@@ -40,6 +40,12 @@ final class MobileUniversalTitleUITests: XCTestCase {
                 let metadata = app.staticTexts["history.metadata.\(identifier)"]
                 XCTAssertTrue(metadata.exists)
                 XCTAssertTrue(metadata.label.contains(start), "The visible metadata must include start date and clock time")
+                let expectedPlace = language == "ru" ? "ул. Примерная, 1, Примерск" : "1 Example Street, Example City"
+                let place = app.descendants(matching: .any).matching(identifier: "history.location.\(identifier)").firstMatch
+                XCTAssertTrue(place.exists, "The saved place stays visible alongside its semantic title")
+                XCTAssertEqual(place.label, expectedPlace)
+                XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "history.location.\(englishIdentifier)").firstMatch.exists,
+                               "A recording without geolocation must not inherit another recording's place")
                 capture(app, "title-list-\(language)-\(appearance)-\(revision.prefix(8))")
                 row.tap()
                 XCTAssertTrue(app.buttons["transcript.more"].waitForExistence(timeout: 10))
@@ -47,6 +53,7 @@ final class MobileUniversalTitleUITests: XCTestCase {
                 XCTAssertTrue(detailTitle.waitForExistence(timeout: 5))
                 XCTAssertEqual(detailTitle.label, expected, "No date or time is appended to the recording name")
                 XCTAssertEqual(app.staticTexts["transcript.metadata.start"].label, start)
+                XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "transcript.location").firstMatch.label, expectedPlace)
                 capture(app, "title-detail-\(language)-\(appearance)-\(revision.prefix(8))")
                 app.terminate()
             }

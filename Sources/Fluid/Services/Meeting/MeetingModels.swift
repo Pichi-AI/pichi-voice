@@ -1297,8 +1297,14 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         }
         guard let defaultBase = self.defaultTitleBase else { return self.title }
         guard self.mode == .inRoom else { return defaultBase }
+        return PichiLocalization.text("In-room meeting", language: language, bundle: bundle)
+    }
+
+    /// Only this recording's saved localized address, never another record's place or a geocoder request.
+    /// Private content stays concealed even when a caller builds metadata independently of its title.
+    func savedLocationLabel(language: PichiInterfaceLanguage) -> String? {
+        guard !self.isLocalContentConcealed else { return nil }
         return self.location?.address(for: language)
-            ?? PichiLocalization.text("In-room meeting", language: language, bundle: bundle)
     }
 
     var effectiveSpeakerProcessingMode: MeetingSpeakerProcessingMode {

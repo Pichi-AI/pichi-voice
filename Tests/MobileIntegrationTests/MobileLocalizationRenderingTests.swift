@@ -33,11 +33,12 @@ final class MobileLocalizationRenderingTests: XCTestCase {
         #endif
     }
 
-    func testSavedLocationFollowsInterfaceLanguageWithoutChangingTranscriptLanguage() throws {
+    func testSavedLocationIsSeparateFromTheDefaultTitleWithoutChangingTranscriptLanguage() throws {
         let session = locationSession()
-        XCTAssertEqual(session.displayTitle(language: .russian), "ул. Примерная, 1, Примерск")
-        XCTAssertEqual(session.displayTitle(language: .english), "1 Example Street, Example City")
-        XCTAssertNotEqual(session.displayTitle(language: .english), session.displayTitle(language: .russian))
+        XCTAssertEqual(session.displayTitle(language: .russian), "Запись")
+        XCTAssertEqual(session.displayTitle(language: .english), "Recording")
+        XCTAssertEqual(session.savedLocationLabel(language: .russian), "ул. Примерная, 1, Примерск")
+        XCTAssertEqual(session.savedLocationLabel(language: .english), "1 Example Street, Example City")
         let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(session))
         XCTAssertEqual(restored.location, session.location)
         XCTAssertEqual(restored.languageCode, session.languageCode)
@@ -71,10 +72,11 @@ final class MobileLocalizationRenderingTests: XCTestCase {
 
     func testMobileTitleLeavesTheStartToRowsAndPages() {
         var session = locationSession()
-        XCTAssertEqual(session.mobileTitle, session.location?.address(for: PichiLocalization.language))
+        XCTAssertTrue(["Запись", "Recording"].contains(session.mobileTitle), session.mobileTitle)
         XCTAssertEqual(session.displayTitle, session.mobileTitle)
         XCTAssertFalse(session.displayTitleIncludesStart)
-        XCTAssertTrue(session.hasDistinctMobileTitle)
+        XCTAssertFalse(session.hasDistinctMobileTitle)
+        XCTAssertNotNil(session.savedLocationLabel(language: PichiLocalization.language))
         session.location = nil
         XCTAssertTrue(["Запись", "Recording"].contains(session.mobileTitle), session.mobileTitle)
         XCTAssertEqual(session.displayTitle, session.mobileTitle)
@@ -84,6 +86,25 @@ final class MobileLocalizationRenderingTests: XCTestCase {
         XCTAssertEqual(session.mobileTitle, session.title)
         XCTAssertEqual(session.displayTitle, session.title)
         XCTAssertTrue(session.hasDistinctMobileTitle)
+    }
+
+    func testPlaceMetadataKeepsGeneratedLanguageAndRespectsMissingOrConcealedLocations() {
+        var session = locationSession()
+        session.automaticTitle = .init(algorithmVersion: MeetingAutomaticTitle.supportedAlgorithmVersion,
+            candidateID: "discussion__questions", localizationKey: "Discussion of questions",
+            previousTitle: session.title, previousDefaultTitleBase: session.defaultTitleBase, languageCode: "ru")
+        XCTAssertEqual(session.displayTitle(language: .english), "Обсуждение вопросов")
+        XCTAssertEqual(session.savedLocationLabel(language: .english), "1 Example Street, Example City")
+        XCTAssertEqual(session.displayTitle(language: .russian), "Обсуждение вопросов")
+        XCTAssertEqual(session.savedLocationLabel(language: .russian), "ул. Примерная, 1, Примерск")
+        session.location?.addresses.removeValue(forKey: "ru")
+        XCTAssertNil(session.savedLocationLabel(language: .russian), "An unavailable localized address is never borrowed from another language")
+        session.location = nil
+        XCTAssertNil(session.savedLocationLabel(language: .english), "Geolocation off or legacy records add no empty place row")
+        session = locationSession()
+        session.requiresEncryptedPersistence = true
+        XCTAssertTrue(session.isLocalContentConcealed)
+        XCTAssertNil(session.savedLocationLabel(language: .english), "A separate metadata reader cannot expose a concealed place")
     }
 
     func testWarmedCatalogKeepsPreferenceAndExplicitLocaleChangesLive() throws {

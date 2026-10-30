@@ -67,6 +67,40 @@ extension MeetingSessionStoreCheckpointTests {
         let info: [String: Any] = ["CFBundleIdentifier": "invalid.synthetic.title-language", "CFBundleDevelopmentRegion": "en", "CFBundleLocalizations": ["en", "ru"]]
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: bundleRoot.appendingPathComponent("Info.plist"))
         let bundle = Bundle(path: bundleRoot.path)!
+        var located = original
+        located.location = .init(latitude: 37.3317, longitude: -122.0301, horizontalAccuracy: 12,
+            capturedAt: original.startedAt, addresses: ["en": "1 Example Street, Example City",
+                "ru": "ул. Примерная, 1, Примерск"])
+        let locatedNamed = MeetingAutomaticNaming.applying(to: located)
+        check(locatedNamed.automaticTitle == named.automaticTitle && locatedNamed.location == located.location,
+              "Current-record location neither changes title ranking/language nor loses its saved evidence")
+        check(locatedNamed.displayTitle(language: .english, bundle: bundle) == "Обсуждение вопросов"
+              && locatedNamed.savedLocationLabel(language: .english) == "1 Example Street, Example City",
+              "The Russian semantic title and separately localized saved place coexist under English UI")
+        check(located.displayTitle(language: .english, bundle: bundle) == "In-room meeting"
+              && located.savedLocationLabel(language: .russian) == "ул. Примерная, 1, Примерск",
+              "A generic default title does not repeat the separate place label")
+        check(original.savedLocationLabel(language: .english) == nil,
+              "No saved location adds no place metadata and never inherits a previous recording")
+        var missingPlace = located
+        missingPlace.location?.addresses = ["en": "   "]
+        check(missingPlace.savedLocationLabel(language: .russian) == nil
+              && missingPlace.savedLocationLabel(language: .english) == nil,
+              "Missing or blank address data never becomes a guessed or cross-language place")
+        var concealedPlace = located
+        concealedPlace.requiresEncryptedPersistence = true
+        check(concealedPlace.isLocalContentConcealed && concealedPlace.savedLocationLabel(language: .english) == nil,
+              "Concealed protected metadata cannot expose its saved place")
+        concealedPlace.profileOwnership = .guest
+        check(!concealedPlace.isLocalContentConcealed
+              && concealedPlace.savedLocationLabel(language: .english) == "1 Example Street, Example City",
+              "Visible encrypted device-guest recordings preserve their own place label")
+        var customPlace = located
+        customPlace.defaultTitleBase = nil
+        customPlace.title = "Мой план Ёё / My plan"
+        check(customPlace.displayTitle(language: .english, bundle: bundle) == customPlace.title
+              && customPlace.savedLocationLabel(language: .russian) == "ул. Примерная, 1, Примерск",
+              "A manually chosen title stays verbatim alongside the independent saved place")
         check(named.displayTitle(language: .english, bundle: bundle) == "Обсуждение вопросов"
               && named.displayTitle(language: .russian, bundle: bundle) == "Обсуждение вопросов",
               "Russian recording titles remain Russian when the interface language changes")
