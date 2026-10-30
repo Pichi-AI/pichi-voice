@@ -31,6 +31,10 @@ catalog currently supplies Russian and English titles, with the existing English
 source fallback for unsupported catalog languages. User speech and custom titles
 are never translated. Automatic names omit the start date and time; history and
 recording detail show the start in their separate visible metadata.
+The current recording's saved localized place appears in a separate optional pin
+row on the live screen, in history and in recording detail. A place never replaces
+the semantic title or supplies naming evidence. Missing or concealed location
+data produces no place row; rendering does not request permission or geocode.
 Manual rename clears the generated artifact and default-title marker. Existing
 generated titles are stable across reloads; unknown algorithm versions retain
 their persisted title snapshot.
