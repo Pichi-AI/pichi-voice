@@ -87,6 +87,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \
     Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
     Sources/Fluid/Services/Meeting/MeetingAutomaticNaming.swift \
+    Sources/Fluid/Services/Meeting/MeetingTitleLanguage.swift \
     Sources/Fluid/Services/Meeting/MeetingUniversalTitleEngine.swift \
     Sources/Fluid/Services/Meeting/MeetingSavedSummary.swift \
     Sources/Fluid/Services/Meeting/MeetingRecordingCipher.swift \
