@@ -448,6 +448,13 @@ struct MobileMeetingRoot: View {
                 Text(session.mobileTitle).font(theme.typography.sectionTitle).lineLimit(2)
             }
             if canPresent(session) {
+                if let place = session.savedLocationLabel(language: PichiLocalization.language) {
+                    Label(place, systemImage: "mappin.and.ellipse")
+                        .accessibilityLabel(place)
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                        .lineLimit(compactHeight ? 1 : 2)
+                        .accessibilityIdentifier("meeting.recording.location")
+                }
                 switch coordinator.liveTranscript.availability {
                 case .unavailable(let reason), .degraded(let reason):
                     Text(MeetingUILocalization.captionAvailability(reason)).font(theme.typography.caption)
@@ -531,7 +538,16 @@ struct MobileMeetingRoot: View {
         VStack(alignment: .leading, spacing: 24) {
             Label(PichiLocalization.text("Preparing your transcript"), systemImage: "text.alignleft")
                 .font(theme.typography.sectionTitle)
-            if canPresent(session) { Text(session.mobileTitle).font(theme.typography.title) }
+            if canPresent(session) {
+                Text(session.mobileTitle).font(theme.typography.title)
+                if let place = session.savedLocationLabel(language: PichiLocalization.language) {
+                    Label(place, systemImage: "mappin.and.ellipse")
+                        .accessibilityLabel(place)
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                        .lineLimit(2)
+                        .accessibilityIdentifier("meeting.processing.location")
+                }
+            }
             ProgressView(PichiLocalization.text(stageTitle(stage)))
                 .accessibilityIdentifier("meeting.processing")
             Spacer()
@@ -620,8 +636,17 @@ struct MobileMeetingRoot: View {
                             .font(theme.typography.bodyStrong)
                         Text(concealedSummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     } else {
-                        Text(session.mobileTitle).font(theme.typography.bodyStrong)
+                        Text(session.displayTitle).font(theme.typography.bodyStrong)
+                            .accessibilityIdentifier("history.title.\(session.id)")
                         Text(historySummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                            .accessibilityIdentifier("history.metadata.\(session.id)")
+                        if let place = session.savedLocationLabel(language: PichiLocalization.language) {
+                            Label(place, systemImage: "mappin.and.ellipse")
+                                .accessibilityLabel(place)
+                                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                                .lineLimit(2)
+                                .accessibilityIdentifier("history.location.\(session.id)")
+                        }
                     }
                     if let cloudPublication {
                         MobileCloudRecordingStatus(service: cloudPublication, interaction: cloudInteraction, recordingID: session.id)
@@ -722,8 +747,7 @@ struct MobileMeetingRoot: View {
         }
     }
 
-    /// One secondary line: start, duration, participants and any unfinished state. The title
-    /// leaves the start out, so the date always appears here.
+    /// The title leaves the start out and this secondary line always shows it.
     private func historySummary(_ session: MeetingSession) -> String {
         var parts = [session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale))]
         parts.append(MeetingTranscriptExporter.timestampText(session.duration))
@@ -750,10 +774,21 @@ struct MobileMeetingRoot: View {
         return ScrollViewReader { reader in
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text(session.mobileTitle).font(theme.typography.title)
-                    HStack {
-                        Label(MeetingTranscriptExporter.timestampText(session.duration), systemImage: "clock")
-                        Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
+                    Text(session.displayTitle).font(theme.typography.title)
+                        .accessibilityIdentifier("transcript.title")
+                    VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
+                        HStack {
+                            Label(MeetingTranscriptExporter.timestampText(session.duration), systemImage: "clock")
+                            Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
+                                .accessibilityIdentifier("transcript.metadata.start")
+                        }
+                        if let place = session.savedLocationLabel(language: PichiLocalization.language) {
+                            Label(place, systemImage: "mappin.and.ellipse")
+                                .accessibilityLabel(place)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("transcript.location")
+                        }
                     }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     if let cloudPublication {
                         MobileCloudRecordingStatus(service: cloudPublication, interaction: cloudInteraction,
@@ -1513,16 +1548,11 @@ private struct MeetingEditTextForm: View {
 }
 
 extension MeetingSession {
-    /// A renamed recording, or one whose title names its place, rather than the default name.
+    /// Retain the capture band's existing policy: hide only its generic in-room label.
     var hasDistinctMobileTitle: Bool {
-        !displayTitleIncludesStart || location?.address(for: PichiLocalization.language) != nil
+        automaticTitle != nil || defaultTitleBase == nil || mode != .inRoom
     }
 
-    /// `displayTitle` without the start that rows and pages show next to it. A default title names
-    /// the place, or the in-room default, which the catalog calls Recording on iPhone and iPad.
-    /// Exports and search keep `displayTitle`.
-    var mobileTitle: String {
-        guard displayTitleIncludesStart else { return displayTitle }
-        return location?.address(for: PichiLocalization.language) ?? PichiLocalization.text("In-room meeting")
-    }
+    /// Mobile capture and rename views share the canonical date-free title renderer.
+    var mobileTitle: String { displayTitle }
 }

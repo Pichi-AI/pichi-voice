@@ -2290,6 +2290,15 @@ private struct MeetingHistoryRow: View {
                             .multilineTextAlignment(.leading)
                             .padding(.trailing, self.theme.metrics.spacing.xxl)
                         self.secondaryLine
+                        if let place = self.session.savedLocationLabel(language: PichiLocalization.language) {
+                            Label(place, systemImage: "mappin.and.ellipse")
+                                .accessibilityLabel(place)
+                                .font(self.theme.typography.caption)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .lineLimit(2)
+                                .help(place)
+                                .accessibilityIdentifier("meeting.history.location.\(self.session.id)")
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -2299,7 +2308,8 @@ private struct MeetingHistoryRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(self.session.displayTitle), \(self.statusText), \(self.sourceName)")
+            .accessibilityLabel([self.session.displayTitle, self.statusText, self.sourceName,
+                self.session.savedLocationLabel(language: PichiLocalization.language)].compactMap { $0 }.joined(separator: ", "))
             .accessibilityAddTraits(self.isSelected ? .isSelected : [])
             .editableTitle(self.session.displayTitle, id: "\(self.session.profileOwnership?.profileID ?? MeetingProfileOwnership.guest.profileID):\(self.session.id)", enabled: self.isQuiescent, onRename: self.onRename)
             if let actionLabel {

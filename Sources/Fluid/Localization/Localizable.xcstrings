@@ -62422,6 +62422,1770 @@
           }
         }
       }
+    },
+    "Audio recording": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиозапись"
+          }
+        }
+      }
+    },
+    "Conversation": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор"
+          }
+        }
+      }
+    },
+    "Conversation about decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор о решениях"
+          }
+        }
+      }
+    },
+    "Conversation about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор об опыте"
+          }
+        }
+      }
+    },
+    "Conversation about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор об идеях"
+          }
+        }
+      }
+    },
+    "Conversation about outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор об итогах"
+          }
+        }
+      }
+    },
+    "Conversation about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор о планах"
+          }
+        }
+      }
+    },
+    "Conversation about proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор о предложениях"
+          }
+        }
+      }
+    },
+    "Conversation about results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор о результатах"
+          }
+        }
+      }
+    },
+    "Conversation about tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор о задачах"
+          }
+        }
+      }
+    },
+    "Debate": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debate"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дискуссия"
+          }
+        }
+      }
+    },
+    "Debate on decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debate on decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дискуссия о решениях"
+          }
+        }
+      }
+    },
+    "Debate on ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debate on ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дискуссия об идеях"
+          }
+        }
+      }
+    },
+    "Debate on proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debate on proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дискуссия о предложениях"
+          }
+        }
+      }
+    },
+    "Debate on results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debate on results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дискуссия о результатах"
+          }
+        }
+      }
+    },
+    "Dialogue": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dialogue"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диалог"
+          }
+        }
+      }
+    },
+    "Dialogue about decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dialogue about decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диалог о решениях"
+          }
+        }
+      }
+    },
+    "Dialogue about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dialogue about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диалог об опыте"
+          }
+        }
+      }
+    },
+    "Dialogue about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dialogue about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диалог об идеях"
+          }
+        }
+      }
+    },
+    "Dialogue about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dialogue about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диалог о планах"
+          }
+        }
+      }
+    },
+    "Discussion": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение"
+          }
+        }
+      }
+    },
+    "Discussion of decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение решений"
+          }
+        }
+      }
+    },
+    "Discussion of experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение опыта"
+          }
+        }
+      }
+    },
+    "Discussion of ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение идей"
+          }
+        }
+      }
+    },
+    "Discussion of opinions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of opinions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение мнений"
+          }
+        }
+      }
+    },
+    "Discussion of outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение итогов"
+          }
+        }
+      }
+    },
+    "Discussion of plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение планов"
+          }
+        }
+      }
+    },
+    "Discussion of proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение предложений"
+          }
+        }
+      }
+    },
+    "Discussion of questions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of questions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение вопросов"
+          }
+        }
+      }
+    },
+    "Discussion of results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение результатов"
+          }
+        }
+      }
+    },
+    "Discussion of tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение задач"
+          }
+        }
+      }
+    },
+    "Exchange of experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exchange of experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обмен опытом"
+          }
+        }
+      }
+    },
+    "Exchange of opinions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exchange of opinions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обмен мнениями"
+          }
+        }
+      }
+    },
+    "Group discussion": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение"
+          }
+        }
+      }
+    },
+    "Group discussion of decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение решений"
+          }
+        }
+      }
+    },
+    "Group discussion of experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение опыта"
+          }
+        }
+      }
+    },
+    "Group discussion of ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение идей"
+          }
+        }
+      }
+    },
+    "Group discussion of opinions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of opinions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение мнений"
+          }
+        }
+      }
+    },
+    "Group discussion of outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение итогов"
+          }
+        }
+      }
+    },
+    "Group discussion of plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение планов"
+          }
+        }
+      }
+    },
+    "Group discussion of proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение предложений"
+          }
+        }
+      }
+    },
+    "Group discussion of questions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of questions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение вопросов"
+          }
+        }
+      }
+    },
+    "Group discussion of results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение результатов"
+          }
+        }
+      }
+    },
+    "Group discussion of tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение задач"
+          }
+        }
+      }
+    },
+    "Group meeting": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group meeting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповая встреча"
+          }
+        }
+      }
+    },
+    "Group meeting to discuss plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group meeting to discuss plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповая встреча для обсуждения планов"
+          }
+        }
+      }
+    },
+    "Group meeting to discuss proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group meeting to discuss proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповая встреча для обсуждения предложений"
+          }
+        }
+      }
+    },
+    "Group meeting to discuss results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group meeting to discuss results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповая встреча для обсуждения результатов"
+          }
+        }
+      }
+    },
+    "Group meeting to discuss tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group meeting to discuss tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповая встреча для обсуждения задач"
+          }
+        }
+      }
+    },
+    "Interview": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interview"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интервью"
+          }
+        }
+      }
+    },
+    "Interview about decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interview about decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интервью о решениях"
+          }
+        }
+      }
+    },
+    "Interview about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interview about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интервью об опыте"
+          }
+        }
+      }
+    },
+    "Interview about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interview about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интервью об идеях"
+          }
+        }
+      }
+    },
+    "Interview about outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interview about outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интервью об итогах"
+          }
+        }
+      }
+    },
+    "Interview about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interview about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интервью о планах"
+          }
+        }
+      }
+    },
+    "Lecture": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lecture"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Лекция"
+          }
+        }
+      }
+    },
+    "Meeting to discuss plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting to discuss plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встреча для обсуждения планов"
+          }
+        }
+      }
+    },
+    "Meeting to discuss proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting to discuss proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встреча для обсуждения предложений"
+          }
+        }
+      }
+    },
+    "Meeting to discuss results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting to discuss results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встреча для обсуждения результатов"
+          }
+        }
+      }
+    },
+    "Meeting to discuss tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting to discuss tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встреча для обсуждения задач"
+          }
+        }
+      }
+    },
+    "Monologue": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monologue"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Монолог"
+          }
+        }
+      }
+    },
+    "Monologue about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monologue about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Монолог об опыте"
+          }
+        }
+      }
+    },
+    "Monologue about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monologue about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Монолог об идеях"
+          }
+        }
+      }
+    },
+    "Monologue about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monologue about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Монолог о планах"
+          }
+        }
+      }
+    },
+    "Notes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки"
+          }
+        }
+      }
+    },
+    "Notes about decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки о решениях"
+          }
+        }
+      }
+    },
+    "Notes about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки об опыте"
+          }
+        }
+      }
+    },
+    "Notes about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки об идеях"
+          }
+        }
+      }
+    },
+    "Notes about outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки об итогах"
+          }
+        }
+      }
+    },
+    "Notes about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки о планах"
+          }
+        }
+      }
+    },
+    "Notes about proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки о предложениях"
+          }
+        }
+      }
+    },
+    "Notes about results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки о результатах"
+          }
+        }
+      }
+    },
+    "Notes about tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки о задачах"
+          }
+        }
+      }
+    },
+    "Presentation": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация"
+          }
+        }
+      }
+    },
+    "Presentation of decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация решений"
+          }
+        }
+      }
+    },
+    "Presentation of experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация опыта"
+          }
+        }
+      }
+    },
+    "Presentation of ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация идей"
+          }
+        }
+      }
+    },
+    "Presentation of outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация итогов"
+          }
+        }
+      }
+    },
+    "Presentation of plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация планов"
+          }
+        }
+      }
+    },
+    "Presentation of proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация предложений"
+          }
+        }
+      }
+    },
+    "Presentation of results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация результатов"
+          }
+        }
+      }
+    },
+    "Presentation of tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация задач"
+          }
+        }
+      }
+    },
+    "Reflections": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления"
+          }
+        }
+      }
+    },
+    "Reflections about decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления о решениях"
+          }
+        }
+      }
+    },
+    "Reflections about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления об опыте"
+          }
+        }
+      }
+    },
+    "Reflections about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления об идеях"
+          }
+        }
+      }
+    },
+    "Reflections about outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления об итогах"
+          }
+        }
+      }
+    },
+    "Reflections about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления о планах"
+          }
+        }
+      }
+    },
+    "Reflections about proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления о предложениях"
+          }
+        }
+      }
+    },
+    "Reflections about questions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about questions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления о вопросах"
+          }
+        }
+      }
+    },
+    "Reflections about results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления о результатах"
+          }
+        }
+      }
+    },
+    "Reflections about tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления о задачах"
+          }
+        }
+      }
+    },
+    "Talk": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Беседа"
+          }
+        }
+      }
+    },
+    "Talk about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Беседа об опыте"
+          }
+        }
+      }
+    },
+    "Talk about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Беседа об идеях"
+          }
+        }
+      }
+    },
+    "Talk about outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk about outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Беседа об итогах"
+          }
+        }
+      }
+    },
+    "Talk about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Беседа о планах"
+          }
+        }
+      }
+    },
+    "Talk about proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk about proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Беседа о предложениях"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

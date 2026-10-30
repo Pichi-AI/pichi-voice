@@ -44,6 +44,15 @@ struct MeetingRecordingCanvas: View {
                         .foregroundStyle(self.theme.palette.secondaryText)
                         .lineLimit(1)
                         .help(self.sourceSummary)
+                    if let place = self.session.savedLocationLabel(language: PichiLocalization.language) {
+                        Label(place, systemImage: "mappin.and.ellipse")
+                            .accessibilityLabel(place)
+                            .font(self.theme.typography.caption)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .lineLimit(2)
+                            .help(place)
+                            .accessibilityIdentifier("meeting.recording.location")
+                    }
                 }
 
             }
@@ -236,6 +245,15 @@ struct MeetingProcessingCanvas: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                 if !self.session.isLocalContentConcealed {
                     MeetingDocumentTitle(title: self.session.displayTitle)
+                    if let place = self.session.savedLocationLabel(language: PichiLocalization.language) {
+                        Label(place, systemImage: "mappin.and.ellipse")
+                            .accessibilityLabel(place)
+                            .font(self.theme.typography.caption)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .lineLimit(2)
+                            .help(place)
+                            .accessibilityIdentifier("meeting.processing.location")
+                    }
                 }
                 Text("You can close this window. Processing continues on this Mac.")
                     .font(self.theme.typography.bodySmall)
@@ -937,26 +955,39 @@ struct MeetingResultCanvas: View {
     }
 
     private var meetingMetadata: some View {
-        HStack(spacing: self.theme.metrics.spacing.md) {
-            Text(self.session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(PichiLocalization.locale)))
-                .fixedSize()
-                .help(self.session.startedAt.formatted(Date.FormatStyle(date: .complete, time: .shortened).locale(PichiLocalization.locale)))
-            Text("·").accessibilityHidden(true)
-            Label(Self.durationText(self.session.duration), systemImage: "clock")
-                .fixedSize()
-            Text("·").accessibilityHidden(true)
-            Label(self.sourceName, systemImage: self.session.mode == .onlineCall ? "macwindow" : "person.2")
-                .lineLimit(1)
-                .help("\(self.sourceName)\nMicrophone: \(self.session.selectedMicrophone.displayName)")
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            HStack(spacing: self.theme.metrics.spacing.md) {
+                Text(self.session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
+                    .accessibilityIdentifier("meeting.metadata.start")
+                    .fixedSize()
+                    .help(self.session.startedAt.formatted(Date.FormatStyle(date: .complete, time: .shortened).locale(PichiLocalization.locale)))
+                Text("·").accessibilityHidden(true)
+                Label(Self.durationText(self.session.duration), systemImage: "clock")
+                    .fixedSize()
+                Text("·").accessibilityHidden(true)
+                Label(self.sourceName, systemImage: self.session.mode == .onlineCall ? "macwindow" : "person.2")
+                    .lineLimit(1)
+                    .help("\(self.sourceName)\nMicrophone: \(self.session.selectedMicrophone.displayName)")
+            }
+            .font(self.theme.typography.caption)
+            .foregroundStyle(self.theme.palette.secondaryText)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "\(self.session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale))), " +
+                    "\(Self.durationText(self.session.duration)), \(self.sourceName), " +
+                    PichiLocalization.format("microphone: %@", self.session.selectedMicrophone.displayName)
+            )
+            if let place = self.session.savedLocationLabel(language: PichiLocalization.language) {
+                Label(place, systemImage: "mappin.and.ellipse")
+                    .accessibilityLabel(place)
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(place)
+                    .accessibilityIdentifier("meeting.metadata.location")
+            }
         }
-        .font(self.theme.typography.caption)
-        .foregroundStyle(self.theme.palette.secondaryText)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "\(self.session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale))), " +
-                "\(Self.durationText(self.session.duration)), \(self.sourceName), " +
-                PichiLocalization.format("microphone: %@", self.session.selectedMicrophone.displayName)
-        )
     }
 
     private var sourceName: String {

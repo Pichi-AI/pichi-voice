@@ -1627,7 +1627,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
-        guard target.displayTitle != trimmed else { return target }
+        guard target.displayTitle != trimmed || target.automaticTitle != nil else { return target }
 
         let directory: URL?
         if let directoryOwner = expectedOwnership ?? target.profileOwnership {
@@ -1646,6 +1646,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         target.title = trimmed
         target.defaultTitleBase = nil
+        target.automaticTitle = nil
         target.updatedAt = Date()
         try await self.store.save(target)
 
@@ -2682,6 +2683,9 @@ final class MeetingSessionCoordinator: ObservableObject {
                 ))
             }
             session.state = .completed
+            session = await MeetingAutomaticNaming.applyingInBackground(to: session)
+            guard self.operationGeneration == generation,
+                  !Task.isCancelled || result.postProcessing != nil else { throw CancellationError() }
             session.updatedAt = Date()
             do {
                 let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.resultPersist)
@@ -2689,9 +2693,13 @@ final class MeetingSessionCoordinator: ObservableObject {
                 defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.resultPersist, since: began,
                     samples: session.transcriptSegments.count, succeeded: succeeded) }
                 await self.flushQueuedPersistence()
+                guard self.operationGeneration == generation,
+                      !Task.isCancelled || result.postProcessing != nil else { throw CancellationError() }
                 try await self.store.save(session)
                 succeeded = true
             }
+            guard self.operationGeneration == generation,
+                  !Task.isCancelled || result.postProcessing != nil else { throw CancellationError() }
             let publishBegan = MeetingPCMRuntimeDiagnostics.beginDetailed(.resultPublish)
             self.removeCheckpoint(sessionDirectory: sessionDirectory, removeRetainedState: result.isComplete)
             self.activeSession = nil
@@ -2721,6 +2729,9 @@ final class MeetingSessionCoordinator: ObservableObject {
                 throw error
             }
             if error is CancellationError {
+                session.title = inputSession.title
+                session.defaultTitleBase = inputSession.defaultTitleBase
+                session.automaticTitle = inputSession.automaticTitle
                 session.speakers = inputSession.speakers
                 session.transcriptSegments = inputSession.transcriptSegments
                 session.postProcessing = inputSession.postProcessing
@@ -2743,6 +2754,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             // A failed completed-session save must not durably publish a sidecar or overwrite the
             // last saved transcript under `.failed`. The verified new sidecar remains unreferenced
             // for retry/journal reconciliation.
+            session.title = inputSession.title
+            session.defaultTitleBase = inputSession.defaultTitleBase
+            session.automaticTitle = inputSession.automaticTitle
             session.speakers = inputSession.speakers
             session.transcriptSegments = inputSession.transcriptSegments
             session.postProcessing = inputSession.postProcessing

@@ -250,6 +250,7 @@ struct MeetingSessionStoreCheckpointTests {
         try await Self.checkRecordingEncryption(root: root.appendingPathComponent("recording-encryption"), check: check)
         try await Self.checkCatalogReadFailures(root: root.appendingPathComponent("catalog-read-failures"), check: check)
         try await Self.checkLocalReaderDates(root: root.appendingPathComponent("local-reader-dates"), check: check)
+        try await Self.checkAutomaticNaming(root: root.appendingPathComponent("automatic-naming"), check: check)
 
         let nativePresentation = MeetingTranscriptExporter.speakerPresentation(
             for: session.transcriptSegments[0], in: session)

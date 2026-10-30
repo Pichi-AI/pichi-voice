@@ -3,6 +3,21 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 task_test_dir="$PWD/.build/meeting-session-store-tests"
 mkdir -p "$task_test_dir"
+# The raw executable has no compiled app catalog. Supply this real catalog entry
+# at Bundle.main's resource root so the persisted Russian snapshot is tested too.
+python3 -B - "$task_test_dir" <<'PY_TITLE_RESOURCE'
+from pathlib import Path
+import json, sys
+catalog = json.loads(Path('Sources/Fluid/Localization/Localizable.xcstrings').read_text())
+for language in ['en', 'ru']:
+    folder = Path(sys.argv[1]) / (language + '.lproj')
+    folder.mkdir(exist_ok=True)
+    values = []
+    for key in ['Discussion of questions', 'Audio recording']:
+        value = catalog['strings'][key]['localizations'][language]['stringUnit']['value']
+        values.append(json.dumps(key, ensure_ascii=False) + ' = ' + json.dumps(value, ensure_ascii=False) + ';\n')
+    (folder / 'Localizable.strings').write_text(''.join(values))
+PY_TITLE_RESOURCE
 # The complete store and production persisted codecs compile unchanged. This bounded test
 # never supplies a canonical sidecar, so make accidental migration reads fail loudly instead
 # of linking inference/runtime orchestration or launching the application.
@@ -86,6 +101,10 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     "$task_test_dir/AttributionTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \
     Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
+    Sources/Fluid/Services/Meeting/MeetingAutomaticNaming.swift \
+    Sources/Fluid/Services/Meeting/MeetingTitleLanguage.swift \
+    Sources/Fluid/Services/Meeting/MeetingUniversalTitleEngine.swift \
+    Sources/Fluid/Services/Meeting/MeetingSavedSummary.swift \
     Sources/Fluid/Services/Meeting/MeetingRecordingCipher.swift \
     Sources/Fluid/Services/Meeting/MeetingRecordingKeychainStore.swift Sources/Fluid/Persistence/ProtectedDataAccessError.swift \
     "$task_test_dir/PipelineVersion.swift" \
@@ -98,6 +117,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     "$task_test_dir/ApplicationSupport.swift" Tests/MeetingSessionStoreCheckpointTests.swift \
     Tests/MeetingRecordingEncryptionTests.swift \
+    Tests/MeetingAutomaticNamingTests.swift \
     Tests/MeetingLocalReaderDateTests.swift \
     Tests/MeetingTranscriptReadingContractTests.swift \
     Tests/MeetingProtectedTranscriptExportTests.swift \
