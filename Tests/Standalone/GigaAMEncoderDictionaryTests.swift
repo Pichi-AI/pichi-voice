@@ -77,12 +77,12 @@ struct DictionaryMatchFrames: Sendable {
         let prefix = GigaAMEncoderDictionary.AcceptedSpan(entryID: prefixID, label: "Alpha", wordRange: 0...0,
             frameRange: 0..<6, distance: 0.146, acceptanceDistance: 0.3, spellingSupport: 1)
         let full = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 0...0,
-            frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 0.8, canonicalSupport: 1)
+            frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 0.8, canonicalSupport: 1, additionalComponentSupport: true)
         let compound = GigaAMEncoderDictionary.arbitrate([prefix, full])
         precondition(compound.accepted.count == 1 && compound.accepted[0].entryID == fullID,
             "Complete accepted compound defeats prefix even when prefix quality is slightly better")
         let scalarPrefix = GigaAMEncoderDictionary.AcceptedSpan(entryID: UUID(), label: "Alphabet", wordRange: 0...0,
-            frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1)
+            frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1, additionalComponentSupport: true)
         precondition(GigaAMEncoderDictionary.arbitrate([prefix, scalarPrefix]).accepted.isEmpty,
             "A scalar spelling prefix does not authorize compound dominance")
         let truncated = GigaAMDictionaryLexicalEvidence.compare(heard: "Alpha", canonical: "Alpha Desktop", observedVariants: ["Alpha"])!
@@ -92,6 +92,34 @@ struct DictionaryMatchFrames: Sendable {
             canonicalSupport: truncated.canonicalSimilarity)
         precondition(GigaAMEncoderDictionary.arbitrate([prefix, aliasExpansion]).accepted.map(\.entryID) == [prefixID],
             "A truncated observed alias and lower distance cannot authorize an extra component")
+        for base in ["Alpha", "Claude"] {
+            let expanded = base + " AI"
+            let spelling = GigaAMDictionaryLexicalEvidence.compare(heard: base, canonical: expanded, observedVariants: [base])!
+            precondition(spelling.canonicalSimilarity == 1, "Reproduce the unsafe consonant-only score")
+            let componentProof = GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: base, canonical: expanded)
+            precondition(!componentProof, "A vowel-only component still needs actual source text")
+            let shortID = UUID()
+            let short = GigaAMEncoderDictionary.AcceptedSpan(entryID: shortID, label: base, wordRange: 0...0,
+                frameRange: 0..<6, distance: 0.146, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1)
+            let unsupported = GigaAMEncoderDictionary.AcceptedSpan(entryID: UUID(), label: expanded, wordRange: 0...0,
+                frameRange: 0..<7, distance: 0.001, acceptanceDistance: 0.3, spellingSupport: 1,
+                canonicalSupport: spelling.canonicalSimilarity, additionalComponentSupport: componentProof)
+            precondition(GigaAMEncoderDictionary.arbitrate([short, unsupported]).accepted.map(\.entryID) == [shortID],
+                "One extra frame and a better distance cannot invent an unspoken AI suffix")
+            let actualProof = GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: expanded, canonical: expanded)
+            precondition(actualProof)
+            let supportedID = UUID()
+            let supported = GigaAMEncoderDictionary.AcceptedSpan(entryID: supportedID, label: expanded, wordRange: 0...1,
+                frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1,
+                additionalComponentSupport: actualProof)
+            precondition(GigaAMEncoderDictionary.arbitrate([short, supported]).accepted.map(\.entryID) == [supportedID])
+        }
+        precondition(GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: "клодкот", canonical: "Claude Code"))
+        precondition(GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: "Clд-кода", canonical: "Claude Code"))
+        precondition(!GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: "Claude A", canonical: "Claude AI"))
+        precondition(!GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: "Claude I", canonical: "Claude AI"))
+        precondition(!GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: "Alpha AI", canonical: "Alpha AI Desktop"))
+        precondition(GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: "Alpha AI Desktop", canonical: "Alpha AI Desktop"))
         let noExtraAudio = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 0...0,
             frameRange: 0..<6, distance: 0.001, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1)
         precondition(GigaAMEncoderDictionary.arbitrate([prefix, noExtraAudio]).accepted.map(\.entryID) == [prefixID],
@@ -99,7 +127,7 @@ struct DictionaryMatchFrames: Sendable {
         let twoWordPrefix = GigaAMEncoderDictionary.AcceptedSpan(entryID: prefixID, label: "Alpha", wordRange: 0...1,
             frameRange: 0..<10, distance: 0.146, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 0.5)
         let twoWordFull = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 0...1,
-            frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1)
+            frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1, additionalComponentSupport: true)
         precondition(GigaAMEncoderDictionary.arbitrate([twoWordPrefix, twoWordFull]).accepted.map(\.entryID) == [fullID],
             "Two actual matched words can prove the complete compound even if the prefix hit consumed both")
         let other = GigaAMEncoderDictionary.AcceptedSpan(entryID: UUID(), label: "Beta", wordRange: 0...0,
@@ -118,6 +146,7 @@ struct DictionaryMatchFrames: Sendable {
         precondition(repeated.text == "Alfa Alpha" && repeated.accepted.count == 1 && repeated.accepted[0].wordRange == 1...1)
         precondition(repeated.accepted[0].frameOffset == 500 && repeated.accepted[0].absoluteFrameRange.lowerBound >= 500)
         precondition(repeated.accepted[0].canonicalSupport > 0, "Current-source canonical evidence survives window mapping")
+        precondition(repeated.accepted[0].additionalComponentSupport, "Direct component proof survives window mapping")
         let claimedAcrossWindow = try await GigaAMEncoderDictionary.correct(
             transcript: self.transcript("Do Alfa", [("Do", 19.8, 19.96), ("Alfa", 20, 20.24)]),
             windows: [laterWindow], modelKey: model, words: prepared.words,
@@ -138,7 +167,7 @@ struct DictionaryMatchFrames: Sendable {
         let crossPrefix = GigaAMEncoderDictionary.AcceptedSpan(entryID: prefixID, label: "Alpha", wordRange: 5...5,
             frameRange: 250..<260, distance: 0.146, acceptanceDistance: 0.3, spellingSupport: 1)
         let crossFull = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 5...5,
-            frameRange: 0..<20, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 0.8, frameOffset: 250, canonicalSupport: 1)
+            frameRange: 0..<20, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 0.8, frameOffset: 250, canonicalSupport: 1, additionalComponentSupport: true)
         precondition(GigaAMEncoderDictionary.arbitrate([crossPrefix, crossFull]).accepted.first?.entryID == fullID,
             "Cross-window compounds compare absolute audio frames")
         let misaligned = try GigaAMEncoderWindow(offset: 0.01, ownership: 0.01..<0.25, features: reference)

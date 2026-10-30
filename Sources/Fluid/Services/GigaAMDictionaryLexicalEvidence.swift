@@ -93,6 +93,36 @@ nonisolated enum GigaAMDictionaryLexicalEvidence {
         self.tokens(text)?.map(\.key)
     }
 
+    /// Every canonical component needs actual current-source letters. The best
+    /// prefix is consumed greedily, including the whole remaining source as a
+    /// possibility, so a shorter prefix cannot fabricate an unspoken suffix.
+    /// This deliberately uses no consonant-only score and no saved aliases.
+    static func supportsCanonicalComponents(heard: String, canonical: String) -> Bool {
+        guard let target = self.tokens(canonical) else { return false }
+        let components = target.map { self.soundKey($0.text) }
+        let source = Array(self.phoneticKey(heard))
+        guard !source.isEmpty, components.allSatisfy({ !$0.isEmpty }) else { return false }
+        if String(source) == components.joined() { return true }
+        var position = 0
+        for (index, component) in components.enumerated() {
+            guard position < source.count else { return false }
+            let remainder = String(source[position...])
+            if index == components.count - 1 {
+                return self.editSimilarity(remainder, component) >= 2.0 / 3.0
+            }
+            var bestEnd = position, bestScore = -Double.infinity
+            for end in (position + 1)...source.count {
+                let score = self.editSimilarity(String(source[position..<end]), component)
+                if score > bestScore + 1e-9 || (abs(score - bestScore) <= 1e-9 && end > bestEnd) {
+                    bestEnd = end; bestScore = score
+                }
+            }
+            guard bestScore >= 2.0 / 3.0, bestEnd < source.count else { return false }
+            position = bestEnd
+        }
+        return false
+    }
+
     private static func tokens(_ text: String) -> [Token]? {
         guard !text.isEmpty, text.count <= 80, text.rangeOfCharacter(from: .newlines) == nil else { return nil }
         guard let regex = try? NSRegularExpression(pattern: #"[\p{L}\p{M}\p{N}]+(?:['’][\p{L}\p{M}\p{N}]+)*"#) else { return nil }

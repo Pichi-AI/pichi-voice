@@ -53,6 +53,7 @@ nonisolated enum GigaAMEncoderDictionary {
         let spellingSupport: Double
         var frameOffset = 0
         var canonicalSupport: Double = 0
+        var additionalComponentSupport = false
         var absoluteFrameRange: Range<Int> {
             (self.frameOffset + self.frameRange.lowerBound)..<(self.frameOffset + self.frameRange.upperBound)
         }
@@ -151,7 +152,8 @@ nonisolated enum GigaAMEncoderDictionary {
                 candidates.append(AcceptedSpan(entryID: span.entryID, label: span.label,
                     wordRange: first...last, frameRange: span.frameRange, distance: span.distance,
                     acceptanceDistance: span.acceptanceDistance, spellingSupport: span.spellingSupport,
-                    frameOffset: offsets[index], canonicalSupport: span.canonicalSupport))
+                    frameOffset: offsets[index], canonicalSupport: span.canonicalSupport,
+                    additionalComponentSupport: span.additionalComponentSupport))
             }
         }
         // Only connected overlapping word spans can compete. Do not run a
@@ -295,7 +297,8 @@ nonisolated enum GigaAMEncoderDictionary {
                 }
                 candidates.append(AcceptedSpan(entryID: term.entryID, label: term.label, wordRange: range,
                     frameRange: hit.frames, distance: match.distance, acceptanceDistance: prepared.calibration.acceptanceDistance,
-                    spellingSupport: lexical.phoneticSimilarity, canonicalSupport: lexical.canonicalSimilarity))
+                    spellingSupport: lexical.phoneticSimilarity, canonicalSupport: lexical.canonicalSimilarity,
+                    additionalComponentSupport: GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: heard, canonical: term.label)))
             }
         }
         let arbitration = self.arbitrate(candidates)
@@ -357,7 +360,7 @@ nonisolated enum GigaAMEncoderDictionary {
 
     private static func compound(_ full: AcceptedSpan, dominates prefix: AcceptedSpan) -> Bool {
         guard self.compoundRelation(full, prefix: prefix), self.covers(full, prefix: prefix),
-              full.canonicalSupport >= 0.8 else { return false }
+              full.canonicalSupport >= 0.8, full.additionalComponentSupport else { return false }
         let fullComponents = GigaAMDictionaryLexicalEvidence.componentKeys(full.label)?.count ?? Int.max
         let extraWords = (full.wordRange.upperBound > prefix.wordRange.upperBound || full.wordRange.count >= fullComponents) &&
             full.absoluteFrameRange.upperBound >= prefix.absoluteFrameRange.upperBound
