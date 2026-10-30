@@ -156,6 +156,7 @@ import Darwin
         let captures = ids.map { id in
             PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "synthetic", inspectionID: id)
         }
+        let pinnedID = ids[1]
         let originalCapture = PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1,
             modelKey: "synthetic", originalAudioID: evidence)
         let profiles = [PronunciationDictionaryProfile(dictionaryEntryID: entry, label: "A private", modelKey: "synthetic",
@@ -302,8 +303,10 @@ import Darwin
         defer { read.close(leaseID: leaseID); negatives.close(leaseID: leaseID) }
         expect(try descriptorCount() == handlesBefore + 4, "Admission retains only three inspection and one original descriptor globally")
         expect(read.profile == a && read.profiles == profiles, "Admission freezes original metadata and generation")
-        expect(try read.inspection(for: ids[0]) == inspection, "Selected evidence decodes through the retained descriptor")
-        rejects("Fourth reference must not be pinned") { _ = try read.inspection(for: ids[3]) }
+        expect(read.matchingEnrollments(for: profiles[0]) == Array(captures.suffix(3)),
+            "Admission pins the latest three manual references after deliberate re-recording")
+        expect(try read.inspection(for: pinnedID) == inspection, "Selected evidence decodes through the retained descriptor")
+        rejects("Unselected oldest reference must not be pinned") { _ = try read.inspection(for: ids[0]) }
         rejects("Unselected entry has no original authority") { _ = try read.originalAudioSamples(for: originalCapture, entryID: UUID()) }
         expect(try read.originalAudioSamples(for: originalCapture, entryID: originalEntry) == [0.2, 0.3], "Original focal extraction keeps existing validation")
         expect(negatives.frames(entryID: entry, profileKey: "selected", modelKey: "synthetic") == [negativeFrames], "Only selected negative records are frozen")
@@ -313,8 +316,8 @@ import Darwin
         let preservedNegative = try Data(contentsOf: negativeURL)
         let replacement = DictionaryAudioInspection(samples: [Float](repeating: 0.5, count: 1280),
             recordedSampleCount: 1280, frames: inspection.frames, words: [], selectedStart: 0, selectedEnd: 0.08)
-        try encoder.encode(replacement).write(to: inspectionDirectory.appendingPathComponent("\(ids[0]).plist"), options: .atomic)
-        expect(try read.inspection(for: ids[0]) == inspection, "Atomic path replacement cannot substitute the pinned reference")
+        try encoder.encode(replacement).write(to: inspectionDirectory.appendingPathComponent("\(pinnedID).plist"), options: .atomic)
+        expect(try read.inspection(for: pinnedID) == inspection, "Atomic path replacement cannot substitute the pinned reference")
         PrivateProfileStorage.closeAdmission()
         rejects("Closed admission must reject another pronunciation lease") {
             _ = try store.admitCaptureRead(leaseID: UUID(), modelKey: "synthetic", entryIDs: [entry])
@@ -328,7 +331,7 @@ import Darwin
         expect(await store.allProfiles().isEmpty, "Ordinary pronunciation reads remain concealed")
         expect(await familyStore.sharedProfiles(modelKey: "synthetic-family-b", hiddenSize: 2).isEmpty, "New shared-profile reads obey concealed profile boundary")
         expect(await negativeStore.frames(entryID: entry, profileKey: "selected", modelKey: "synthetic").isEmpty, "Ordinary negative reads remain concealed")
-        expect(try read.inspection(for: ids[0]) == inspection, "Admitted original reference survives conceal and store retirement")
+        expect(try read.inspection(for: pinnedID) == inspection, "Admitted original reference survives conceal and store retirement")
         expect(negatives.revision == negativeRevision && negatives.frames(entryID: entry, profileKey: "selected", modelKey: "synthetic") == [negativeFrames], "Admitted negative comparison remains immutable")
         PrivateProfileStorage.select(b)
         expect(await familyStore.sharedProfiles(modelKey: "synthetic-family-b", hiddenSize: 2).isEmpty, "B cannot query A through new shared-profile API")
@@ -340,12 +343,12 @@ import Darwin
         expect(try read.originalAudioSamples(for: originalCapture, entryID: originalEntry) == [0.2, 0.3], "Account B cannot redirect admitted A reads")
         rejects("Old A store must not admit against B") { _ = try store.admitCaptureRead(leaseID: UUID(), modelKey: "synthetic", entryIDs: [entry]) }
         read.close(leaseID: UUID()); negatives.close(leaseID: UUID())
-        expect(try read.inspection(for: ids[0]) == inspection, "Foreign lease cannot close the active read")
+        expect(try read.inspection(for: pinnedID) == inspection, "Foreign lease cannot close the active read")
         expect(!negatives.frames(entryID: entry, profileKey: "selected", modelKey: "synthetic").isEmpty, "Foreign lease cannot close negative snapshot")
         read.close(leaseID: leaseID); negatives.close(leaseID: leaseID)
         expect(try descriptorCount() == handlesBefore, "Exact close releases every retained process descriptor")
         expect(read.profiles.isEmpty, "Exact close removes private metadata")
-        rejects("Exact close releases reference authority") { _ = try read.inspection(for: ids[0]) }
+        rejects("Exact close releases reference authority") { _ = try read.inspection(for: pinnedID) }
         rejects("Exact close releases original authority") { _ = try read.originalAudioSamples(for: originalCapture, entryID: originalEntry) }
         expect(negatives.frames(entryID: entry, profileKey: "selected", modelKey: "synthetic").isEmpty, "Exact close removes negative evidence")
         expect(try Data(contentsOf: file) == preserved && Data(contentsOf: negativeURL) == preservedNegative, "Admission, conceal and close preserve original data")
@@ -353,7 +356,7 @@ import Darwin
         PrivateProfileStorage.select(sameAccountNewGeneration)
         rejects("Same account with a new generation cannot reuse old admission") { _ = try store.admitCaptureRead(leaseID: UUID(), modelKey: "synthetic", entryIDs: [entry]) }
         // Bounded failures reject the whole snapshot rather than silently omitting selected data.
-        let failedReference = try FileHandle(forWritingTo: inspectionDirectory.appendingPathComponent("\(ids[1]).plist"))
+        let failedReference = try FileHandle(forWritingTo: inspectionDirectory.appendingPathComponent("\(ids[2]).plist"))
         try failedReference.truncate(atOffset: 24_000_001); try failedReference.close()
         let partial = PronunciationDictionaryStore(fileURL: file, profile: sameAccountNewGeneration)
         let beforeFailure = try descriptorCount()
@@ -383,7 +386,7 @@ import Darwin
         }
         let bInspection = b.rootDirectory.appendingPathComponent("pronunciation-inspection")
         try FileManager.default.createDirectory(at: bInspection, withIntermediateDirectories: true)
-        try encoder.encode(replacement).write(to: bInspection.appendingPathComponent("\(ids[0]).plist"))
+        try encoder.encode(replacement).write(to: bInspection.appendingPathComponent("\(pinnedID).plist"))
         let savedInspections = a.rootDirectory.appendingPathComponent("synthetic-saved-inspections")
         try FileManager.default.moveItem(at: inspectionDirectory, to: savedInspections)
         try FileManager.default.createSymbolicLink(at: inspectionDirectory, withDestinationURL: bInspection)

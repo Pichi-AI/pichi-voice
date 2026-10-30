@@ -34,10 +34,13 @@ card = read_source("DeliveryFailureCard")
 card_actions = card[card.index("    private func copy() {"):card.rfind("\n}")]
 overlay = read_source("DeliveryFailureOverlay")
 overlay_action = overlay[overlay.index("    private func copy() {"):overlay.rfind("\n}")]
-controller_actions = overlay[overlay.index("    func show(kind:"):overlay.index("    private func createPanel(")]
+controller_start = ("    private func concealPrivatePresentation() {"
+                    if "    private func concealPrivatePresentation() {" in overlay else "    func show(kind:")
+controller_actions = overlay[overlay.index(controller_start):overlay.index("    private func createPanel(")]
 controller_duration = overlay[overlay.index("    private static let displayDuration:"):overlay.index("    private var panel:")]
 swift = r'''
 import Foundation
+import Combine
 import SwiftUI
 
 enum ClipboardService {
@@ -63,6 +66,7 @@ final class Card {
 }
 final class Popup {
     var transcript = "first transcript"
+    let profile: PrivateProfileSnapshot
     var didCopy = false
     var successes = 0
     var failures = 0
@@ -75,6 +79,7 @@ final class Popup {
     init(
         kind: DeliveryFailureOverlayController.Kind = .deliveryFailed,
         transcript: String = "first transcript",
+        profile: PrivateProfileSnapshot = PrivateProfileStorage.current,
         displayDuration: TimeInterval = 10,
         startedAt: Date = Date(),
         onCopied: (() -> Void)? = nil,
@@ -83,6 +88,7 @@ final class Popup {
     ) {
         self.kind = kind
         self.transcript = transcript
+        self.profile = profile
         self.displayDuration = displayDuration
         self.startedAt = startedAt
         self.onCopied = onCopied ?? { [weak self] in self?.successes += 1 }
@@ -102,6 +108,7 @@ final class HostingView {
 }
 final class Panel {
     var isVisible = false
+    var contentView: Any?
     var alphaValue = 1.0
     func orderFrontRegardless() { self.isVisible = true }
     func orderOut(_ sender: Any?) { self.isVisible = false }
@@ -269,5 +276,15 @@ with tempfile.TemporaryDirectory(prefix="fv-recovery-copy-") as directory:
     source = root / "Tests.swift"
     binary = root / "tests"
     source.write_text(swift)
-    subprocess.run(["xcrun", "swiftc", "-swift-version", "5", "-default-isolation", "MainActor", "-parse-as-library", str(source), "-o", str(binary)], check=True)
+    profile_types = root / "ProfileTypes.swift"
+    subprocess.run([
+        "python3", str(repo / "Tests/Support/write_private_profile_standalone_types.py"),
+        str(profile_types), "--synthetic-brand",
+    ], cwd=repo, check=True)
+    subprocess.run([
+        "xcrun", "swiftc", "-swift-version", "5", "-default-isolation", "MainActor",
+        "-parse-as-library", "-module-cache-path", str(root / "ModuleCache"),
+        str(profile_types), str(repo / "Sources/Fluid/Account/PrivateProfileStorage.swift"),
+        str(source), "-o", str(binary),
+    ], check=True)
     subprocess.run([str(binary)], check=True)

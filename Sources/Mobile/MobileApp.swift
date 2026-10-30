@@ -28,6 +28,7 @@ final class AppServices: ObservableObject {
     private var accountRestorationTask: Task<Void, Never>?
     private static var didCleanExportStaging = false
     private let settings: SettingsStore
+    private let meetingModelResidency: MeetingModelResidencyCoordinator
     private var idlePreparationObservers: Set<AnyCancellable> = []
     private var idleResourceObservers: Set<AnyCancellable> = []
     private var observedSpeakerStore: MeetingDiarizationModelStore?
@@ -59,6 +60,7 @@ final class AppServices: ObservableObject {
     init(store: (any MeetingSessionStoring)? = nil,
          capture injectedCapture: (any MeetingCaptureControlling)? = nil,
          settings: SettingsStore? = nil,
+         meetingModelResidency: MeetingModelResidencyCoordinator? = nil,
          accountSession: AccountSessionService? = nil,
          privateProfiles: PrivateProfileService? = nil,
          publicationHTTP: (any PichiPublicationHTTPPerforming)? = nil,
@@ -70,6 +72,7 @@ final class AppServices: ObservableObject {
         let isProductionComposition = store == nil && settings == nil && accountSession == nil
             && privateProfiles == nil && injectedCapture == nil && privacy == nil && privacyRedactor == nil
             && microphoneResolver == nil && publicationHTTP == nil && recordingCipher == nil
+            && meetingModelResidency == nil
         // Only a deliberate facade injection can install an observer in a fixture.
         // A generic test store must never touch the global facade or production HTTP.
         let publicationStore = isProductionComposition ? PrivateProfileMeetingStore.shared
@@ -87,14 +90,17 @@ final class AppServices: ObservableObject {
         self.meetingLocation = MeetingLocationService(settings: settings)
         settings.migrateMobileSetup()
         let store = store ?? MeetingSessionStore.shared
-        let asr = ASRService(settings: settings)
+        // The process composition shares one residency owner. Other hosts can supply
+        // an owned lifetime without terminating another composition's admission.
+        let residency = meetingModelResidency ?? .shared
+        self.meetingModelResidency = residency
+        let asr = ASRService(meetingModelResidency: residency, settings: settings)
         let privacy = privacy ?? PichiTranscriptPrivacyService(beginOrdinaryWork: {
-            let residency = await MainActor.run { MeetingModelResidencyCoordinator.shared }
             // An admitted recording joins its matching preparation on the deferred worker.
             // Other privacy operations retire the optional lease before native work begins.
             if await MainActor.run(body: { asr.activeExclusiveActivity == .meeting || residency.isExclusive }) { return nil }
             return try await residency.beginOperationRetiringIdle(owner: "text-privacy", modelID: "selected-text-privacy")
-        }, endOrdinaryWork: { token in await MeetingModelResidencyCoordinator.shared.endOperation(token) })
+        }, endOrdinaryWork: { token in await residency.endOperation(token) })
         // A host can decorate the prepared privacy service without replacing its
         // installation/readiness lifecycle or the shared publication contract.
         let meetingRedactor: any TranscriptTextRedacting = privacyRedactor ?? privacy
@@ -104,7 +110,7 @@ final class AppServices: ObservableObject {
         self.requiredResources = MobileRequiredResources()
         self.privacyActivation = MobilePrivacyActivation(settings: settings, canPrepare: {
             asr.activeExclusiveActivity == nil && !asr.hasActiveModelPreparation
-                && !MeetingModelResidencyCoordinator.shared.isExclusive
+                && !residency.isExclusive
         }, prepare: { progress in
             try await privacy.prepare(progress: progress)
         })
@@ -178,7 +184,7 @@ final class AppServices: ObservableObject {
                 }
             }.store(in: &idlePreparationObservers)
         }
-        MeetingModelResidencyCoordinator.shared.ordinaryOperationEvents.sink { [weak self] in
+        residency.ordinaryOperationEvents.sink { [weak self] in
             Task { @MainActor in await self?.idleResourcesChanged() }
         }.store(in: &idlePreparationObservers)
         observeIdleResourceStores()
@@ -381,8 +387,8 @@ final class AppServices: ObservableObject {
         let otherWork = !coordinator.isQuiescent && !meetingActivity
             || (asr.activeExclusiveActivity != nil && asr.activeExclusiveActivity != .meeting)
             || asr.hasActiveModelPreparation
-            || (MeetingModelResidencyCoordinator.shared.isExclusive && !meetingActivity)
-            || MeetingModelResidencyCoordinator.shared.hasOrdinaryOperations
+            || (meetingModelResidency.isExclusive && !meetingActivity)
+            || meetingModelResidency.hasOrdinaryOperations
             || isPreparingIdleResources
         let identity = [transcriptPrivacy.checkpointIdentity ?? "", settings.selectedSpeechModel.rawValue,
                         settings.meetingTranscriptionBackendID.rawValue,
@@ -395,7 +401,7 @@ final class AppServices: ObservableObject {
                 "restoreComplete": String(hasRestoredInitialState), "quiescent": String(coordinator.isQuiescent),
                 "recordingActivity": String(meetingActivity), "otherWork": String(otherWork), "enabled": String(enabled),
                 "speakerOrVADResourceWork": String(isPreparingIdleResources),
-                "ordinaryResidencyWork": String(MeetingModelResidencyCoordinator.shared.hasOrdinaryOperations),
+                "ordinaryResidencyWork": String(meetingModelResidency.hasOrdinaryOperations),
                 "adoptionSupported": String(asr.supportsPreparedProviderAdoption), "hasResidencyOwner": String(asr.idleModelResidency != nil)]
             if decision != lastIdleDecision {
                 lastIdleDecision = decision
