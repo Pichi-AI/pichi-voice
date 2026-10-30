@@ -651,7 +651,10 @@ final class MobileNavigationUITests: XCTestCase {
         let revision = ProcessInfo.processInfo.environment["PICHI_TEST_REVISION"] ?? "candidate"
         func scrollTo(_ element: XCUIElement) {
             let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
-            for _ in 0..<10 where !element.exists || !element.isHittable { scroll.swipeUp() }
+            if element.exists && element.isHittable { return }
+            // A returned Form may retain its old offset. Search from the top.
+            for _ in 0..<7 { scroll.swipeDown() }
+            for _ in 0..<12 where !element.exists || !element.isHittable { scroll.swipeUp() }
             XCTAssertTrue(element.exists && element.isHittable)
         }
         for (language, appearance) in [("ru", "light"), ("ru", "dark"), ("en", "light")] {
@@ -688,7 +691,13 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertNotEqual(enabled.value as? String, old)
             try tapNativeSwitch("privacy.groups.illicit-remuneration.enabled")
             XCTAssertEqual(enabled.value as? String, old)
-            app.navigationBars.buttons.element(boundBy: 0).tap()
+            // Start this destination from its root. The iPad has a separate
+            // sidebar button before its Back control in the accessibility tree.
+            app.terminate(); app.launch()
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 20))
+            openNavigation("settings", title: language == "ru" ? "Настройки" : "Settings")
+            let reopenedPrivacy = app.buttons["settings.privacy"]
+            scrollTo(reopenedPrivacy); reopenedPrivacy.tap()
             let topics = app.buttons["privacy.topics.open"]
             scrollTo(topics); topics.tap()
             XCTAssertTrue(app.buttons["privacy.topics.import"].waitForExistence(timeout: 5))
