@@ -2,6 +2,9 @@ import Foundation
 import PichiGigaAM
 @testable import FluidVoice_Debug
 import XCTest
+#if os(macOS)
+import AppKit
+#endif
 
 extension PichiGigaAMIntegrationTests {
     /// Exercise the complete saved-template path with generated signals, independent
@@ -206,6 +209,22 @@ extension PichiGigaAMIntegrationTests {
         let observedNegative = GigaAMDictionaryAcoustics.Word(entryID: word.entryID, label: word.label, profileKey: word.profileKey,
             references: references, calibration: calibration, negatives: [anchor], observedSpellings: ["Бимчик"])
         XCTAssertNil(try GigaAMDictionaryAcoustics.corroboratedDistance(query: anchor, word: observedNegative, heard: "Бимчик"))
+    }
+
+    @MainActor
+    func testLocalLexicalEvidenceProtectsWordsAndFailsClosedWithoutCoverage() throws {
+        #if os(macOS)
+        guard NSSpellChecker.shared.availableLanguages.contains(where: { $0.lowercased().hasPrefix("ru") }) else {
+            throw XCTSkip("Installed Russian spelling lexicons are required for this native evidence probe")
+        }
+        XCTAssertFalse(DictionaryLexicalEvidence.isUnknownTerm("печи", requiredLanguages: ["ru"]))
+        XCTAssertFalse(DictionaryLexicalEvidence.isUnknownTerm("модель", requiredLanguages: ["ru"]))
+        XCTAssertFalse(DictionaryLexicalEvidence.isUnknownTerm("очень Бимчик", requiredLanguages: ["ru"]))
+        XCTAssertTrue(DictionaryLexicalEvidence.isUnknownTerm("Бимчик", requiredLanguages: ["ru"]))
+        XCTAssertTrue(DictionaryLexicalEvidence.isUnknownTerm("GigM", requiredLanguages: ["ru"]))
+        XCTAssertFalse(DictionaryLexicalEvidence.isUnknownTerm("GigM", requiredLanguages: ["zz"]))
+        XCTAssertFalse(DictionaryLexicalEvidence.isUnknownTerm("1234", requiredLanguages: ["ru"]))
+        #endif
     }
 
     nonisolated private static func acousticTone(_ frequency: Double, duration: Double) -> [Float] {
