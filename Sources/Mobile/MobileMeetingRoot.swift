@@ -449,7 +449,7 @@ struct MobileMeetingRoot: View {
             }
             if canPresent(session) {
                 if let place = session.savedLocationLabel(language: PichiLocalization.language) {
-                    Label(place, systemImage: "mappin.and.ellipse")
+                    Text(verbatim: place)
                         .accessibilityLabel(place)
                         .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                         .lineLimit(compactHeight ? 1 : 2)
@@ -541,7 +541,7 @@ struct MobileMeetingRoot: View {
             if canPresent(session) {
                 Text(session.mobileTitle).font(theme.typography.title)
                 if let place = session.savedLocationLabel(language: PichiLocalization.language) {
-                    Label(place, systemImage: "mappin.and.ellipse")
+                    Text(verbatim: place)
                         .accessibilityLabel(place)
                         .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                         .lineLimit(2)
@@ -641,7 +641,7 @@ struct MobileMeetingRoot: View {
                         Text(historySummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                             .accessibilityIdentifier("history.metadata.\(session.id)")
                         if let place = session.savedLocationLabel(language: PichiLocalization.language) {
-                            Label(place, systemImage: "mappin.and.ellipse")
+                            Text(verbatim: place)
                                 .accessibilityLabel(place)
                                 .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                                 .lineLimit(2)
@@ -652,6 +652,7 @@ struct MobileMeetingRoot: View {
                         MobileCloudRecordingStatus(service: cloudPublication, interaction: cloudInteraction, recordingID: session.id)
                     }
                 }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .alignmentGuide(.listRowSeparatorLeading) { dimensions in dimensions[.leading] }
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityIdentifier("history.session.\(session.id)")
                 .swipeActions {
@@ -774,22 +775,26 @@ struct MobileMeetingRoot: View {
         return ScrollViewReader { reader in
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text(session.displayTitle).font(theme.typography.title)
-                        .accessibilityIdentifier("transcript.title")
                     VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
-                        HStack {
-                            Label(MeetingTranscriptExporter.timestampText(session.duration), systemImage: "clock")
-                            Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
-                                .accessibilityIdentifier("transcript.metadata.start")
-                        }
-                        if let place = session.savedLocationLabel(language: PichiLocalization.language) {
-                            Label(place, systemImage: "mappin.and.ellipse")
-                                .accessibilityLabel(place)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .accessibilityIdentifier("transcript.location")
-                        }
-                    }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                        Text(session.displayTitle).font(theme.typography.title)
+                            .accessibilityIdentifier("transcript.title")
+                        VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
+                            HStack(alignment: .firstTextBaseline, spacing: theme.metrics.spacing.xs) {
+                                Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
+                                    .accessibilityIdentifier("transcript.metadata.start")
+                                Text("·").accessibilityHidden(true)
+                                Text(MeetingTranscriptExporter.timestampText(session.duration))
+                                    .accessibilityIdentifier("transcript.metadata.duration")
+                            }
+                            if let place = session.savedLocationLabel(language: PichiLocalization.language) {
+                                Text(verbatim: place)
+                                    .accessibilityLabel(place)
+                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("transcript.location")
+                            }
+                        }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    }
                     if let cloudPublication {
                         MobileCloudRecordingStatus(service: cloudPublication, interaction: cloudInteraction,
                             recordingID: session.id, showsActions: true)
