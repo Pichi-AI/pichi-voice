@@ -21741,6 +21741,40 @@
         }
       }
     },
+    "Live caption buffering failed. The recording is preserved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live caption buffering failed. The recording is preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сохранить очередь субтитров. Запись сохраняется."
+          }
+        }
+      }
+    },
+    "Live captions require a matching recording configuration.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live captions require a matching recording configuration."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки субтитров не совпадают с настройками записи."
+          }
+        }
+      }
+    },
     "Live captions dropped audio and resynced.": {
       "extractionState": "manual",
       "localizations": {
@@ -25742,13 +25776,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "No meeting audio is being captured while your microphone is active."
+            "value": "The app is quiet; your microphone is active."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Звук встречи не записывается, хотя микрофон активен."
+            "value": "В приложении тихо; микрофон активен."
           }
         }
       }
@@ -51467,23 +51501,6 @@
         }
       }
     },
-    "Stored on this device. Place the microphone where everyone can be heard.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stored on this device. Place the microphone where everyone can be heard."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Хранится на этом устройстве. Расположите микрофон так, чтобы было слышно всех."
-          }
-        }
-      }
-    },
     "System Default": {
       "extractionState": "manual",
       "localizations": {
@@ -52111,23 +52128,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Настройте свой голос, чтобы в следующих встречах ваша речь отмечалась как «Вы». Голосовой профиль хранится на этом устройстве."
-          }
-        }
-      }
-    },
-    "Read aloud at a natural pace for 15 to 20 seconds. Audio stays in memory and is discarded after checking. Only Save stores the voice profile.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Read aloud at a natural pace for 15 to 20 seconds. Audio stays in memory and is discarded after checking. Only Save stores the voice profile."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Читайте вслух в обычном темпе в течение 15-20 секунд. Аудио остаётся в памяти и удаляется после проверки. Голосовой профиль сохраняется только по кнопке «Сохранить»."
           }
         }
       }
@@ -52801,57 +52801,6 @@
         }
       }
     },
-    "PDF Presentation": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "PDF Presentation"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "PDF-презентация"
-          }
-        }
-      }
-    },
-    "Open a PDF in this app while recording continues.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open a PDF in this app while recording continues."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Открыть PDF в приложении, не прерывая запись."
-          }
-        }
-      }
-    },
-    "The PDF presentation could not be opened. Choose a readable PDF file.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The PDF presentation could not be opened. Choose a readable PDF file."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось открыть PDF-презентацию. Выберите доступный PDF-файл."
-          }
-        }
-      }
-    },
     "Speech detection": {
       "localizations": {
         "en": {
@@ -53067,40 +53016,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ресурсы для определения речи и участников готовятся автоматически. Устанавливаются файлы, без загрузки всех моделей в память."
-          }
-        }
-      }
-    },
-    "Your speech can carry your own label.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your speech can carry your own label."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ваши реплики могут отображаться с подписью «Вы»."
-          }
-        }
-      }
-    },
-    "Find a quiet place and read the phrase below. The microphone starts only when you choose Set up my voice. You can skip this step.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Find a quiet place and read the phrase below. The microphone starts only when you choose Set up my voice. You can skip this step."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Найдите тихое место и прочитайте фразу ниже. Микрофон включится только по нажатию «Настроить мой голос». Этот шаг можно пропустить."
           }
         }
       }
@@ -56692,38 +56607,6 @@
         }
       }
     },
-    "Configure recording, transcription and storage first. Restricted access keeps these settings and allows only recording and your voice setup.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Configure recording, transcription and storage first. Restricted access keeps these settings and allows only recording and your voice setup."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сначала настройте запись, расшифровку и хранение. При ограниченном доступе эти настройки сохраняются, а доступны только запись и настройка своего голоса."
-          }
-        }
-      }
-    },
-    "To keep audio on this device, enable Save Audio and choose the recording retention period before restricting access.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "To keep audio on this device, enable Save Audio and choose the recording retention period before restricting access."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Чтобы хранить аудио на устройстве, включите сохранение аудио и выберите срок хранения перед ограничением доступа."
-          }
-        }
-      }
-    },
     "The password is required to restore full access. Restricted access stays enabled after restarting the app.": {
       "localizations": {
         "en": {
@@ -59636,13 +59519,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Deletion after sync and local encryption are configured in Data cleanup."
+            "value": "Deletion after sync and local encryption are configured in Privacy."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Удаление после синхронизации и шифрование на устройстве настраиваются в разделе «Очистка данных»."
+            "value": "Удаление после синхронизации и шифрование на устройстве настраиваются в разделе «Приватность»."
           }
         }
       }
@@ -60323,6 +60206,91 @@
           "stringUnit": {
             "state": "translated",
             "value": "Подготовка синхронизации…"
+          }
+        }
+      }
+    },
+    "Only recording stays available: start, stop and your own voice setup. Meetings, transcripts and settings open with the administrator password.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only recording stays available: start, stop and your own voice setup. Meetings, transcripts and settings open with the administrator password."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Остаётся только запись: начать, остановить и настроить свой голос. Встречи, расшифровки и настройки открываются паролем администратора."
+          }
+        }
+      }
+    },
+    "For a shared device in a meeting room. Recording and storage settings can't be changed in restricted mode, so check them first.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "For a shared device in a meeting room. Recording and storage settings can't be changed in restricted mode, so check them first."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для общего устройства в переговорной. В ограниченном режиме настройки записи и хранения изменить нельзя, поэтому сначала проверьте их."
+          }
+        }
+      }
+    },
+    "Read aloud at a natural pace for 15 to 20 seconds. The audio stays in memory; after checking, only your voice profile is saved on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read aloud at a natural pace for 15 to 20 seconds. The audio stays in memory; after checking, only your voice profile is saved on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Читайте вслух в обычном темпе от 15 до 20 секунд. Аудио остаётся в памяти, после проверки на устройстве сохраняется только голосовой профиль."
+          }
+        }
+      }
+    },
+    "Compact Russian speech recognition with automatic punctuation and text normalization. Runs locally on Apple Silicon and Intel Macs.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compact Russian speech recognition with automatic punctuation and text normalization. Runs locally on Apple Silicon and Intel Macs."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Компактная модель для русской речи с автоматической пунктуацией и нормализацией текста. Работает локально на Apple Silicon и Intel."
+          }
+        }
+      }
+    },
+    "Russian speech recognition with automatic punctuation and text normalization. Runs locally using Core ML.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Russian speech recognition with automatic punctuation and text normalization. Runs locally using Core ML."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание русской речи с автоматической пунктуацией и нормализацией текста. Работает локально через Core ML."
           }
         }
       }

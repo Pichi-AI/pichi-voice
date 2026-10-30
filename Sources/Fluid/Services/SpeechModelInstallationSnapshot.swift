@@ -13,6 +13,21 @@ nonisolated struct SpeechModelLibraryMetadata: Equatable, Sendable {
     let features: String
     let performanceRatings: SpeechModelPerformanceRatings
     let performanceExplanation: String
+    let cardDescription: String?
+    let hardwareLabel: String?
+
+    init(size: String, processor: String, recommendedMemory: String, features: String,
+         performanceRatings: SpeechModelPerformanceRatings, performanceExplanation: String,
+         cardDescription: String? = nil, hardwareLabel: String? = nil) {
+        self.size = size
+        self.processor = processor
+        self.recommendedMemory = recommendedMemory
+        self.features = features
+        self.performanceRatings = performanceRatings
+        self.performanceExplanation = performanceExplanation
+        self.cardDescription = cardDescription
+        self.hardwareLabel = hardwareLabel
+    }
 }
 
 /// UI reads immutable IDs. Only an event-triggered worker inspects downloaded files.

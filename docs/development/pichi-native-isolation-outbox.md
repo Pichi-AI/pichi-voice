@@ -155,7 +155,9 @@ N1 announced source freeze `f6b0e48a` while actual target builds were still in p
 
 ### Guest preservation and explicitly shared resources
 
-Legacy private files, preferences and provider credentials remain guest-private. Account profiles begin with empty private namespaces, not copied guest dictionaries, prompts, destinations, audio, histories or credentials. Preserve legacy data in place or independently verify any required copies before atomically recording a guest migration; do not delete originals merely because an index was written.
+The October 28 policy shares device-owned guest meeting history with every account while retaining the original guest files and ownership. Account histories remain private to their verified owner/workspace. This is a merged local view, with no copying, account adoption or automatic publication. Guest encryption on disk remains intact; decrypted guest meetings are locally viewable through the existing guest key. Account-protected display restrictions are unchanged.
+
+Other legacy private files, preferences and provider credentials remain guest-private. Account profiles begin with separate private namespaces, without copied guest dictionaries, prompts, destinations or credentials. Preserve guest source data in place; do not delete originals merely because a shared index or view was written. Automatic account retention/recovery cannot apply the account's settings to the shared guest library.
 
 Public installed model artifacts may retain their current resource owners and shared paths. Shared device preferences require an explicit key allowlist reviewed against their actual consumers. Do not reuse the full standard defaults domain, all provider settings or arbitrary model/API configuration as shared account state.
 
@@ -206,7 +208,7 @@ Use the existing production-code standalone probes and native integration target
 
 | Case | Required result |
 | --- | --- |
-| Legacy guest, sign in A, logout, sign in B | Guest bytes preserved; no history/profile/key exposure and no automatic enqueue |
+| Legacy guest, sign in A, logout, sign in B | Guest meetings visible in every scope with original ownership/bytes; A and B meetings, settings and keys stay separate; no automatic guest enqueue |
 | N2: account/workspace switch during capture admission/capture/finalization | Transition rejected, old profile remains selected, capture completes normally |
 | N2: offline logout during capture | Credentials and private projections clear; recording continues with frozen owner, no data exposure or retarget into guest/B |
 | N2: token expiry during recording | Authentication status changes, recording and local source ownership remain unchanged |

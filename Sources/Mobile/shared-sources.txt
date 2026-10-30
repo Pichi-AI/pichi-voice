@@ -99,6 +99,7 @@ Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptionBackendRegistry.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingUnitEchoVerdictProvider.swift
 Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveBoundedQueue.swift
 Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift
+Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveAudioFIFO.swift
 Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveTrackEngine.swift
 Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveTranscriptionCoordinator.swift
 Sources/Fluid/Services/Meeting/LiveTranscription/MeetingModelPreparationQueue.swift

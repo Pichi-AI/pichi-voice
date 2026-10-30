@@ -4,10 +4,62 @@ import UIKit
 import XCTest
 @testable import PichiVoiceMobile
 
-/// The publisher retains a trusted read path. Only local presentation omits
-/// encrypted content, while ordinary meetings from before opt-in stay visible.
+/// Shared device guest history stays visible. Account-protected presentation and
+/// trusted publication retain their existing per-record boundaries.
 @MainActor
 final class MobileEncryptedPresentationTests: XCTestCase {
+    func testEncryptedGuestHistoryIsVisibleWhileAccountProtectionStaysConcealed() async {
+        var guest = session(title: "Encrypted device guest", concealed: true)
+        guest.profileOwnership = .guest
+        var account = session(title: "Protected account recording", concealed: true)
+        account.profileOwnership = .init(profileID: "synthetic-account", issuer: "https://identity.invalid",
+            subject: "synthetic", internalUserID: "synthetic", organizationID: "org", workspaceID: "workspace")
+        let values = [guest, account]
+        let history = MeetingHistorySnapshot { values }
+        await history.refresh()
+        XCTAssertEqual(history.sessions.map(\.id), [guest.id])
+        XCTAssertTrue(guest.requiresEncryptedPersistence == true)
+        XCTAssertFalse(guest.isLocalContentConcealed)
+        XCTAssertTrue(account.isLocalContentConcealed)
+    }
+
+    func testSharedGuestHistorySurvivesAccountChangesAndFreshSnapshots() async throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Synthetic profile history regression requires an owned simulator")
+        #else
+        let fixture = try SharedGuestNativeFixture()
+        addTeardownBlock { @MainActor in try fixture.cleanup() }
+        try await fixture.seed()
+        let originalGuestBytes = try Data(contentsOf: fixture.manifest(profile: fixture.guest, id: fixture.guestID))
+        for profile in [fixture.guest, fixture.a, fixture.b, fixture.guest, fixture.renewed(fixture.a)] {
+            PrivateProfileStorage.select(profile)
+            let store = PrivateProfileMeetingStore()
+            let history = MeetingHistorySnapshot { try await store.loadHistory() }
+            await history.refresh()
+            XCTAssertTrue(history.hasLoaded)
+            XCTAssertNil(history.errorMessage)
+            XCTAssertEqual(Set(history.sessions.map(\.id)), fixture.visibleIDs(for: profile),
+                           "Every fresh history owner must combine device-guest and current-account records only")
+            let guest = try await store.loadTranscript(id: fixture.guestID)
+            XCTAssertEqual(guest?.title, "Гостевая встреча Ёж")
+            if !profile.isGuest {
+                XCTAssertTrue(guest?.profileOwnership?.matches(fixture.guest) == true,
+                              "An account reads the guest source without adopting it")
+                XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.manifest(profile: profile, id: fixture.guestID).path))
+            }
+            for foreignID in fixture.accountIDs.subtracting(fixture.visibleIDs(for: profile)) {
+                let foreign = try await store.loadTranscript(id: foreignID)
+                let directory = try await store.existingSessionDirectory(for: foreignID)
+                XCTAssertNil(foreign, "A known foreign account UUID must remain unreadable")
+                XCTAssertNil(directory, "A known foreign account UUID must not expose its files")
+            }
+            await store.finishProfileTransition()
+        }
+        XCTAssertEqual(try Data(contentsOf: fixture.manifest(profile: fixture.guest, id: fixture.guestID)), originalGuestBytes,
+                       "Profile changes and cold history reads must preserve the legacy guest manifest bytes")
+        #endif
+    }
+
     func testColdGuestHistoryWaitsForInitialPrivateAdmission() async throws {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Synthetic launch regression requires an owned simulator")
@@ -124,6 +176,88 @@ final class MobileEncryptedPresentationTests: XCTestCase {
         history.applyCommitted(encrypted)
         XCTAssertFalse(history.sessions.contains { $0.id == encrypted.id })
         XCTAssertTrue(history.sessions.contains { $0.id == ordinary.id })
+    }
+}
+
+/// Invented records in disposable roots; account selection here exercises storage scope,
+/// while the existing account lifecycle regressions own authentication and transition joins.
+@MainActor private final class SharedGuestNativeFixture {
+    let root: URL
+    let guest: PrivateProfileSnapshot
+    let a: PrivateProfileSnapshot
+    let b: PrivateProfileSnapshot
+    let guestID = UUID()
+    let aID = UUID()
+    let bID = UUID()
+    let settings: SettingsStore
+    private let suite: String
+    private let defaults: UserDefaults
+    private let previous = PrivateProfileStorage.current
+    private let previouslyAdmitted = PrivateProfileStorage.acceptsNewWork
+
+    var accountIDs: Set<UUID> { [aID, bID] }
+
+    init() throws {
+        let suite = "SharedGuestNativeHistory.\(UUID().uuidString)"
+        self.suite = suite
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        self.defaults = defaults
+        let settings = SettingsStore(defaults: defaults, initializeDesktop: false)
+        settings.meetingAudioRetentionPolicy = .never
+        self.settings = settings
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
+        self.root = root
+        guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: root)
+        func account(_ subject: String) throws -> PrivateProfileSnapshot {
+            let context = AccountContext(identity: .init(issuer: "https://identity.invalid/shared-guest",
+                subject: subject, internalUserID: "synthetic-" + subject), organizationID: "synthetic-org",
+                workspaceID: "synthetic-workspace", generation: UUID())
+            return try PrivateProfileStorage.proposed(context: context, generation: UUID(), legacyRootDirectory: root)
+        }
+        a = try account("a"); b = try account("b")
+    }
+
+    func renewed(_ profile: PrivateProfileSnapshot) -> PrivateProfileSnapshot {
+        .init(id: profile.id, context: profile.context, generation: UUID(), rootDirectory: profile.rootDirectory,
+              legacyRootDirectory: profile.legacyRootDirectory, isReadable: true)
+    }
+
+    func visibleIDs(for profile: PrivateProfileSnapshot) -> Set<UUID> {
+        profile.isGuest ? [guestID] : [guestID, profile.id == a.id ? aID : bID]
+    }
+
+    func manifest(profile: PrivateProfileSnapshot, id: UUID) -> URL {
+        profile.directory("Meetings").appendingPathComponent(id.uuidString).appendingPathComponent("session.json")
+    }
+
+    func seed() async throws {
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+            machTimebaseDenominator: 1, firstPresentationTime: nil)
+        for (profile, id, title, offset) in [(guest, guestID, "Гостевая встреча Ёж", 0.0),
+                                             (a, aID, "Встреча аккаунта А", 60.0), (b, bID, "Встреча аккаунта Б", 120.0)] {
+            var record = MeetingSession(id: id, configuration: .init(mode: .inRoom, title: title,
+                microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone")),
+                startedAt: Date(timeIntervalSince1970: 1_700_000_000 + offset), timebase: timebase)
+            record.profileOwnership = profile.isGuest ? nil : .init(profile: profile)
+            record.state = .completed; record.endedAt = record.startedAt.addingTimeInterval(30)
+            record.audioStorageMode = .memoryOnly; record.transcriptTimeDomain = .meetingRelative
+            record.audioTracks = [.init(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
+                sourceDisplayName: "Synthetic microphone", format: nil, timebase: timebase, health: .waiting, chunks: [])]
+            if profile.isGuest {
+                record.transcriptSegments = [.init(id: UUID(), start: .init(value: 0, timescale: 1),
+                    end: .init(value: 2, timescale: 1), sourceTrackID: record.audioTracks[0].id, speakerID: nil,
+                    text: "Синтетический текст гостевой встречи.", revision: 0, status: .final,
+                    overlap: .none, completeness: .complete, attributionState: .unassigned)]
+            }
+            try await MeetingSessionStore(rootDirectory: profile.directory("Meetings")).create(record)
+        }
+    }
+
+    func cleanup() throws {
+        PrivateProfileStorage.select(previous)
+        if !previouslyAdmitted { PrivateProfileStorage.closeAdmission() }
+        defaults.removePersistentDomain(forName: suite)
+        if FileManager.default.fileExists(atPath: root.path) { try FileManager.default.removeItem(at: root) }
     }
 }
 

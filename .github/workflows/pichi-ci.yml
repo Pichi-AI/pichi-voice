@@ -12,6 +12,11 @@ on:
         type: boolean
         required: false
         default: false
+      run_ios:
+        description: Compile the shared sources for iPhone and iPad Simulator
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -45,3 +50,26 @@ jobs:
       - name: Run macOS tests
         working-directory: ../pichi-voice-ci
         run: bash scripts/dev/macos.sh test
+
+  ios:
+    name: iOS simulator build
+    if: github.event_name == 'workflow_dispatch' && inputs.run_ios
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Create isolated build worktree
+        run: git worktree add --detach ../pichi-voice-ios-ci HEAD
+      - name: Check shared-source membership
+        working-directory: ../pichi-voice-ios-ci
+        run: python3 scripts/dev/update-mobile-project.py --check
+      - name: Build iPhone and iPad Simulator app
+        working-directory: ../pichi-voice-ios-ci
+        run: |
+          xcodebuild -project Fluid.xcodeproj -scheme PichiVoiceMobile \
+            -configuration Debug -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath .build/ios/DerivedData \
+            -clonedSourcePackagesDirPath .build/ios/SourcePackages -jobs 4 \
+            CODE_SIGN_IDENTITY= CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build

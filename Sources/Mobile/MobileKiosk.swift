@@ -16,7 +16,13 @@ enum MobileMeetingRecordingActions {
         let configuration = try await coordinator.defaultConfiguration(mode: .inRoom,
             title: PichiLocalization.text("In-room meeting"))
         guard !Task.isCancelled && canStart() else { throw CancellationError() }
-        _ = try await coordinator.startRecording(configuration: configuration)
+        // A new meeting over an interrupted or failed one starts as Record Again: the old meeting
+        // is resolved once capture runs, so its offer stops reopening, and stays if the start fails.
+        if let offer = coordinator.activeSession, offer.state == .interrupted || offer.state == .failed {
+            _ = try await coordinator.recordAgain(from: offer.id, configuration: configuration)
+        } else {
+            _ = try await coordinator.startRecording(configuration: configuration)
+        }
     }
 }
 
@@ -174,9 +180,9 @@ struct MobileKioskRoot: View {
                 VStack(spacing: theme.metrics.spacing.xxl) {
                     HStack {
                         Label(PichiLocalization.text(status),
-                              systemImage: coordinator.isRecording ? "record.circle" : "mic")
+                              systemImage: coordinator.isRecording ? "record.circle.fill" : "mic")
                             .font(theme.typography.bodyStrong)
-                            .foregroundStyle(coordinator.isRecording ? theme.palette.accentText : theme.palette.primaryText)
+                            .foregroundStyle(coordinator.isRecording ? theme.palette.readableText(.red) : theme.palette.primaryText)
                             .accessibilityIdentifier("kiosk.status")
                         Spacer(minLength: 12)
                         if coordinator.isRecording || !coordinator.isQuiescent {
@@ -188,14 +194,14 @@ struct MobileKioskRoot: View {
                         }
                     }
                     Spacer(minLength: compactHeight ? 0 : 24)
-                    AudioWaveformBars(color: theme.palette.accent, barCount: 7,
+                    AudioWaveformBars(color: coordinator.isRecording ? theme.palette.readableText(.red) : theme.palette.accent, barCount: 7,
                         barWidth: horizontalSizeClass == .regular ? 20 : 12,
                         barSpacing: horizontalSizeClass == .regular ? 14 : 10, minHeight: 8,
                         maxHeight: compactHeight ? 64 : horizontalSizeClass == .regular ? 216 : 144,
                         level: { CGFloat(coordinator.trackHealth[.microphone]?.level ?? 0) },
                         noiseThreshold: 0.02, isAnimating: coordinator.isRecording,
                         isIdleWaveEnabled: false)
-                        .foregroundStyle(theme.palette.accent)
+                        .foregroundStyle(coordinator.isRecording ? theme.palette.readableText(.red) : theme.palette.accent)
                         .frame(maxWidth: .infinity, minHeight: compactHeight ? 80 : horizontalSizeClass == .regular ? 248 : 176)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(PichiLocalization.text("Microphone"))
@@ -214,9 +220,9 @@ struct MobileKioskRoot: View {
             if coordinator.isRecording {
                 Button { stop() } label: {
                     Label(PichiLocalization.text("Stop Recording"), systemImage: "stop.fill")
-                        .foregroundStyle(theme.palette.accentForeground)
+                        .foregroundStyle(theme.palette.foreground(on: .red))
                         .frame(maxWidth: .infinity, minHeight: 48)
-                }.buttonStyle(.borderedProminent)
+                }.buttonStyle(.borderedProminent).tint(.red)
                     .disabled(isBusy).accessibilityIdentifier("kiosk.stop")
             } else if coordinator.isQuiescent && !isBusy {
                 Button { start() } label: {
@@ -265,12 +271,12 @@ struct MobileKioskRoot: View {
     }
     private func updateAwake() {
         if scenePhase == .active && coordinator.isRecording {
-            if awakeToken == nil { awakeToken = MobilePresentationAwakeRegistry.shared.acquire() }
+            if awakeToken == nil { awakeToken = MobileScreenAwakeRegistry.shared.acquire() }
         } else { releaseAwake() }
     }
     private func releaseAwake() {
         if let token = awakeToken {
-            awakeToken = nil; MobilePresentationAwakeRegistry.shared.release(token)
+            awakeToken = nil; MobileScreenAwakeRegistry.shared.release(token)
         }
     }
 }
@@ -325,10 +331,11 @@ struct MobileKioskSettings: View {
 
     var body: some View {
         Form {
+            // What the mode is comes first; what to check before turning it on is the footer.
             Section {
-                Text(PichiLocalization.text("Configure recording, transcription and storage first. Restricted access keeps these settings and allows only recording and your voice setup."))
+                Text(PichiLocalization.text("Only recording stays available: start, stop and your own voice setup. Meetings, transcripts and settings open with the administrator password."))
             } footer: {
-                MobileSettingsFooter(PichiLocalization.text("To keep audio on this device, enable Save Audio and choose the recording retention period before restricting access."))
+                MobileSettingsFooter(PichiLocalization.text("For a shared device in a meeting room. Recording and storage settings can't be changed in restricted mode, so check them first."))
             }
             Section {
                 SecureField(PichiLocalization.text(access.hasPassword ? "Current password" : "Password"), text: $password,

@@ -20,7 +20,7 @@ final nonisolated class ConcealablePreferences: UserDefaults, @unchecked Sendabl
     func conceal() { self.lock.withLock { self.isReadable = false } }
 }
 nonisolated struct SpeechModelPerformanceRatings { let speedRating: Int; let accuracyRating: Int; let speedPercent: Double; let accuracyPercent: Double }
-nonisolated struct SpeechModelLibraryMetadata { let size: String; let processor: String; let recommendedMemory: String; let features: String; let performanceRatings: SpeechModelPerformanceRatings; let performanceExplanation: String }
+nonisolated struct SpeechModelLibraryMetadata { let size: String; let processor: String; let recommendedMemory: String; let features: String; let performanceRatings: SpeechModelPerformanceRatings; let performanceExplanation: String; let cardDescription: String?; let hardwareLabel: String? }
 @MainActor protocol TranscriptionProvider {}
 nonisolated final class DebugLogger {
     static let shared = DebugLogger()
@@ -48,6 +48,12 @@ nonisolated enum ProgressiveFileDownloader {
         try manager.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? manager.removeItem(at: root.deletingLastPathComponent()) }
         let publicDescriptor = GigaAMModelCatalog.downloadableModel
+        self.expect(publicDescriptor.libraryMetadata.hardwareLabel == "Apple Silicon", "The public model advertises Apple Silicon without changing its Intel compatibility")
+        self.expect(publicDescriptor.libraryMetadata.cardDescription?.contains("punctuation") == true, "The public formatted export describes punctuation")
+        self.expect(publicDescriptor.libraryMetadata.cardDescription?.contains("Intel") == true, "The summary makes CPU compatibility explicit")
+        for descriptor in GigaAMModelCatalog.models where descriptor.format == .onnx && descriptor.vocabularyFile == nil {
+            self.expect(descriptor.libraryMetadata.cardDescription?.contains("punctuation") == false, "Character exports do not inherit formatting claims")
+        }
         let importedDescriptor = GigaAMModelCatalog.models.first { $0.id != publicDescriptor.id }!
         let publicRoot = root.appendingPathComponent(publicDescriptor.id, isDirectory: true)
         let importedRoot = root.appendingPathComponent(importedDescriptor.id, isDirectory: true)

@@ -176,7 +176,7 @@ extension VoiceEngineSettingsView {
                             Spacer()
                         }
 
-                        Text(LocalizedStringKey(model.cardDescription))
+                        Text(PichiLocalization.text(metadata?.cardDescription ?? model.cardDescription))
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
                             .lineLimit(2)
@@ -187,13 +187,14 @@ extension VoiceEngineSettingsView {
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
 
-                        if model.requiresAppleSilicon {
-                            Text("Apple Silicon")
+                        if let hardware = metadata?.hardwareLabel ?? (model.requiresAppleSilicon ? "Apple Silicon" : nil) {
+                            Text(PichiLocalization.text(hardware))
                                 .font(self.theme.typography.bodySmallStrong)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .background(Capsule().fill(self.theme.palette.elevatedCardBackground))
                                 .foregroundStyle(self.theme.palette.accentText)
+                                .help(PichiLocalization.text(metadata?.cardDescription ?? model.cardDescription))
                         }
 
                         Text(LocalizedStringKey(model.languageSupport))
@@ -274,7 +275,7 @@ extension VoiceEngineSettingsView {
             Text(model.displayName)
                 .font(self.theme.typography.sectionTitle)
 
-            Text(PichiLocalization.text(model.cardDescription))
+            Text(PichiLocalization.text(metadata?.cardDescription ?? model.cardDescription))
 
             if let creditLine = model.creditLine {
                 Text(PichiLocalization.text(creditLine))

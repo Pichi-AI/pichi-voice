@@ -40,20 +40,22 @@ import Foundation
         let kind: OperationKind
         let task: Task<Void, Error>
     }
-    private var ownedOperation: OwnedOperation?
+    private var ownedOperation: OwnedOperation? { didSet { objectWillChange.send() } }
     /// Owns the complete user command, including any pre-admission logout. It is
     /// deliberately outside ownedOperation because the logout boundary joins that slot.
     private struct AuthenticationCommand {
         let id: UUID
         let task: Task<Void, Never>
     }
-    private var authenticationCommand: AuthenticationCommand?
+    private var authenticationCommand: AuthenticationCommand? { didSet { objectWillChange.send() } }
     private var isShuttingDown = false
     private var refreshTask: Task<AccountGrant, Error>?
     private var refreshID: UUID?
     private var logoutTask: Task<Void, Never>?
-    private var boundaryInProgress = false
-    private var cleanupRequired = false
+    // Availability (isSignInAvailable, isCurrent) is read by views that stay open across a sign-in or
+    // workspace boundary; these flags redraw them when the boundary settles.
+    private var boundaryInProgress = false { didSet { objectWillChange.send() } }
+    private var cleanupRequired = false { didSet { objectWillChange.send() } }
     private var requiresAccountValidation = false
     private var latestDeviceRefreshToken: String?
 

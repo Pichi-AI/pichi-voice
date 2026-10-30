@@ -215,8 +215,8 @@ nonisolated struct MeetingApplicationIdentity: Codable, Equatable, Sendable {
     var displayID: UInt32?
     /// The specific window auto-detection found evidence in. Additive/optional so pre-existing
     /// manifests still decode (synthesized Codable uses decodeIfPresent/encodeIfPresent for
-    /// Optional properties). `MeetingWindowSelector` prefers it when set and it still exists —
-    /// prevents recording a different foreground window than the one that was actually detected.
+    /// Optional properties). This remains detection evidence; selected-application audio follows
+    /// the resolved process across window changes instead of binding capture to this window.
     var windowID: UInt32?
 
     init(
@@ -1129,6 +1129,14 @@ nonisolated struct MeetingProfileOwnership: Codable, Equatable, Sendable {
     let internalUserID: String?
     let organizationID: String?
     let workspaceID: String?
+
+    static let guest = Self(profileID: "guest", issuer: nil, subject: nil,
+        internalUserID: nil, organizationID: nil, workspaceID: nil)
+
+    /// Schema-1 ownerless records are legacy guest data, never an account admission.
+    func matchesPersistedOwner(_ owner: Self?) -> Bool {
+        owner == self || (owner == nil && self == .guest)
+    }
 }
 
 nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
@@ -1180,9 +1188,11 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     var piiRedactionEnabled: Bool? = nil
     /// New protected captures persist local transcript data as ciphertext.
     var requiresEncryptedPersistence: Bool? = nil
-    /// Local display/export controls consume this immutable per-record policy. Trusted
-    /// processing and publication owners retain their existing store read operations.
-    var isLocalContentConcealed: Bool { requiresEncryptedPersistence == true }
+    /// Device guest meetings are shared local history, including encrypted-at-rest recordings.
+    /// Account-protected captures retain their existing local display/export restrictions.
+    var isLocalContentConcealed: Bool {
+        requiresEncryptedPersistence == true && profileOwnership != MeetingProfileOwnership.guest
+    }
     /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
     /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
     var transcriptTimeDomain: MeetingTranscriptTimeDomain? = nil
@@ -1241,8 +1251,11 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
 
     var displayTitle: String { self.displayTitle(language: PichiLocalization.language) }
 
+    /// A default in-room title is composed with its start time, so lists need not repeat the date.
+    var displayTitleIncludesStart: Bool { self.defaultTitleBase != nil && self.mode == .inRoom }
+
     func displayTitle(language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
-        guard self.defaultTitleBase != nil, self.mode == .inRoom else { return self.title }
+        guard self.displayTitleIncludesStart else { return self.title }
         let base = self.location?.address(for: language)
             ?? PichiLocalization.text("In-room meeting", language: language, bundle: bundle)
         let date = self.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened)
