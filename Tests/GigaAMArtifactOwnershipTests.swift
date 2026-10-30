@@ -42,6 +42,14 @@ nonisolated enum ProgressiveFileDownloader {
         }
         self.checks += 1
     }
+    @MainActor static func snapshot(_ provider: PichiGigaAMProvider) -> GigaAMDictionaryAcoustics.Snapshot? {
+        guard let optional = Mirror(reflecting: provider).children.first(where: { $0.label == "dictionarySnapshot" })?.value
+        else { return nil }
+        return Mirror(reflecting: optional).children.first?.value as? GigaAMDictionaryAcoustics.Snapshot
+    }
+    @MainActor static func usesEncoder(_ provider: PichiGigaAMProvider) -> Bool {
+        Mirror(reflecting: provider).children.first(where: { $0.label == "dictionaryUsesEncoderFeatures" })?.value as? Bool ?? false
+    }
     @MainActor static func main() async throws {
         let root = PichiGigaAMModelStore.defaultDirectory
         let manager = FileManager.default
@@ -77,6 +85,76 @@ nonisolated enum ProgressiveFileDownloader {
         let store = PichiGigaAMModelStore(preferences: preferences, environment: [:]) { _, _, _ in
             preconditionFailure("Installed synthetic fixtures must not download")
         }
+
+        // Freeze the new dictionary recipe from artifact metadata before any
+        // runtime load. No dictionary entries means no private read is admitted.
+        self.expect(!GigaAMRuntime.encoderFeatureAPIAvailable, "The inert runtime does not advertise features by default")
+        self.expect(!store.encoderDictionarySupported(fingerprint: publicDescriptor.fingerprint),
+                    "Missing SDK feature support rejects the encoder recipe before prepare")
+        GigaAMArtifactTestCapabilities.encoderFeatureAPIAvailable = true
+        self.expect(store.encoderDictionarySupported(fingerprint: publicDescriptor.fingerprint),
+                    "An exact registered GGUF fingerprint admits encoder features without a model load")
+        self.expect(!store.encoderDictionarySupported(fingerprint: publicDescriptor.fingerprint + "-changed"),
+                    "A changed artifact fingerprint cannot inherit encoder support")
+        if let nonGGUF = GigaAMModelCatalog.models.first(where: { $0.format != .gguf }) {
+            self.expect(!store.encoderDictionarySupported(fingerprint: nonGGUF.fingerprint),
+                        "Registered non-GGUF exports cannot inherit the native encoder API")
+        }
+        DictionaryMatcherExperiment.sharedFeaturesEnabled = true
+        DictionaryMatcherExperiment.generation = "before-cold-prepare"
+        let cold = PichiGigaAMProvider(modelStore: store, expectedModelFingerprint: publicDescriptor.fingerprint)
+        let coldLease = UUID()
+        try cold.beginAdmittedTranscription(leaseID: coldLease)
+        self.expect(!cold.isReady && cold.loadedModelFingerprint == nil,
+                    "Metadata admission does not prepare or publish an inference runtime")
+        self.expect(self.usesEncoder(cold), "Cold admission freezes the available encoder recipe")
+        let admitted = self.snapshot(cold)
+        self.expect(admitted?.modelKey == GigaAMEncoderDictionaryStorage.modelKey(fingerprint: publicDescriptor.fingerprint),
+                    "The admitted encoder key binds the exact artifact and actual storage recipe")
+        self.expect(admitted?.enabled == true && admitted?.generation == "before-cold-prepare",
+                    "Admission freezes the dictionary enable flag and generation")
+        self.expect(admitted?.pronunciation == nil && admitted?.negatives == nil,
+                    "An empty dictionary admits no private evidence handles")
+        GigaAMArtifactTestCapabilities.encoderFeatureAPIAvailable = false
+        DictionaryMatcherExperiment.sharedFeaturesEnabled = false
+        DictionaryMatcherExperiment.generation = "changed-after-admission"
+        try cold.beginAdmittedTranscription(leaseID: coldLease)
+        self.expect(self.usesEncoder(cold) && self.snapshot(cold)?.modelKey == admitted?.modelKey &&
+                    self.snapshot(cold)?.generation == admitted?.generation && self.snapshot(cold)?.enabled == true,
+                    "Repeated admission of the same lease preserves recipe and flags after capability changes")
+        let otherLease = UUID()
+        do { try cold.beginAdmittedTranscription(leaseID: otherLease); preconditionFailure("A second lease must be rejected") }
+        catch is CancellationError { self.checks += 1 }
+        cold.endAdmittedTranscription(leaseID: otherLease)
+        self.expect(self.snapshot(cold)?.modelKey == admitted?.modelKey && self.usesEncoder(cold),
+                    "Another lease cannot release the frozen encoder snapshot")
+        cold.endAdmittedTranscription(leaseID: coldLease)
+        self.expect(self.snapshot(cold) == nil && !self.usesEncoder(cold),
+                    "The owning lease releases its snapshot and encoder capture state")
+        let nextLease = UUID()
+        try cold.beginAdmittedTranscription(leaseID: nextLease)
+        self.expect(!self.usesEncoder(cold) && self.snapshot(cold)?.enabled == false &&
+                    self.snapshot(cold)?.generation == "changed-after-admission" &&
+                    self.snapshot(cold)?.modelKey == GigaAMDictionaryAcoustics.modelKey(fingerprint: publicDescriptor.fingerprint),
+                    "A later lease captures the changed capability and disabled state using the actual legacy recipe")
+        cold.endAdmittedTranscription(leaseID: nextLease)
+        let mismatchedEvidence = DictionaryLearningAudioEvidence(recordingID: UUID(),
+            modelKey: GigaAMEncoderDictionaryStorage.modelKey(fingerprint: publicDescriptor.fingerprint + "-changed"),
+            observedText: "synthetic", sourceWordRange: 0..<1, sourceSampleRange: 0..<1,
+            focalSampleRange: 0..<1, samples: [0])
+        self.expect(try await cold.originalAudioEnrollment(mismatchedEvidence) == nil,
+                    "Original encoder evidence from a different artifact is rejected before storage or inference")
+        let wrong = PichiGigaAMProvider(modelStore: store, expectedModelFingerprint: publicDescriptor.fingerprint + "-changed")
+        await GigaAMArtifactTestGate.shared.reset()
+        do { try await wrong.prepare(); preconditionFailure("An unregistered fingerprint must not prepare") }
+        catch GigaAMError.missingModels { self.checks += 1 }
+        self.expect(await GigaAMArtifactTestGate.shared.loadedDirectory == nil,
+                    "Fingerprint rejection happens before the runtime load gate")
+        self.expect(!wrong.isReady && wrong.loadedModelFingerprint == nil,
+                    "Fingerprint rejection cannot publish loaded state")
+        await wrong.unloadModel()
+        DictionaryMatcherExperiment.generation = "artifact-ownership-inert-dictionary"
+
         let provider = PichiGigaAMProvider(modelStore: store)
         let lease = UUID()
         try provider.beginAdmittedTranscription(leaseID: lease)
