@@ -64186,6 +64186,618 @@
           }
         }
       }
+    },
+    "Expression groups": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expression groups"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Группы выражений"
+          }
+        }
+      }
+    },
+    "Groups are off until you enable them. Review the expressions in each group. Context examples are explanations, not additional dictionary rules.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Groups are off until you enable them. Review the expressions in each group. Context examples are explanations, not additional dictionary rules."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Группы выключены, пока вы их не включите. Проверьте выражения в каждой группе. Контекстные примеры служат пояснениями и не добавляются в словарь."
+          }
+        }
+      }
+    },
+    "Hide topics": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide topics"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрывать темы"
+          }
+        }
+      }
+    },
+    "Experimental topic detection": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Experimental topic detection"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспериментальное распознавание тем"
+          }
+        }
+      }
+    },
+    "A local topic model can hide complete sentences about selected topics, including indirect wording. This experimental mode may miss phrases or hide unrelated sentences.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A local topic model can hide complete sentences about selected topics, including indirect wording. This experimental mode may miss phrases or hide unrelated sentences."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальная модель может скрывать целые предложения на выбранные темы, включая косвенные формулировки. Экспериментальный режим может пропускать фразы или скрывать посторонние предложения."
+          }
+        }
+      }
+    },
+    "Russian word forms": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Russian word forms"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Словоформы русского языка"
+          }
+        }
+      }
+    },
+    "Exact wording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exact wording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Точная формулировка"
+          }
+        }
+      }
+    },
+    "Matching": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Matching"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сопоставление"
+          }
+        }
+      }
+    },
+    "Recognized Russian words include case and number forms. Unknown words and other languages use exact wording; add any needed variants. Parts of other words are kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recognized Russian words include case and number forms. Unknown words and other languages use exact wording; add any needed variants. Parts of other words are kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для известных русских слов учитываются падежи и числа. Неизвестные слова и другие языки сопоставляются буквально; добавьте нужные варианты. Части других слов сохраняются."
+          }
+        }
+      }
+    },
+    "Hide this group's expressions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide this group's expressions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрывать выражения этой группы"
+          }
+        }
+      }
+    },
+    "Could not update privacy rules. The existing rules were kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not update privacy rules. The existing rules were kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось обновить правила очистки. Прежние правила сохранены."
+          }
+        }
+      }
+    },
+    "Expressions to hide": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expressions to hide"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выражения для скрытия"
+          }
+        }
+      }
+    },
+    "The listed expressions also match supported Russian word forms. They are hidden in quotations, denials and training examples too.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The listed expressions also match supported Russian word forms. They are hidden in quotations, denials and training examples too."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для выражений из списка учитываются поддерживаемые русские словоформы. Они скрываются также в цитатах, отрицаниях и учебных примерах."
+          }
+        }
+      }
+    },
+    "Examples that need context": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Examples that need context"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Примеры, требующие контекста"
+          }
+        }
+      }
+    },
+    "These examples are not added as dictionary rules. Topic detection is a separate optional setting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These examples are not added as dictionary rules. Topic detection is a separate optional setting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эти примеры не добавляются в словарь. Распознавание тем включается отдельно."
+          }
+        }
+      }
+    },
+    "Local topic model is ready": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local topic model is ready"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальная модель тем готова"
+          }
+        }
+      }
+    },
+    "Import a local topic model to begin": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import a local topic model to begin"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для начала импортируйте локальную модель тем"
+          }
+        }
+      }
+    },
+    "Import local topic model": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import local topic model"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортировать локальную модель тем"
+          }
+        }
+      }
+    },
+    "The model stays on this device. Importing it does not enable any topic. Settings apply to new recordings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model stays on this device. Importing it does not enable any topic. Settings apply to new recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель остаётся на этом устройстве. Импорт не включает скрытие тем. Настройки применяются к новым записям."
+          }
+        }
+      }
+    },
+    "This model has no supported topics.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This model has no supported topics."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В этой модели нет поддерживаемых тем."
+          }
+        }
+      }
+    },
+    "Topics to hide": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Topics to hide"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Темы для скрытия"
+          }
+        }
+      }
+    },
+    "Topic detection hides complete sentences, including quotations and denials. Live text waits for enough context. A processing error stops publication instead of showing unfiltered text.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Topic detection hides complete sentences, including quotations and denials. Live text waits for enough context. A processing error stops publication instead of showing unfiltered text."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание тем скрывает целые предложения, включая цитаты и отрицания. Живой текст ожидает достаточного контекста. При ошибке обработки вывод останавливается, чтобы не показать неочищенный текст."
+          }
+        }
+      }
+    },
+    "This experimental model does not guarantee recognition of every indirect phrase. Review the cleaned transcript before sharing it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This experimental model does not guarantee recognition of every indirect phrase. Review the cleaned transcript before sharing it."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспериментальная модель не гарантирует распознавание всех косвенных формулировок. Проверьте очищенную расшифровку перед отправкой."
+          }
+        }
+      }
+    },
+    "Could not import the local topic model. The existing model and rules were kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not import the local topic model. The existing model and rules were kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось импортировать локальную модель тем. Прежняя модель и правила сохранены."
+          }
+        }
+      }
+    },
+    "Bribes and illicit remuneration": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bribes and illicit remuneration"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Взятки и незаконное вознаграждение"
+          }
+        }
+      }
+    },
+    "Hide the listed expressions, including quotations and denials. Ambiguous words such as rollback or gratitude need context. A match does not establish misconduct.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide the listed expressions, including quotations and denials. Ambiguous words such as rollback or gratitude need context. A match does not establish misconduct."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрывать выражения из списка, включая цитаты и отрицания. Неоднозначные слова, например «откат» или «благодарность», требуют контекста. Совпадение не доказывает нарушения."
+          }
+        }
+      }
+    },
+    "Procurement collusion": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Procurement collusion"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сговор в закупках"
+          }
+        }
+      }
+    },
+    "Hide expressions about arranged bidding, including prevention and training discussions. Ordinary tenders and technical specifications remain separate.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide expressions about arranged bidding, including prevention and training discussions. Ordinary tenders and technical specifications remain separate."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрывать выражения о договорных торгах, включая обсуждение профилактики и обучение. Обычные тендеры и технические задания рассматриваются отдельно."
+          }
+        }
+      }
+    },
+    "Commercial metrics and pricing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Commercial metrics and pricing"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Коммерческие показатели и цены"
+          }
+        }
+      }
+    },
+    "Hide the listed business metrics and pricing expressions, including public examples. This broad group does not determine whether information is confidential.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide the listed business metrics and pricing expressions, including public examples. This broad group does not determine whether information is confidential."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрывать показатели бизнеса и выражения о ценах из списка, включая публичные примеры. Эта широкая группа не определяет конфиденциальность сведений."
+          }
+        }
+      }
+    },
+    "Investments and corporate transactions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Investments and corporate transactions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Инвестиции и корпоративные сделки"
+          }
+        }
+      }
+    },
+    "Hide the listed investment and transaction expressions, including announced deals and educational examples. Confidentiality is a user choice.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide the listed investment and transaction expressions, including announced deals and educational examples. Confidentiality is a user choice."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрывать выражения об инвестициях и сделках из списка, включая объявленные сделки и учебные примеры. Решение о конфиденциальности принимает пользователь."
+          }
+        }
+      }
+    },
+    "Employee compensation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Employee compensation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оплата труда сотрудников"
+          }
+        }
+      }
+    },
+    "Hide listed pay and employment-package expressions, including published salary ranges and general policy discussions. Ordinary offers and grades need context.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide listed pay and employment-package expressions, including published salary ranges and general policy discussions. Ordinary offers and grades need context."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрывать выражения об оплате труда и условиях найма из списка, включая опубликованные зарплатные вилки и обсуждение общих правил. Обычные офферы и грейды требуют контекста."
+          }
+        }
+      }
+    },
+    "Health and medical information": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Health and medical information"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Здоровье и медицинские сведения"
+          }
+        }
+      }
+    },
+    "Hide listed medical expressions, including denials and general medical discussions. This topic setting is separate from identifying a person's name.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide listed medical expressions, including denials and general medical discussions. This topic setting is separate from identifying a person's name."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрывать медицинские выражения из списка, включая отрицания и общие медицинские обсуждения. Эта настройка темы работает отдельно от распознавания имени человека."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
