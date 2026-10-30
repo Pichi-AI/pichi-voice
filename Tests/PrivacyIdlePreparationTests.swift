@@ -81,6 +81,10 @@ private actor ReadinessSnapshotGate {
     var requests = 0
     func prepare(modelID: String) async throws { requests += 1 }
 }
+@MainActor final class IdleSceneCloudProbe {
+    var sceneEvents: [Bool] = []
+    func notifySceneActive(_ active: Bool) async { sceneEvents.append(active) }
+}
 struct IdleSceneSettingsProbe {
     struct Model { let rawValue = "synthetic-model" }
     let selectedSpeechModel = Model()
@@ -89,18 +93,25 @@ struct IdleSceneSettingsProbe {
     let meetingSessionCoordinator = IdleSceneCoordinatorProbe()
     let privacyActivation = IdleScenePrivacyActivationProbe()
     let requiredResources = IdleSceneRequiredResourcesProbe()
+    let cloudPublication: IdleSceneCloudProbe? = IdleSceneCloudProbe()
     let settings = IdleSceneSettingsProbe()
     var requiredPreparationTask: Task<Void, Never>?
     var isUIReady = false
     var hasRestoredInitialState = false
+    var hasRestoredAccount = false
+    var accountRestorationAllowed = true
     var isSceneActive = false
     var preparations = 0
     lazy var controller = MeetingIdlePreparationController<UUID>(prepare: { [weak self] in
         await MainActor.run { self?.preparations += 1 }
         return UUID()
     }, release: { _ in })
+    // Authentication and encrypted persistence are independent tested services.
+    // This explicit boundary controls only whether they admitted private startup.
+    func restoreAccountBeforePrivateUI() async { hasRestoredAccount = accountRestorationAllowed }
     func updateIdlePreparation() async {
-        await controller.update(.init(isSceneActive: isSceneActive, isUIReady: isUIReady && hasRestoredInitialState,
+        await controller.update(.init(isSceneActive: isSceneActive,
+            isUIReady: isUIReady && hasRestoredInitialState && PrivateProfileStorage.acceptsNewWork,
             preparationEnabled: true, configurationIdentity: "scene-lifecycle", hasRecordingActivity: false, hasOtherModelWork: false))
     }
 }
@@ -142,6 +153,8 @@ struct PrivacyIdlePreparationTests {
 
     @MainActor
     static func main() async throws {
+        let originalProfile = PrivateProfileStorage.current
+        defer { PrivateProfileStorage.select(originalProfile) }
         // The initial view task captures an inactive phase while restore is suspended.
         // A later actual foreground event must remain authoritative after restore joins.
         // Both host methods and the task's service calls are extracted from MobileApp.
@@ -156,7 +169,50 @@ struct PrivacyIdlePreparationTests {
             await until { await MainActor.run { host.preparations == 1 } }
             check(mobileSceneUsesInitialCallback, "One scene callback must supply both initial and later phases")
             check(host.hasRestoredInitialState && host.preparations == 1, "Foreground preparation starts once after restoration joins")
+            check(host.hasRestoredAccount && host.cloudPublication?.sceneEvents == [true],
+                "The actual scene callback retains account readiness and notifies the cloud boundary")
+            await host.requiredPreparationTask?.value
             await host.controller.shutdown()
+        }
+        // Private startup must stay closed if account restoration is unavailable.
+        do {
+            let host = IdleSceneHostProbe()
+            host.accountRestorationAllowed = false
+            await host.setSceneActive(true)
+            await host.signalUIReady()
+            await settle()
+            check(!host.meetingSessionCoordinator.restore.entered && !host.hasRestoredInitialState
+                && host.preparations == 0 && host.requiredResources.requests == 0,
+                "Unrestored account cannot read meetings or start model preparation")
+            await host.controller.shutdown()
+        }
+        do {
+            PrivateProfileStorage.closeAdmission()
+            let host = IdleSceneHostProbe()
+            await host.setSceneActive(true)
+            await host.signalUIReady()
+            await settle()
+            check(host.hasRestoredAccount && !host.meetingSessionCoordinator.restore.entered
+                && !host.hasRestoredInitialState && host.preparations == 0,
+                "Closed private-profile admission prevents initial local restoration and idle work")
+            await host.controller.shutdown()
+            PrivateProfileStorage.select(originalProfile)
+        }
+        do {
+            let host = IdleSceneHostProbe()
+            await host.setSceneActive(true)
+            let initial = Task { await host.signalUIReady() }
+            await until { await MainActor.run { host.meetingSessionCoordinator.restore.entered } }
+            let replacement = try PrivateProfileStorage.proposed(context: nil, generation: UUID())
+            PrivateProfileStorage.select(replacement)
+            host.meetingSessionCoordinator.restore.finish()
+            await initial.value
+            await settle()
+            check(!host.hasRestoredInitialState && host.privacyActivation.restores == 0
+                && host.preparations == 0 && host.requiredResources.requests == 0,
+                "A restore completing for an old profile cannot admit preparation for its replacement")
+            await host.controller.shutdown()
+            PrivateProfileStorage.select(originalProfile)
         }
         // Readiness is a resource-generation snapshot, not a promise that remains true
         // after an owner-controlled unload completes while the callback is suspended.
@@ -385,6 +441,6 @@ struct PrivacyIdlePreparationTests {
             await controller.update(state); await settle()
             check(attempts == 2, "Shutdown cannot restart optional preparation")
         }
-        print("Privacy idle preparation tests passed: \(assertions) assertions across 17 ownership/lifecycle scenarios")
+        print("Privacy idle preparation tests passed: \(assertions) assertions across 20 ownership/lifecycle scenarios")
     }
 }
