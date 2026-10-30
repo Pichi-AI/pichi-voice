@@ -1,5 +1,10 @@
 import Foundation
 import CryptoKit
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 
 nonisolated enum SensitiveTopicClassifierError: Error, Equatable {
     case invalidArtifact, checksumMismatch, unsupportedTopic, inputTooLong, sentenceTooLong
@@ -59,14 +64,38 @@ nonisolated struct SensitiveTopicClassifierSnapshot: Sendable {
     }
 
     static func load(artifactURL: URL, expectedSHA256: String, selectedTopicIDs: Set<String>) throws -> Self {
-        let values = try artifactURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
-        guard values.isRegularFile == true, values.isSymbolicLink != true,
-              let count = values.fileSize, count > 0, count <= maximumArtifactBytes else {
+        let data = try readArtifact(at: artifactURL)
+        return try .init(data: data, expectedSHA256: expectedSHA256, selectedTopicIDs: selectedTopicIDs)
+    }
+
+    /// Descriptor-based bounded reads reject FIFOs, symlinks and replacement races.
+    /// The importing settings service uses the same admission as inference.
+    static func readArtifact(at url: URL) throws -> Data {
+        guard url.isFileURL else { throw SensitiveTopicClassifierError.invalidArtifact }
+        let descriptor = open(url.path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW)
+        guard descriptor >= 0 else { throw SensitiveTopicClassifierError.invalidArtifact }
+        defer { close(descriptor) }
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_size > 0, metadata.st_size <= maximumArtifactBytes else {
             throw SensitiveTopicClassifierError.invalidArtifact
         }
-        let data = try Data(contentsOf: artifactURL)
-        guard data.count == count, data.count <= maximumArtifactBytes else { throw SensitiveTopicClassifierError.invalidArtifact }
-        return try .init(data: data, expectedSHA256: expectedSHA256, selectedTopicIDs: selectedTopicIDs)
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 16_384)
+        while data.count <= maximumArtifactBytes {
+            let count = read(descriptor, &buffer, min(buffer.count, maximumArtifactBytes + 1 - data.count))
+            if count == 0 { break }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw SensitiveTopicClassifierError.invalidArtifact
+            }
+            data.append(contentsOf: buffer.prefix(count))
+        }
+        guard data.count == metadata.st_size, data.count <= maximumArtifactBytes else {
+            throw SensitiveTopicClassifierError.invalidArtifact
+        }
+        return data
     }
 
     init(data: Data, expectedSHA256: String, selectedTopicIDs: Set<String>) throws {

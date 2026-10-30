@@ -1016,6 +1016,30 @@ actor MeetingTranscriptPrivacyContext {
             }
             if tokens >= Self.minimumPendingTokens { break }
         }
+        // A contextual detector may need a complete unit, even when its beginning
+        // is older than the ordinary lexical tail. Snap durable publication back
+        // to its approved boundary, retaining original segment identities.
+        let firstHeld = combinedOrdered.count - heldCount
+        let candidatePrefix = combinedOrdered.prefix(firstHeld).map(\.text).joined(separator: " ")
+        if let limit = try redactor.durablePublicationLimit(in: candidatePrefix) {
+            guard limit >= 0, limit <= candidatePrefix.utf16.count,
+                  Range(NSRange(location: 0, length: limit), in: candidatePrefix) != nil else {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+            }
+            var offset = 0
+            var publicationCount = 0
+            for segment in combinedOrdered.prefix(firstHeld) {
+                let end = offset + segment.text.utf16.count
+                if end <= limit { publicationCount += 1 }
+                offset = end + 1
+            }
+            heldCount = combinedOrdered.count - publicationCount
+            let held = combinedOrdered.suffix(heldCount)
+            guard heldCount <= Self.maximumPendingSegments,
+                  held.reduce(0, { $0 + $1.text.utf16.count + 1 }) <= Self.maximumPendingUTF16 else {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+            }
+        }
         let tail = Array(combinedOrdered.suffix(heldCount))
         let heldIDs = Set(tail.map(\.id))
         var safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(combined, using: redactor,

@@ -641,6 +641,60 @@ final class MobileNavigationUITests: XCTestCase {
         #endif
     }
 
+    func testSensitivePolicySettingsInBothLanguagesAndThemes() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Staged privacy settings review requires an owned simulator")
+        #else
+        let revision = ProcessInfo.processInfo.environment["PICHI_TEST_REVISION"] ?? "candidate"
+        func scrollTo(_ element: XCUIElement) {
+            let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+            for _ in 0..<10 where !element.exists || !element.isHittable { scroll.swipeUp() }
+            XCTAssertTrue(element.exists && element.isHittable)
+        }
+        for (language, appearance) in [("ru", "light"), ("ru", "dark"), ("en", "light")] {
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
+                "-MeetingPIIRedactionEnabled", "NO", "-MeetingPIIRedactionRequested", "NO"]
+            app.launch()
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 20))
+            openNavigation("settings", title: language == "ru" ? "Настройки" : "Settings")
+            let privacy = app.buttons["settings.privacy"]
+            scrollTo(privacy); privacy.tap()
+            let add = app.buttons["privacy.dictionary.add"]
+            scrollTo(add); add.tap()
+            XCTAssertTrue(app.textFields["privacy.dictionary.phrase"].waitForExistence(timeout: 5)
+                || app.textViews["privacy.dictionary.phrase"].exists)
+            capture("sensitive-\(revision)-\(language)-\(appearance)-dictionary-editor")
+            app.buttons["privacy.dictionary.cancel"].tap()
+            let group = app.buttons["privacy.groups.illicit-remuneration"]
+            scrollTo(group)
+            capture("sensitive-\(revision)-\(language)-\(appearance)-groups")
+            group.tap()
+            let enabled = app.switches["privacy.groups.illicit-remuneration.enabled"]
+            XCTAssertTrue(enabled.waitForExistence(timeout: 5))
+            capture("sensitive-\(revision)-\(language)-\(appearance)-group-detail")
+            let edit = app.buttons["privacy.groups.illicit-remuneration.edit"]
+            scrollTo(edit); edit.tap()
+            XCTAssertTrue(app.textViews["privacy.groups.illicit-remuneration.expressions"].waitForExistence(timeout: 5))
+            capture("sensitive-\(revision)-\(language)-\(appearance)-group-editor")
+            app.buttons["privacy.groups.illicit-remuneration.cancel"].tap()
+            // Exercise the actual shared settings service, then restore this owned fixture.
+            let old = enabled.value as? String
+            try tapNativeSwitch("privacy.groups.illicit-remuneration.enabled")
+            XCTAssertNotEqual(enabled.value as? String, old)
+            try tapNativeSwitch("privacy.groups.illicit-remuneration.enabled")
+            XCTAssertEqual(enabled.value as? String, old)
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            let topics = app.buttons["privacy.topics.open"]
+            scrollTo(topics); topics.tap()
+            XCTAssertTrue(app.buttons["privacy.topics.import"].waitForExistence(timeout: 5))
+            capture("sensitive-\(revision)-\(language)-\(appearance)-topics")
+        }
+        app.terminate()
+        #endif
+    }
+
     func testMVPSettingsAndOrientation() throws {
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
         XCTAssertGreaterThanOrEqual(app.buttons["meeting.start"].frame.height, 44)

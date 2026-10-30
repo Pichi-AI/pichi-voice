@@ -23,7 +23,7 @@ private struct DictionaryOverlappingRedactor: TranscriptTextRedacting {
 extension MeetingPrivacyContextTests {
     static func sensitiveDictionarySuite() async throws {
         func dictionary(_ phrases: [String]) throws -> TranscriptSensitiveDictionarySnapshot {
-            try .init(entries: phrases.map { .init(phrase: $0) })
+            try .init(entries: phrases.map { .init(phrase: $0, matchMode: .exact) })
         }
         func redactor(_ phrases: [String]) throws -> TranscriptDictionaryRedactor {
             try .init(wrapped: DictionaryEchoRedactor(), dictionary: dictionary(phrases))
@@ -62,9 +62,37 @@ extension MeetingPrivacyContextTests {
         let empty = TranscriptDictionaryRedactor(wrapped: DictionaryEchoRedactor(), dictionary: try dictionary([]))
         try check(empty.checkpointIdentity == "synthetic-model-v1" && empty.supportsSpeechBoundaryAdmission, "Empty dictionary broke checkpoint compatibility")
         try check(dictionaryRedactor.checkpointIdentity?.contains(first.entries[0].phrase) == false, "Fingerprint exposed phrase text")
+        try await sensitiveDictionaryWordFormsSuite()
         try await sensitiveDictionaryPersistenceSuite()
         try await sensitiveDictionaryProjectionSuite()
         print("Sensitive dictionary synthetic suites passed")
+    }
+
+    private static func sensitiveDictionaryWordFormsSuite() async throws {
+        let dictionary = try TranscriptSensitiveDictionarySnapshot(entries: [.init(phrase: "взятка"), .init(phrase: "откат")])
+        let redactor = TranscriptDictionaryRedactor(wrapped: DictionaryEchoRedactor(), dictionary: dictionary)
+        for word in ["взятка", "взятки", "взятке", "взятку", "взяткой", "взяткою", "взяток", "взяткам", "взятками", "взятках",
+                     "откат", "отката", "откату", "откатом", "откате", "откаты", "откатов", "откатам", "откатами", "откатах"] {
+            try check(try await redactor.redactWithSpans("О \(word)!").text == "О [СКРЫТО]!", "Word-form mismatch: \(word)")
+        }
+        try check(try await redactor.redactWithSpans("взяточник откатить подоткат").spans.isEmpty,
+                  "Morphology confused derivation/substrings with an inflection")
+        let phrase = try TranscriptDictionaryRedactor(wrapped: DictionaryEchoRedactor(), dictionary: .init(entries: [.init(phrase: "коммерческий подкуп")]))
+        try check(try await phrase.redactWithSpans("О коммерческом подкупе.").text == "О [СКРЫТО].", "Inflected multiword phrase missed")
+        let held = try await phrase.redactWithSpans("О коммерческом")
+        try check(held.provisionalSafeUTF16 == 2, "Inflected phrase prefix leaked")
+        let exact = try TranscriptDictionaryRedactor(wrapped: DictionaryEchoRedactor(), dictionary: .init(entries: [.init(phrase: "взятка", matchMode: .exact)]))
+        try check(try await exact.redactWithSpans("взятке").spans.isEmpty, "Exact mode unexpectedly inflected")
+        try check(dictionary.fingerprint != TranscriptSensitiveDictionarySnapshot(entries: [.init(phrase: "взятка", matchMode: .exact), .init(phrase: "откат")]).fingerprint,
+                  "Matching mode missing from immutable capability identity")
+        let groupID = "illicit-remuneration"
+        let custom = try TranscriptSensitiveDictionarySnapshot(entries: [], selectedGroupIDs: [groupID], groupTermOverrides: [groupID: ["взятка"]])
+        try check(try custom.spans(in: "взяток").count == 1, "Group override omitted morphology")
+        let changed = try TranscriptSensitiveDictionarySnapshot(entries: [], selectedGroupIDs: [groupID], groupTermOverrides: [groupID: ["откат"]])
+        try check(custom.fingerprint != changed.fingerprint, "Changed private group terms retained stale checkpoint identity")
+        let legacy = Data("[{\"id\":\"00000000-0000-0000-0000-000000000001\",\"phrase\":\"взятка\"}]".utf8)
+        let migrated = try JSONDecoder().decode([SensitiveDataDictionaryEntry].self, from: legacy)
+        try check(migrated[0].matchMode == .wordForms, "Legacy dictionary did not gain word forms")
     }
 
     private static func sensitiveDictionaryPersistenceSuite() async throws {

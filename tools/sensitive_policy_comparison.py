@@ -87,7 +87,7 @@ def summarize(rows):
             'errors': errors, 'completedCases': len(rows) - errors,
             'topicMentionDetection': {'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn,
                 'precision': ratio(tp, tp + fp), 'recall': ratio(tp, tp + fn),
-                'cleanCaseFalseMaskRate': ratio(fp, negatives)},
+                'cleanCaseFalseMaskRate': ratio(fp, fp + tn)},
             'wholeSensitiveSentenceCoverage': ratio(full, positives),
             'sensitiveUTF16Coverage': ratio(covered, gold_count),
             'unrelatedUTF16MaskRate': ratio(benign_masked, benign_count),
@@ -127,7 +127,7 @@ def jury_export(report):
         options = []
         for letter, method in zip('ABCD', methods):
             result = next(r for r in row['results'] if r['method'] == method)
-            options.append({'option': letter, 'status': result['status'], 'output': result['output']})
+            options.append({'option': letter, 'status': result['status'], 'output': result.get('output')})
             mapping.append({'caseID': opaque, 'option': letter, 'method': method, 'sourceCaseID': row['input']['id']})
         blind.append({'caseID': opaque, 'selectedTopics': row['input']['enabledGroupIDs'],
             'input': row['input']['text'], 'options': options})

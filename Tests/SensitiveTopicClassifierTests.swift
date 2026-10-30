@@ -19,6 +19,16 @@ struct SensitiveTopicClassifierTests {
             catch { check(error as? SensitiveTopicClassifierError == expected, "wrong error \(error)") }
         }
         check(classifier.artifactSHA256 == digest, "frozen digest")
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("topic-artifact-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let link = temporary.appendingPathComponent("link.json")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: artifactURL)
+        fails(.invalidArtifact) { _ = try SensitiveTopicClassifierSnapshot.readArtifact(at: link) }
+        fails(.invalidArtifact) { _ = try SensitiveTopicClassifierSnapshot.readArtifact(at: temporary) }
+        let oversized = temporary.appendingPathComponent("oversized.json")
+        try Data(repeating: 0, count: SensitiveTopicClassifierSnapshot.maximumArtifactBytes + 1).write(to: oversized)
+        fails(.invalidArtifact) { _ = try SensitiveTopicClassifierSnapshot.readArtifact(at: oversized) }
         check(classifier.identity.contains("commercial-metrics,illicit-remuneration,procurement-collusion"), "sorted immutable topic selection")
         fails(.checksumMismatch) {
             _ = try SensitiveTopicClassifierSnapshot(data: data, expectedSHA256: String(repeating: "0", count: 64), selectedTopicIDs: selected)

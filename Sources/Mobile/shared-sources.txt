@@ -230,3 +230,7 @@ Sources/Fluid/Services/Meeting/MeetingUniversalTitleEngine.swift
 Sources/Fluid/Services/Meeting/MeetingAutomaticNaming.swift
 
 Sources/Fluid/Services/Meeting/MeetingTitleLanguage.swift
+
+Sources/Fluid/Services/Privacy/SensitiveBusinessGroupCatalog.swift
+
+Sources/Fluid/Services/Privacy/SensitiveTopicClassifier.swift
