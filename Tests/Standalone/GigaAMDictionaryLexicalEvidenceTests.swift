@@ -55,6 +55,8 @@ import Foundation
         precondition(!GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "Alfa Desk", canonical: "Alpha Desktop"))
         precondition(!GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "клодкот", canonical: "Claude Code"))
         precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "Alfa e", canonical: "Alpha"))
+        precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "clodx", canonical: "Claude"))
+        precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "chatgptx", canonical: "ChatGPT"))
         for pair in [("не зови", "зови"), ("мне", "тебе"), ("Call model 4", "Call model 5"), ("don't call", "call"),
                      ("you help me", "me help you"), ("couldn't call", "call")] {
             precondition(comparison(pair.0, pair.1, [pair.0]).protectsContent)

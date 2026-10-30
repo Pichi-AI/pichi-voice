@@ -386,7 +386,7 @@ nonisolated enum GigaAMEncoderDictionary {
     }
 
     private static func compound(_ full: AcceptedSpan, dominates prefix: AcceptedSpan) -> Bool {
-        guard self.compoundRelation(full, prefix: prefix), self.covers(full, prefix: prefix),
+        guard !full.sourceTruncation, self.compoundRelation(full, prefix: prefix), self.covers(full, prefix: prefix),
               full.canonicalSupport >= 0.8, full.additionalComponentSupport else { return false }
         let fullComponents = GigaAMDictionaryLexicalEvidence.componentKeys(full.label)?.count ?? Int.max
         let extraWords = (full.wordRange.upperBound > prefix.wordRange.upperBound || full.wordRange.count >= fullComponents) &&

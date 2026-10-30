@@ -108,6 +108,11 @@ struct DictionaryMatchFrames: Sendable {
             "A failed full compound cannot fall back to erasing its suffix, or gain admission when the prefix is vetoed")
         precondition(GigaAMEncoderDictionary.arbitrate([destructivePrefix, full]).accepted.map(\.entryID) == [fullID],
             "A proven full compound remains eligible when the destructive short candidate is retained as evidence")
+        let incompleteFull = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 0...2,
+            frameRange: 0..<14, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1,
+            additionalComponentSupport: true, sourceTruncation: true)
+        precondition(GigaAMEncoderDictionary.arbitrate([prefix, incompleteFull]).accepted.map(\.entryID) == [prefixID],
+            "A full candidate erasing Pro from Alfa Desktop Pro cannot remove a clean short candidate before its own veto")
         for base in ["Alpha", "Claude"] {
             let expanded = base + " AI"
             let spelling = GigaAMDictionaryLexicalEvidence.compare(heard: base, canonical: expanded, observedVariants: [base])!

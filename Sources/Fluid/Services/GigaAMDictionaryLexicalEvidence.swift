@@ -142,7 +142,7 @@ nonisolated enum GigaAMDictionaryLexicalEvidence {
             position = bestEnd
         }
         let residual = String(source.dropFirst(position))
-        return residual.count >= 2 && !["om", "em"].contains(residual)
+        return !["", "e", "a", "u", "om", "em"].contains(residual)
     }
 
     /// Every canonical component needs actual current-source letters. The best
