@@ -64798,6 +64798,91 @@
           }
         }
       }
+    },
+    "Edit expressions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit expressions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменить выражения"
+          }
+        }
+      }
+    },
+    "Use one expression per line. Groups can contain up to 128 expressions in total. Changes stay on this device and apply to new recordings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use one expression per line. Groups can contain up to 128 expressions in total. Changes stay on this device and apply to new recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Указывайте каждое выражение на отдельной строке. Во всех группах может быть до 128 выражений. Изменения остаются на этом устройстве и применяются к новым записям."
+          }
+        }
+      }
+    },
+    "Restore suggested expressions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore suggested expressions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Восстановить предложенные выражения"
+          }
+        }
+      }
+    },
+    "Edit group expressions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit group expressions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выражения группы"
+          }
+        }
+      }
+    },
+    "Could not save group expressions. Use unique expressions of up to 16 words and 256 characters, with at most 128 expressions across all groups. The existing rules were kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not save group expressions. Use unique expressions of up to 16 words and 256 characters, with at most 128 expressions across all groups. The existing rules were kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сохранить выражения группы. Используйте уникальные выражения длиной до 16 слов и 256 символов, не более 128 выражений во всех группах. Прежние правила сохранены."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
