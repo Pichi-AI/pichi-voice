@@ -250,6 +250,7 @@ builds/
 /docs/*
 !/docs/development/
 /docs/development/*
+!/docs/development/automatic-recording-titles.md
 !/docs/development/upstream-1.6.12-beta1-20261013.md
 !/docs/development/codex.md
 !/docs/development/upstream.md
