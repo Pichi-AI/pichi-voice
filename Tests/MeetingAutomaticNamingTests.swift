@@ -59,10 +59,10 @@ extension MeetingSessionStoreCheckpointTests {
 
         // This resource fixture exercises actual Foundation lookup with both caller languages.
         let bundleRoot = root.appendingPathComponent("title-language.bundle")
-        for (language, value) in [("en", "Discussion of questions"), ("ru", "Обсуждение вопросов")] {
+        for (language, value, neutral) in [("en", "Discussion of questions", "Audio recording"), ("ru", "Обсуждение вопросов", "Аудиозапись")] {
             let folder = bundleRoot.appendingPathComponent(language + ".lproj")
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            try "\"Discussion of questions\" = \"\(value)\";\n".write(to: folder.appendingPathComponent("Localizable.strings"), atomically: true, encoding: .utf8)
+            try "\"Discussion of questions\" = \"\(value)\";\n\"Audio recording\" = \"\(neutral)\";\n".write(to: folder.appendingPathComponent("Localizable.strings"), atomically: true, encoding: .utf8)
         }
         let info: [String: Any] = ["CFBundleIdentifier": "invalid.synthetic.title-language", "CFBundleDevelopmentRegion": "en", "CFBundleLocalizations": ["en", "ru"]]
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: bundleRoot.appendingPathComponent("Info.plist"))
@@ -81,6 +81,27 @@ extension MeetingSessionStoreCheckpointTests {
         check(englishNamed.displayTitle(language: .russian, bundle: bundle) == englishKey
               && englishNamed.displayTitle(language: .english, bundle: bundle) == englishKey,
               "English recording titles remain English in either interface language")
+        for (text, code, expected, opposite) in [
+            ("Небо голубое, трава зеленая. Дорога проходит через лес. Деревья растут около реки. Вода течет между камнями. ", "ru", "Аудиозапись", PichiInterfaceLanguage.english),
+            ("The sky is blue and the grass is green. A path runs through the forest. Trees grow beside the river. Water flows between the stones. ", "en", "Audio recording", PichiInterfaceLanguage.russian)
+        ] {
+            var neutral = original
+            for index in neutral.transcriptSegments.indices { neutral.transcriptSegments[index].text = String(repeating: text, count: 4) }
+            let result = MeetingAutomaticNaming.applying(to: neutral)
+            check(result.automaticTitle?.candidateID == "recording" && result.automaticTitle?.languageCode == code
+                  && result.displayTitle(language: opposite, bundle: bundle) == expected,
+                  "A long neutral fallback retains its content language without inventing conversational claims")
+            let neutralStore = MeetingSessionStore(rootDirectory: root.appendingPathComponent("neutral-" + code))
+            try await neutralStore.create(neutral)
+            let persisted = try await neutralStore.loadTranscript(id: neutral.id)!
+            let neutralManifest = root.appendingPathComponent("neutral-" + code).appendingPathComponent(neutral.id.uuidString).appendingPathComponent("session.json")
+            let neutralBytes = try Data(contentsOf: neutralManifest)
+            let reloaded = try await neutralStore.loadTranscript(id: neutral.id)
+            let repeatedNeutralBytes = try Data(contentsOf: neutralManifest)
+            check(persisted.automaticTitle?.candidateID == "recording" && persisted.automaticTitle?.languageCode == code
+                  && reloaded == persisted && neutralBytes == repeatedNeutralBytes,
+                  "Actual store reads persist and preserve a neutral language-frozen title")
+        }
         let background = await MeetingAutomaticNaming.applyingInBackground(to: original)
         check(background == named, "Joined utility naming produces the same immutable result as the pure engine")
         check(named.automaticTitle != nil, "A completed long default-named recording receives an automatic title")
@@ -140,6 +161,26 @@ extension MeetingSessionStoreCheckpointTests {
               "Language backfill preserves the prior candidate and original-title rollback metadata")
         check(MeetingAutomaticNaming.applying(to: backfilled) == backfilled,
               "An already frozen recording title never follows later interface changes")
+        let oldRoot = root.appendingPathComponent("old-generated-language")
+        let oldStore = MeetingSessionStore(rootDirectory: oldRoot)
+        oldGenerated.id = UUID()
+        oldGenerated.title = "Discussion of questions · old generated start"
+        try await oldStore.create(oldGenerated)
+        let oldLoaded = try await oldStore.loadTranscript(id: oldGenerated.id)!
+        check(oldLoaded.automaticTitle?.languageCode == "ru"
+              && oldLoaded.automaticTitle?.candidateID == oldGenerated.automaticTitle?.candidateID
+              && oldLoaded.automaticTitle?.previousTitle == oldGenerated.automaticTitle?.previousTitle
+              && oldLoaded.automaticTitle?.previousDefaultTitleBase == oldGenerated.automaticTitle?.previousDefaultTitleBase,
+              "An actual store read backfills the old artifact without changing candidate or original backup")
+        check(oldLoaded.title == "Обсуждение вопросов"
+              && oldLoaded.displayTitle(language: .english, bundle: bundle) == "Обсуждение вопросов",
+              "An actual store read persists a bare Russian snapshot over the earlier English timestamped snapshot")
+        let oldManifest = oldRoot.appendingPathComponent(oldGenerated.id.uuidString).appendingPathComponent("session.json")
+        let oldBytes = try Data(contentsOf: oldManifest)
+        let oldAgain = try await oldStore.loadTranscript(id: oldGenerated.id)
+        let oldRepeatedBytes = try Data(contentsOf: oldManifest)
+        check(oldAgain == oldLoaded && oldRepeatedBytes == oldBytes,
+              "Repeated actual store reads preserve a backfilled title manifest byte for byte")
 
         var partial = original
         partial.transcriptIsComplete = false
