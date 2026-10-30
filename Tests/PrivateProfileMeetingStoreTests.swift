@@ -253,11 +253,21 @@ extension MeetingSessionStoreCheckpointTests {
         check(!(try await store.loadHistory()).contains { $0.id == explicit.id },
             "The merged catalog suppresses a guest UUID shadowed by an unreadable current record")
         var foreignShadow = ownedA; foreignShadow.id = explicit.id
+        foreignShadow.defaultTitleBase = "Meeting"
+        foreignShadow.endedAt = foreignShadow.startedAt.addingTimeInterval(MeetingAutomaticNaming.minimumDuration)
+        let shadowTrackID = foreignShadow.audioTracks[0].id
+        foreignShadow.transcriptSegments = [.init(id: UUID(), start: .init(value: 0, timescale: 1),
+            end: .init(value: 1_800, timescale: 1), sourceTrackID: shadowTrackID, speakerID: nil,
+            text: String(repeating: "Я думаю о вопросе, почему возникает этот вопрос. ", count: 60),
+            revision: 0, status: .final, overlap: .none, completeness: .complete)]
         try await bStore.save(foreignShadow)
+        let foreignTitleBytes = try Data(contentsOf: shadowManifest)
         check(try await store.load(id: explicit.id) == nil,
             "A foreign-owned current-root record cannot expose its guest sibling through fallback")
         check(!(try await store.loadHistory()).contains { $0.id == explicit.id },
             "Current-root ownership failure does not create duplicate or substituted guest rows")
+        check(try Data(contentsOf: shadowManifest) == foreignTitleBytes,
+            "Rejecting a long default-named foreign shadow cannot migrate its title before ownership filtering")
         var forgedGuest = explicit; forgedGuest.title = "Rejected shadowed guest write"
         do { try await store.save(forgedGuest); check(false, "An explicit guest snapshot cannot bypass current-root collision precedence") }
         catch { check(true, "Guest mutation rejects a foreign-owned colliding current-root record") }

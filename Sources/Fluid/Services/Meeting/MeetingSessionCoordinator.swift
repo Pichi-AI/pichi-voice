@@ -2676,6 +2676,9 @@ final class MeetingSessionCoordinator: ObservableObject {
                 throw error
             }
             if error is CancellationError {
+                session.title = inputSession.title
+                session.defaultTitleBase = inputSession.defaultTitleBase
+                session.automaticTitle = inputSession.automaticTitle
                 session.speakers = inputSession.speakers
                 session.transcriptSegments = inputSession.transcriptSegments
                 session.postProcessing = inputSession.postProcessing
@@ -2698,6 +2701,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             // A failed completed-session save must not durably publish a sidecar or overwrite the
             // last saved transcript under `.failed`. The verified new sidecar remains unreferenced
             // for retry/journal reconciliation.
+            session.title = inputSession.title
+            session.defaultTitleBase = inputSession.defaultTitleBase
+            session.automaticTitle = inputSession.automaticTitle
             session.speakers = inputSession.speakers
             session.transcriptSegments = inputSession.transcriptSegments
             session.postProcessing = inputSession.postProcessing

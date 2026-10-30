@@ -77,6 +77,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
 
     private let fileSystem: MeetingSessionFileSystem
     private let rootDirectory: URL
+    private let automaticTitleOwnership: MeetingProfileOwnership
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private var tombstonedIDs: Set<MeetingSessionID> = []
@@ -84,7 +85,9 @@ actor MeetingSessionStore: MeetingSessionStoring {
     private var encryptionCipher: MeetingRecordingCipher?
 
     init(rootDirectory: URL? = nil, fileManager: FileManager = .default,
-         encryptionCipher: MeetingRecordingCipher? = nil) {
+         encryptionCipher: MeetingRecordingCipher? = nil,
+         automaticTitleOwnership: MeetingProfileOwnership = .guest) {
+        self.automaticTitleOwnership = automaticTitleOwnership
         self.encryptionCipher = encryptionCipher
         self.fileSystem = MeetingSessionFileSystem(manager: fileManager)
         if let rootDirectory {
@@ -260,6 +263,9 @@ actor MeetingSessionStore: MeetingSessionStoring {
     /// The actor serializes this one-record migration with renames and other manifest writes.
     /// Read paths retain their existing no-audio contract and use the same encrypted writer.
     private func migrateAutomaticTitle(in session: MeetingSession) -> MeetingSession {
+        // A raw read may precede the facade's ownership filter. Never rename another
+        // profile's shadowed manifest merely because it exists in this physical root.
+        guard self.automaticTitleOwnership.matchesPersistedOwner(session.profileOwnership) else { return session }
         if session.automaticTitle != nil { return MeetingAutomaticNaming.validatingMetadata(in: session) }
         let named = MeetingAutomaticNaming.applying(to: session)
         guard named.automaticTitle != session.automaticTitle else { return session }
