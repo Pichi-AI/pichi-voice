@@ -26,8 +26,8 @@ enum AutomaticDictionaryCorrectionDetector {
     private static let boundaryCharacters = CharacterSet.whitespacesAndNewlines.union(
         CharacterSet(charactersIn: ",!?;:\"“”()[]{}<>")
     )
-    private static let maxCandidateLength = 40
-    private static let maxCombinedLength = 70
+    private static let maxCandidateLength = 80
+    private static let maxCombinedLength = 160
 
     static func textChange(before: String, after: String) -> AutomaticDictionaryTextChange? {
         guard before != after else { return nil }
@@ -215,8 +215,7 @@ enum AutomaticDictionaryCorrectionDetector {
             return false
         }
 
-        let words = value.split(whereSeparator: { $0.isWhitespace })
-        return words.count == 1
+        return DictionaryCorrectionEditPolicy.isTerm(value)
     }
 
     private static func isMeaningfulCorrection(heard: String, corrected: String) -> Bool {

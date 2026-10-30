@@ -2394,21 +2394,31 @@ final class ASRService: ObservableObject {
         }
     }
 
+    func validateDictionaryPronunciations(_ captures: [PronunciationEnrollmentCapture]) async throws -> Bool {
+        let profile = PrivateProfileStorage.current
+        let generation = DictionaryMatcherExperiment.generation
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              DictionaryMatcherExperiment.sharedFeaturesEnabled, self.activeExclusiveActivity == nil else { throw CancellationError() }
+        let provider = self.transcriptionProvider
+        let result = try await provider.validateDictionaryPronunciations(captures)
+        try Task.checkCancellation()
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              DictionaryMatcherExperiment.sharedFeaturesEnabled,
+              generation == DictionaryMatcherExperiment.generation else { throw CancellationError() }
+        return result
+    }
+
     private func performOriginalAudioEnrollment(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture {
         let generation = DictionaryMatcherExperiment.generation
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { throw CancellationError() }
         try Task.checkCancellation()
         guard self.activeExclusiveActivity == nil else { throw CancellationError() }
-        #if arch(arm64)
-        if let provider = self.fluidAudioProvider,
-           let capture = try await provider.originalAudioEnrollment(evidence)
-        {
+        if let capture = try await self.transcriptionProvider.originalAudioEnrollment(evidence) {
             try Task.checkCancellation()
             guard DictionaryMatcherExperiment.sharedFeaturesEnabled,
                   DictionaryMatcherExperiment.generation == generation else { throw CancellationError() }
             return capture
         }
-        #endif
         try Task.checkCancellation()
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled,
               DictionaryMatcherExperiment.generation == generation,

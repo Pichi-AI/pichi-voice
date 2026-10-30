@@ -47,6 +47,7 @@ Sources/Fluid/Services/DictionaryAudioSpan.swift
 Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift
 Sources/Fluid/Services/DictionaryExperimentalMatcher.swift
 Sources/Fluid/Services/DictionaryLearningEvidence.swift
+Sources/Fluid/Services/DictionaryLexicalEvidence.swift
 Sources/Fluid/Services/DictionaryMatchPlayground.swift
 Sources/Fluid/Services/DictionaryNegativeExamples.swift
 Sources/Fluid/Services/DictionaryPronunciationDecision.swift
@@ -156,6 +157,7 @@ Sources/Fluid/Services/ParakeetRealtimeProvider.swift
 Sources/Fluid/Services/ParakeetSpeechModelBackend.swift
 Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift
 Sources/Fluid/Services/ParakeetVocabularyStore.swift
+Sources/Fluid/Services/GigaAMDictionaryAcoustics.swift
 Sources/Fluid/Services/PichiGigaAMProvider.swift
 Sources/Fluid/Services/Privacy/PichiTranscriptPrivacyService.swift
 Sources/Fluid/Services/Privacy/TranscriptTextRedacting.swift

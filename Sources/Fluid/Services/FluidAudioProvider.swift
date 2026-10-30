@@ -591,6 +591,9 @@ final class FluidAudioProvider: TranscriptionProvider {
         let labels = Self.dictionaryLabels(from: entries)
         return stored.filter { profile in
             guard profile.isEligibleForMatching,
+                  profile.enrollments.allSatisfy({
+                      $0.extractorVersion == nil || $0.extractorVersion == "parakeet-encoder-mean-l2-v1"
+                  }),
                   includeManual || profile.automaticMatchingEnabled == true || (includeOriginal && profile.hasOriginalAudio),
                   let label = labels[profile.dictionaryEntryID]
             else { return false }
@@ -1798,7 +1801,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         guard self.temporalReferenceCache.canFit(reservation) else { return [] }
         let pronunciationGeneration = self.pronunciationGeneration
         var result: [DictionaryMatchFrames] = []
-        for capture in profile.enrollments.prefix(3) {
+        for capture in profile.matchingEnrollments {
             try Task.checkCancellation()
             guard self.sharedFeaturesEnabled,
                   pronunciationGeneration == self.pronunciationGeneration else { return [] }
@@ -2002,35 +2005,11 @@ final class FluidAudioProvider: TranscriptionProvider {
         wordTexts: [String],
         replacements: [PronunciationTextReplacement]
     ) -> String {
-        let source = text as NSString
-        var searchLocation = 0
-        var ranges: [NSRange] = []
-        let trimSet = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
-
-        for wordText in wordTexts {
-            let searchableWord = wordText.trimmingCharacters(in: trimSet)
-            guard !searchableWord.isEmpty, searchLocation <= source.length else { return text }
-            let searchRange = NSRange(location: searchLocation, length: source.length - searchLocation)
-            let range = source.range(of: searchableWord, options: .caseInsensitive, range: searchRange)
-            guard range.location != NSNotFound else { return text }
-            ranges.append(range)
-            searchLocation = NSMaxRange(range)
-        }
-
-        let edits = replacements.compactMap { replacement -> (NSRange, String)? in
-            guard ranges.indices.contains(replacement.wordRange.lowerBound),
-                  ranges.indices.contains(replacement.wordRange.upperBound)
-            else { return nil }
-            let start = ranges[replacement.wordRange.lowerBound].location
-            let end = NSMaxRange(ranges[replacement.wordRange.upperBound])
-            return (NSRange(location: start, length: end - start), replacement.label)
-        }.sorted { $0.0.location > $1.0.location }
-
-        let output = NSMutableString(string: text)
-        for (range, label) in edits {
-            output.replaceCharacters(in: range, with: label)
-        }
-        return output as String
+        DictionaryTranscriptReplacement.apply(
+            to: text,
+            wordTexts: wordTexts,
+            replacements: replacements.map { .init(wordRange: $0.wordRange, label: $0.label) }
+        )
     }
 
     private func logFinalBenchmark(

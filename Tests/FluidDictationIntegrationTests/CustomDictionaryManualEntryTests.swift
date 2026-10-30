@@ -9,6 +9,54 @@ import FluidAudio
 
 @MainActor
 final class CustomDictionaryManualEntryTests: XCTestCase {
+    func testSelectableHistoryTextTracksItsFinalWidthAcrossResize() async throws {
+        let text = NSAttributedString(
+            string: String(repeating: "Открой модель гигам и проверь качество распознавания. ", count: 3),
+            attributes: [.font: NSFont.systemFont(ofSize: 16)]
+        )
+        let host = NSHostingView(rootView: DictionarySelectableTranscript(text: text, onCorrect: { _ in })
+            .frame(maxWidth: .infinity, alignment: .leading))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.orderOut(nil) }
+        func transcript(in view: NSView) -> DictionarySelectableTextView? {
+            if let value = view as? DictionarySelectableTextView { return value }
+            return view.subviews.lazy.compactMap { transcript(in: $0) }.first
+        }
+        for width in [320.0, 900.0, 360.0] {
+            window.setContentSize(NSSize(width: width, height: 500))
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+            host.layoutSubtreeIfNeeded()
+            let view = try XCTUnwrap(transcript(in: host))
+            let container = try XCTUnwrap(view.textContainer)
+            let manager = try XCTUnwrap(view.layoutManager)
+            manager.ensureLayout(for: container)
+            XCTAssertTrue(container.widthTracksTextView)
+            XCTAssertEqual(container.containerSize.width, view.bounds.width, accuracy: 1)
+            XCTAssertLessThanOrEqual(manager.usedRect(for: container).height, view.bounds.height + 1)
+        }
+    }
+
+    func testAcousticCorrectionDoesNotGloballyReplaceAnotherValidTerm() {
+        let triggers = DictionaryTrainingSpellingPolicy.exactTriggers(
+            accepted: ["BIMCheck"], manuallyConfirmed: [], acousticCorrection: true
+        )
+        let entries = CustomDictionaryTrainingMerge.mergedEntries(
+            current: [], replacement: "AI Enablement", triggers: triggers, savePronunciation: true
+        )
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries[0].triggers, ["ai enablement"])
+        self.withRestoredDictionary(entries) {
+            XCTAssertEqual(ASRService.applyCustomDictionary("Review BIMCheck and AI Enablement."), "Review BIMCheck and AI Enablement.")
+        }
+        let explicit = DictionaryTrainingSpellingPolicy.exactTriggers(
+            accepted: ["BIMCheck"], manuallyConfirmed: ["BIMCheck"], acousticCorrection: true
+        )
+        XCTAssertEqual(explicit, ["BIMCheck"])
+    }
+
     // Keep these tests independent of a saved pronunciation preference.
     private var priorSharedFeaturesFlag: Any?
 
@@ -520,6 +568,34 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         XCTAssertEqual(Array(kept.suffix(7)), Array(original.suffix(7)))
         XCTAssertEqual(PronunciationDictionaryStore.retainedEnrollments(original), Array(original.suffix(10)))
         XCTAssertEqual(PronunciationDictionaryStore.retainedEnrollments(Array(repeating: manual[0], count: 12)).count, 10)
+    }
+
+    func testRetrainingPrioritizesLatestThreeManualRecordingsAndRetainsOlderVersions() {
+        let captures = (1...6).map { index in
+            PronunciationEnrollmentCapture(values: [Float(index)], sourceFrameCount: 1,
+                modelKey: "synthetic", inspectionID: UUID())
+        }
+        let kept = PronunciationDictionaryStore.retainedEnrollments(captures)
+        XCTAssertEqual(PronunciationDictionaryStore.matchingEnrollments(kept), Array(captures.suffix(3)))
+        XCTAssertEqual(Set(kept.compactMap(\.inspectionID)), Set(captures.compactMap(\.inspectionID)))
+    }
+
+    func testValidatedPronunciationSaveRejectsChangedExistingRecordings() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("validated-dictionary-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PronunciationDictionaryStore(fileURL: root.appendingPathComponent("profiles.json"))
+        let entryID = UUID()
+        let capture = PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "synthetic")
+        try await store.upsert(dictionaryEntryID: entryID, label: "Слово", modelKey: "synthetic", enrollments: [capture])
+        do {
+            try await store.upsert(dictionaryEntryID: entryID, label: "Слово", modelKey: "synthetic",
+                enrollments: [capture], expectedExistingEnrollments: [])
+            XCTFail("An intervening enrollment must invalidate the prior readiness check")
+        } catch let error as PronunciationDictionaryStoreError {
+            XCTAssertEqual(error, .staleEvidence)
+        }
+        let profiles = await store.profiles(modelKey: "synthetic")
+        XCTAssertEqual(profiles.first?.enrollments.count, 1)
     }
 
     func testOriginalReferenceReadsOnlyFocalPCMAndChecksEntry() async throws {

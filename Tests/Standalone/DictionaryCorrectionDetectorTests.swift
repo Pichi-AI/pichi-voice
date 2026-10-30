@@ -30,6 +30,7 @@ struct DictionaryNegativeCorrection {}
             ("use foo now", "use bar baz now"), ("use foo now", "use bar,baz now"),
             ("use foo now", "use bar.baz now"), ("use foo now", "use bar/baz now"),
             ("I met foo bar today", "I met baz today"),
+            ("AI. Enablement", "AI Enablement"),
         ]
         for (before, after) in rejected {
             self.expect(self.candidate(before, after) == nil, "Reject \(before) → \(after)")
@@ -39,11 +40,22 @@ struct DictionaryNegativeCorrection {}
             ("Dflash", "DFlash"), ("manimekali", "Manimekalai"), ("Jhon", "John"),
             ("O'Neal", "O'Neill"), ("Anne-Mari", "Anne-Marie"), ("Jose", "José"),
             ("Jo", "Jos"), ("東京", "京都"), ("foo", "Kubernetes"), ("helllo", "hello"),
+            ("IINblement", "AI Enablement"), ("yoser Experiens", "User Experience"),
         ]
         for (before, after) in accepted {
             let result = self.candidate(before, after)
             self.expect(result?.heardText == before && result?.correctedText == after, "Keep \(before) → \(after)")
         }
+        self.expect(!DictionaryCorrectionEditPolicy.isTerm("one two three four five"), "Limit selected terms to four words")
+        self.expect(!DictionaryCorrectionEditPolicy.isTerm("first\nsecond"), "Reject multiline selection")
+        self.expect(!DictionaryCorrectionEditPolicy.isTerm(String(repeating: "x", count: 81)), "Bound selection length")
+        self.expect(DictionaryCorrectionEditPolicy.allows(heard: "Home Assistent", corrected: "Home Assistant"), "Allow a selected short term repair")
+        self.expect(DictionaryTrainingSpellingPolicy.exactTriggers(accepted: ["BIMCheck"], manuallyConfirmed: [], acousticCorrection: true).isEmpty,
+                    "A spoken AI Enablement correction must not globally replace the valid term BIMCheck")
+        self.expect(DictionaryTrainingSpellingPolicy.exactTriggers(accepted: ["BIMCheck", "other"], manuallyConfirmed: ["BIMCheck"], acousticCorrection: true) == ["BIMCheck"],
+                    "Only explicit fixed text choices become exact triggers")
+        self.expect(DictionaryTrainingSpellingPolicy.exactTriggers(accepted: ["BIMCheck"], manuallyConfirmed: [], acousticCorrection: false) == ["BIMCheck"],
+                    "Ordinary manual dictionary workflow retains its existing spelling behavior")
         let punctuated = self.candidate("I met Barat.", "I met Barath.")
         self.expect(punctuated?.heardText == "Barat" && punctuated?.correctedText == "Barath", "Sentence punctuation")
         let before = "Title: I met Barat"

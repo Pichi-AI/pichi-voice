@@ -245,6 +245,14 @@ protocol TranscriptionProvider {
     func transcribeDictionaryTraining(_ samples: [Float]) async throws -> ASRTranscriptionResult
     func transcribeDictionaryTraining(_ samples: [Float], capturePronunciation: Bool) async throws -> ASRTranscriptionResult
 
+    /// Validate the provider's own acoustic representation before the shared wizard
+    /// commits it. Counting recordings alone does not establish a usable template.
+    func validateDictionaryPronunciations(_ captures: [PronunciationEnrollmentCapture]) async throws -> Bool
+
+    /// Extract a pronunciation example from the immutable source occurrence, when compatible.
+    /// Providers own feature-format and artifact validation; nil leaves legacy extraction available.
+    func originalAudioEnrollment(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture?
+
     /// Meeting word alignment only; dictation never calls the method this gates.
     var supportsWordTimings: Bool { get }
 
@@ -319,8 +327,14 @@ extension TranscriptionProvider {
         try await self.transcribeDictionaryTraining(samples)
     }
 
+    func validateDictionaryPronunciations(_ captures: [PronunciationEnrollmentCapture]) async throws -> Bool { true }
+
     func transcribeDictionaryTraining(_ samples: [Float]) async throws -> ASRTranscriptionResult {
         try await self.transcribeFinal(samples)
+    }
+
+    func originalAudioEnrollment(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture? {
+        nil
     }
 
     func transcribeFile(at fileURL: URL) async throws -> ASRTranscriptionResult {
