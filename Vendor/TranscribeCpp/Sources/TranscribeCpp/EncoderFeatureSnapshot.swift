@@ -112,16 +112,28 @@ struct NativeEncoderFeatureAPI {
     let get: Getter
 
     static let resolved: Self? = {
-        var info = Dl_info()
         // Keep the C function convention explicit. Inference as a Swift closure
         // creates a two-word value that cannot be cast to a code pointer.
         let run: CRun = transcribe_run
-        guard dladdr(unsafeBitCast(run, to: UnsafeRawPointer.self), &info) != 0,
-              let filename = info.dli_fname,
-              let image = dlopen(filename, RTLD_LAZY | RTLD_NOLOAD) else { return nil }
-        defer { dlclose(image) }
-        return resolve { dlsym(image, $0) }
+        return resolve(ownerAddress: unsafeBitCast(run, to: UnsafeRawPointer.self))
     }()
+
+    static func resolve(ownerAddress: UnsafeRawPointer) -> Self? {
+        var owner = Dl_info()
+        guard dladdr(ownerAddress, &owner) != 0, let ownerBase = owner.dli_fbase,
+              let filename = owner.dli_fname,
+              let image = dlopen(filename, RTLD_LAZY | RTLD_NOLOAD | RTLD_FIRST) else { return nil }
+        defer { dlclose(image) }
+        return resolve { name in
+            guard let symbol = dlsym(image, name) else { return nil }
+            // Darwin dlsym can otherwise find a dependency's compatible-looking
+            // exports. Never send our opaque model/session to a foreign SDK.
+            var provider = Dl_info()
+            guard dladdr(UnsafeRawPointer(symbol), &provider) != 0,
+                  provider.dli_fbase == ownerBase else { return nil }
+            return symbol
+        }
+    }
 
     static func resolve(_ lookup: (String) -> UnsafeMutableRawPointer?) -> Self? {
         guard let versionSymbol = lookup("transcribe_encoder_features_api_version"),
