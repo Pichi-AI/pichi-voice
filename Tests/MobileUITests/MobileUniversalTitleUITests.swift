@@ -46,5 +46,7 @@ final class MobileUniversalTitleUITests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+        let revision = ProcessInfo.processInfo.environment["PICHI_TEST_REVISION"] ?? "unverified-revision"
+        reviewNativeScreenshotIfRequested(name, namePrefix: "universal-title", revision: revision)
     }
 }
