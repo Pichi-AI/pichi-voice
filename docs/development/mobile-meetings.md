@@ -17,7 +17,7 @@
 | Обработка после остановки | Сохранение, участники, распознавание, завершение | `MeetingProcessingPipeline`, backend registry, canonical assembler |
 | Участники | Общая диаризация и сопоставление голосов между окнами | Nemotron, WeSpeaker, исходный matcher |
 | Расшифровка | Время, участник, текст, копирование, исправление и аудио | Общие модели, player, операции исправления и Undo |
-| История | Это раздел «Встречи»: просмотр, поиск, статус, переименование, удаление; зашифрованная встреча видна строкой без содержимого | `MeetingHistorySnapshot`, `MeetingSessionStore` |
+| История | Это раздел «Записи»: просмотр, поиск, статус, переименование, удаление; зашифрованная запись видна строкой без содержимого. Автоматическое название без даты и времени: дата показана строкой ниже. Поиск и экспорт используют название с началом записи | `MeetingHistorySnapshot`, `MeetingSessionStore` |
 | Повторное распознавание | Доступно только при сохранившемся пригодном аудио | Исходная проверка `hasRetryableAudio`, общий coordinator |
 | Экспорт | TXT, JSON и сохранённое аудио через Share и Files | Исходные transcript/audio exporters, мобильная presentation boundary |
 | Распознавание речи | Три локальных модели и исходные операции жизненного цикла | `ASRService`, `TranscriptionProvider`, preparation/residency owners |
@@ -93,11 +93,11 @@ flowchart TB
 
 ## Live Activity во время записи
 
-На iPhone во время записи Lock Screen и Dynamic Island показывают знак продукта, статус `Meeting recording in progress` («Идёт запись встречи»), тип встречи и время записи. Время считает сама система через `Text(timerInterval:)`. Push и сеть не используются.
+На iPhone во время записи Lock Screen и Dynamic Island показывают знак продукта, статус `Recording in progress` («Идёт запись») и время записи. Подпись с типом есть только у онлайн-звонка: у записи в комнате статус уже всё называет. Время считает сама система через `Text(timerInterval:)`. Push и сеть не используются.
 
 - `MobileRecordingActivityOwner` в `Sources/Mobile/MobileRecordingActivity.swift` единственный вызывает ActivityKit. `AppServices.shared` передаёт ему `state` и `activeSession` существующего `MeetingSessionCoordinator` и владеет conceal/restore границей приватного профиля; coordinator и pipeline о Live Activity не знают. Дополнительные compositions в тестах activity не создают.
 - Чистый `MobileRecordingActivityPlan` запускает одну activity на сессию только в `recording` и `recordingDegraded`. Остановка, обработка, прерывание, ошибка и сброс сразу завершают её с немедленным скрытием. Отказ системы для той же сессии не повторяется.
-- Activity запрашивается с `staleDate` через 5 минут. Пока идёт запись, приложение работает в фоне в audio mode и каждые 2 минуты переносит `staleDate` вперёд; обновление останавливается вместе с activity. Если процесс завершился без остановки (crash, нехватка памяти), система через несколько минут помечает activity устаревшей, и расширение показывает `Meeting recording was interrupted` («Запись встречи прервана») без таймера и без индикатора записи.
+- Activity запрашивается с `staleDate` через 5 минут. Пока идёт запись, приложение работает в фоне в audio mode и каждые 2 минуты переносит `staleDate` вперёд; обновление останавливается вместе с activity. Если процесс завершился без остановки (crash, нехватка памяти), система через несколько минут помечает activity устаревшей, и расширение показывает `Recording was interrupted` («Запись прервана») без таймера и без индикатора записи.
 - Выход процесса: при `willTerminate` выполняется ограниченная попытка завершить activity, следующий запуск завершает все activities предыдущего процесса. Обычный `AppServices.shutdownForTermination` дожидается той же цепочки ActivityKit cleanup перед завершением остальных сервисов.
 - Расширение `PichiVoiceMobileActivity` собирается из `Sources/MobileActivity`. Общий тип `MobileRecordingActivityAttributes` компилируется в приложение через `shared-sources.txt`. Приложение передаёт уже локализованный текст из String Catalog, имя из `AppBrand`, accent для светлой и тёмной темы и дизайн шрифта общих ролей. У расширения нет своего каталога, настроек или brand package; знак берётся из packaged `markAsset`, для импортированного оформления используется символ `waveform`.
 - При недоступности ActivityKit или выключенных пользователем Live Activities запись идёт как раньше. Возможность определяется системным API, без исключения всех iPad.
