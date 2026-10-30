@@ -38,6 +38,13 @@ struct DictionaryMatchFrames: Sendable {
         let result = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("🙂 Alfa!", [("Alfa!", 0, 0.24)]),
             features: reference, modelKey: model, words: prepared.words, entries: [])
         precondition(result.text == "🙂 Alpha!" && result.accepted.count == 1, "Actual native encoder search and UTF16 replacement")
+        let prefixOnlyAudio = try self.features([0, 1, 2, 3, 4, 5, 20, 21, 22, 23])
+        let truncatedSource = try await GigaAMEncoderDictionary.correct(
+            transcript: self.transcript("🙂 Alfadesk!", [("Alfadesk!", 0, 0.4)]),
+            features: prefixOnlyAudio, modelKey: model, words: prepared.words, entries: [])
+        precondition(truncatedSource.text == "🙂 Alfadesk!" && truncatedSource.accepted.isEmpty &&
+            truncatedSource.diagnostics.contains { $0.reason == .sourceTruncation },
+            "A perfect sound prefix must not erase the material remainder of a whole CTC word")
         let protected = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("Alfa", [("Alfa", 0, 0.24)]),
             features: reference, modelKey: model, words: prepared.words,
             entries: [.init(id: UUID(), triggers: ["Alfa"], replacement: "UserChoice")])
@@ -92,6 +99,15 @@ struct DictionaryMatchFrames: Sendable {
             canonicalSupport: truncated.canonicalSimilarity)
         precondition(GigaAMEncoderDictionary.arbitrate([prefix, aliasExpansion]).accepted.map(\.entryID) == [prefixID],
             "A truncated observed alias and lower distance cannot authorize an extra component")
+        var destructivePrefix = prefix
+        destructivePrefix.sourceTruncation = true
+        let blockedFallback = GigaAMEncoderDictionary.arbitrate([destructivePrefix, aliasExpansion])
+        precondition(blockedFallback.accepted.isEmpty &&
+            blockedFallback.diagnostics.contains { $0.reason == .sourceTruncation } &&
+            blockedFallback.diagnostics.contains { $0.reason == .unconfirmedCompound },
+            "A failed full compound cannot fall back to erasing its suffix, or gain admission when the prefix is vetoed")
+        precondition(GigaAMEncoderDictionary.arbitrate([destructivePrefix, full]).accepted.map(\.entryID) == [fullID],
+            "A proven full compound remains eligible when the destructive short candidate is retained as evidence")
         for base in ["Alpha", "Claude"] {
             let expanded = base + " AI"
             let spelling = GigaAMDictionaryLexicalEvidence.compare(heard: base, canonical: expanded, observedVariants: [base])!

@@ -30,6 +30,7 @@ nonisolated enum GigaAMEncoderDictionary {
         case noSearchHits, invalidWordSpan, protectedTextRule, confidentSource
         case protectedContent, acousticRejected, recordedVariantCorroborated, ambiguous, compoundPreferred
         case overlapping, replacementFailed, accepted, invalidWindows, outsideOwnership, unconfirmedCompound
+        case sourceTruncation
     }
 
     struct Diagnostic: Sendable {
@@ -54,6 +55,7 @@ nonisolated enum GigaAMEncoderDictionary {
         var frameOffset = 0
         var canonicalSupport: Double = 0
         var additionalComponentSupport = false
+        var sourceTruncation = false
         var absoluteFrameRange: Range<Int> {
             (self.frameOffset + self.frameRange.lowerBound)..<(self.frameOffset + self.frameRange.upperBound)
         }
@@ -153,7 +155,7 @@ nonisolated enum GigaAMEncoderDictionary {
                     wordRange: first...last, frameRange: span.frameRange, distance: span.distance,
                     acceptanceDistance: span.acceptanceDistance, spellingSupport: span.spellingSupport,
                     frameOffset: offsets[index], canonicalSupport: span.canonicalSupport,
-                    additionalComponentSupport: span.additionalComponentSupport))
+                    additionalComponentSupport: span.additionalComponentSupport, sourceTruncation: span.sourceTruncation))
             }
         }
         // Only connected overlapping word spans can compete. Do not run a
@@ -319,7 +321,8 @@ nonisolated enum GigaAMEncoderDictionary {
                 candidates.append(AcceptedSpan(entryID: term.entryID, label: term.label, wordRange: range,
                     frameRange: hit.frames, distance: match.distance, acceptanceDistance: effectiveLimit,
                     spellingSupport: lexical.phoneticSimilarity, canonicalSupport: lexical.canonicalSimilarity,
-                    additionalComponentSupport: GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: heard, canonical: term.label)))
+                    additionalComponentSupport: GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: heard, canonical: term.label),
+                    sourceTruncation: GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: heard, canonical: term.label)))
             }
         }
         let arbitration = self.arbitrate(candidates)
@@ -365,6 +368,9 @@ nonisolated enum GigaAMEncoderDictionary {
             return $0.entryID.uuidString < $1.entryID.uuidString
         }
         for candidate in sorted {
+            // Keep this candidate in compound/ambiguity evidence above. Removing
+            // it earlier could admit an unconfirmed expansion by default.
+            if candidate.sourceTruncation { diagnostics.append(.init(.sourceTruncation, candidate.entryID)); continue }
             if candidate.wordRange.contains(where: occupied.contains) { diagnostics.append(.init(.overlapping, candidate.entryID)); continue }
             let ambiguous = complete.contains { other in
                 other.entryID != candidate.entryID && other.label.caseInsensitiveCompare(candidate.label) != .orderedSame &&

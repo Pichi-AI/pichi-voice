@@ -120,6 +120,31 @@ nonisolated enum GigaAMDictionaryLexicalEvidence {
         return false
     }
 
+    /// A sound hit inside one CTC word still replaces that entire word. Do not
+    /// erase an extra word or a material fused component when only its prefix
+    /// resembles the canonical label. This is a veto, never admission evidence.
+    static func dropsSourceComponents(heard: String, canonical: String) -> Bool {
+        guard let sourceTokens = self.tokens(heard), let target = self.tokens(canonical) else { return true }
+        if sourceTokens.count > target.count { return true }
+        let source = Array(self.phoneticKey(heard))
+        var position = 0
+        for token in target {
+            guard position < source.count else { return false }
+            let component = self.soundKey(token.text)
+            var bestEnd = position, bestScore = -Double.infinity
+            for end in (position + 1)...source.count {
+                let score = self.editSimilarity(String(source[position..<end]), component)
+                if score > bestScore + 1e-9 || (abs(score - bestScore) <= 1e-9 && end > bestEnd) {
+                    bestEnd = end; bestScore = score
+                }
+            }
+            guard bestScore >= 2.0 / 3.0 else { return false }
+            position = bestEnd
+        }
+        let residual = String(source.dropFirst(position))
+        return residual.count >= 2 && !["om", "em"].contains(residual)
+    }
+
     /// Every canonical component needs actual current-source letters. The best
     /// prefix is consumed greedily, including the whole remaining source as a
     /// possibility, so a shorter prefix cannot fabricate an unspoken suffix.

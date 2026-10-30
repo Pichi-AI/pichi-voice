@@ -45,6 +45,16 @@ import Foundation
         precondition(!stem("Clod", "Claude", Array(repeating: "Clod", count: 21)))
         precondition(!stem(String(repeating: "x", count: 81), "Claude", ["Clod"]))
         precondition(!stem("one two three four five", "Claude", ["one two three four five"]))
+        for heard in ["Alfadesk", "Alfa Desktop", "AlfaAI", "alfaai", "Alphabet", "клоткот", "Clod a"] {
+            let canonical = heard.hasPrefix("Al") || heard.hasPrefix("al") ? "Alpha" : "Claude"
+            precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: heard, canonical: canonical))
+        }
+        for heard in ["Clod", "клод", "клода", "клоду", "клоде", "клодом", "клодем"] {
+            precondition(!GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: heard, canonical: "Claude"))
+        }
+        precondition(!GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "Alfa Desk", canonical: "Alpha Desktop"))
+        precondition(!GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "клодкот", canonical: "Claude Code"))
+        precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "Alfa e", canonical: "Alpha"))
         for pair in [("не зови", "зови"), ("мне", "тебе"), ("Call model 4", "Call model 5"), ("don't call", "call"),
                      ("you help me", "me help you"), ("couldn't call", "call")] {
             precondition(comparison(pair.0, pair.1, [pair.0]).protectsContent)
