@@ -26,8 +26,77 @@ final class EncoderFeatureSnapshotTests: XCTestCase {
         // explicit expectation lets a patched-native test runner verify ABI
         // availability without opening model weights.
         let available = NativeEncoderFeatureAPI.resolved != nil
+        XCTAssertEqual(Session.nativeEncoderFeatureAPIAvailable, available)
         if let expected = ProcessInfo.processInfo.environment["TRANSCRIBE_TEST_ENCODER_API_AVAILABLE"] {
             XCTAssertEqual(available, expected == "1")
+        }
+    }
+
+    private func transcript() -> Transcript {
+        var timing = transcribe_timings()
+        transcribe_timings_init(&timing)
+        return Transcript(text: "Kept ASR text.", language: "en", timestampKind: .none,
+            segments: [], words: [], tokens: [], timings: Timings(timing))
+    }
+
+    func testOptionalCaptureFailurePreservesTranscriptWithExactlyOneASRCall() throws {
+        var runs = 0, queries = 0, discarded = 0
+        let expected = self.transcript()
+        let badMetadata = self.api { _, _, _, _, _, _, _, _ in queries += 1; return 0 }
+        let result = try performEncoderFeatureRun(required: false, run: { runs += 1; return expected },
+            copy: { try badMetadata.copy(session: self.session, maximumBytes: 4, cancelled: { false }) },
+            cancelled: { false }, discard: { discarded += 1 })
+        XCTAssertEqual(result.transcript, expected)
+        XCTAssertNil(result.encoderFeatures)
+        XCTAssertEqual(runs, 1)
+        XCTAssertEqual(queries, 1)
+        XCTAssertGreaterThan(discarded, 0)
+    }
+
+    func testStrictCaptureFailureStillThrowsAfterOneASRCall() {
+        var runs = 0
+        XCTAssertThrowsError(try performEncoderFeatureRun(required: true,
+            run: { runs += 1; return self.transcript() },
+            copy: { throw TranscribeError.backend("copy failed") },
+            cancelled: { false }, discard: {}))
+        XCTAssertEqual(runs, 1)
+    }
+
+    func testLegacyOptionalFallbackRunsOnceAndStrictRejectsBeforeASR() throws {
+        var runs = 0
+        let expected = self.transcript()
+        let result = try performEncoderFeatureRun(required: false, run: { runs += 1; return expected },
+            copy: nil, cancelled: { false }, discard: {})
+        XCTAssertEqual(result.transcript, expected)
+        XCTAssertNil(result.encoderFeatures)
+        XCTAssertEqual(runs, 1)
+        XCTAssertThrowsError(try performEncoderFeatureRun(required: true,
+            run: { runs += 1; return expected }, copy: nil, cancelled: { false }, discard: {}))
+        XCTAssertEqual(runs, 1)
+    }
+
+    func testOptionalCaptureNeverMasksASRFailureOrReadsFeaturesAfterIt() {
+        var copies = 0
+        XCTAssertThrowsError(try performEncoderFeatureRun(required: false,
+            run: { throw TranscribeError.backend("ASR failed") },
+            copy: { copies += 1; throw TranscribeError.backend("copy") },
+            cancelled: { false }, discard: {})) { error in
+            guard case TranscribeError.backend(let message) = error else { return XCTFail("Wrong error: \(error)") }
+            XCTAssertEqual(message, "ASR failed")
+        }
+        XCTAssertEqual(copies, 0)
+    }
+
+    func testOptionalCapturePropagatesBothCancellationErrorForms() {
+        for failure: Error in [CancellationError(), TranscribeError.aborted(message: "cancelled", partial: nil)] {
+            XCTAssertThrowsError(try performEncoderFeatureRun(required: false, run: { self.transcript() },
+                copy: { throw failure }, cancelled: { false }, discard: {}))
+        }
+        var cancelled = false
+        XCTAssertThrowsError(try performEncoderFeatureRun(required: false, run: { self.transcript() },
+            copy: { cancelled = true; throw TranscribeError.backend("copy failed during cancellation") },
+            cancelled: { cancelled }, discard: {})) { error in
+            guard case TranscribeError.aborted = error else { return XCTFail("Cancellation was hidden: \(error)") }
         }
     }
 

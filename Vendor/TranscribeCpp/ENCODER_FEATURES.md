@@ -4,12 +4,22 @@ The pinned v0.1.2 binary does not export the feature API. Existing transcription
 continues to use that binary. `Session.supportsEncoderFeatureSnapshots` is false
 when any required symbol is missing, the ABI version differs, or the loaded
 model does not implement the capability. The SwiftPM URL/checksum are unchanged.
+`Session.nativeEncoderFeatureAPIAvailable` reports only ABI availability before
+model preparation. It never loads weights. Instance capability validation is
+still required after preparing the frozen model selection.
 
 `runWithEncoderFeatures` holds the existing model compute lock across the ASR
 call, metadata query and feature copy. It returns an owned transcript and owned
 time-major Float32 sequence from that same successful run. It does not load a
 second model, perform another encoder pass, use environment variables, or write
 features to disk. Async calls use the existing joined cancellation bridge.
+
+`runWithOptionalEncoderFeatures` shares that locked single-pass operation. On
+legacy SDKs or unsupported models it returns the ASR transcript with nil
+features. If ASR succeeds but metadata or feature copying fails, it clears the
+capture and keeps that same transcript. It never retries the encoder. ASR
+failure, cancellation and invalid caller byte limits still throw. The strict
+`runWithEncoderFeatures` operation continues to throw on capture failure.
 
 Snapshots have at most 600 frames, 1024 channels and 2 MiB of feature bytes.
 Callers may request a smaller byte limit. Invalid clocks, zero generation,

@@ -59,6 +59,12 @@ public final class Session {
         return try runUnlocked(pcm, options: options)
     }
 
+    /// ABI availability only. This never constructs or loads a model. Callers
+    /// must still check the instance capability after preparing the model.
+    public static var nativeEncoderFeatureAPIAvailable: Bool {
+        NativeEncoderFeatureAPI.resolved != nil
+    }
+
     /// False with a legacy native SDK or a model without encoder snapshot support.
     public var supportsEncoderFeatureSnapshots: Bool {
         NativeEncoderFeatureAPI.resolved?.supports(model.ptr) == true
@@ -69,27 +75,50 @@ public final class Session {
     public func runWithEncoderFeatures(
         _ pcm: [Float], options: RunOptions = .init(), maximumFeatureBytes: Int = 2 * 1_024 * 1_024
     ) throws -> EncoderFeatureRunSnapshot {
+        let snapshot = try runCapturingEncoderFeatures(pcm, options: options,
+            maximumFeatureBytes: maximumFeatureBytes, required: true)
+        guard let features = snapshot.encoderFeatures else {
+            throw TranscribeError.notImplemented("Required encoder features were not returned")
+        }
+        return EncoderFeatureRunSnapshot(transcript: snapshot.transcript, encoderFeatures: features)
+    }
+
+    /// Preserve the successful ASR transcript when optional capture fails. The
+    /// same single encoder pass is used even on a legacy SDK with no feature API.
+    /// Cancellation, ASR failure and invalid caller limits continue to throw.
+    public func runWithOptionalEncoderFeatures(
+        _ pcm: [Float], options: RunOptions = .init(), maximumFeatureBytes: Int = 2 * 1_024 * 1_024
+    ) throws -> OptionalEncoderFeatureRunSnapshot {
+        try runCapturingEncoderFeatures(pcm, options: options,
+            maximumFeatureBytes: maximumFeatureBytes, required: false)
+    }
+
+    private func runCapturingEncoderFeatures(
+        _ pcm: [Float], options: RunOptions, maximumFeatureBytes: Int, required: Bool
+    ) throws -> OptionalEncoderFeatureRunSnapshot {
         model.runLock.lock()
         defer { model.runLock.unlock() }
         guard !model.streamActive else {
             throw TranscribeError.busy("a stream is active on this model; finish or drop it before encoder capture")
         }
-        guard let api = NativeEncoderFeatureAPI.resolved, api.supports(model.ptr) else {
-            throw TranscribeError.notImplemented("The loaded native SDK/model does not support encoder feature snapshots")
-        }
+        let api = NativeEncoderFeatureAPI.resolved
         guard Int32(exactly: pcm.count) != nil, (1...2 * 1_024 * 1_024).contains(maximumFeatureBytes) else {
-            _ = api.clear(ptr)
+            _ = api?.clear(ptr)
             throw TranscribeError.invalidArgument("Invalid encoder capture input or byte limit")
         }
-        do {
-            let transcript = try runUnlocked(pcm, options: options)
-            let features = try api.copy(session: ptr, maximumBytes: maximumFeatureBytes,
-                                        cancelled: { self.cancelToken?.isCancelled == true })
-            return EncoderFeatureRunSnapshot(transcript: transcript, encoderFeatures: features)
-        } catch {
-            _ = api.clear(ptr)
-            throw error
+        let capture: (() throws -> EncoderFeatureSnapshot)?
+        if let api, api.supports(model.ptr) {
+            capture = {
+                try api.copy(session: self.ptr, maximumBytes: maximumFeatureBytes,
+                             cancelled: { self.cancelToken?.isCancelled == true })
+            }
+        } else {
+            capture = nil
         }
+        return try performEncoderFeatureRun(required: required,
+            run: { try self.runUnlocked(pcm, options: options) }, copy: capture,
+            cancelled: { self.cancelToken?.isCancelled == true },
+            discard: { _ = api?.clear(self.ptr) })
     }
 
     /// Transcribe with Whisper and copy its decoding quality trace from the
@@ -223,6 +252,15 @@ public final class Session {
         nonisolated(unsafe) let this = self
         return try await withTaskCancellationBridge {
             try this.runWithEncoderFeatures(pcm, options: options, maximumFeatureBytes: maximumFeatureBytes)
+        }
+    }
+
+    public func runWithOptionalEncoderFeatures(
+        _ pcm: [Float], options: RunOptions = .init(), maximumFeatureBytes: Int = 2 * 1_024 * 1_024
+    ) async throws -> OptionalEncoderFeatureRunSnapshot {
+        nonisolated(unsafe) let this = self
+        return try await withTaskCancellationBridge {
+            try this.runWithOptionalEncoderFeatures(pcm, options: options, maximumFeatureBytes: maximumFeatureBytes)
         }
     }
 

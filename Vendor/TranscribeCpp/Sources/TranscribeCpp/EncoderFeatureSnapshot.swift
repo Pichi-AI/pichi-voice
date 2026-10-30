@@ -24,6 +24,52 @@ public struct EncoderFeatureRunSnapshot: Sendable, Equatable {
     public let encoderFeatures: EncoderFeatureSnapshot
 }
 
+/// A successful ASR result can be published even when optional feature capture
+/// is unavailable or rejected. ASR failure and cancellation still throw.
+public struct OptionalEncoderFeatureRunSnapshot: Sendable, Equatable {
+    public let transcript: Transcript
+    public let encoderFeatures: EncoderFeatureSnapshot?
+}
+
+/// Shared single-pass policy, invoked while Session holds the model run lock.
+/// Keeping the run outside the optional-copy catch prevents an acoustic
+/// dictionary failure from causing another ASR pass or masking an ASR error.
+func performEncoderFeatureRun(
+    required: Bool, run: () throws -> Transcript, copy: (() throws -> EncoderFeatureSnapshot)?,
+    cancelled: () -> Bool, discard: () -> Void
+) throws -> OptionalEncoderFeatureRunSnapshot {
+    func requireNotCancelled() throws {
+        guard !cancelled() else {
+            throw TranscribeError.aborted(message: "Encoder feature capture cancelled", partial: nil)
+        }
+    }
+    do {
+        if required, copy == nil {
+            throw TranscribeError.notImplemented("The loaded native SDK/model does not support encoder feature snapshots")
+        }
+        let transcript = try run()
+        try requireNotCancelled()
+        guard let copy else {
+            return OptionalEncoderFeatureRunSnapshot(transcript: transcript, encoderFeatures: nil)
+        }
+        do {
+            let features = try copy()
+            try requireNotCancelled()
+            return OptionalEncoderFeatureRunSnapshot(transcript: transcript, encoderFeatures: features)
+        } catch {
+            discard()
+            try requireNotCancelled()
+            if error is CancellationError { throw error }
+            if case TranscribeError.aborted = error { throw error }
+            guard !required else { throw error }
+            return OptionalEncoderFeatureRunSnapshot(transcript: transcript, encoderFeatures: nil)
+        }
+    } catch {
+        discard()
+        throw error
+    }
+}
+
 struct EncoderFeatureMetadata: Equatable {
     var frameCount: UInt32 = 0
     var dimension: UInt32 = 0
