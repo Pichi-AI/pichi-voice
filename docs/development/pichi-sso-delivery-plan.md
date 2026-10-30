@@ -1,5 +1,7 @@
 # Pichi account, enterprise SSO and cloud publication delivery
 
+> Historical design snapshot from PR #48 at `31d7a077a9ebd0855ed900e2cfbcea698e0971ae`, dated 2026-10-22. Session assignments, implementation statuses and source references below describe that snapshot. Current implementation and release acceptance evidence take precedence. Preserving this design does not establish deployed server support or authorize production account migration.
+
 Status: coordinated implementation, contract version 1. Initial baselines were verified on 2026-10-22.
 
 ## Product decisions

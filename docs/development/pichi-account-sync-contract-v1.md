@@ -1,5 +1,7 @@
 # Pichi account and protected cloud publication contract v1
 
+> Historical design snapshot from PR #48 at `31d7a077a9ebd0855ed900e2cfbcea698e0971ae`, dated 2026-10-22. Session assignments, implementation statuses and source references below describe that snapshot. Current implementation and release acceptance evidence take precedence. Preserving this design does not establish deployed server support or authorize production account migration.
+
 Status: implementation baseline for [the delivery plan](pichi-sso-delivery-plan.md). Changes require coordinator review and a new pinned contract commit.
 
 ## 1. Trust and identity
