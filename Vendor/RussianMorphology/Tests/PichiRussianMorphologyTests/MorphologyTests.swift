@@ -27,10 +27,13 @@ final class MorphologyTests: XCTestCase {
     func testUnknownWordsDoNotInventForms() throws {
         XCTAssertNil(try morphology.forms(for: "квантобублозавр"))
         XCTAssertNil(try morphology.forms(for: "C0rp_42"))
+        XCTAssertNil(try morphology.forms(for: "C++17"))
+        XCTAssertNil(try morphology.forms(for: "公司"))
+        XCTAssertNil(try morphology.forms(for: "слово🙂"))
         XCTAssertThrowsError(try morphology.forms(for: "два слова"))
         XCTAssertThrowsError(try morphology.forms(for: ""))
         XCTAssertThrowsError(try morphology.forms(for: "a\u{0}b"))
-        XCTAssertThrowsError(try morphology.forms(for: String(repeating: "я", count: 65)))
+        XCTAssertNil(try morphology.forms(for: String(repeating: "я", count: 65)))
     }
 
     func testCyrillicUnicodeAndNames() throws {

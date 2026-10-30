@@ -16,10 +16,15 @@ public struct SensitiveDictionaryMorphologySnapshot: Sendable {
     /// Unknown words return nil, allowing the caller to retain exact matching.
     public func forms(for word: String) throws -> Set<String>? {
         let normalized = Self.normalize(word)
-        guard !normalized.isEmpty, normalized.utf8.count <= 128,
+        guard !normalized.isEmpty,
               !normalized.unicodeScalars.contains(where: {
                   CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0)
               }) else { throw SensitiveDictionaryMorphologyError.invalidWord }
+        // Long terms and other scripts remain valid exact rules. Keep tokens
+        // the Russian lexicon cannot expand outside the native CP1251 decoder.
+        guard normalized.utf8.count <= 128, normalized.unicodeScalars.allSatisfy({
+            (0x0430...0x044F).contains($0.value) || $0.value == 0x0451 || $0.value == 0x2D
+        }) else { return nil }
         var output = [CChar](repeating: 0, count: 65_536)
         var written = 0
         var count = 0
