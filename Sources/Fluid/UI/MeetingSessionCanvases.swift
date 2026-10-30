@@ -817,7 +817,8 @@ struct MeetingResultCanvas: View {
 
     private var meetingMetadata: some View {
         HStack(spacing: self.theme.metrics.spacing.md) {
-            Text(self.session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(PichiLocalization.locale)))
+            Text(self.session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
+                .accessibilityIdentifier("meeting.metadata.start")
                 .fixedSize()
                 .help(self.session.startedAt.formatted(Date.FormatStyle(date: .complete, time: .shortened).locale(PichiLocalization.locale)))
             Text("·").accessibilityHidden(true)

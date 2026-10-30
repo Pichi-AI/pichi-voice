@@ -35,8 +35,8 @@ final class MobileLocalizationRenderingTests: XCTestCase {
 
     func testSavedLocationFollowsInterfaceLanguageWithoutChangingTranscriptLanguage() throws {
         let session = locationSession()
-        XCTAssertTrue(session.displayTitle(language: .russian).hasPrefix("ул. Примерная, 1, Примерск · "))
-        XCTAssertTrue(session.displayTitle(language: .english).hasPrefix("1 Example Street, Example City · "))
+        XCTAssertEqual(session.displayTitle(language: .russian), "ул. Примерная, 1, Примерск")
+        XCTAssertEqual(session.displayTitle(language: .english), "1 Example Street, Example City")
         XCTAssertNotEqual(session.displayTitle(language: .english), session.displayTitle(language: .russian))
         let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(session))
         XCTAssertEqual(restored.location, session.location)
@@ -59,13 +59,13 @@ final class MobileLocalizationRenderingTests: XCTestCase {
         XCTAssertEqual(restored.displayTitle(language: .english), session.title)
     }
 
-    func testMissingAddressUsesLocalizedFallbackAndDateWithoutAnotherLanguage() {
+    func testMissingAddressUsesLocalizedFallbackWithoutStartOrAnotherLanguage() {
         var session = locationSession()
         session.location?.addresses.removeValue(forKey: "ru")
-        XCTAssertTrue(session.displayTitle(language: .russian).hasPrefix("Встреча в одной комнате · "))
+        XCTAssertEqual(session.displayTitle(language: .russian), "Встреча в одной комнате")
         XCTAssertFalse(session.displayTitle(language: .russian).contains("Example Street"))
         session.location = nil
-        XCTAssertTrue(session.displayTitle(language: .english).hasPrefix("In-room meeting · "))
+        XCTAssertEqual(session.displayTitle(language: .english), "In-room meeting")
     }
 
     func testWarmedCatalogKeepsPreferenceAndExplicitLocaleChangesLive() throws {

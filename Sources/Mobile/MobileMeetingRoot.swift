@@ -620,7 +620,9 @@ struct MobileMeetingRoot: View {
                         Text(concealedSummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     } else {
                         Text(session.displayTitle).font(theme.typography.bodyStrong)
+                            .accessibilityIdentifier("history.title.\(session.id)")
                         Text(historySummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                            .accessibilityIdentifier("history.metadata.\(session.id)")
                     }
                     if let cloudPublication {
                         MobileCloudRecordingStatus(service: cloudPublication, interaction: cloudInteraction, recordingID: session.id)
@@ -721,13 +723,9 @@ struct MobileMeetingRoot: View {
         }
     }
 
-    /// One secondary line: duration, participants and any unfinished state. A default title
-    /// already carries the date, so the date appears here only for a renamed meeting.
+    /// The title leaves the start out and this secondary line always shows it.
     private func historySummary(_ session: MeetingSession) -> String {
-        var parts: [String] = []
-        if !session.displayTitleIncludesStart {
-            parts.append(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
-        }
+        var parts = [session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale))]
         parts.append(MeetingTranscriptExporter.timestampText(session.duration))
         if !session.readableSpeakers.isEmpty {
             parts.append(PichiLocalization.format("%lld speakers", Int64(session.readableSpeakers.count)))
@@ -753,9 +751,11 @@ struct MobileMeetingRoot: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     Text(session.displayTitle).font(theme.typography.title)
+                        .accessibilityIdentifier("transcript.title")
                     HStack {
                         Label(MeetingTranscriptExporter.timestampText(session.duration), systemImage: "clock")
                         Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
+                            .accessibilityIdentifier("transcript.metadata.start")
                     }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     if let cloudPublication {
                         MobileCloudRecordingStatus(service: cloudPublication, interaction: cloudInteraction,
