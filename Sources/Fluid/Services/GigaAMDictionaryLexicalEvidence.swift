@@ -1,0 +1,192 @@
+import Foundation
+
+/// Comparison keys never replace, translate or persist a user's spelling. This
+/// supplies bounded lexical evidence; the inference adapter still owns all sound
+/// thresholds, reference provenance, competition checks and the final decision.
+nonisolated enum GigaAMDictionaryLexicalEvidence {
+    enum Reason: String, Sendable {
+        case invalidTerm, protectedContent, noObservedVariant, formattingOnly
+        case unknownChangedComponents, knownChangedComponent, lexiconUnavailable
+    }
+
+    struct Comparison: Sendable {
+        let changedSourceComponents: [String]
+        let changedTargetComponents: [String]
+        let canonicalSimilarity: Double
+        let observedSimilarity: Double
+        let phoneticSimilarity: Double
+        let hasObservedVariants: Bool
+        let matchesObservedVariant: Bool
+        let protectsContent: Bool
+    }
+
+    struct Assessment: Sendable {
+        let comparison: Comparison?
+        let reason: Reason
+        var allowsWeakCorrection: Bool { reason == .unknownChangedComponents }
+        var requiresStrictAcousticEvidence: Bool { reason == .knownChangedComponent }
+    }
+
+    private struct Token {
+        let text: String
+        let key: String
+        let lexicalText: String
+        let component: Int
+    }
+
+    static func compare(heard: String, canonical: String, observedVariants: [String]) -> Comparison? {
+        guard let source = self.tokens(heard), let target = self.tokens(canonical) else { return nil }
+        let sourceKey = self.phoneticKey(heard), targetKey = self.phoneticKey(canonical)
+        guard !sourceKey.isEmpty, !targetKey.isEmpty else { return nil }
+        let variants = observedVariants.prefix(20).filter { self.tokens($0) != nil }
+        let observed = variants.map { self.similarity(heard, $0) }.max() ?? 0
+        let canonicalScore = self.similarity(heard, canonical)
+        let equivalent = source.map(\.key).joined() == target.map(\.key).joined()
+        let common = self.unchanged(source.map(\.key), target.map(\.key))
+        let changedSource = equivalent ? [] : self.changedComponents(source, unchanged: common.source)
+        let changedTarget = equivalent ? [] : self.changedComponents(target, unchanged: common.target)
+        return Comparison(
+            changedSourceComponents: changedSource, changedTargetComponents: changedTarget,
+            canonicalSimilarity: canonicalScore, observedSimilarity: observed,
+            phoneticSimilarity: max(canonicalScore, observed), hasObservedVariants: !variants.isEmpty,
+            matchesObservedVariant: variants.contains { self.literalKey($0) == self.literalKey(heard) },
+            protectsContent: self.numberMarkers(heard) != self.numberMarkers(canonical) ||
+                self.roleMarkers(heard) != self.roleMarkers(canonical)
+        )
+    }
+
+    @MainActor static func assess(heard: String, canonical: String, observedVariants: [String], requiredLanguages: [String]) -> Assessment {
+        guard !Task.isCancelled, let comparison = self.compare(heard: heard, canonical: canonical, observedVariants: observedVariants) else {
+            return Assessment(comparison: nil, reason: .invalidTerm)
+        }
+        if comparison.protectsContent { return Assessment(comparison: comparison, reason: .protectedContent) }
+        if comparison.changedSourceComponents.isEmpty && comparison.changedTargetComponents.isEmpty {
+            return Assessment(comparison: comparison, reason: .formattingOnly)
+        }
+        guard comparison.hasObservedVariants else { return Assessment(comparison: comparison, reason: .noObservedVariant) }
+        guard DictionaryLexicalEvidence.hasRequiredLexicons(requiredLanguages) else {
+            return Assessment(comparison: comparison, reason: .lexiconUnavailable)
+        }
+        // Only changed components are questioned. A correctly recognized shared
+        // suffix such as "Voice" is not evidence against repairing another token.
+        guard !comparison.changedSourceComponents.isEmpty else { return Assessment(comparison: comparison, reason: .protectedContent) }
+        for component in comparison.changedSourceComponents {
+            guard !Task.isCancelled else { return Assessment(comparison: comparison, reason: .invalidTerm) }
+            if !DictionaryLexicalEvidence.isUnknownTerm(component, requiredLanguages: requiredLanguages) {
+                // Homophones and real ordinary words need stronger acoustic
+                // evidence. Lexical resemblance alone never admits them here.
+                return Assessment(comparison: comparison, reason: .knownChangedComponent)
+            }
+        }
+        return Assessment(comparison: comparison, reason: .unknownChangedComponents)
+    }
+
+    static func phoneticKey(_ text: String) -> String {
+        guard let tokens = self.tokens(text) else { return "" }
+        let result = tokens.map { self.soundKey($0.text) }.joined()
+        return result.count <= 160 ? result : ""
+    }
+
+    private static func tokens(_ text: String) -> [Token]? {
+        guard !text.isEmpty, text.count <= 80, text.rangeOfCharacter(from: .newlines) == nil else { return nil }
+        guard let regex = try? NSRegularExpression(pattern: #"[\p{L}\p{M}\p{N}]+(?:['’][\p{L}\p{M}\p{N}]+)*"#) else { return nil }
+        let value = text as NSString
+        let parts = regex.matches(in: text, range: NSRange(location: 0, length: value.length)).map { value.substring(with: $0.range) }
+        guard (1...4).contains(parts.count), parts.allSatisfy({ $0.count <= 80 }) else { return nil }
+        let tokens = parts.enumerated().flatMap { index, original in
+            let split = original.replacingOccurrences(of: #"([\p{Ll}\p{N}])(\p{Lu})"#, with: "$1 $2", options: .regularExpression)
+                .replacingOccurrences(of: #"(\p{Lu})(\p{Lu}\p{Ll})"#, with: "$1 $2", options: .regularExpression)
+            return split.split(whereSeparator: \.isWhitespace).map {
+                Token(text: String($0), key: self.literalKey(String($0)), lexicalText: original, component: index)
+            }
+        }
+        return tokens.count <= 16 ? tokens : nil
+    }
+
+    private static func changedComponents(_ tokens: [Token], unchanged: Set<Int>) -> [String] {
+        var seen = Set<Int>()
+        return tokens.indices.compactMap { index in
+            guard !unchanged.contains(index), seen.insert(tokens[index].component).inserted else { return nil }
+            return tokens[index].lexicalText
+        }
+    }
+
+    private static func literalKey(_ text: String) -> String {
+        let latin = text.applyingTransform(.toLatin, reverse: false) ?? text
+        return (latin.applyingTransform(.stripCombiningMarks, reverse: false) ?? latin)
+            .lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    private static func soundKey(_ text: String) -> String {
+        var value = (text.applyingTransform(.toLatin, reverse: false) ?? text).lowercased()
+        // Standard transliteration marks are expanded before diacritic removal.
+        for (before, after) in [("č", "ch"), ("š", "sh"), ("ž", "zh"), ("ŝ", "sh"), ("ǰ", "j")] {
+            value = value.replacingOccurrences(of: before, with: after)
+        }
+        value = (value.applyingTransform(.stripCombiningMarks, reverse: false) ?? value).filter { $0.isLetter || $0.isNumber }
+        for (before, after) in [("ph", "f"), ("ck", "k"), ("qu", "k"), ("au", "o"), ("aw", "o"),
+                                ("ou", "o"), ("ow", "o"), ("ee", "i"), ("ea", "i"), ("oo", "u")] {
+            value = value.replacingOccurrences(of: before, with: after)
+        }
+        value = value.replacingOccurrences(of: "c(?=[eiy])", with: "s", options: .regularExpression)
+            .replacingOccurrences(of: "c", with: "k").replacingOccurrences(of: "j", with: "y")
+        if value.count >= 4, value.hasSuffix("e") { value.removeLast() }
+        return value
+    }
+
+    private static func similarity(_ first: String, _ second: String) -> Double {
+        let a = self.phoneticKey(first), b = self.phoneticKey(second)
+        guard !a.isEmpty, !b.isEmpty else { return 0 }
+        let direct = self.editSimilarity(a, b)
+        let vowels = Set("aeiouy")
+        let ac = a.filter { !vowels.contains($0) }, bc = b.filter { !vowels.contains($0) }
+        return max(direct, ac.isEmpty || bc.isEmpty ? 0 : self.editSimilarity(ac, bc))
+    }
+
+    private static func editSimilarity(_ first: String, _ second: String) -> Double {
+        let a = Array(first), b = Array(second)
+        var previous = Array(0...b.count)
+        for (i, character) in a.enumerated() {
+            var current = [i + 1]
+            for (j, other) in b.enumerated() {
+                current.append(min(current[j] + 1, previous[j + 1] + 1, previous[j] + (character == other ? 0 : 1)))
+            }
+            previous = current
+        }
+        return 1 - Double(previous[b.count]) / Double(max(1, max(a.count, b.count)))
+    }
+
+    private static func unchanged(_ source: [String], _ target: [String]) -> (source: Set<Int>, target: Set<Int>) {
+        var lengths = Array(repeating: Array(repeating: 0, count: target.count + 1), count: source.count + 1)
+        for i in source.indices.reversed() {
+            for j in target.indices.reversed() {
+                lengths[i][j] = source[i] == target[j] ? lengths[i + 1][j + 1] + 1 : max(lengths[i + 1][j], lengths[i][j + 1])
+            }
+        }
+        var i = 0, j = 0, si = Set<Int>(), ti = Set<Int>()
+        while i < source.count && j < target.count {
+            if source[i] == target[j] { si.insert(i); ti.insert(j); i += 1; j += 1 }
+            else if lengths[i + 1][j] >= lengths[i][j + 1] { i += 1 }
+            else { j += 1 }
+        }
+        return (si, ti)
+    }
+
+    private static func numberMarkers(_ text: String) -> [String] {
+        text.components(separatedBy: CharacterSet.decimalDigits.inverted).filter { !$0.isEmpty }
+    }
+
+    private static func roleMarkers(_ text: String) -> [String] {
+        text.lowercased().replacingOccurrences(of: "’", with: "'")
+            .components(separatedBy: CharacterSet.letters.union(CharacterSet(charactersIn: "'")).inverted)
+            .filter { self.protectedWords.contains($0) || $0.hasSuffix("n't") }
+    }
+
+    // Closed-class safety data, not product terms or locale-dependent behavior.
+    private static let protectedWords: Set<String> = [
+        "no", "not", "never", "without", "none", "nothing", "nobody", "neither", "nor", "cannot",
+        "i", "you", "he", "she", "we", "they", "me", "him", "her", "us", "them", "my", "your", "our", "their",
+        "не", "ни", "нет", "без", "я", "ты", "он", "она", "мы", "вы", "они", "мне", "тебе", "ему", "ей",
+        "нам", "вам", "им", "меня", "тебя", "нас", "вас", "его", "ее", "её", "их", "мой", "твой", "наш", "ваш",
+    ]
+}
