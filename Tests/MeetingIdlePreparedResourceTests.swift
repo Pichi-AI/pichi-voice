@@ -76,8 +76,15 @@ import Foundation
     var residentProvider: ResidentProviderWitness?
     var residentModelID: String?
     var isAsrReady = true
+    var executionStatus: TranscriptionExecutionStatus? = .init(backend: .gpu)
+    var executionStatusModelID: String?
+    var executionStatusProviderID: ObjectIdentifier?
     var residentReleaseTask: Task<Void, Never>?
-    init(provider: ResidentProviderWitness) { residentProvider = provider; residentModelID = provider.fingerprint }
+    init(provider: ResidentProviderWitness) {
+        residentProvider = provider; residentModelID = provider.fingerprint
+        executionStatusModelID = provider.fingerprint
+        executionStatusProviderID = ObjectIdentifier(provider)
+    }
 }
 
 @main
@@ -104,6 +111,8 @@ struct MeetingIdlePreparedResourceTests {
             }
             await until { h.releaseGate.entered }
             check(h.loads == 0 && h.weights == 1, "Idle loading must join the existing ready provider's actual release first")
+            check(service.executionStatus == nil && service.executionStatusModelID == nil && service.executionStatusProviderID == nil,
+                "Retirement clears the released provider's execution-status ownership before suspension")
             h.releaseGate.release()
             _ = try await idle.value
             check(h.weights == 1 && h.maximumWeights == 1 && !service.isAsrReady,
