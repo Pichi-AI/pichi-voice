@@ -4091,6 +4091,40 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(arbiter.releaseCount, 1)
     }
 
+    func testRejectedCompletedSaveRestoresAutomaticTitleWithItsTranscript() async throws {
+        for cancellation in [false, true] {
+            let dir = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let inner = MeetingSessionStore(rootDirectory: dir)
+            var session = self.makeCorrectionSession(state: .interrupted).session
+            session.defaultTitleBase = "Meeting"
+            session.endedAt = session.startedAt.addingTimeInterval(1_800)
+            try await inner.create(session)
+            let store = RejectCompletedTitleStore(inner: inner, cancellation: cancellation)
+            let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                processing: TitleFixtureProcessingController(), audioArbiter: StubArbiter())
+            do {
+                _ = try await coordinator.retryProcessing(sessionID: session.id)
+                XCTFail("The fixture must reject the completed publication")
+            } catch {
+                XCTAssertEqual(error is CancellationError, cancellation)
+            }
+            let rejected = await store.rejected
+            XCTAssertNotNil(rejected?.automaticTitle, "The failure must happen after a new title was generated")
+            XCTAssertNotEqual(rejected?.title, session.title)
+            let saved = try await inner.loadTranscript(id: session.id)
+            XCTAssertEqual(saved?.title, session.title)
+            XCTAssertEqual(saved?.defaultTitleBase, session.defaultTitleBase)
+            XCTAssertEqual(saved?.automaticTitle, session.automaticTitle)
+            XCTAssertEqual(saved?.transcriptSegments, session.transcriptSegments)
+            XCTAssertEqual(saved?.state, cancellation ? .interrupted : .failed)
+
+            let retried = try await coordinator.retryProcessing(sessionID: session.id)
+            XCTAssertNotNil(retried.automaticTitle, "A discarded title cannot suppress naming the successful retry")
+            XCTAssertEqual(retried.automaticTitle?.previousTitle, session.title)
+        }
+    }
+
     // MARK: - Slice 3, test 4: checkpoint survives a failed retry
 
     func testCheckpointSurvivesProcessingFailure() async throws {
@@ -7929,6 +7963,32 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
     }
 
+    func testRenameGeneratedSessionToVisibleTitleBecomesExplicit() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        session.defaultTitleBase = "Meeting"
+        session.automaticTitle = .init(algorithmVersion: MeetingUniversalTitleEngine.algorithmVersion,
+            candidateID: "discussion__questions", localizationKey: "Discussion of questions",
+            previousTitle: "Original automatic title", previousDefaultTitleBase: "Meeting")
+        try await store.create(session)
+        let visible = session.displayTitle
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        let renamed = try await coordinator.renameSession(sessionID: session.id, to: visible)
+        XCTAssertEqual(renamed.title, visible)
+        XCTAssertNil(renamed.defaultTitleBase)
+        XCTAssertNil(renamed.automaticTitle)
+        let saved = try await store.loadTranscript(id: session.id)
+        XCTAssertEqual(saved?.title, visible)
+        XCTAssertNil(saved?.automaticTitle)
+        XCTAssertNil(saved?.defaultTitleBase)
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+    }
+
     func testRenameLocatedSessionToStoredTitleBecomesExplicitAndSurvivesReload() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -8346,6 +8406,46 @@ private final class GatedMeetingLocationResolver: MeetingLocationResolving {
         let pending = self.continuations.values
         self.continuations.removeAll()
         for continuation in pending { continuation.resume(returning: location) }
+    }
+}
+
+private actor RejectCompletedTitleStore: MeetingSessionStoring {
+    private let inner: MeetingSessionStore
+    private let cancellation: Bool
+    private(set) var rejected: MeetingSession?
+
+    init(inner: MeetingSessionStore, cancellation: Bool) {
+        self.inner = inner; self.cancellation = cancellation
+    }
+
+    func create(_ session: MeetingSession) async throws { try await self.inner.create(session) }
+    func save(_ session: MeetingSession) async throws {
+        if session.state == .completed, self.rejected == nil {
+            self.rejected = session
+            if self.cancellation { throw CancellationError() }
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try await self.inner.save(session)
+    }
+    func load(id: MeetingSessionID) async throws -> MeetingSession? { try await self.inner.load(id: id) }
+    func loadAll() async throws -> [MeetingSession] { try await self.inner.loadAll() }
+    func loadRecoverable() async throws -> [MeetingSession] { try await self.inner.loadRecoverable() }
+    func sessionDirectory(for id: MeetingSessionID) async throws -> URL { try await self.inner.sessionDirectory(for: id) }
+    func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL? { try await self.inner.existingSessionDirectory(for: id) }
+    func delete(id: MeetingSessionID) async throws { try await self.inner.delete(id: id) }
+    func deleteAudioFiles(for id: MeetingSessionID) async throws { try await self.inner.deleteAudioFiles(for: id) }
+}
+
+@MainActor
+private final class TitleFixtureProcessingController: MeetingProcessingControlling {
+    func process(session: MeetingSession, sessionDirectory: URL,
+                 progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
+        var segment = session.transcriptSegments[0]
+        segment.text = String(repeating: "Я думаю о вопросе, почему возникает этот вопрос. ", count: 60)
+        return MeetingProcessingResult(speakers: session.speakers, segments: [segment],
+            attempt: .init(id: UUID(), startedAt: Date(), completedAt: Date(), stage: .completed,
+                pipelineVersion: MeetingProcessingPipeline.pipelineVersion, asrProvider: nil, asrModel: nil,
+                diarizationModel: nil, lastCompletedTrackID: nil, errorCode: nil))
     }
 }
 

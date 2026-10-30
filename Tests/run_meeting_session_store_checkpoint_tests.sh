@@ -86,6 +86,9 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     "$task_test_dir/AttributionTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \
     Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
+    Sources/Fluid/Services/Meeting/MeetingAutomaticNaming.swift \
+    Sources/Fluid/Services/Meeting/MeetingUniversalTitleEngine.swift \
+    Sources/Fluid/Services/Meeting/MeetingSavedSummary.swift \
     Sources/Fluid/Services/Meeting/MeetingRecordingCipher.swift \
     Sources/Fluid/Services/Meeting/MeetingRecordingKeychainStore.swift Sources/Fluid/Persistence/ProtectedDataAccessError.swift \
     "$task_test_dir/PipelineVersion.swift" \
@@ -98,6 +101,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     "$task_test_dir/ApplicationSupport.swift" Tests/MeetingSessionStoreCheckpointTests.swift \
     Tests/MeetingRecordingEncryptionTests.swift \
+    Tests/MeetingAutomaticNamingTests.swift \
     Tests/MeetingLocalReaderDateTests.swift \
     Tests/MeetingTranscriptReadingContractTests.swift \
     Tests/MeetingProtectedTranscriptExportTests.swift \

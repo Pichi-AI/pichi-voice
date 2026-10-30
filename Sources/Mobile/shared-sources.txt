@@ -224,3 +224,7 @@ Sources/Fluid/Services/CloudPublication/PichiPublicationRetryPolicy.swift
 Sources/Fluid/Services/CloudPublication/PichiPublicationWire.swift
 # Shared with the Live Activity extension target, which compiles every file in Sources/MobileActivity.
 Sources/MobileActivity/MobileRecordingActivityAttributes.swift
+
+Sources/Fluid/Services/Meeting/MeetingUniversalTitleEngine.swift
+
+Sources/Fluid/Services/Meeting/MeetingAutomaticNaming.swift

@@ -438,7 +438,8 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
 
     private func store(for profile: PrivateProfileSnapshot) -> MeetingSessionStore {
         if let existing = stores[profile.id] { return existing }
-        let store = MeetingSessionStore(rootDirectory: profile.directory("Meetings"))
+        let store = MeetingSessionStore(rootDirectory: profile.directory("Meetings"),
+            automaticTitleOwnership: .init(profile: profile))
         stores[profile.id] = store
         return store
     }
