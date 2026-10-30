@@ -1,0 +1,433 @@
+diff --git a/include/transcribe.h b/include/transcribe.h
+index c79b02e..67da520 100644
+--- a/include/transcribe.h
++++ b/include/transcribe.h
+@@ -2496,6 +2496,37 @@ TRANSCRIBE_API transcribe_status transcribe_batch_get_timings(const struct trans
+                                                               int                               i,
+                                                               struct transcribe_timings *       out);
+ 
++/* Optional encoder-snapshot API v1. Resolve all four symbols when using an
++ * older binary. The caller serializes clear, run, query and copy with the
++ * same model compute lease. No pointers into native storage escape.
++ *
++ * clear is required BEFORE every run attempt: the established run API may
++ * reject malformed PCM without dereferencing even a non-NULL session. Such
++ * malformed calls therefore cannot invalidate a previously valid snapshot.
++ * Accepted attempts, batch and stream operations invalidate automatically.
++ * Only a successful single run may publish a snapshot. Cancellation prevents
++ * query/copy, including cancellation that arrives just after run returned.
++ *
++ * get: NULL destination with capacity 0 queries metadata. Otherwise capacity
++ * is measured in floats. Maximum 524288 floats (2 MiB), 600 frames and 1024
++ * dimensions. Metadata is zeroed on error. A too-small capacity returns
++ * INPUT_TOO_LONG; missing successful snapshot returns INVALID_ARG;
++ * unsupported families return NOT_IMPLEMENTED. Generation changes on clear.
++ * All operations require an actual valid session/model or NULL, not a freed
++ * pointer. No function loads weights, performs inference or writes files.
++ */
++TRANSCRIBE_API uint32_t transcribe_encoder_features_api_version(void);
++TRANSCRIBE_API int32_t  transcribe_encoder_features_supported(const struct transcribe_model * model);
++TRANSCRIBE_API int32_t  transcribe_clear_encoder_features(struct transcribe_session * session);
++TRANSCRIBE_API int32_t  transcribe_get_encoder_features(const struct transcribe_session * session,
++                                                        uint32_t *                        frame_count,
++                                                        uint32_t *                        dimension,
++                                                        uint32_t *                        sample_rate,
++                                                        uint32_t *                        hop_samples,
++                                                        uint64_t *                        generation,
++                                                        float *                           destination,
++                                                        uint64_t                          capacity_elements);
++
+ #ifdef __cplusplus
+ } /* extern "C" */
+ #endif
+diff --git a/src/arch/gigaam/gigaam.h b/src/arch/gigaam/gigaam.h
+index 3824f33..665f3a3 100644
+--- a/src/arch/gigaam/gigaam.h
++++ b/src/arch/gigaam/gigaam.h
+@@ -73,6 +73,8 @@ struct GigaamSession final : public transcribe_session {
+     std::vector<float> mel_buf;
+     std::vector<float> pos_buf;  // cos/sin rotary PE bank, host scratch
+     std::vector<float> enc_host;
++    uint32_t           encoder_feature_frames    = 0;
++    uint32_t           encoder_feature_dimension = 0;
+ 
+     GigaamSession() = default;
+     ~GigaamSession() override;
+diff --git a/src/arch/gigaam/model.cpp b/src/arch/gigaam/model.cpp
+index 1935db8..83778eb 100644
+--- a/src/arch/gigaam/model.cpp
++++ b/src/arch/gigaam/model.cpp
+@@ -493,6 +493,8 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
+         const int D     = static_cast<int>(enc_t->ne[0]);
+         gc->enc_host.assign(static_cast<size_t>(T_enc) * D, 0.0f);
+         ggml_backend_tensor_get(enc_t, gc->enc_host.data(), 0, gc->enc_host.size() * sizeof(float));
++        gc->encoder_feature_frames    = static_cast<uint32_t>(T_enc);
++        gc->encoder_feature_dimension = static_cast<uint32_t>(D);
+ 
+         if (gm->hparams.head_kind == HeadKind::RNNT) {
+             const long long enc_shape[2] = { T_enc, D };
+@@ -781,6 +783,26 @@ transcribe_status run_batch(transcribe_session *          session,
+ 
+ }  // namespace
+ 
++static transcribe_status encoder_features(const transcribe_session * session,
++                                          const float **             data,
++                                          uint32_t *                 frames,
++                                          uint32_t *                 dimension,
++                                          uint32_t *                 sample_rate,
++                                          uint32_t *                 hop_samples) {
++    const auto * gc = static_cast<const GigaamSession *>(session);
++    const auto * gm = static_cast<const GigaamModel *>(gc->model);
++    if (gm == nullptr || gc->encoder_feature_frames == 0 || gc->encoder_feature_dimension == 0 ||
++        gc->enc_host.size() != static_cast<size_t>(gc->encoder_feature_frames) * gc->encoder_feature_dimension) {
++        return TRANSCRIBE_ERR_INVALID_ARG;
++    }
++    *data        = gc->enc_host.data();
++    *frames      = gc->encoder_feature_frames;
++    *dimension   = gc->encoder_feature_dimension;
++    *sample_rate = static_cast<uint32_t>(gm->hparams.fe_sample_rate);
++    *hop_samples = static_cast<uint32_t>(gm->hparams.fe_hop_length * gm->hparams.enc_subsampling_factor);
++    return TRANSCRIBE_OK;
++}
++
+ const Arch arch = {
+     /*.name             =*/"gigaam",
+     /*.load             =*/load,
+@@ -793,6 +815,8 @@ const Arch arch = {
+     /*.stream_finalize  =*/nullptr,
+     /*.stream_reset     =*/nullptr,
+     /*.accepts_ext_kind =*/nullptr,
++    /*.run_validate     =*/nullptr,
++    /*.encoder_features =*/encoder_features,
+ };
+ 
+ }  // namespace transcribe::gigaam
+diff --git a/src/transcribe-arch.h b/src/transcribe-arch.h
+index c88d638..5981911 100644
+--- a/src/transcribe-arch.h
++++ b/src/transcribe-arch.h
+@@ -129,6 +129,16 @@ struct Arch {
+     // out of the guarantee). NULL is skipped; the generic header-size + kind
+     // checks remain in force.
+     transcribe_status (*run_validate)(const struct transcribe_session * ctx, const transcribe_run_params * params);
++
++    // Optional borrowed time-major F32 view of the already-computed encoder.
++    // Never performs inference or allocates another model. The public API
++    // validates and copies this view while the caller holds its compute lease.
++    transcribe_status (*encoder_features)(const struct transcribe_session * ctx,
++                                          const float **                    data,
++                                          uint32_t *                        frames,
++                                          uint32_t *                        dimension,
++                                          uint32_t *                        sample_rate,
++                                          uint32_t *                        hop_samples) = nullptr;
+ };
+ 
+ // Look up an architecture by name. Returns nullptr if no registered
+diff --git a/src/transcribe-model.cpp b/src/transcribe-model.cpp
+index 8900a3e..db48f20 100644
+--- a/src/transcribe-model.cpp
++++ b/src/transcribe-model.cpp
+@@ -12,6 +12,7 @@ transcribe_model::~transcribe_model()     = default;
+ transcribe_session::~transcribe_session() = default;
+ 
+ void transcribe_session::clear_result() {
++    invalidate_encoder_features();
+     tokens.clear();
+     words.clear();
+     segments.clear();
+diff --git a/src/transcribe-session.h b/src/transcribe-session.h
+index 7d769ea..4345648 100644
+--- a/src/transcribe-session.h
++++ b/src/transcribe-session.h
+@@ -188,6 +188,18 @@ struct transcribe_session {
+     transcribe_timestamp_kind result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+     bool                      has_result  = false;
+ 
++    // Optional learned encoder view. The family owns its existing host buffer;
++    // this state only binds that view to one successful single-audio run.
++    uint64_t encoder_features_generation = 0;
++    bool     encoder_features_ready      = false;
++
++    void invalidate_encoder_features() noexcept {
++        encoder_features_ready = false;
++        if (++encoder_features_generation == 0) {
++            ++encoder_features_generation;
++        }
++    }
++
+     // Abort / cancellation (set via transcribe_set_abort_callback).
+     // run() drivers call poll_abort() at chunk / decode-step boundaries;
+     // a callback returning true sets was_aborted and the run returns
+diff --git a/src/transcribe.cpp b/src/transcribe.cpp
+index 6e25481..d1cfd48 100644
+--- a/src/transcribe.cpp
++++ b/src/transcribe.cpp
+@@ -1651,6 +1651,7 @@ static transcribe_status transcribe_stream_begin_impl(struct transcribe_session
+     if (session == nullptr) {
+         return TRANSCRIBE_ERR_INVALID_ARG;
+     }
++    session->invalidate_encoder_features();
+     // NULL run/stream params each mean "all defaults".
+     struct transcribe_run_params run_params_defaults;
+     transcribe_run_params_init(&run_params_defaults);
+@@ -2150,9 +2151,16 @@ static transcribe_status transcribe_run_impl(struct transcribe_session *
+     // this with a fake (session *)0x1 and a NULL pcm / non-positive
+     // n_samples, expecting INVALID_ARG with no dereference.
+     if (session != nullptr && pcm != nullptr && n_samples > 0) {
++        session->invalidate_encoder_features();
+         session->batch_results.clear();
+     }
+-    return run_one_inner(session, pcm, n_samples, params);
++    const auto status = run_one_inner(session, pcm, n_samples, params);
++    if (status == TRANSCRIBE_OK && session != nullptr && session->model != nullptr && session->model->arch != nullptr &&
++        session->model->arch->encoder_features != nullptr && session->has_result && !session->was_aborted &&
++        !session->was_truncated) {
++        session->encoder_features_ready = true;
++    }
++    return status;
+ }
+ 
+ // Batch run (offline)
+@@ -2218,6 +2226,7 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *
+     if (session == nullptr || pcm == nullptr || n_samples == nullptr || n <= 0) {
+         return TRANSCRIBE_ERR_INVALID_ARG;
+     }
++    session->invalidate_encoder_features();
+     struct transcribe_run_params params_defaults;
+     transcribe_run_params_init(&params_defaults);
+     if (params == nullptr) {
+@@ -2977,6 +2986,100 @@ extern "C" transcribe_status transcribe_batch_get_timings(const struct transcrib
+     return TRANSCRIBE_OK;
+ }
+ 
++extern "C" uint32_t transcribe_encoder_features_api_version(void) {
++    return 1;
++}
++
++extern "C" int32_t transcribe_encoder_features_supported(const transcribe_model * model) {
++    return model != nullptr && model->arch != nullptr && model->arch->encoder_features != nullptr ? 1 : 0;
++}
++
++extern "C" int32_t transcribe_clear_encoder_features(transcribe_session * session) {
++    if (session == nullptr) {
++        return TRANSCRIBE_ERR_INVALID_ARG;
++    }
++    session->invalidate_encoder_features();
++    return TRANSCRIBE_OK;
++}
++
++extern "C" int32_t transcribe_get_encoder_features(const transcribe_session * session,
++                                                   uint32_t *                 frame_count,
++                                                   uint32_t *                 dimension,
++                                                   uint32_t *                 sample_rate,
++                                                   uint32_t *                 hop_samples,
++                                                   uint64_t *                 generation,
++                                                   float *                    destination,
++                                                   uint64_t                   capacity_elements) {
++    if (frame_count != nullptr) {
++        *frame_count = 0;
++    }
++    if (dimension != nullptr) {
++        *dimension = 0;
++    }
++    if (sample_rate != nullptr) {
++        *sample_rate = 0;
++    }
++    if (hop_samples != nullptr) {
++        *hop_samples = 0;
++    }
++    if (generation != nullptr) {
++        *generation = 0;
++    }
++    const auto status = api_guard_status("transcribe_get_encoder_features", [&] {
++        if (session == nullptr || frame_count == nullptr || dimension == nullptr || sample_rate == nullptr ||
++            hop_samples == nullptr || generation == nullptr || (destination == nullptr && capacity_elements != 0) ||
++            capacity_elements > 524288) {
++            return TRANSCRIBE_ERR_INVALID_ARG;
++        }
++        if (!transcribe_encoder_features_supported(session->model)) {
++            return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
++        }
++        // Invoke the installed callback on the same serialized native thread.
++        auto * mutable_session = const_cast<transcribe_session *>(session);
++        if (mutable_session->poll_abort()) {
++            mutable_session->invalidate_encoder_features();
++            return TRANSCRIBE_ERR_ABORTED;
++        }
++        if (!session->encoder_features_ready || !session->has_result || session->was_aborted ||
++            session->was_truncated || session->stream_state == TRANSCRIBE_STREAM_ACTIVE) {
++            return TRANSCRIBE_ERR_INVALID_ARG;
++        }
++        const float * data   = nullptr;
++        uint32_t      frames = 0, dim = 0, rate = 0, hop = 0;
++        const auto    st = session->model->arch->encoder_features(session, &data, &frames, &dim, &rate, &hop);
++        if (st != TRANSCRIBE_OK) {
++            return st;
++        }
++        const uint64_t count = static_cast<uint64_t>(frames) * dim;
++        if (data == nullptr || frames == 0 || frames > 600 || dim == 0 || dim > 1024 || count > 524288 || rate == 0 ||
++            hop == 0 || hop > rate) {
++            return TRANSCRIBE_ERR_INPUT_TOO_LONG;
++        }
++        if (destination != nullptr && capacity_elements < count) {
++            return TRANSCRIBE_ERR_INPUT_TOO_LONG;
++        }
++        for (uint64_t i = 0; i < count; ++i) {
++            if (!std::isfinite(data[i])) {
++                return TRANSCRIBE_ERR_BACKEND;
++            }
++        }
++        if (destination != nullptr) {
++            std::memcpy(destination, data, static_cast<size_t>(count) * sizeof(float));
++        }
++        if (mutable_session->poll_abort()) {
++            mutable_session->invalidate_encoder_features();
++            return TRANSCRIBE_ERR_ABORTED;
++        }
++        *frame_count = frames;
++        *dimension   = dim;
++        *sample_rate = rate;
++        *hop_samples = hop;
++        *generation  = session->encoder_features_generation;
++        return TRANSCRIBE_OK;
++    });
++    return static_cast<int32_t>(status);
++}
++
+ // C ABI forwarders. Entry points that allocate, reach ggml/driver state,
+ // or transfer ownership route through api_guard_* here. Other public symbols
+ // above are kept nothrow by construction: pure POD/c_str reads, prefix
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index dcf5c11..7495864 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -54,6 +54,14 @@ target_link_libraries(transcribe_api_smoke PRIVATE transcribe)
+ 
+ add_test(NAME transcribe_api_smoke COMMAND transcribe_api_smoke)
+ 
++# Synthetic encoder-buffer contract tests. The local base definitions allow
++# model-free white-box session fixtures even with hidden shared-library symbols.
++add_executable(transcribe_encoder_features_unit encoder_features_unit.cpp
++    ${CMAKE_SOURCE_DIR}/src/transcribe-model.cpp)
++target_include_directories(transcribe_encoder_features_unit PRIVATE ${CMAKE_SOURCE_DIR}/src)
++target_link_libraries(transcribe_encoder_features_unit PRIVATE transcribe)
++add_test(NAME transcribe_encoder_features_unit COMMAND transcribe_encoder_features_unit)
++
+ add_test(
+     NAME transcribe_extension_umbrella_check
+     COMMAND ${CMAKE_COMMAND}
+diff --git a/tests/encoder_features_unit.cpp b/tests/encoder_features_unit.cpp
+new file mode 100644
+index 0000000..d675d75
+--- /dev/null
++++ b/tests/encoder_features_unit.cpp
+@@ -0,0 +1,109 @@
++#include "transcribe-arch.h"
++#include "transcribe-model.h"
++#include "transcribe-session.h"
++#include "transcribe.h"
++#ifdef NDEBUG
++#    undef NDEBUG
++#endif
++#include <cassert>
++#include <cmath>
++#include <limits>
++
++namespace {
++float    values[]    = { 1, 2, 3, 4, 5, 6 };
++uint32_t frame_count = 2;
++uint32_t dimension   = 3;
++bool     cancel      = false;
++bool     fail_run    = false;
++
++bool abort_callback(void *) {
++    return cancel;
++}
++
++transcribe_status features(const transcribe_session *,
++                           const float ** data,
++                           uint32_t *     frames,
++                           uint32_t *     dim,
++                           uint32_t *     rate,
++                           uint32_t *     hop) {
++    *data   = values;
++    *frames = frame_count;
++    *dim    = dimension;
++    *rate   = 16000;
++    *hop    = 640;
++    return TRANSCRIBE_OK;
++}
++
++transcribe_status run(transcribe_session * s, const float *, int, const transcribe_run_params *) {
++    s->has_result = !fail_run;
++    return fail_run ? TRANSCRIBE_ERR_BACKEND : TRANSCRIBE_OK;
++}
++}  // namespace
++
++int main() {
++    transcribe::Arch arch{};
++    arch.name             = "synthetic-test";
++    arch.run              = run;
++    arch.encoder_features = features;
++    transcribe_model model;
++    model.arch = &arch;
++    transcribe_session session;
++    session.model   = &model;
++    uint32_t frames = 9, dim = 9, rate = 9, hop = 9;
++    uint64_t generation = 9;
++    auto     query      = [&](float * dst = nullptr, uint64_t cap = 0) {
++        return transcribe_get_encoder_features(&session, &frames, &dim, &rate, &hop, &generation, dst, cap);
++    };
++    assert(transcribe_encoder_features_api_version() == 1);
++    assert(transcribe_encoder_features_supported(&model) == 1);
++    assert(transcribe_encoder_features_supported(nullptr) == 0);
++    assert(query() == TRANSCRIBE_ERR_INVALID_ARG && frames == 0 && generation == 0);
++    float pcm = 0;
++    assert(transcribe_run(&session, &pcm, 1, nullptr) == TRANSCRIBE_OK);
++    assert(query() == TRANSCRIBE_OK && frames == 2 && dim == 3 && rate == 16000 && hop == 640);
++    const auto first_generation = generation;
++    float      destination[6]   = {};
++    assert(query(destination, 5) == TRANSCRIBE_ERR_INPUT_TOO_LONG && generation == 0);
++    assert(query(destination, 6) == TRANSCRIBE_OK && destination[5] == 6 && generation == first_generation);
++    assert(transcribe_clear_encoder_features(&session) == TRANSCRIBE_OK);
++    assert(query() == TRANSCRIBE_ERR_INVALID_ARG);
++    assert(transcribe_run(&session, &pcm, 1, nullptr) == TRANSCRIBE_OK);
++    assert(query() == TRANSCRIBE_OK && generation != first_generation);
++    transcribe_set_abort_callback(&session, abort_callback, nullptr);
++    cancel = true;
++    assert(query() == TRANSCRIBE_ERR_ABORTED && frames == 0);
++    cancel = false;
++    assert(query() == TRANSCRIBE_ERR_INVALID_ARG);
++    assert(transcribe_run(&session, &pcm, 1, nullptr) == TRANSCRIBE_OK);
++    fail_run = true;
++    assert(transcribe_run(&session, &pcm, 1, nullptr) == TRANSCRIBE_ERR_BACKEND);
++    assert(query() == TRANSCRIBE_ERR_INVALID_ARG);
++    fail_run = false;
++    assert(transcribe_run(&session, &pcm, 1, nullptr) == TRANSCRIBE_OK);
++    values[0] = std::numeric_limits<float>::infinity();
++    assert(query() == TRANSCRIBE_ERR_BACKEND && frames == 0);
++    values[0]   = 1;
++    frame_count = 601;
++    assert(query() == TRANSCRIBE_ERR_INPUT_TOO_LONG);
++    frame_count = 2;
++    dimension   = 1025;
++    assert(query() == TRANSCRIBE_ERR_INPUT_TOO_LONG);
++    dimension = 3;
++    transcribe_run_params params;
++    transcribe_run_params_init(&params);
++    params.struct_size = 0;
++    assert(transcribe_run(&session, &pcm, 1, &params) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
++    assert(query() == TRANSCRIBE_ERR_INVALID_ARG);
++    // Existing no-dereference malformed-run contract remains intact.
++    assert(transcribe_run(reinterpret_cast<transcribe_session *>(1), nullptr, 1, nullptr) ==
++           TRANSCRIBE_ERR_INVALID_ARG);
++    assert(transcribe_run(&session, &pcm, 1, nullptr) == TRANSCRIBE_OK);
++    const float * inputs[]  = { &pcm };
++    int           lengths[] = { 1 };
++    assert(transcribe_run_batch(&session, inputs, lengths, 1, nullptr) == TRANSCRIBE_OK);
++    assert(query() == TRANSCRIBE_ERR_INVALID_ARG);
++    arch.encoder_features = nullptr;
++    assert(transcribe_encoder_features_supported(&model) == 0);
++    assert(query() == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
++    return 0;
++}
