@@ -328,7 +328,6 @@ private struct DeliveryFailureOverlayView: View {
 
     private func copy() {
         guard PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(self.profile) else { return }
-        guard !self.didCopy else { return }
         guard ClipboardService.copyToClipboard(self.transcript) else {
             self.didCopy = false
             self.onCopyFailed()
