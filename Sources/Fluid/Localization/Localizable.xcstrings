@@ -22419,6 +22419,23 @@
         }
       }
     },
+    "Loading recordings…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading recordings…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка записей…"
+          }
+        }
+      }
+    },
     "Loading recording…": {
       "extractionState": "manual",
       "localizations": {
