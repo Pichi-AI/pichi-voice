@@ -253,7 +253,7 @@ SHELL_PROBES = (
     "stats_snapshot", "terminal_service_lifecycle", "voice_edit_cancellation",
 )
 PYTHON_PROBES = (
-    "delivery_failure_copy", "dictation_context_profile", "diarization_repeatability", "dictionary_training_save", "dictation_capture_admission", "fluid_audio_capture_options", "gigaam_artifact_ownership", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
+    "delivery_failure_copy", "dictation_context_profile", "diarization_repeatability", "dictionary_training_save", "dictation_capture_admission", "fluid_audio_capture_options", "gigaam_artifact_ownership", "gigaam_encoder_dictionary_storage", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
     "meeting_speaker_attribution", "mobile_recording_activity_lifecycle",
     "private_capture_feedback", "private_profile_activation_summary", "private_panel_concealment", "settings_backup_concurrency",
 )
