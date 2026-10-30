@@ -57,6 +57,14 @@ import Foundation
         precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "Alfa e", canonical: "Alpha"))
         precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "clodx", canonical: "Claude"))
         precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "chatgptx", canonical: "ChatGPT"))
+        for heard in ["Clod DiscTop", "Clod Disc Top", "Alfa DeskTop", "Alfa Desk Top"] {
+            let canonical = heard.hasPrefix("Alfa") ? "Alpha Desktop" : "Claude Desktop"
+            precondition(!GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: heard, canonical: canonical))
+        }
+        for heard in ["Clod a", "Clod om", "Clodo m", "Clod e", "Clod em"] {
+            precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: heard, canonical: "Claude"))
+        }
+        precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "Alfa Desktop Pro", canonical: "Alpha Desktop"))
         for pair in [("не зови", "зови"), ("мне", "тебе"), ("Call model 4", "Call model 5"), ("don't call", "call"),
                      ("you help me", "me help you"), ("couldn't call", "call")] {
             precondition(comparison(pair.0, pair.1, [pair.0]).protectsContent)

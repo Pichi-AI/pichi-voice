@@ -125,8 +125,10 @@ nonisolated enum GigaAMDictionaryLexicalEvidence {
     /// resembles the canonical label. This is a veto, never admission evidence.
     static func dropsSourceComponents(heard: String, canonical: String) -> Bool {
         guard let sourceTokens = self.tokens(heard), let target = self.tokens(canonical) else { return true }
-        if sourceTokens.count > target.count { return true }
         let source = Array(self.phoneticKey(heard))
+        let sourceWords = sourceTokens.flatMap { token in
+            Array(repeating: token.component, count: self.soundKey(token.text).count)
+        }
         var position = 0
         for token in target {
             guard position < source.count else { return false }
@@ -142,7 +144,13 @@ nonisolated enum GigaAMDictionaryLexicalEvidence {
             position = bestEnd
         }
         let residual = String(source.dropFirst(position))
-        return !["", "e", "a", "u", "om", "em"].contains(residual)
+        guard !residual.isEmpty else { return false }
+        guard ["e", "a", "u", "om", "em"].contains(residual), position > 0,
+              sourceWords.count == source.count else { return true }
+        // CamelCase and ASR word splits are harmless when all their letters are
+        // covered. An ignored ending must belong to the same original word as
+        // the matched stem, including every character of a two-letter ending.
+        return !sourceWords.dropFirst(position).allSatisfy { $0 == sourceWords[position - 1] }
     }
 
     /// Every canonical component needs actual current-source letters. The best

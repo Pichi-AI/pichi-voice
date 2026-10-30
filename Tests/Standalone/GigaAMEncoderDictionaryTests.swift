@@ -74,6 +74,11 @@ struct DictionaryMatchFrames: Sendable {
         let compoundTerm = GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Alpha Desktop", modelKey: model,
             references: [reference, reference, reference], observedVariants: ["Alfa Desk"])
         let compoundPrepared = try GigaAMEncoderDictionary.prepare(terms: [compoundTerm], modelKey: model)
+        let splitSpelling = try await GigaAMEncoderDictionary.correct(
+            transcript: self.transcript("Alfa DeskTop!", [("Alfa", 0, 0.08), ("DeskTop!", 0.08, 0.24)]),
+            features: reference, modelKey: model, words: compoundPrepared.words, entries: [])
+        precondition(splitSpelling.text == "Alpha Desktop!" && splitSpelling.accepted.count == 1,
+            "A fully covered CamelCase ASR component does not count as a material extra component")
         let sentence = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("Alfa. Desk", [("Alfa.", 0, 0.12), ("Desk", 0.12, 0.24)]),
             features: reference, modelKey: model, words: compoundPrepared.words, entries: [])
         precondition(sentence.accepted.isEmpty && sentence.text == "Alfa. Desk", "Never join a compound across sentence punctuation")
