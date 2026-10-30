@@ -109,6 +109,16 @@ nonisolated enum DictionaryNegativeEvidenceResolver {
     /// Repeated names, AI rewrites, partial selections, and stale audio are deliberately ignored.
     static func resolve(context: DictionaryLearningCorrectionContext, heard: String, corrected: String, now: Date = Date()) -> DictionaryNegativeCorrection? {
         guard DictionaryCorrectionEditPolicy.allows(heard: heard, corrected: corrected) else { return nil }
+        let beforeWords = self.normalized(heard).split(separator: " ")
+        let afterWords = self.normalized(corrected).split(separator: " ")
+        if afterWords.count > beforeWords.count, !beforeWords.isEmpty,
+           (0...(afterWords.count - beforeWords.count)).contains(where: {
+               afterWords[$0..<($0 + beforeWords.count)].elementsEqual(beforeWords)
+           }) {
+            // Adding a modifier keeps the recognized term; it is not evidence
+            // that this term's acoustic match was wrong.
+            return nil
+        }
         let alignment = context.recording.alignment
         guard now < context.recording.expiresAt, alignment.acousticOutput == context.deliveredTextBeforeEdit,
               !self.normalized(corrected).isEmpty, self.normalized(heard) != self.normalized(corrected) else { return nil }
