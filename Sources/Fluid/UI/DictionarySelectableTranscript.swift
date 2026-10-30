@@ -36,9 +36,16 @@ struct DictionarySelectableTranscript: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: DictionarySelectableTextView, context: Context) -> CGSize? {
-        guard let width = proposal.width, width.isFinite, width > 0,
-              let container = view.textContainer, let manager = view.layoutManager else { return nil }
-        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
+        // SwiftUI can measure several proposals after assigning the final frame.
+        // Measuring the live container would leave it wrapped at the last probe's
+        // width even though the displayed text view has a different width.
+        let storage = NSTextStorage(attributedString: view.attributedString())
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        manager.addTextContainer(container)
+        storage.addLayoutManager(manager)
         manager.ensureLayout(for: container)
         return CGSize(width: width, height: max(22, ceil(manager.usedRect(for: container).height)))
     }
