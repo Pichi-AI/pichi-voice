@@ -6,6 +6,8 @@ import PichiGigaAM
 nonisolated enum GigaAMEncoderDictionary {
     static let maximumTerms = 128
     static let maximumReferenceBytes = 32 * 1_024 * 1_024
+    static let maximumWindowBytes = 128 * 1_024 * 1_024
+    static let maximumAbsoluteFrames = 22_500
 
     struct Term: Sendable {
         let entryID: UUID
@@ -27,7 +29,7 @@ nonisolated enum GigaAMEncoderDictionary {
         case invalidReferences, uncalibrated, contrastBudget, invalidTranscript
         case noSearchHits, invalidWordSpan, protectedTextRule, confidentSource
         case protectedContent, acousticRejected, ambiguous, compoundPreferred
-        case overlapping, replacementFailed, accepted
+        case overlapping, replacementFailed, accepted, invalidWindows, outsideOwnership
     }
 
     struct Diagnostic: Sendable {
@@ -49,6 +51,10 @@ nonisolated enum GigaAMEncoderDictionary {
         let distance: Float
         let acceptanceDistance: Float
         let spellingSupport: Double
+        var frameOffset = 0
+        var absoluteFrameRange: Range<Int> {
+            (self.frameOffset + self.frameRange.lowerBound)..<(self.frameOffset + self.frameRange.upperBound)
+        }
         var quality: Double {
             let acoustic = 1 - min(1, Double(self.distance / max(0.000_001, self.acceptanceDistance)))
             return (acoustic + self.spellingSupport) / 2
@@ -64,6 +70,116 @@ nonisolated enum GigaAMEncoderDictionary {
     struct Arbitration: Sendable {
         let accepted: [AcceptedSpan]
         let diagnostics: [Diagnostic]
+    }
+
+    /// Long recordings retain immutable global CTC ordinals. Each bounded feature
+    /// window uses the unchanged short-window policy, and only the final global
+    /// edit touches the original transcript, including repeated occurrences.
+    @concurrent static func correct(
+        transcript: GigaAMTranscript, windows: [GigaAMEncoderWindow], modelKey: String,
+        words: [PreparedTerm], entries: [SettingsStore.CustomDictionaryEntry]
+    ) async throws -> Output {
+        try Task.checkCancellation()
+        func raw(_ reason: Reason) -> Output { Output(text: transcript.text, accepted: [], diagnostics: [.init(reason)]) }
+        guard !modelKey.isEmpty, words.count <= self.maximumTerms,
+              words.allSatisfy({ $0.term.modelKey == modelKey && $0.term.extractorVersion == GigaAMEncoderFeatures.extractorVersion }) else {
+            return raw(.wrongModel)
+        }
+        guard !windows.isEmpty, windows.count <= 256 else { return raw(.invalidWindows) }
+        guard entries.count <= 4_096 else { return raw(.capacityExceeded) }
+        let source = transcript.words
+        guard !source.isEmpty, source.count <= 4_096,
+              source.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start &&
+                  $0.end <= 900.08 && $0.confidence.isFinite && (0...1).contains($0.confidence) }),
+              zip(source, source.dropFirst()).allSatisfy({ $0.start <= $1.start && $0.end <= $1.end }) else {
+            return raw(.invalidTranscript)
+        }
+        var bytes = 0, offsets: [Int] = []
+        var previousOffset = -Double.infinity, previousOwnershipEnd = -Double.infinity
+        for window in windows {
+            try Task.checkCancellation()
+            let offset = window.offset / GigaAMEncoderFeatures.frameDuration
+            guard offset.isFinite, (0...Double(self.maximumAbsoluteFrames)).contains(offset),
+                  abs(offset - offset.rounded()) <= 0.000_01,
+                  window.offset >= previousOffset, window.ownership.lowerBound >= previousOwnershipEnd - 0.000_001,
+                  window.ownership.lowerBound >= window.offset,
+                  window.ownership.upperBound <= 900.000_001 else { return raw(.invalidWindows) }
+            let frameOffset = Int(offset.rounded())
+            guard frameOffset + window.features.frameCount <= self.maximumAbsoluteFrames else { return raw(.invalidWindows) }
+            let size = window.features.values.count * MemoryLayout<Float>.size
+            guard size <= self.maximumWindowBytes - bytes else { return raw(.capacityExceeded) }
+            bytes += size
+            offsets.append(frameOffset)
+            previousOffset = window.offset
+            previousOwnershipEnd = window.ownership.upperBound
+        }
+        let globallyClaimed = DictionaryAudioSpan.textClaimed(words: source.map(\.text), entries: entries)
+        var candidates: [AcceptedSpan] = [], diagnostics: [Diagnostic] = []
+        for (index, window) in windows.enumerated() {
+            try Task.checkCancellation()
+            let end = window.offset + Double(window.features.frameCount) * GigaAMEncoderFeatures.frameDuration
+            let indices = source.indices.filter { source[$0].start >= window.offset - 0.000_001 && source[$0].end <= end + 0.000_001 }
+            guard !indices.isEmpty else { continue }
+            let localWords = indices.map {
+                GigaAMWordTiming(text: source[$0].text, start: max(0, source[$0].start - window.offset),
+                    end: source[$0].end - window.offset, confidence: source[$0].confidence)
+            }
+            let local = GigaAMTranscript(text: localWords.map(\.text).joined(separator: " "), confidence: transcript.confidence,
+                words: localWords, endOfUtteranceProbability: nil, processingDuration: 0)
+            let output = try await self.correct(transcript: local, features: window.features,
+                modelKey: modelKey, words: words, entries: entries)
+            try Task.checkCancellation()
+            diagnostics += output.diagnostics.filter { $0.reason != .accepted }
+            for span in output.accepted {
+                guard indices.indices.contains(span.wordRange.lowerBound), indices.indices.contains(span.wordRange.upperBound) else {
+                    diagnostics.append(.init(.invalidWordSpan, span.entryID)); continue
+                }
+                let first = indices[span.wordRange.lowerBound], last = indices[span.wordRange.upperBound]
+                guard last - first + 1 == span.wordRange.count else {
+                    diagnostics.append(.init(.invalidWordSpan, span.entryID)); continue
+                }
+                guard (first...last).allSatisfy({ !globallyClaimed.contains($0) }) else {
+                    diagnostics.append(.init(.protectedTextRule, span.entryID)); continue
+                }
+                // Word-span ownership is stable even if overlapping contexts yield
+                // slightly different acoustic hit boundaries for this occurrence.
+                let center = (source[first].start + source[last].end) / 2
+                guard window.ownership.contains(center) else {
+                    diagnostics.append(.init(.outsideOwnership, span.entryID)); continue
+                }
+                candidates.append(AcceptedSpan(entryID: span.entryID, label: span.label,
+                    wordRange: first...last, frameRange: span.frameRange, distance: span.distance,
+                    acceptanceDistance: span.acceptanceDistance, spellingSupport: span.spellingSupport,
+                    frameOffset: offsets[index]))
+            }
+        }
+        // Only connected overlapping word spans can compete. Do not run a
+        // quadratic arbitration across unrelated terms in a fifteen-minute text.
+        let ordered = candidates.sorted {
+            $0.wordRange.lowerBound == $1.wordRange.lowerBound ? $0.wordRange.upperBound < $1.wordRange.upperBound : $0.wordRange.lowerBound < $1.wordRange.lowerBound
+        }
+        var accepted: [AcceptedSpan] = [], group: [AcceptedSpan] = [], groupEnd = -1
+        for candidate in ordered {
+            try Task.checkCancellation()
+            if !group.isEmpty && candidate.wordRange.lowerBound > groupEnd {
+                let resolved = self.arbitrate(group)
+                accepted += resolved.accepted; diagnostics += resolved.diagnostics
+                group.removeAll(keepingCapacity: true)
+                groupEnd = -1
+            }
+            group.append(candidate); groupEnd = max(groupEnd, candidate.wordRange.upperBound)
+        }
+        if !group.isEmpty {
+            try Task.checkCancellation()
+            let resolved = self.arbitrate(group)
+            accepted += resolved.accepted; diagnostics += resolved.diagnostics
+        }
+        let text = DictionaryTranscriptReplacement.apply(to: transcript.text, wordTexts: source.map(\.text),
+            replacements: accepted.map { .init(wordRange: $0.wordRange, label: $0.label) })
+        guard text != transcript.text || accepted.isEmpty else {
+            return Output(text: transcript.text, accepted: [], diagnostics: diagnostics + [.init(.replacementFailed)])
+        }
+        return Output(text: text, accepted: accepted, diagnostics: diagnostics)
     }
 
     static func prepare(terms: [Term], modelKey: String) throws -> Preparation {
@@ -199,6 +315,8 @@ nonisolated enum GigaAMEncoderDictionary {
             $0.acceptanceDistance > 0 && (0...$0.acceptanceDistance).contains($0.distance) &&
             $0.wordRange.lowerBound >= 0 && $0.frameRange.lowerBound >= 0 && !$0.frameRange.isEmpty &&
             $0.frameRange.upperBound <= GigaAMEncoderFeatures.maximumFrames &&
+            $0.frameOffset >= 0 && $0.frameOffset <= self.maximumAbsoluteFrames &&
+            $0.frameOffset + $0.frameRange.upperBound <= self.maximumAbsoluteFrames &&
             $0.spellingSupport.isFinite && (0...1).contains($0.spellingSupport) }
         var diagnostics: [Diagnostic] = []
         let complete = candidates.filter { prefix in
@@ -217,7 +335,7 @@ nonisolated enum GigaAMEncoderDictionary {
             let ambiguous = complete.contains { other in
                 other.entryID != candidate.entryID && other.label.caseInsensitiveCompare(candidate.label) != .orderedSame &&
                     other.wordRange.overlaps(candidate.wordRange) &&
-                    (!other.frameRange.overlaps(candidate.frameRange) ||
+                    (!other.absoluteFrameRange.overlaps(candidate.absoluteFrameRange) ||
                         (abs(other.distance - candidate.distance) <= 0.01 && abs(other.quality - candidate.quality) <= 0.05))
             }
             if ambiguous { diagnostics.append(.init(.ambiguous, candidate.entryID)); continue }
@@ -229,7 +347,7 @@ nonisolated enum GigaAMEncoderDictionary {
 
     private static func compound(_ full: AcceptedSpan, dominates prefix: AcceptedSpan) -> Bool {
         guard full.entryID != prefix.entryID, full.wordRange.lowerBound <= prefix.wordRange.lowerBound,
-              full.wordRange.upperBound >= prefix.wordRange.upperBound, full.frameRange.overlaps(prefix.frameRange) else { return false }
+              full.wordRange.upperBound >= prefix.wordRange.upperBound, full.absoluteFrameRange.overlaps(prefix.absoluteFrameRange) else { return false }
         let fullKey = GigaAMDictionaryLexicalEvidence.phoneticKey(full.label)
         let prefixKey = GigaAMDictionaryLexicalEvidence.phoneticKey(prefix.label)
         return !prefixKey.isEmpty && fullKey.count > prefixKey.count && fullKey.hasPrefix(prefixKey) &&
