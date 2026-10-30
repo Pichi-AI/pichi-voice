@@ -20,7 +20,16 @@ actual += between("    func beginStreamingDrainRecovery(sessionID: Int", "\n}\n\
 actual = actual.replace("    private ", "    ")
 combined = template.replace("// ACTUAL_ASR_ADMISSION_SOURCE", actual)
 protocol = (repo / "Sources/Fluid/Services/TranscriptionProvider.swift").read_text()
-combined = combined.replace("// ACTUAL_TRANSCRIPTION_PROVIDER_SOURCE", protocol)
+evidence = (repo / "Sources/Fluid/Services/DictionaryLearningEvidence.swift").read_text()
+marker = "nonisolated struct DictionaryLearningAudioEvidence:"
+assert evidence.count(marker) == 1, "Expected one production audio-evidence declaration"
+begin = evidence.index(marker)
+end = evidence.index("{", begin) + 1
+depth = 1
+while depth:
+    depth += (evidence[end] == "{") - (evidence[end] == "}")
+    end += 1
+combined = combined.replace("// ACTUAL_TRANSCRIPTION_PROVIDER_SOURCE", evidence[begin:end] + "\n" + protocol)
 
 # These checks bind the runtime declarations to the production start/stop/readiness paths.
 start = between("    func start(\n", "    func cancelPendingPronunciationTrainingStart()")

@@ -52,8 +52,8 @@ def main() -> None:
     assert "self.appDetailContent\n" in (ROOT / "Sources/Fluid/ContentView.swift").read_text()
     assert ".onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore))" in source
     assert ".onChange(of: self.canRefreshSetupAfterBackupRestore)" in source
-    mode_observer = declaration(source, ".onChange(of: self.setupDraft.mode)")
-    assert "Task { await self.refreshSources(requestPermissions: false) }" in mode_observer
+    mode_observer = declaration(source, ".onChange(of: self.privateState.setupDraft.mode)")
+    assert "self.privateState.run { _ in await self.refreshSources(requestPermissions: false) }" in mode_observer
     for action in ("cancelMeetingSettings", "saveMeetingSettings"):
         body = declaration(source, f"private func {action}()")
         assert body.split("{", 1)[1].strip().startswith(
@@ -147,7 +147,12 @@ def main() -> None:
     capture = (ROOT / "Sources/Fluid/Services/Meeting/MeetingCaptureEngine.swift").read_text()
     application_resolver = declaration(capture, "static func resolveRecordingApplication(")
     recording_start = declaration(source, "private func startRecording()")
+    private_projection = "@MainActor\n" + declaration(source, "private final class MeetingViewPrivateProjection:")
+    private_projection = private_projection.replace("private final class MeetingViewPrivateProjection:",
+                                                     "final class MeetingViewPrivateProjection:", 1)
     swift = r'''
+import AppKit
+import Combine
 import Foundation
 nonisolated final class UserDefaults: @unchecked Sendable {
     static let standard = UserDefaults()
@@ -167,6 +172,18 @@ final class SettingsStore {
 struct Identity { let id: String }
 struct Option { let identity: Identity }
 final class Coordinator { var isQuiescent = true; var activeLanguage = "en" }
+@MainActor protocol PrivateProfileTransitionParticipant: AnyObject {
+    func prepareForPrivateProfileTransition() async throws
+}
+@MainActor final class PrivateProfileService {
+    static let shared = PrivateProfileService()
+    var projectionRevision = UUID()
+    var isPrivateDataVisible = true
+    var isTransitioning = false
+    func register(_ participant: any PrivateProfileTransitionParticipant) {}
+}
+typealias MeetingSessionID = UUID
+struct MeetingSession { let id: MeetingSessionID }
 ''' + metadata + factory + model_declarations + '\n' + application_option + r'''
 enum MeetingAutoDetector {
     struct ResolvedTarget { let bundleIdentifier: String; let pid: Int32; let windowID: UInt32? }
@@ -175,18 +192,36 @@ enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavai
 enum MeetingCaptureSourceCatalog {
 ''' + application_resolver + r'''
 }
-''' + draft + r'''
+''' + draft + '\n' + private_projection + r'''
 final class Harness {
     let coordinator = Coordinator()
-    var setupDraft = MeetingTranscriptionSetupDraft()
-    var setupDraftBeforeEditing = MeetingTranscriptionSetupDraft()
-    var pendingBackupSetupRefresh = false
+    let privateState = MeetingViewPrivateProjection()
+    // Preserve the probe's assertions through aliases to the real view owner.
+    var setupDraft: MeetingTranscriptionSetupDraft {
+        get { privateState.setupDraft }
+        set { privateState.setupDraft = newValue }
+    }
+    var setupDraftBeforeEditing: MeetingTranscriptionSetupDraft {
+        get { privateState.setupDraftBeforeEditing }
+        set { privateState.setupDraftBeforeEditing = newValue }
+    }
+    var pendingBackupSetupRefresh: Bool {
+        get { privateState.pendingBackupSetupRefresh }
+        set { privateState.pendingBackupSetupRefresh = newValue }
+    }
+    var isShowingMeetingSettings: Bool {
+        get { privateState.isShowingMeetingSettings }
+        set { privateState.isShowingMeetingSettings = newValue }
+    }
+    var draftMeetingAudioRetentionPolicy: Int {
+        get { privateState.draftMeetingAudioRetentionPolicy }
+        set { privateState.draftMeetingAudioRetentionPolicy = newValue }
+    }
     var cachedSystemDefaultMicrophoneUID: String? = "cached-mic"
     var isStarting = false, isStopping = false, isRetrying = false
-    var isRefreshingSources = false, isShowingMeetingSettings = false
+    var isRefreshingSources = false
     var microphones = [Option(identity: Identity(id: "cached-mic"))]
     var applications = [Option(identity: Identity(id: "cached-app"))]
-    var draftMeetingAudioRetentionPolicy = 7
     var selectedIdentities = 0
     var persistedWrites = 0
     var hardwareQueries = 0
@@ -254,9 +289,16 @@ struct StartReadiness {
     let readiness = StartReadiness()
     let captureConfiguration: StartConfiguration? = StartConfiguration(microphone: MeetingMicrophoneIdentity(captureDeviceID: "mic", displayName: "Mic"))
     let applications = [MeetingApplicationOption(identity: MeetingApplicationIdentity(bundleIdentifier: "manual.app", processID: 42, displayName: "Manual App"))]
-    var setupDraft = MeetingTranscriptionSetupDraft()
-    var isStarting = false, pendingBackupSetupRefresh = false
-    var actionErrorMessage: String?
+    let privateState = MeetingViewPrivateProjection()
+    var setupDraft: MeetingTranscriptionSetupDraft {
+        get { privateState.setupDraft }
+        set { privateState.setupDraft = newValue }
+    }
+    var pendingBackupSetupRefresh: Bool {
+        get { privateState.pendingBackupSetupRefresh }
+        set { privateState.pendingBackupSetupRefresh = newValue }
+    }
+    var isStarting = false
     init() { setupDraft.chooseApplication(applications[0].identity) }
     func waitForStart() async { while coordinator.continuation == nil { await Task.yield() } }
     func finish() async { coordinator.finish(); while isStarting { await Task.yield() } }
@@ -371,8 +413,13 @@ struct StartReadiness {
         directory = Path(directory)
         swift_file = directory / "Tests.swift"
         swift_file.write_text(swift)
+        profile_types = directory / "ProfileTypes.swift"
+        subprocess.run(["python3", "Tests/Support/write_private_profile_standalone_types.py",
+                        str(profile_types), "--synthetic-brand"], cwd=ROOT, env=env, check=True, timeout=15)
         executable = directory / "tests"
-        subprocess.run(["xcrun", "swiftc", "-parse-as-library",
+        subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-default-isolation", "MainActor",
+                        "-module-cache-path", str(directory / "ModuleCache"),
+                        str(profile_types), str(ROOT / "Sources/Fluid/Account/PrivateProfileStorage.swift"),
                         str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
                         str(swift_file), "-o", str(executable)],
                        env=env, check=True, timeout=60)

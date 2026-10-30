@@ -1120,7 +1120,9 @@ struct MobileMeetingRoot: View {
         guard canPresent(session) else { return }
         runPrivate { admission in
             let redactor = settings.meetingPIIRedactionRequested ? try settings.transcriptPrivacyRedactor(wrapping: privacy) : nil
-            guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
+            guard let source = try await store.loadExistingSource(id: session.id,
+                expectedOwnership: session.profileOwnership ?? .guest) else { throw CocoaError(.fileNoSuchFile) }
+            let fresh = source.session
             guard privatePresentation.publications.canPublish(admission), canPresent(fresh) else { return }
             let output: MeetingSession
             if let redactor {
@@ -1157,7 +1159,9 @@ struct MobileMeetingRoot: View {
     private func exportProtectedTranscript(_ session: MeetingSession) {
         guard canPresent(session) else { return }
         runPrivate { admission in
-            guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
+            guard let source = try await store.loadExistingSource(id: session.id,
+                expectedOwnership: session.profileOwnership ?? .guest) else { throw CocoaError(.fileNoSuchFile) }
+            let fresh = source.session
             guard privatePresentation.publications.canPublish(admission), canPresent(fresh) else { return }
             let data = try await MeetingTranscriptExporter.protectedTranscriptJSONForSharing(for: fresh)
             guard privatePresentation.publications.canPublish(admission) else { return }

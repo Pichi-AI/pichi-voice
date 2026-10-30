@@ -82,6 +82,7 @@ final class MeetingRecordingPillController: ObservableObject {
 
     /// Grows the pill into the captions box; a no-op when already expanded or not recording.
     func expand() {
+        guard SettingsStore.shared.fluidMeetEnabled else { return }
         guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
         guard AppServices.shared.meetingSessionCoordinator.activeSession?.isLocalContentConcealed != true else { return }
         guard self.reducer.presentation == .pill else { return }

@@ -19,8 +19,25 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# The provider's optional enrollment capability carries this production value.
+# Keep its declaration current without loading the unrelated dictionary pipeline.
+python3 -S - "$task_test_dir/DictionaryLearningAudioEvidence.swift" <<'PY'
+from pathlib import Path
+import sys
+source = Path('Sources/Fluid/Services/DictionaryLearningEvidence.swift').read_text()
+marker = 'nonisolated struct DictionaryLearningAudioEvidence:'
+assert source.count(marker) == 1, 'Expected one production audio-evidence declaration'
+start = source.index(marker)
+end = source.index('{', start) + 1
+depth = 1
+while depth:
+    depth += (source[end] == '{') - (source[end] == '}')
+    end += 1
+Path(sys.argv[1]).write_text('import Foundation\n' + source[start:end] + '\n')
+PY
 xcrun swiftc -target x86_64-apple-macosx15.0 -parse-as-library -swift-version 5 \
     -module-cache-path "$task_test_dir/ModuleCache" \
+    "$task_test_dir/DictionaryLearningAudioEvidence.swift" \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift \
     Sources/Fluid/Account/AccountDomain.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
