@@ -59,6 +59,70 @@ final class GigaAMEncoderDictionaryTests: XCTestCase {
         XCTAssertNil(try GigaAMAcousticMatcher.matchEncoder(query: first, references: references, calibration: calibration, negativeReferences: Array(repeating: other, count: 33)))
     }
 
+    func testCorroboratedOperatingPointUsesTrainingContrastWithoutChangingOrdinaryMatching() throws {
+        let reference = try word(), references = [reference, reference, reference]
+        let contrast = try word(variation: 1.5), query = try word(variation: 1)
+        let calibration = try XCTUnwrap(GigaAMAcousticMatcher.calibrateEncoder(references: references, contrastReferences: [contrast]))
+        let ordinary = try XCTUnwrap(GigaAMAcousticMatcher.matchEncoder(query: query, references: references, calibration: calibration))
+        XCTAssertFalse(ordinary.accepted)
+        XCTAssertGreaterThan(ordinary.distance, calibration.acceptanceDistance)
+        XCTAssertLessThan(ordinary.distance, try XCTUnwrap(calibration.nearestContrastDistance))
+        let corroborated = try XCTUnwrap(GigaAMAcousticMatcher.matchEncoderCorroborated(query: query, references: references, calibration: calibration))
+        XCTAssertTrue(corroborated.accepted)
+        XCTAssertEqual(corroborated.distance, ordinary.distance)
+        XCTAssertLessThan(corroborated.distance, try XCTUnwrap(calibration.corroboratedAcceptanceDistance))
+        XCTAssertFalse(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoder(query: query, references: references, calibration: calibration)).accepted)
+        XCTAssertFalse(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoderCorroborated(query: contrast, references: references, calibration: calibration)).accepted)
+        let beyondContrast = try word(variation: 2)
+        XCTAssertFalse(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoderCorroborated(query: beyondContrast, references: references, calibration: calibration)).accepted)
+    }
+
+    func testCorroboratedOperatingPointStillHasAnAbsoluteCeiling() throws {
+        let reference = try word(), references = [reference, reference, reference]
+        let contrast = try word(label: 1), query = try word(variation: 2)
+        let calibration = try XCTUnwrap(GigaAMAcousticMatcher.calibrateEncoder(references: references, contrastReferences: [contrast]))
+        XCTAssertGreaterThan(try XCTUnwrap(calibration.nearestContrastDistance), 0.45)
+        let result = try XCTUnwrap(GigaAMAcousticMatcher.matchEncoderCorroborated(query: query, references: references, calibration: calibration))
+        XCTAssertGreaterThan(result.distance, 0.45)
+        XCTAssertLessThan(result.distance, try XCTUnwrap(calibration.nearestContrastDistance))
+        XCTAssertFalse(result.accepted)
+    }
+
+    func testCorroboratedOperatingPointRequiresAUsableTrainingContrast() throws {
+        let reference = try word(), references = [reference, reference, reference]
+        let noContrast = try XCTUnwrap(GigaAMAcousticMatcher.calibrateEncoder(references: references))
+        XCTAssertNil(noContrast.corroboratedAcceptanceDistance)
+        XCTAssertNil(try GigaAMAcousticMatcher.matchEncoderCorroborated(query: reference, references: references, calibration: noContrast))
+        let tooLong = try GigaAMEncoderFeatures(values: reference.values + reference.values + reference.values)
+        let unusableContrast = try XCTUnwrap(GigaAMAcousticMatcher.calibrateEncoder(references: references, contrastReferences: [tooLong]))
+        XCTAssertNil(unusableContrast.nearestContrastDistance)
+        XCTAssertNil(try GigaAMAcousticMatcher.matchEncoderCorroborated(query: reference, references: references, calibration: unusableContrast))
+    }
+
+    func testCorroboratedOperatingPointRetainsReferenceBindingAndChecksEveryNegative() throws {
+        let reference = try word(), references = [reference, reference, reference]
+        let contrast = try word(variation: 1.5), query = try word(variation: 1), unrelated = try word(label: 1)
+        let calibration = try XCTUnwrap(GigaAMAcousticMatcher.calibrateEncoder(references: references, contrastReferences: [contrast]))
+        XCTAssertFalse(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoder(query: query, references: references, calibration: calibration)).accepted)
+        XCTAssertNil(try GigaAMAcousticMatcher.matchEncoderCorroborated(query: query, references: [unrelated, reference, reference], calibration: calibration))
+        XCTAssertTrue(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoderCorroborated(query: query, references: references, calibration: calibration, negativeReferences: [unrelated])).accepted)
+        XCTAssertFalse(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoderCorroborated(query: query, references: references, calibration: calibration, negativeReferences: [unrelated, query])).accepted)
+        XCTAssertNil(try GigaAMAcousticMatcher.matchEncoderCorroborated(query: query, references: references, calibration: calibration, negativeReferences: Array(repeating: unrelated, count: 33)))
+        let tooLong = try GigaAMEncoderFeatures(values: query.values + query.values + query.values)
+        XCTAssertNil(try GigaAMAcousticMatcher.matchEncoderCorroborated(query: tooLong, references: references, calibration: calibration))
+    }
+
+    func testCancellationStopsCorroboratedMatching() async throws {
+        let reference = try word(), contrast = try word(variation: 1.5), references = [reference, reference, reference]
+        let calibration = try XCTUnwrap(GigaAMAcousticMatcher.calibrateEncoder(references: references, contrastReferences: [contrast]))
+        let comparison = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try GigaAMAcousticMatcher.matchEncoderCorroborated(query: reference, references: references, calibration: calibration)
+        }
+        do { _ = try await comparison.value; XCTFail("Cancelled corroborated matching returned a result") }
+        catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+    }
+
     func testDurationGuardDoesNotRecognizeAWholeRepeatedPhraseAsOneTerm() throws {
         let first = try word()
         let repeated = try GigaAMEncoderFeatures(values: first.values + first.values + first.values)

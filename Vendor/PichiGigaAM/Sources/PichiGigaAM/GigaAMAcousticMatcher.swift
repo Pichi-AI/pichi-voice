@@ -4,6 +4,7 @@ import Foundation
 /// word boundaries, exact-rule protection and arbitration between dictionary labels.
 public enum GigaAMAcousticMatcher {
     public static let encoderCalibrationVersion = "gigaam-encoder-loo-contrast-v1"
+    public static let encoderCorroboratedMatchVersion = "gigaam-encoder-recorded-variant-contrast-v1"
 
     public struct Calibration: Equatable, Sendable {
         public let acceptanceDistance: Float
@@ -25,6 +26,13 @@ public enum GigaAMAcousticMatcher {
         public let maximumLeaveOneOutDistance: Float
         public let nearestContrastDistance: Float?
         fileprivate let references: [GigaAMEncoderFeatures]
+
+        /// Effective cap for independently corroborated variants. The actual
+        /// contrast boundary remains exclusive, including an identical example.
+        public var corroboratedAcceptanceDistance: Float? {
+            guard let contrast = self.nearestContrastDistance, contrast.isFinite, contrast > 0 else { return nil }
+            return min(GigaAMAcousticMatcher.maximumEncoderDistance, contrast)
+        }
     }
 
     // Conservative initial operating range for this cepstral representation.
@@ -88,12 +96,37 @@ public enum GigaAMAcousticMatcher {
         query: GigaAMEncoderFeatures, references: [GigaAMEncoderFeatures],
         calibration: EncoderCalibration, negativeReferences: [GigaAMEncoderFeatures] = []
     ) throws -> Match? {
+        try self.matchEncoder(query: query, references: references, calibration: calibration,
+            negativeReferences: negativeReferences, acceptanceDistance: calibration.acceptanceDistance)
+    }
+
+    /// The caller must independently corroborate the current source against a
+    /// recorded variant before choosing this method. Acoustic resemblance alone
+    /// cannot supply that evidence. A usable training contrast is mandatory;
+    /// reference-only calibration never enables this separate operating point.
+    public static func matchEncoderCorroborated(
+        query: GigaAMEncoderFeatures, references: [GigaAMEncoderFeatures],
+        calibration: EncoderCalibration, negativeReferences: [GigaAMEncoderFeatures] = []
+    ) throws -> Match? {
+        try Task.checkCancellation()
+        guard let contrast = calibration.nearestContrastDistance,
+              let cap = calibration.corroboratedAcceptanceDistance else { return nil }
+        guard let match = try self.matchEncoder(query: query, references: references, calibration: calibration,
+            negativeReferences: negativeReferences, acceptanceDistance: cap) else { return nil }
+        return Match(distance: match.distance, accepted: match.accepted && match.distance < contrast)
+    }
+
+    private static func matchEncoder(
+        query: GigaAMEncoderFeatures, references: [GigaAMEncoderFeatures],
+        calibration: EncoderCalibration, negativeReferences: [GigaAMEncoderFeatures], acceptanceDistance: Float
+    ) throws -> Match? {
         try Task.checkCancellation()
         guard references == calibration.references, (3...Self.maximumReferences).contains(references.count),
               negativeReferences.count <= 32, calibration.acceptanceDistance.isFinite,
               (0...Self.maximumEncoderDistance).contains(calibration.acceptanceDistance),
+              acceptanceDistance.isFinite, (0...Self.maximumEncoderDistance).contains(acceptanceDistance),
               let score = try self.encoderScore(query: query, references: references) else { return nil }
-        guard score <= calibration.acceptanceDistance else { return Match(distance: score, accepted: false) }
+        guard score <= acceptanceDistance else { return Match(distance: score, accepted: false) }
         for negative in negativeReferences {
             if let distance = try self.distanceEncoder(negative, query),
                distance <= min(Self.maximumEncoderDistance, score + 0.01) {
