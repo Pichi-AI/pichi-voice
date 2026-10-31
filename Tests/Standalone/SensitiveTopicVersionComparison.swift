@@ -9,9 +9,27 @@ struct SensitiveTopicVersionComparison {
     struct Corpus: Decodable {
         let schemaVersion: Int
         let id: String
-        let policyDefinition: String
+        let policyDefinition: PolicyText
         let evaluationNotes: [String]
         let cases: [Input]
+    }
+    struct PolicyText: Decodable {
+        struct Structured: Decodable {
+            let decisionUnit: String
+            let selectedTopics: [String: String]
+            let discussionRule: String
+            let ambiguityRule: String
+            let sentenceRule: String
+        }
+        let text: String
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let value = try? container.decode(String.self) { text = value; return }
+            let value = try container.decode(Structured.self)
+            let topics = value.selectedTopics.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }
+            text = ([value.decisionUnit, value.discussionRule, value.ambiguityRule, value.sentenceRule] + topics)
+                .joined(separator: "\n")
+        }
     }
     struct Input: Codable {
         let id: String
@@ -142,7 +160,7 @@ struct SensitiveTopicVersionComparison {
         }
         let report = Report(schemaVersion: 1, revision: revision, corpusID: corpus.id,
             corpusSHA256: SHA256.hash(data: corpusData).map { String(format: "%02x", $0) }.joined(),
-            artifactSHA256: ["old": oldSHA, "new": newSHA], policyDefinition: corpus.policyDefinition,
+            artifactSHA256: ["old": oldSHA, "new": newSHA], policyDefinition: corpus.policyDefinition.text,
             notes: corpus.evaluationNotes + [
                 "Classifier-only: neither the catalog nor base A1 PII detector is applied. Explicit errors never produce a raw successful output.",
                 "Three warm detections per input share a frozen per-topic snapshot. Host timings are not iPad or ASR measurements.",
