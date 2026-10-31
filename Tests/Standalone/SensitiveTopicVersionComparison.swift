@@ -183,9 +183,12 @@ struct SensitiveTopicVersionComparison {
     }
 
     static func footprint(path: String, sha: String, revision: String) throws {
+        let artifactURL = URL(fileURLWithPath: path)
+        guard let artifactBytes = try artifactURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              artifactBytes > 0 else { throw Failure.invalidOutput }
         let loadStart = DispatchTime.now().uptimeNanoseconds
         let snapshot: SensitiveTopicClassifierSnapshot = try autoreleasepool {
-            try .load(artifactURL: URL(fileURLWithPath: path), expectedSHA256: sha,
+            try .load(artifactURL: artifactURL, expectedSHA256: sha,
                       selectedTopicIDs: SensitiveTopicClassifierSnapshot.supportedTopicIDs)
         }
         let load = milliseconds(loadStart)
@@ -209,7 +212,7 @@ struct SensitiveTopicVersionComparison {
         }
         let payload: [String: Any] = [
             "schemaVersion": 1, "revision": revision, "artifactSHA256": sha,
-            "artifactBytes": try Data(contentsOf: URL(fileURLWithPath: path)).count,
+            "artifactBytes": artifactBytes,
             "loadMilliseconds": load, "firstDetectionMilliseconds": firstTime,
             "initialSpanCount": first.spans.count, "warmMilliseconds": timings,
             "iterations": 1_000, "totalSpanCount": masks,
