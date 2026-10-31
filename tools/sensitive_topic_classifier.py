@@ -54,7 +54,15 @@ def load_cases(path):
     texts = [unicodedata.normalize("NFC", row["text"]).lower().strip() for row in cases]
     if len(set(texts)) != len(texts):
         raise ValueError("duplicate normalized text across splits")
+    families = {}
     for row in cases:
+        family = row.get("familyID")
+        if family is not None:
+            if not isinstance(family, str) or not family:
+                raise ValueError("invalid scenario family")
+            if family in families and families[family] != row["split"]:
+                raise ValueError("scenario family crosses splits")
+            families[family] = row["split"]
         if row["split"] not in {"train", "development", "exploratory"}:
             raise ValueError("invalid split")
         if not set(row["topics"]) <= set(TOPICS):
@@ -86,18 +94,61 @@ def evaluate(artifact, cases):
     return dict(cases=len(cases), seconds=elapsed, perTopic=counts, predictions=rows)
 
 
-def train(cases, digest, dimensions=16384):
+def load_initial_artifact(path, expected_sha256):
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256 or ""):
+        raise ValueError("initial artifact requires exact SHA-256")
+    if not path.is_file() or path.is_symlink() or not 0 < path.stat().st_size <= 2_097_152:
+        raise ValueError("invalid initial artifact file")
+    raw = path.read_bytes()
+    if len(raw) > 2_097_152 or hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise ValueError("initial artifact checksum mismatch")
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate artifact key")
+            result[key] = value
+        return result
+    def invalid_constant(value):
+        raise ValueError("nonfinite artifact number")
+    artifact = json.loads(raw, object_pairs_hook=unique_object, parse_constant=invalid_constant)
+    if not isinstance(artifact, dict):
+        raise ValueError("initial artifact must be an object")
+    dimensions = artifact.get("dimensions")
+    if (type(artifact.get("formatVersion")) is not int or artifact.get("formatVersion") != 1 or artifact.get("featureIdentity") != FEATURE_ID
+            or type(dimensions) is not int or dimensions != 16384
+            or not re.fullmatch(r"[0-9a-f]{64}", artifact.get("trainingDigest", ""))
+            or not isinstance(artifact.get("topics"), list) or len(artifact["topics"]) != len(TOPICS)
+            or not all(isinstance(topic, dict) for topic in artifact["topics"])
+            or {topic.get("id") for topic in artifact["topics"]} != set(TOPICS)):
+        raise ValueError("incompatible initial artifact")
+    def finite_number(value, bound=100):
+        return type(value) in (int, float) and math.isfinite(value) and abs(value) <= bound
+    for topic in artifact["topics"]:
+        if (not finite_number(topic.get("bias")) or not finite_number(topic.get("threshold"), 1)
+                or not 0 < topic["threshold"] < 1 or not isinstance(topic.get("weights"), dict)
+                or len(topic["weights"]) > dimensions):
+            raise ValueError("invalid initial topic")
+        for key, value in topic["weights"].items():
+            if (not re.fullmatch(r"0|[1-9][0-9]*", key) or not 0 <= int(key) < dimensions
+                    or not finite_number(value)):
+                raise ValueError("invalid initial weight")
+    return artifact
+
+
+def train(cases, digest, dimensions=16384, initial_artifact=None, epochs=100, learning_rate=0.7):
     rows = [(row, features(row["text"], dimensions)) for row in cases if row["split"] == "train"]
     development = [row for row in cases if row["split"] == "development"]
     topics = []
     for topic_index, topic in enumerate(TOPICS):
-        weights = {}
-        bias = 0.0
+        initial = next((item for item in initial_artifact["topics"] if item["id"] == topic), None) if initial_artifact else None
+        weights = {int(key): value for key, value in initial["weights"].items()} if initial else {}
+        bias = initial["bias"] if initial else 0.0
         order = list(range(len(rows)))
         rng = random.Random(20261030 + topic_index)
-        for epoch in range(100):
+        for epoch in range(epochs):
             rng.shuffle(order)
-            rate = 0.7 / (1 + epoch * 0.025)
+            rate = learning_rate / (1 + epoch * 0.025)
             for index in order:
                 row, ids = rows[index]
                 label = float(topic in row["topics"])
@@ -129,7 +180,17 @@ def main():
     parser.add_argument("--cases", type=Path, required=True)
     parser.add_argument("--output-directory", type=Path, required=True)
     parser.add_argument("--artifact", type=Path, help="Evaluate an existing artifact without retraining")
+    parser.add_argument("--initial-artifact", type=Path, help="Continue from frozen weights and bias")
+    parser.add_argument("--initial-sha256", help="Exact required checksum for continuation")
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--learning-rate", type=float, default=0.7)
     args = parser.parse_args()
+    if args.artifact and (args.initial_artifact or args.initial_sha256):
+        parser.error("evaluation and continuation are mutually exclusive")
+    if bool(args.initial_artifact) != bool(args.initial_sha256):
+        parser.error("continuation requires both initial artifact and checksum")
+    if not 0 <= args.epochs <= 500 or not math.isfinite(args.learning_rate) or not 0 < args.learning_rate <= 2:
+        parser.error("invalid training controls")
     output = args.output_directory.resolve()
     # Refuse likely accidental checked-in artifact locations. Caller owns this directory.
     if not any(part in {".build", "private_assets", "models", "benchmark_reports"} for part in output.parts):
@@ -138,18 +199,29 @@ def main():
     raw, cases = load_cases(args.cases)
     start = time.perf_counter()
     digest = hashlib.sha256(raw).hexdigest()
-    artifact = json.loads(args.artifact.read_text()) if args.artifact else train(cases, digest)
+    initial = load_initial_artifact(args.initial_artifact, args.initial_sha256) if args.initial_artifact else None
+    protocol = dict(inputSHA256=digest, initialArtifactSHA256=args.initial_sha256,
+                    epochs=args.epochs, learningRate=args.learning_rate, seed=20261030,
+                    thresholdObjective="3FN+FP, then fewer FP, then higher threshold",
+                    trainingScope="train only; thresholds selected on development only")
+    training_digest = hashlib.sha256(json.dumps(protocol, sort_keys=True, separators=(",", ":")).encode()).hexdigest() if initial else digest
+    artifact = json.loads(args.artifact.read_text()) if args.artifact else train(
+        cases, training_digest, initial_artifact=initial, epochs=args.epochs, learning_rate=args.learning_rate)
     training_seconds = time.perf_counter() - start
     encoded = (json.dumps(artifact, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
     destination = output / "sensitive-topics-v1.json"
     if destination.exists() and destination.read_bytes() != encoded:
         parser.error("refusing to overwrite a different frozen artifact")
+    if len(encoded) > 2_097_152:
+        parser.error("artifact exceeds native loader budget")
     destination.write_bytes(encoded)
     report = dict(artifactSHA256=hashlib.sha256(encoded).hexdigest(), artifactBytes=len(encoded),
-                  trainingDigest=digest, trainingSeconds=training_seconds,
+                  trainingDigest=artifact["trainingDigest"], inputSHA256=digest, trainingProtocol=protocol,
+                  trainingSeconds=training_seconds,
                   evaluationScope="synthetic authored exploratory only; not independent or calibrated",
                   splits={split: evaluate(artifact, [row for row in cases if row["split"] == split])
                           for split in ["development", "exploratory"]})
+    (output / "training-protocol.json").write_text(json.dumps(protocol, ensure_ascii=False, indent=2) + "\n")
     (output / "evaluation.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({key: value for key, value in report.items() if key != "splits"}, ensure_ascii=False))
     for split, result in report["splits"].items():
