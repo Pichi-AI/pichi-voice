@@ -102,6 +102,7 @@ def summarize(rows):
             'tp': n['tp'], 'fp': n['fp'], 'fn': n['fn'], 'tn': n['tn'],
             'precision': ratio(n['tp'], n['tp'] + n['fp']),
             'recall': ratio(n['tp'], n['tp'] + n['fn']),
+            'f1': ratio(2 * n['tp'], 2 * n['tp'] + n['fp'] + n['fn']),
             'falseMaskRate': ratio(n['fp'], n['fp'] + n['tn']),
             'fullSensitiveSentenceCoverage': ratio(n['full'], n['completed_positive']),
             'sensitiveUTF16Coverage': ratio(covered, gold_count),

@@ -32,6 +32,7 @@ class TopicVersionReportTests(unittest.TestCase):
         self.assertEqual(result['old']['ambiguousMaskRate'], 1.0)
         self.assertEqual(result['new']['ambiguousMaskRate'], 0.0)
         self.assertEqual(result['new']['fullSensitiveSentenceCoverage'], 1.0)
+        self.assertAlmostEqual(result['new']['f1'], 2 / 3)
         self.assertGreater(result['old']['unrelatedUTF16MaskRate'], 0)
         self.assertEqual(REPORT.paired([positive, error, negative, ambiguous])['transitionCounts']['positive']['miss -> full'], 1)
 
