@@ -3,6 +3,21 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 task_test_dir="$PWD/.build/publication-outbox-tests"
 mkdir -p "$task_test_dir"
+# The raw executable has no app catalog. Keep title presentation resources explicit
+# and isolated so the deletion guard exercises two genuinely different languages.
+task_title_catalog="$task_test_dir/PublicationTitleCatalog.bundle"
+mkdir -p "$task_title_catalog"
+python3 -S - "$task_title_catalog/Info.plist" <<'PY_TITLE_CATALOG'
+from pathlib import Path
+import plistlib
+import sys
+Path(sys.argv[1]).write_bytes(plistlib.dumps({
+    'CFBundleIdentifier': 'local.voice.publication-title-catalog.fixture',
+    'CFBundleDevelopmentRegion': 'en',
+}))
+PY_TITLE_CATALOG
+xcrun xcstringstool compile Sources/Fluid/Localization/Localizable.xcstrings \
+    --output-directory "$task_title_catalog" --language en --language ru
 # Real N1/N2/domain/exporter/wire code; only unrelated inference/sidecar app support
 # follows the existing checkpoint runner's generated standalone support convention.
 cat > "$task_test_dir/ApplicationSupport.swift" <<'SWIFT'
@@ -70,4 +85,5 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Services/CloudPublication/PichiCloudPublicationService.swift \
     Sources/Fluid/Services/CloudPublication/PichiCloudPublicationActivation.swift \
     Tests/PichiPublicationOutboxTests.swift Tests/PichiCloudPublicationServiceTests.swift Tests/PichiLegacyCloudPublicationServiceTests.swift Tests/PichiAutomaticCloudPublicationTests.swift -o "$task_test_dir/tests"
-"$task_test_dir/tests" "$task_test_dir/fixtures-$(uuidgen)" "$@"
+PICHI_PUBLICATION_TEST_CATALOG_BUNDLE="$task_title_catalog" \
+    "$task_test_dir/tests" "$task_test_dir/fixtures-$(uuidgen)" "$@"

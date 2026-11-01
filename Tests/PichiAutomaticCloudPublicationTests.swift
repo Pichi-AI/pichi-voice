@@ -5,6 +5,10 @@ extension PichiPublicationOutboxTests {
     /// deletion owner and account are synthetic; no model, Keychain, socket or UI runs.
     static func checkAutomaticCloudPublication(root: URL) async throws -> Int {
         let manager = FileManager.default
+        guard let titleCatalogPath = ProcessInfo.processInfo.environment["PICHI_PUBLICATION_TEST_CATALOG_BUNDLE"],
+              let titleCatalog = Bundle(path: titleCatalogPath) else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
         try manager.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let previous = PrivateProfileStorage.current
         defer { PrivateProfileStorage.select(previous) }
@@ -232,7 +236,10 @@ extension PichiPublicationOutboxTests {
         check(try record(source.id)?.localSourceSHA256 == acceptedLocalRevision
             && PichiProtectedPublicationSource.localFingerprint(for: maintained) == acceptedLocalRevision,
               "Post-freeze audio retention and update-clock maintenance cannot strand accepted local cleanup")
-        check(maintained.displayTitle(language: .english) != maintained.displayTitle(language: .russian),
+        check(titleCatalog.localizations.contains("en") && titleCatalog.localizations.contains("ru"),
+              "The deletion fixture loads the real English and Russian title catalog")
+        check(maintained.displayTitle(language: .english, bundle: titleCatalog)
+            != maintained.displayTitle(language: .russian, bundle: titleCatalog),
               "The deletion fixture actually has presentation-dependent generated titles")
         var renamed = maintained; renamed.title += " user edit"; renamed.defaultTitleBase = nil
         check(try PichiProtectedPublicationSource.localFingerprint(for: renamed) != acceptedLocalRevision,
