@@ -148,6 +148,7 @@ nonisolated private func fixtureConfiguration(_ bundle: String = "ai.example.voi
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(configuration)) as! [String: Any]
         object["issuer"] = "http://identity.example/realms/test"
         reject("insecure issuer") { try JSONDecoder().decode(AccountConfiguration.self, from: JSONSerialization.data(withJSONObject: object)).validate() }
+        guard await httpClientLifetimeTests() else { exit(1) }
         try jwtTests()
         try await transportTests(configuration)
         count += try await AccountLegacySessionChecks.run()
@@ -539,6 +540,49 @@ nonisolated private func fixtureConfiguration(_ bundle: String = "ai.example.voi
             await service.logout()
         }
     }
+    @MainActor static func httpClientLifetimeTests() async -> Bool {
+        // A session retains its delegate until invalidation. Merely constructing and
+        // discarding an account client must not leave that client as its own delegate.
+        for _ in 0..<32 {
+            weak var released: AccountHTTPClient?
+            autoreleasepool {
+                let client = AccountHTTPClient()
+                released = client
+            }
+            guard released == nil else {
+                print("FAIL: Discarded account HTTP client remains retained by its session delegate")
+                return false
+            }
+            count += 1
+        }
+        var client: AccountHTTPClient? = AccountHTTPClient()
+        weak let releasedAfterShutdown = client
+        await client!.shutdown()
+        // Shutdown is idempotent and does not become a requirement for releasing an
+        // unused client. This fixture never opens a network connection.
+        await client!.shutdown()
+        client = nil
+        guard releasedAfterShutdown == nil else {
+            print("FAIL: Shut down account HTTP client remains retained")
+            return false
+        }
+        count += 1
+
+        var ownedClient: AccountHTTPClient? = AccountHTTPClient()
+        weak let releasedWithTransport = ownedClient
+        var transport: AccountHTTPTransport? = AccountHTTPTransport(configuration: fixtureConfiguration(), http: ownedClient!)
+        weak let releasedTransport = transport
+        ownedClient = nil
+        expect(releasedWithTransport != nil, "Account transport owns its client for its lifetime")
+        transport = nil
+        guard releasedTransport == nil && releasedWithTransport == nil else {
+            print("FAIL: Discarded account transport leaves its HTTP client retained")
+            return false
+        }
+        count += 1
+        return true
+    }
+
     @MainActor static func transportTests(_ configuration: AccountConfiguration) async throws {
         let http = try FixtureHTTP()
         let transport = AccountHTTPTransport(configuration: configuration, http: http)

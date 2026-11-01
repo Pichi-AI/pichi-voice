@@ -5,19 +5,24 @@ nonisolated protocol AccountHTTPRequesting: Sendable {
     func shutdown() async
 }
 
+/// The session retains its redirect delegate until invalidation. Keep that delegate
+/// independent of the client so dropping an unused transport can release its session.
+private nonisolated final class AccountHTTPRedirectPolicy: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+}
+
 /// Ephemeral session, no cookies/cache, no redirects, bounded bodies and total resource timeout.
-nonisolated final class AccountHTTPClient: NSObject, URLSessionTaskDelegate, AccountHTTPRequesting, @unchecked Sendable {
-    private var session: URLSession!
-    override init() {
-        super.init()
+nonisolated final class AccountHTTPClient: AccountHTTPRequesting, @unchecked Sendable {
+    private let session: URLSession
+    init() {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpShouldSetCookies = false; configuration.httpCookieStorage = nil
         configuration.urlCredentialStorage = nil; configuration.urlCache = nil
         configuration.timeoutIntervalForRequest = 20; configuration.timeoutIntervalForResource = 30
-        session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        session = URLSession(configuration: configuration, delegate: AccountHTTPRedirectPolicy(), delegateQueue: nil)
     }
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+    deinit { session.invalidateAndCancel() }
     func request(_ request: URLRequest) async throws -> Data {
         do {
             let (bytes, response) = try await session.bytes(for: request)
