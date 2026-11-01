@@ -244,7 +244,7 @@ SHELL_PROBES = (
     "credential_startup", "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
     "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
     "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_error_localization", "file_export", "file_operation_isolation",
-    "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
+    "file_history_publisher", "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
     "fluid_serve", "fluid_typography", "history_decode_recovery", "history_persistence", "hotkey_initialization",
     "local_text_model_catalog", "meeting_capture_pcm", "meeting_capture_activity", "meeting_microphone_capture_contracts", "meeting_pending_speech", "native_window_appearance",
     "meeting_private_view", "n4_file_private_projection", "meeting_summary_evidence", "meeting_audio_export", "onboarding",
