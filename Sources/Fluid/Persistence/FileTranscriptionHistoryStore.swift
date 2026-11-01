@@ -207,9 +207,11 @@ final class FileTranscriptionHistoryStore: ObservableObject {
             if self.canAccess { self.visibleEntries = newValue }
         }
     }
-    var entriesPublisher: AnyPublisher<[FileTranscriptionEntry], Never> {
+    // SwiftUI's onReceive must keep the same subscription across projection updates.
+    // A fresh erased publisher replays @Published's initial value after every render.
+    private(set) lazy var entriesPublisher: AnyPublisher<[FileTranscriptionEntry], Never> = {
         self.$visibleEntries.map { [weak self] entries in self?.canAccess == true ? entries : [] }.eraseToAnyPublisher()
-    }
+    }()
     @Published var selectedEntryID: UUID?
 
     init(defaults: UserDefaults? = nil, profile: PrivateProfileSnapshot? = nil) {
