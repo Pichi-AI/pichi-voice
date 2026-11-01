@@ -108,6 +108,8 @@ final class PrivateAISettingsController: ObservableObject {
     init(viewModel: AIEnhancementSettingsViewModel) {
         self.viewModel = viewModel
         self.session = PrivateAISettingsSession(selectedModelID: PrivateAIIntegrationService.configuredModelID)
+        // View recreation must not retain dead weak registrations until logout.
+        Self.profileOwners.removeAll { $0.value == nil }
         Self.profileOwners.append(WeakOwner(self))
         self.profileObserver = NotificationCenter.default.addObserver(forName: SettingsStore.privateProfileWillChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {

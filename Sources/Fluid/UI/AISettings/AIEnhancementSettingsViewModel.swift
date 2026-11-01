@@ -194,6 +194,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.openAIBaseURL = ""
         self.selectedProviderID = settings.selectedProviderID
 
+        // View recreation must not retain dead weak registrations until logout.
+        Self.profileOwners.removeAll { $0.value == nil }
         Self.profileOwners.append(WeakOwner(self))
         self.profileTransitionCancellable = NotificationCenter.default.publisher(for: SettingsStore.privateProfileWillChange)
             .sink { [weak self] _ in self?.clearForPrivateProfileTransition() }
