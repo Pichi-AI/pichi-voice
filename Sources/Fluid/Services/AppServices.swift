@@ -39,7 +39,7 @@ final class AppServices: ObservableObject {
                     || TranscriptionHistoryStore.shared.admittedRecordingWriteCount > 0
             }, prepare: { [weak self] in
                 guard let self else { throw AccountError.isolationRequired }
-                await self._localAIModelResidency?.shutdown(); self._localAIModelResidency = nil
+                await self.retireLocalAIResidency()
                 self._meetingAutoDetector?.stop(); self._meetingAutoDetector = nil
                 MeetingRecordingPillController.shared.deactivate()
                 try await PrivateProfileSources.prepare(coordinator: self._meetingSessionCoordinator, asr: self._asr)
@@ -179,6 +179,7 @@ final class AppServices: ObservableObject {
     // MARK: - Lazy Services
 
     private var _localAIModelResidency: LocalAIModelResidencyController?
+    private var localAIResidencySettingsObservation: AnyCancellable?
     private var privateAIStartupWarmup: Task<Void, Never>?
     private var localAIResidencySlot: SettingsStore.DictationShortcutSlot = .primary
     private var isTerminating = false
@@ -228,15 +229,22 @@ final class AppServices: ObservableObject {
                 releaseForTermination: { await LocalAIModelResidencyTransport.release($0) }
             ))
             self._localAIModelResidency = controller
-            SettingsStore.shared.objectWillChange
+            self.localAIResidencySettingsObservation = SettingsStore.shared.objectWillChange
                 .debounce(for: .milliseconds(100), scheduler: RunLoop.main)
                 .sink { [weak self] _ in
                     MainActor.assumeIsolated { self?.refreshLocalAIResidency() }
                 }
-                .store(in: &self.cancellables)
             controller.start()
         }
         self._localAIModelResidency?.refresh()
+    }
+
+    private func retireLocalAIResidency() async {
+        // Retire queued settings events before joining the profile-owned controller.
+        self.localAIResidencySettingsObservation?.cancel()
+        self.localAIResidencySettingsObservation = nil
+        await self._localAIModelResidency?.shutdown()
+        self._localAIModelResidency = nil
     }
 
     /// Audio hardware observation service (lazily initialized)
@@ -644,8 +652,7 @@ final class AppServices: ObservableObject {
         self.privateAIStartupWarmup?.cancel()
         await self.privateAIStartupWarmup?.value
         self.privateAIStartupWarmup = nil
-        await self._localAIModelResidency?.shutdown()
-        self._localAIModelResidency = nil
+        await self.retireLocalAIResidency()
         self._meetingAutoDetector?.stop()
         self._meetingAutoDetector = nil
         if let meetingSessionCoordinator = self._meetingSessionCoordinator {
