@@ -24,7 +24,7 @@ nonisolated struct MeetingPrivateProfileAdmission: Sendable {
 
 /// N5's local policy observer. These callbacks must remain bounded local operations, without
 /// network/model work. Delivery failures must never prevent a local recording from being saved.
-nonisolated protocol PrivateProfileRecordingObserver: Sendable {
+nonisolated protocol PrivateProfileRecordingObserver: AnyObject, Sendable {
     func captureAdmitted(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async
     func prepareRequiredCapture(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async throws
     func prepareAutomaticCapture() async throws -> Bool
@@ -54,7 +54,9 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
     })
     private var stores: [String: MeetingSessionStore] = [:]
     private var admissions: [MeetingSessionID: MeetingPrivateProfileAdmission] = [:]
-    private var recordingObserver: (any PrivateProfileRecordingObserver)?
+    // Composition owns the observer; retaining it here would form a facade/store cycle.
+    private weak var recordingObserver: (any PrivateProfileRecordingObserver)?
+    private var hasInstalledRecordingObserver = false
     private var encryptedProfiles = Set<String>()
     private let sharedGuestCipherProvider: (@Sendable () async throws -> MeetingRecordingCipher?)?
     private var preparedGuestReaderGeneration: UUID?
@@ -68,6 +70,16 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
     func installRecordingObserver(_ observer: any PrivateProfileRecordingObserver) throws {
         guard recordingObserver == nil else { throw AccountError.busy }
         recordingObserver = observer
+        hasInstalledRecordingObserver = true
+    }
+
+    private func currentRecordingObserver() throws -> (any PrivateProfileRecordingObserver)? {
+        guard let observer = recordingObserver else {
+            // Losing an installed policy owner must not silently select unprotected capture.
+            guard !hasInstalledRecordingObserver else { throw AccountError.isolationRequired }
+            return nil
+        }
+        return observer
     }
 
     /// Resolves the existing observer's secure-mode resource preflight before the
@@ -78,7 +90,8 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
 
     func prepareCapturePersistencePolicy() async throws -> MeetingCapturePersistencePolicy {
         let profile = try readableProfile()
-        let policy = try await recordingObserver?.prepareCapturePersistencePolicy() ?? .init()
+        let observer = try currentRecordingObserver()
+        let policy = try await observer?.prepareCapturePersistencePolicy() ?? .init()
         try checkReadable(profile)
         guard !policy.requiresEncryptedPersistence || encryptedProfiles.contains(profile.id) else {
             throw MeetingRecordingCipher.Failure.unavailableKey
@@ -102,24 +115,26 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
 
     private func captureOwnership(for id: MeetingSessionID, configuration: MeetingCaptureConfiguration?) async throws -> MeetingProfileOwnership? {
         guard admissions[id] == nil else { throw AccountError.busy }
+        // Keep this admission's observer alive through its joined local preflight.
+        let observer = try currentRecordingObserver()
         var captured = try admission()
         captured.requiresEncryptedPersistence = configuration?.requiresEncryptedPersistence == true
         if captured.requiresEncryptedPersistence {
             guard encryptedProfiles.contains(captured.profile.id),
-                  configuration?.audioStorageMode == .memoryOnly, recordingObserver != nil else {
+                  configuration?.audioStorageMode == .memoryOnly, observer != nil else {
                 throw MeetingRecordingCipher.Failure.invalidConfiguration
             }
         }
         admissions[id] = captured
         do {
             if captured.requiresEncryptedPersistence {
-                try await recordingObserver?.prepareRequiredCapture(id: id, admission: captured)
-            } else { await recordingObserver?.captureAdmitted(id: id, admission: captured) }
+                try await observer?.prepareRequiredCapture(id: id, admission: captured)
+            } else { await observer?.captureAdmitted(id: id, admission: captured) }
             try checkReadable(captured.profile)
             return captured.ownership
         } catch {
             admissions.removeValue(forKey: id)
-            await recordingObserver?.captureAdmissionCancelled(id: id, admission: captured)
+            await observer?.captureAdmissionCancelled(id: id, admission: captured)
             throw error
         }
     }

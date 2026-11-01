@@ -28,6 +28,57 @@ import Foundation
             apiAudience: "synthetic-api", bundleIdentifier: "ai.synthetic.voice")
         let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: root)
         PrivateProfileStorage.select(guest)
+        // Composition owns its observer. A store must not keep a discarded facade alive.
+        for iteration in 0..<16 {
+            let lifetimeProfiles = PrivateProfileService()
+            let lifetimeAccount = AccountSessionService(configuration: nil, browser: CompositionBrowser(),
+                transport: CompositionIdentity(configuration: configuration, http: CompositionHTTP()),
+                credentials: CompositionCredentials(), lifecycle: lifetimeProfiles)
+            let lifetimeStore = PrivateProfileMeetingStore()
+            var facade: PichiCloudPublicationService? = PichiCloudPublicationService(
+                account: lifetimeAccount, meetings: lifetimeStore, profiles: lifetimeProfiles)
+            weak let releasedFacade = facade
+            try await facade!.install()
+            if iteration.isMultiple(of: 2) { await facade!.shutdown() }
+            facade = nil
+            await Task.yield()
+            guard releasedFacade == nil else {
+                print("FAIL: Recording observer retains a discarded publication facade")
+                exit(1)
+            }
+            check(releasedFacade == nil, "A retired publication facade must be released")
+            do {
+                _ = try await lifetimeStore.prepareCapturePersistencePolicy()
+                check(false, "A missing installed observer must not default to unprotected capture")
+            } catch let failure as AccountError {
+                check(failure == .isolationRequired, "Missing composition must fail closed")
+            }
+            do {
+                _ = try await lifetimeStore.captureOwnership(for: UUID())
+                check(false, "An abandoned composition must not admit a capture")
+            } catch let failure as AccountError {
+                check(failure == .isolationRequired, "Missing capture policy owner must fail closed")
+            }
+            let replacement = PichiCloudPublicationService(
+                account: lifetimeAccount, meetings: lifetimeStore, profiles: lifetimeProfiles)
+            try await replacement.install()
+            await replacement.shutdown()
+            await lifetimeAccount.shutdown()
+        }
+        let heldStore = PrivateProfileMeetingStore(), observerGate = CompositionSourceGate()
+        var heldObserver: CompositionHeldObserver? = CompositionHeldObserver(gate: observerGate)
+        weak let releasedObserver = heldObserver
+        try await heldStore.installRecordingObserver(heldObserver!)
+        let heldID = UUID()
+        let captureAdmission = Task { try await heldStore.captureOwnership(for: heldID) }
+        try await wait { observerGate.isHeld }
+        heldObserver = nil
+        check(releasedObserver != nil, "Admitted preflight must retain its exact policy observer while suspended")
+        observerGate.release()
+        _ = try await captureAdmission.value
+        await Task.yield()
+        check(releasedObserver == nil, "Completed preflight must release its temporary observer ownership")
+        await heldStore.cancelCaptureAdmission(for: heldID)
         let profiles = PrivateProfileService(), browser = CompositionBrowser(), http = CompositionHTTP()
         let credentials = CompositionCredentials(), identity = CompositionIdentity(configuration: configuration, http: http)
         let account = AccountSessionService(configuration: configuration, browser: browser,
@@ -152,7 +203,9 @@ import Foundation
         // Failure to acquire the exact observer leaves account admission unavailable.
         PrivateProfileStorage.select(guest)
         let failedProfiles = PrivateProfileService(), occupiedStore = PrivateProfileMeetingStore()
-        try await occupiedStore.installRecordingObserver(CompositionNoopObserver())
+        let occupiedObserver = CompositionNoopObserver()
+        defer { withExtendedLifetime(occupiedObserver) {} }
+        try await occupiedStore.installRecordingObserver(occupiedObserver)
         let failedAccount = AccountSessionService(configuration: configuration, browser: CompositionBrowser(),
             transport: identity, credentials: CompositionCredentials(), lifecycle: failedProfiles)
         let failedService = PichiCloudPublicationService(account: failedAccount, meetings: occupiedStore, profiles: failedProfiles)
@@ -240,7 +293,13 @@ private actor CompositionHTTP: PichiPublicationHTTPPerforming {
     func shutdown() async { closed = true }
     func isClosed() -> Bool { closed }
 }
-private struct CompositionNoopObserver: PrivateProfileRecordingObserver {
+private final class CompositionNoopObserver: PrivateProfileRecordingObserver {
     func captureAdmitted(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async {}
+    func sourceDidPersist(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async {}
+}
+@MainActor private final class CompositionHeldObserver: PrivateProfileRecordingObserver {
+    let gate: CompositionSourceGate
+    init(gate: CompositionSourceGate) { self.gate = gate }
+    func captureAdmitted(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async { await gate.wait() }
     func sourceDidPersist(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async {}
 }
