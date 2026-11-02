@@ -24,6 +24,25 @@ assert "profile: contextProfile" in source
 for marker in ["for: .primary", "for: slot"]:
     assert "startDictationContextCaptureIfNeeded(" + marker + ")" in source
 
+rewrite_source = (repo / "Sources/Fluid/Services/RewriteModeService.swift").read_text()
+def rewrite_declaration(marker):
+    begin = rewrite_source.index(marker)
+    return rewrite_source[begin:rewrite_source.index("\n    }\n", begin) + len("\n    }")]
+rewrite_fields = "\n".join(line for line in rewrite_source.splitlines() if line.startswith((
+    "    private let privateOperations =", "    private var windowCapture:",
+    "    private var windowCaptureRevision:", "    private var windowCaptureProfile:",
+    "    private var windowCaptureOperationID:", "    private let captureWindow:"
+)))
+rewrite_methods = "\n".join(rewrite_declaration(marker) for marker in (
+    "    init(captureWindow:", "    func startReadingWindow(", "    func windowContextForRewrite(",
+    "    func cancelOutdatedWindowCapture(", "    func stopReadingWindow(",
+    "    func prepareForPrivateProfileTransition("
+))
+assert "await privateOperations.retireAndJoin()" in rewrite_methods
+assert rewrite_methods.index("owner.admit(") < rewrite_methods.index("admittedCapture = self.captureWindow(target)")
+assert "PrivateProfileStorage.isReadable(profile)" in rewrite_methods
+rewrite_harness = "\n@MainActor final class RewriteContextProfileHarness: PrivateProfileTransitionParticipant {\n" + rewrite_fields + "\n" + rewrite_methods + "\n    var isProcessing = false; var isAcceptingRewrite = false\n    func clearState() { self.stopReadingWindow() }\n}\n"
+
 support = '''
 import AppKit
 import Foundation
@@ -51,6 +70,10 @@ nonisolated enum TypingService {
     static let shared = SettingsStore()
     enum DictationShortcutSlot { case primary, secondary }
     var dictationScreenContextEnabled = true
+    var editModeScreenContextRevision: UInt64 = 0
+    var editModeReadsScreen = false {
+        didSet { if oldValue != editModeReadsScreen { editModeScreenContextRevision &+= 1 } }
+    }
     var needsDictationFormattingContext = false
 }
 @MainActor enum DictationProviderRoute {
@@ -101,7 +124,7 @@ nonisolated enum PrivateAIIntegrationService { static func readsDictationContext
 with tempfile.TemporaryDirectory(prefix="pichi-context-profile-", dir=repo / ".build") as name:
     directory = Path(name)
     support_path = directory / "Support.swift"
-    support_path.write_text(support + "\n@MainActor extension ContextProfileViewHarness {\n" + methods + "}\n")
+    support_path.write_text(support + rewrite_harness + "\n@MainActor extension ContextProfileViewHarness {\n" + methods + "}\n")
     files = [support_path,
              repo / "Sources/Fluid/Account/AccountDomain.swift",
              repo / "Sources/Fluid/Account/PrivateProfileStorage.swift",

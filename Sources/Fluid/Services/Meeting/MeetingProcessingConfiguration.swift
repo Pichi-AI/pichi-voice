@@ -29,6 +29,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
         asrModel: String? = nil,
         asrArtifactFingerprint: String? = nil,
         asrArtifactDirectory: URL? = nil,
+        preferredASRModel: SettingsStore.SpeechModel? = nil,
         languageCode: String = Self.defaultLanguageCode,
         vocabularyBoostingEnabled: Bool = false,
         pronunciationMatchingEnabled: Bool = false,
@@ -40,9 +41,9 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
         speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording,
         speakerAttributionPolicy: MeetingSpeakerAttributionPolicy? = .standard
     ) {
-        self.asrModel = asrModel ?? (languageCode == Self.defaultLanguageCode ? Self.defaultASRModel : "parakeet-tdt")
         self.asrArtifactFingerprint = asrArtifactFingerprint
         self.asrArtifactDirectory = asrArtifactDirectory
+        self.asrModel = asrModel ?? MeetingProviderOptions.preferredModel(for: languageCode, selected: preferredASRModel).rawValue
         self.languageCode = languageCode
         self.vocabularyBoostingEnabled = vocabularyBoostingEnabled
         self.pronunciationMatchingEnabled = pronunciationMatchingEnabled
@@ -77,6 +78,41 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
         if let asrArtifactFingerprint { pairs.append(("asrArtifact", asrArtifactFingerprint)) }
         if self.effectiveSpeakerProcessingMode == .streaming { pairs.append(("speakerProcessing", "streaming")) }
         return MeetingConfigFingerprintEncoding.encode(pairs)
+    }
+}
+
+/// Retained attempts preserve language identifiers independently of the current model selection.
+/// Backend admission validates support when a new processing attempt is planned.
+enum MeetingRetranscriptionLanguage {
+    nonisolated static func canonicalCode(_ raw: String) -> String? {
+        let code = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard code == "auto" || code.range(of: "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$", options: .regularExpression) != nil else { return nil }
+        return code
+    }
+
+    static var choices: [VoiceEngineLanguage] {
+        VoiceEngineLanguageCatalog.allLanguages(availableModels: PichiMeetingProviderFactory.retranscriptionModels)
+    }
+
+    static func displayName(for languageCode: String) -> String {
+        self.choices.first { $0.id == languageCode }?.displayName ?? languageCode
+    }
+
+    /// A same-language run replaces nothing and, if it fails, hides the transcript that is already there.
+    nonisolated static func canRetranscribe(selection: String, currentLanguageCode: String) -> Bool {
+        guard let code = canonicalCode(selection) else { return false }
+        return code != currentLanguageCode
+    }
+
+    /// The language an empty meeting should try again. Use the latest attempt that recorded a
+    /// language, pending or failed. A later recovery attempt with no language must not hide that
+    /// request, and an older failure must not replace a newer one.
+    nonisolated static func failedAttemptLanguage(for session: MeetingSession) -> String? {
+        guard session.transcriptSegments.isEmpty,
+              let language = session.processingAttempts.last(where: { $0.languageCode != nil })?.languageCode,
+              canRetranscribe(selection: language, currentLanguageCode: session.languageCode)
+        else { return nil }
+        return Self.canonicalCode(language)
     }
 }
 

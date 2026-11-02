@@ -91,12 +91,27 @@ nonisolated extension MeetingSession {
         }
 
         try self.validateTranscriptStructure()
+        // Historical attempts keep their original request language. Backend capabilities are
+        // checked when processing starts; persistence must also read older installed providers.
         for attempt in self.processingAttempts {
-            if let languageCode = attempt.languageCode,
-               languageCode != self.languageCode
-            {
-                throw MeetingModelValidationError.unsupportedLanguage
+            for code in [attempt.languageCode, attempt.retainedTranscriptLanguageCode].compactMap({ $0 }) {
+                guard MeetingLanguageCode.isValid(code) else {
+                    throw MeetingModelValidationError.unsupportedLanguage
+                }
             }
+        }
+        let completedLanguage = self.processingAttempts.last(where: {
+            $0.stage == .completed && $0.completedAt != nil && $0.errorCode == nil && $0.languageCode != nil
+        })?.languageCode
+        let retainedLanguage = self.processingAttempts.reversed().compactMap(\.retainedTranscriptLanguageCode).first
+        if let transcriptLanguage = completedLanguage ?? retainedLanguage, transcriptLanguage != self.languageCode {
+            // Older snapshots labeled retained text with the pending request. Let recovery
+            // repair that state once instead of making the stored transcript unreadable.
+            let latest = self.processingAttempts.last(where: { $0.languageCode != nil })
+            let legacyPending = [.processing, .interrupted].contains(self.state)
+                && latest?.completedAt == nil && latest?.errorCode == nil
+                && latest?.languageCode == self.languageCode && latest?.retainedTranscriptLanguageCode == nil
+            guard legacyPending else { throw MeetingModelValidationError.unsupportedLanguage }
         }
     }
 

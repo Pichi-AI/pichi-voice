@@ -456,7 +456,7 @@ final class MeetingMenuBarStartTests: XCTestCase {
         XCTAssertThrowsError(try self.configuration(targetPID: 42, availablePID: 43))
     }
 
-    func testNoDetectedOnlineMeetingRejectsStartInsteadOfRecordingOnlyMicrophone() {
+    func testNoDetectedMeetingRequiresAnApplication() {
         XCTAssertThrowsError(try self.configuration(targetPID: nil, availablePID: 43))
     }
 

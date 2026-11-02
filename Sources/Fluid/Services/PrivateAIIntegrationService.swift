@@ -34,6 +34,13 @@ actor PrivateAIIntegrationService {
         // Absence means no screen context was read.
         // swiftlint:disable:next discouraged_optional_collection
         var screenText: [String]? = nil
+        /// The text an Edit Mode instruction applies to, when any was selected.
+        var selectedText: String? = nil
+        // The front window, for Edit Mode models that read it.
+        // swiftlint:disable:next discouraged_optional_collection
+        var windowLines: [EditModeWindowLine]? = nil
+        /// Signs what Edit Mode writes.
+        var userDisplayName: String? = nil
     }
 
     struct EnhancementResult: Sendable, Equatable {
@@ -115,6 +122,14 @@ actor PrivateAIIntegrationService {
 
     nonisolated static var modelDirectoryURL: URL {
         provider.modelDirectoryURL
+    }
+
+    /// The local model Edit Mode runs on. Dictation's model choice never changes it.
+    nonisolated static var editModel: PrivateAIRegisteredModel? {
+        guard PrivateAIProviderFeature.shared.isAvailable else { return nil }
+        return PrivateAIModelRegistry.modelIDs(for: .edit)
+            .compactMap { PrivateAIModelRegistry.model(id: $0) }
+            .first { $0.isEnabled }
     }
 
     nonisolated static func expectedLocalModelURL(for model: PrivateAIRegisteredModel) -> URL {
@@ -392,6 +407,11 @@ actor PrivateAIIntegrationService {
         }
     }
 
+    func prewarmEdit() async {
+        guard !Task.isCancelled, let model = Self.editModel else { return }
+        _ = try? await Self.modelActivity(modelID: model.id) { await Self.provider.prewarmEdit() }
+    }
+
     func unloadCachedRuntime(reason: String = "manual") async {
         let token: UUID
         do {
@@ -452,7 +472,7 @@ actor PrivateAIIntegrationService {
         runtime: RuntimeConfiguration,
         context: AppContext
     ) async throws -> EnhancementResult {
-        try await Self.modelActivity {
+        try await Self.modelActivity(modelID: runtime.model) {
             try await Self.provider.rewrite(
                 inputText,
                 systemPrompt: systemPrompt,

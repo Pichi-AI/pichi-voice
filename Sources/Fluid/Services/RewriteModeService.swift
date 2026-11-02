@@ -6,7 +6,6 @@ import Foundation
 @MainActor
 final class RewriteModeService: ObservableObject, PrivateProfileTransitionParticipant {
     private let privateOperations = PrivateProfileOperationOwner()
-    init() { PrivateProfileService.shared.register(self) }
     @Published var originalText: String = ""
     @Published var selectedContextText: String = ""
     @Published var rewrittenText: String = ""
@@ -14,8 +13,23 @@ final class RewriteModeService: ObservableObject, PrivateProfileTransitionPartic
     @Published var isProcessing = false
     @Published private(set) var isAcceptingRewrite = false
     @Published var conversationHistory: [Message] = []
+    /// Why the last request produced nothing, for the overlay to show.
+    @Published private(set) var lastErrorMessage: String?
     @Published var isWriteMode: Bool = false // true = no text selected (write/improve), false = text selected (rewrite)
     private var promptAppBundleID: String?
+    /// The front window as read when the shortcut was pressed.
+    private var windowCapture: DictationContextCapture?
+    private var windowCaptureRevision: UInt64?
+    private var windowCaptureProfile: PrivateProfileSnapshot?
+    private var windowCaptureOperationID: UUID?
+    private let captureWindow: @MainActor (TypingService.RecordingTargetContext) -> DictationContextCapture?
+
+    init(captureWindow: @escaping @MainActor (TypingService.RecordingTargetContext) -> DictationContextCapture? = {
+        DictationContextCapture.startForEditMode(target: $0)
+    }) {
+        self.captureWindow = captureWindow
+        PrivateProfileService.shared.register(self)
+    }
 
     private let textSelectionService = TextSelectionService.shared
     private let typingService = TypingService()
@@ -105,6 +119,7 @@ final class RewriteModeService: ObservableObject, PrivateProfileTransitionPartic
         defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
 
         let startTime = Date()
+        self.lastErrorMessage = nil
         AnalyticsService.shared.recordUsage(
             mode: .edit,
             aiModel: SettingsStore.shared.analyticsAIModelDescriptor(for: .edit)
@@ -151,7 +166,7 @@ final class RewriteModeService: ObservableObject, PrivateProfileTransitionPartic
         self.isProcessing = true
 
         do {
-            let response = try await callLLM(messages: conversationHistory, isWriteMode: isWriteMode)
+            let response = try await callLLM(messages: conversationHistory, isWriteMode: isWriteMode, instruction: prompt)
             guard privateOperations.isCurrent, !Task.isCancelled else { return }
             self.conversationHistory.append(Message(role: .assistant, content: response))
             self.rewrittenText = response
@@ -163,6 +178,7 @@ final class RewriteModeService: ObservableObject, PrivateProfileTransitionPartic
         } catch {
             guard privateOperations.isCurrent, !Task.isCancelled else { return }
             self.conversationHistory.append(Message(role: .assistant, content: "Error: \(error.localizedDescription)"))
+            self.lastErrorMessage = error.localizedDescription
             self.isProcessing = false
             self.appendDiagnosticLog(
                 "processRewriteRequest failure | writeMode=\(self.isWriteMode) | error=\(error.localizedDescription)"
@@ -243,6 +259,65 @@ final class RewriteModeService: ObservableObject, PrivateProfileTransitionPartic
         self.isWriteMode = false
         self.thinkingBuffer = []
         self.promptAppBundleID = nil
+        self.lastErrorMessage = nil
+        self.stopReadingWindow()
+    }
+
+    /// Starts reading the window while it is still in front, so the answer can use
+    /// what the user is looking at. Replaces the reading of any earlier press.
+    func startReadingWindow(target: TypingService.RecordingTargetContext) {
+        self.stopReadingWindow()
+        let profile = PrivateProfileStorage.current
+        let owner = self.privateOperations
+        guard owner.isCurrent, PrivateProfileStorage.isReadable(profile), SettingsStore.shared.editModeReadsScreen else { return }
+        var admittedCapture: DictationContextCapture?
+        guard let operationID = owner.admit(
+            cancel: { admittedCapture?.cancel() },
+            join: { await admittedCapture?.cancelAndWait() }
+        ) else { return }
+        admittedCapture = self.captureWindow(target)
+        guard let capture = admittedCapture else { owner.complete(operationID); return }
+        self.windowCaptureRevision = SettingsStore.shared.editModeScreenContextRevision
+        self.windowCaptureProfile = profile
+        self.windowCaptureOperationID = operationID
+        self.windowCapture = capture
+    }
+
+    func windowContextForRewrite() async -> DictationTypingContext? {
+        self.cancelOutdatedWindowCapture()
+        guard self.privateOperations.isCurrent,
+              let capture = self.windowCapture, let revision = self.windowCaptureRevision,
+              let profile = self.windowCaptureProfile, PrivateProfileStorage.isReadable(profile) else { return nil }
+        let context = await capture.result(timeout: .seconds(2))
+        // The switch, target or private profile may change while the reader is pending.
+        guard !Task.isCancelled, self.privateOperations.isCurrent, PrivateProfileStorage.isReadable(profile),
+              SettingsStore.shared.editModeReadsScreen,
+              revision == SettingsStore.shared.editModeScreenContextRevision,
+              self.windowCapture === capture
+        else { return nil }
+        return context
+    }
+
+    func cancelOutdatedWindowCapture() {
+        if !SettingsStore.shared.editModeReadsScreen || self.windowCaptureRevision != SettingsStore.shared.editModeScreenContextRevision {
+            self.stopReadingWindow()
+        }
+    }
+
+    func stopReadingWindow() {
+        guard let capture = self.windowCapture else { return }
+        let operationID = self.windowCaptureOperationID
+        let owner = self.privateOperations
+        self.windowCapture = nil
+        self.windowCaptureRevision = nil
+        self.windowCaptureProfile = nil
+        self.windowCaptureOperationID = nil
+        capture.cancel()
+        // Retirement stays registered until the actual AX/OCR reader has returned.
+        Task { @MainActor in
+            await capture.cancelAndWait()
+            if let operationID { owner.complete(operationID) }
+        }
     }
 
     func prepareForPrivateProfileTransition() async throws {
@@ -257,7 +332,7 @@ final class RewriteModeService: ObservableObject, PrivateProfileTransitionPartic
 
     // MARK: - LLM Integration
 
-    private func callLLM(messages: [Message], isWriteMode: Bool) async throws -> String {
+    private func callLLM(messages: [Message], isWriteMode: Bool, instruction: String) async throws -> String {
         let settings = SettingsStore.shared
         let promptMode: SettingsStore.PromptMode = .edit
         let appBundleID = self.promptAppBundleID
@@ -328,18 +403,18 @@ final class RewriteModeService: ObservableObject, PrivateProfileTransitionPartic
         var runtimeModel = model
         var localModelPath = PrivateAIIntegrationService.configuredLocalModelPath
         if usesPrivateAIProvider {
-            guard let verifiedModelID = PrivateAIProviderPromptFormat.verifiedModelID(for: model, settings: settings),
-                  let verifiedModel = PrivateAIModelRegistry.model(id: verifiedModelID),
-                  let verifiedModelPath = PrivateAIIntegrationService.localModelPath(for: verifiedModel)
+            let route = EditModeRoute.current(providerID: providerID)
+            guard case let .local(editModel) = route,
+                  let editModelPath = PrivateAIIntegrationService.localModelPath(for: editModel)
             else {
                 throw NSError(
                     domain: "RewriteMode",
                     code: -5,
-                    userInfo: [NSLocalizedDescriptionKey: "Selected Fluid-1 model is not installed and verified"]
+                    userInfo: [NSLocalizedDescriptionKey: route.failureMessage ?? EditModeRoute.modelMissing.failureMessage ?? ""]
                 )
             }
-            runtimeModel = verifiedModelID
-            localModelPath = verifiedModelPath
+            runtimeModel = editModel.id
+            localModelPath = editModelPath
         }
         self.appendDiagnosticLog(
             "LLM config | writeMode=\(isWriteMode) | linkedToGlobal=\(settings.rewriteModeLinkedToGlobal) | " +
@@ -357,13 +432,18 @@ final class RewriteModeService: ObservableObject, PrivateProfileTransitionPartic
             baseURL = ""
         }
 
-        if usesPrivateAIProvider || PrivateAIIntegrationService.shouldHandleDictation(model: model) {
-            let inputText = messages.map {
-                let role = $0.role == .user ? "user" : "assistant"
-                return "[\(role)]\n\($0.content)"
-            }.joined(separator: "\n\n")
+        if usesPrivateAIProvider {
+            // A follow-up applies to the last result, not to the original selection.
+            let textToEdit = self.rewrittenText.isEmpty ? self.selectedContextText : self.rewrittenText
+            let window = await self.windowContextForRewrite()
+            guard self.privateOperations.isCurrent, !Task.isCancelled else { throw CancellationError() }
+            // Counts only: what was read is never logged.
+            DebugLogger.shared.info(
+                "Edit Mode read the window | lines=\(window?.windowLines?.count ?? 0) | hasSelection=\(!textToEdit.isEmpty)",
+                source: "RewriteModeService"
+            )
             let response = try await PrivateAIIntegrationService.shared.rewrite(
-                inputText,
+                instruction,
                 systemPrompt: systemPrompt,
                 runtime: PrivateAIIntegrationService.RuntimeConfiguration(
                     selectedProviderID: providerID,
@@ -380,7 +460,10 @@ final class RewriteModeService: ObservableObject, PrivateProfileTransitionPartic
                     appName: "",
                     bundleID: appBundleID ?? "",
                     windowTitle: "",
-                    appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+                    appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+                    selectedText: textToEdit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : textToEdit,
+                    windowLines: window?.windowLines,
+                    userDisplayName: NSFullUserName()
                 )
             )
             return response.outputText

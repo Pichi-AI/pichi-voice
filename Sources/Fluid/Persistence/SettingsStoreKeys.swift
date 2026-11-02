@@ -43,6 +43,7 @@ extension SettingsStore {
         static let suppressedMicrophoneUIDs = "SuppressedMicrophoneUIDs"
         static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
         static let meetingRecordingDefaults = "MeetingRecordingDefaults"
+        static let meetingRecentApplication = "MeetingRecentApplication"
         static let meetingAudioRetentionPolicy = "MeetingAudioRetentionPolicy"
         static let meetingTranscriptionBackendID = "MeetingTranscriptionBackendID"
         static let fluidMeetEnabled = "FluidMeetEnabled"
@@ -120,6 +121,7 @@ extension SettingsStore {
         static let rewriteModeSelectedModel = "RewriteModeSelectedModel"
         static let rewriteModeSelectedProviderID = "RewriteModeSelectedProviderID"
         static let rewriteModeLinkedToGlobal = "RewriteModeLinkedToGlobal"
+        static let editModeReadsScreen = "EditModeReadsScreen"
 
         // Model Reasoning Config Keys
         static let modelReasoningConfigs = "ModelReasoningConfigs"

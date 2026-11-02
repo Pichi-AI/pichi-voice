@@ -5,6 +5,64 @@ import XCTest
 
 @MainActor
 final class PasteDeliveryCoordinatorTests: XCTestCase {
+    func testUnreadTimeoutKeepsTransientRecoveryUntilProfileRetirement() async throws {
+        let pasteboard = FakePasteboardManager(text: "original")
+        pasteboard.observesReads = true
+        let coordinator = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: FakePasteCommandPoster(), readTimeoutNanoseconds: .max)
+        _ = await coordinator.deliver("private recovery", preserveTranscriptOnClipboard: false)
+        coordinator.runPendingSettlementForTesting(readTimedOut: true)
+        XCTAssertEqual(pasteboard.text, "private recovery")
+        XCTAssertTrue(pasteboard.isTemporary)
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+        XCTAssertEqual(pasteboard.temporaryWriteCount, 1)
+        try await coordinator.prepareForPrivateProfileTransition()
+        XCTAssertEqual(pasteboard.text, "original")
+        XCTAssertEqual(pasteboard.restoreCount, 1)
+        try await coordinator.prepareForPrivateProfileTransition()
+        XCTAssertEqual(pasteboard.restoreCount, 1)
+    }
+
+    func testUnreadRecoveryNeverOverwritesAForeignClipboardRevision() async throws {
+        let pasteboard = FakePasteboardManager(text: "original")
+        pasteboard.observesReads = true
+        let coordinator = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: FakePasteCommandPoster(), readTimeoutNanoseconds: .max)
+        _ = await coordinator.deliver("private recovery", preserveTranscriptOnClipboard: false)
+        coordinator.runPendingSettlementForTesting(readTimedOut: true)
+        pasteboard.simulateExternalCopy("user copy")
+        try await coordinator.prepareForPrivateProfileTransition()
+        XCTAssertEqual(pasteboard.text, "user copy")
+        XCTAssertEqual(pasteboard.restoreCount, 0)
+    }
+
+    func testNewDeliveryRetiresRecoveryBeforeCapturingItsOriginalClipboard() async {
+        let pasteboard = FakePasteboardManager(text: "original")
+        pasteboard.observesReads = true
+        let coordinator = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: FakePasteCommandPoster(), readTimeoutNanoseconds: .max)
+        _ = await coordinator.deliver("private recovery", preserveTranscriptOnClipboard: false)
+        let oldReceipt = pasteboard.readHandler
+        coordinator.runPendingSettlementForTesting(readTimedOut: true)
+        _ = await coordinator.deliver("new output", preserveTranscriptOnClipboard: false)
+        oldReceipt?(ProcessInfo.processInfo.systemUptime)
+        XCTAssertEqual(pasteboard.text, "new output")
+        XCTAssertEqual(pasteboard.restoreCount, 1)
+        coordinator.runPendingSettlementForTesting()
+        XCTAssertEqual(pasteboard.text, "original")
+        XCTAssertEqual(pasteboard.restoreCount, 2)
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+    }
+
+    func testCopyPreferenceStillPromotesAnUnreadTimeoutIntentionally() async {
+        let pasteboard = FakePasteboardManager(text: "original")
+        pasteboard.observesReads = true
+        let coordinator = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: FakePasteCommandPoster(), readTimeoutNanoseconds: .max)
+        _ = await coordinator.deliver("intentional copy", preserveTranscriptOnClipboard: true)
+        coordinator.runPendingSettlementForTesting(readTimedOut: true)
+        XCTAssertEqual(pasteboard.text, "intentional copy")
+        XCTAssertFalse(pasteboard.isTemporary)
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 1)
+        XCTAssertEqual(pasteboard.restoreCount, 0)
+    }
+
     func testEachRecoveryFailureGetsANewIdentityEvenForIdenticalText() {
         let state = NotchContentState.shared
         defer { state.clearTextDeliveryFailure() }
@@ -132,13 +190,17 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
         XCTAssertEqual(pasteboard.restoreCount, 1)
     }
 
-    func testPasteCheckAlertsDefaultOffAndRoundTripThroughBackup() {
+    func testPasteCheckAlertsDefaultOnAndPreserveExplicitOffThroughBackup() {
         let settings = SettingsStore.shared
         let original = settings.showPasteCheckAlerts
         defer { settings.showPasteCheckAlerts = original }
 
         UserDefaults.standard.removeObject(forKey: "ShowPasteCheckAlerts")
+        XCTAssertTrue(settings.showPasteCheckAlerts)
+
+        settings.showPasteCheckAlerts = false
         XCTAssertFalse(settings.showPasteCheckAlerts)
+        XCTAssertEqual(settings.makeBackupPayload().showPasteCheckAlerts, false)
 
         settings.showPasteCheckAlerts = true
         XCTAssertTrue(settings.showPasteCheckAlerts)
@@ -540,10 +602,9 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
         XCTAssertEqual(state.textDeliveryFailureTranscript, "retained output")
     }
 
-    func testPasteNotLandedVerdictWaitsAtLeastOneAndAHalfSeconds() {
-        // A slow app that applies Cmd+V late must never draw a failure card.
-        XCTAssertGreaterThanOrEqual(PasteVerifier.totalDecisionDelay, 1.5)
-        XCTAssertEqual(PasteVerifier.finalCheckDelay, 1.0)
+    func testPasteNotLandedVerdictGivesLateAppsTwoSeconds() {
+        XCTAssertEqual(PasteVerifier.totalDecisionDelay, 2)
+        XCTAssertEqual(PasteVerifier.finalCheckDelay, 1.5)
     }
 
     func testAccessibilityMessagingTimeoutIsBounded() {
@@ -630,6 +691,8 @@ private final class FakePasteboardManager: PasteboardManaging {
     private(set) var isTemporary = false
     var snapshotSucceeds: Bool
     var onTemporaryWrite: (() -> Void)?
+    var observesReads = false
+    private(set) var readHandler: (@MainActor @Sendable (TimeInterval) -> Void)?
     private let temporaryWriteSucceeds: Bool
     private var sessionID: String?
 
@@ -697,6 +760,12 @@ private final class FakePasteboardManager: PasteboardManaging {
     ) -> Bool {
         guard self.isOwned(sessionID: sessionID, expectedText: expectedText) else { return false }
         return self.restore(snapshot)
+    }
+
+    func observeTemporaryTextRead(sessionID: String, onRead: @escaping @MainActor @Sendable (TimeInterval) -> Void) -> Bool {
+        guard self.observesReads, self.sessionID == sessionID else { return false }
+        self.readHandler = onRead
+        return true
     }
 
     func simulateExternalCopy(_ text: String) {

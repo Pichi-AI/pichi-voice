@@ -715,6 +715,93 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         XCTAssertEqual(settings.meetingTranscriptionBackendID, .productionDefault)
     }
 
+    func testFirstCompositeProcessingRetainsRecordedModelInsteadOfReadingPreference() async throws {
+        var captured: MeetingBackendRequest?
+        let marker = CocoaError(.userCancelled)
+        let pipeline = MeetingProcessingPipeline(
+            asrServiceProvider: { XCTFail("Selection test cannot prepare ASR"); return ASRService() },
+            managesModelResidency: false,
+            chunkObserver: UnreadableFixtureObserver(),
+            meetingRuntimeFactory: { request in captured = request; throw marker },
+            preferredASRModelProvider: { XCTFail("First processing must retain the recording model"); return .parakeetTDTv2 }
+        )
+        var session = self.makeSession(languageCode: "de")
+        session.speakerLabelsEnabled = false
+        session.recordingBackendID = MeetingBackendID.parakeetNemotron.rawValue
+        session.recordingASRModel = SettingsStore.SpeechModel.fluidParakeetPro.rawValue
+        session.recordingASRArtifactFingerprint = "synthetic-pro-recording"
+        do {
+            _ = try await pipeline.process(session: session, sessionDirectory: FileManager.default.temporaryDirectory, progress: { _ in })
+            XCTFail("Expected marker before runtime preparation")
+        } catch { XCTAssertEqual(error as? CocoaError, marker) }
+        XCTAssertEqual(captured?.configuration.asrModel, "fluid-parakeet-pro")
+        XCTAssertEqual(captured?.configuration.asrArtifactFingerprint, "synthetic-pro-recording")
+    }
+
+    func testIncompatibleRecordedCompositeModelFailsBeforeDependencyPreparation() async throws {
+        let pipeline = MeetingProcessingPipeline(
+            asrServiceProvider: { XCTFail("Preflight cannot prepare ASR"); return ASRService() },
+            managesModelResidency: false,
+            meetingRuntimeFactory: { _ in XCTFail("Preflight cannot construct runtime"); throw CocoaError(.userCancelled) },
+            prepareDiarizationModel: { XCTFail("Incompatible pinned model must fail before downloads") },
+            preferredASRModelProvider: { XCTFail("First processing cannot change the recording model"); return .fluidParakeetPro }
+        )
+        var session = self.makeSession(languageCode: "de")
+        session.recordingBackendID = MeetingBackendID.parakeetNemotron.rawValue
+        session.recordingASRModel = SettingsStore.SpeechModel.parakeetTDTv2.rawValue
+        do {
+            _ = try await pipeline.process(session: session, sessionDirectory: FileManager.default.temporaryDirectory, progress: { _ in })
+            XCTFail("Expected incompatible recorded model rejection")
+        } catch { XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedLanguageCode("de")) }
+    }
+
+    func testCustomBackendDoesNotReadTheDictationModelPreference() async throws {
+        let backend = FixtureMeetingBackend(descriptor: self.makeFixtureDescriptor()) { plan in
+            .legacyCompatibility(self.makeResult(attemptID: plan.attemptID, text: "Fixture"))
+        }
+        let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: Self.fixtureBackendID)
+        registry.register(Self.fixtureBackendID) { _ in backend }
+        let pipeline = MeetingProcessingPipeline(
+            asrServiceProvider: { XCTFail("Fixture must not load models"); return ASRService() },
+            managesModelResidency: false,
+            serializationGate: MeetingProcessingSerializationGate(),
+            backendRegistry: registry,
+            preferredASRModelProvider: { XCTFail("Other backends keep their own model policy"); return .fluidParakeetPro }
+        )
+        _ = try await pipeline.process(
+            session: self.makeSession(),
+            sessionDirectory: FileManager.default.temporaryDirectory,
+            progress: { _ in }
+        )
+        XCTAssertEqual(backend.lastPlan?.request.configuration, MeetingFinalProcessingConfiguration())
+    }
+
+    func testPreferredASRModelIsFrozenBeforeDiarizationPreparation() async throws {
+        var selected = SettingsStore.SpeechModel.fluidParakeetPro
+        var reads = 0
+        let backend = FixtureMeetingBackend(descriptor: self.makeFixtureDescriptor(id: .parakeetNemotron)) { plan in
+            .legacyCompatibility(self.makeResult(attemptID: plan.attemptID, text: "Fixture"))
+        }
+        let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: .parakeetNemotron)
+        registry.register(.parakeetNemotron) { _ in backend }
+        let pipeline = MeetingProcessingPipeline(
+            asrServiceProvider: { XCTFail("Fixture selection must not load models"); return ASRService() },
+            managesModelResidency: false,
+            serializationGate: MeetingProcessingSerializationGate(),
+            backendRegistry: registry,
+            prepareDiarizationModel: { await Task.yield(); selected = .parakeetTDTv2 },
+            preferredASRModelProvider: { reads += 1; return selected }
+        )
+        _ = try await pipeline.process(
+            session: self.makeSession(),
+            sessionDirectory: FileManager.default.temporaryDirectory,
+            progress: { _ in }
+        )
+        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(selected, .parakeetTDTv2)
+        XCTAssertEqual(backend.lastPlan?.request.configuration.asrModel, "fluid-parakeet-pro")
+    }
+
     func testSavedLegacyBackendUsesProductionForFrenchWithoutChangingPreference() async {
         let settings = SettingsStore.shared
         let defaults = UserDefaults.standard

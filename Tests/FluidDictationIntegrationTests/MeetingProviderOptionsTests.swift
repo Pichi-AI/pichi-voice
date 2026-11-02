@@ -15,11 +15,93 @@ final class MeetingProviderOptionsTests: XCTestCase {
         XCTAssertFalse(options.experimentalUnifiedFinalEnabled)
     }
 
+    func testRetranscriptionLanguagePreservesNormalizedIdentifiersIndependentlyOfModelSupport() {
+        XCTAssertEqual(MeetingRetranscriptionLanguage.canonicalCode(" de "), "de")
+        XCTAssertEqual(MeetingRetranscriptionLanguage.canonicalCode("en"), "en")
+        XCTAssertEqual(MeetingRetranscriptionLanguage.canonicalCode("ru"), "ru")
+        XCTAssertEqual(MeetingRetranscriptionLanguage.canonicalCode("zh"), "zh")
+        XCTAssertEqual(MeetingRetranscriptionLanguage.canonicalCode(" DE "), "de")
+        XCTAssertEqual(MeetingRetranscriptionLanguage.canonicalCode("auto"), "auto")
+        XCTAssertEqual(MeetingRetranscriptionLanguage.canonicalCode("pt-BR"), "pt-br")
+        XCTAssertNil(MeetingRetranscriptionLanguage.canonicalCode("en_US"))
+        XCTAssertNil(MeetingRetranscriptionLanguage.canonicalCode("invalid language"))
+        XCTAssertNil(MeetingRetranscriptionLanguage.canonicalCode(" "))
+        XCTAssertEqual(MeetingRetranscriptionLanguage.displayName(for: "de"), "German")
+        XCTAssertFalse(MeetingRetranscriptionLanguage.canRetranscribe(selection: "en", currentLanguageCode: "en"))
+        XCTAssertTrue(MeetingRetranscriptionLanguage.canRetranscribe(selection: "nl", currentLanguageCode: "en"))
+        XCTAssertEqual(
+            MeetingFinalProcessingConfiguration(languageCode: "de").asrModel,
+            "parakeet-tdt"
+        )
+    }
+
+    func testRetranscriptionChoicesKeepRegisteredProviderCapabilityAdmission() {
+        XCTAssertTrue(MeetingRetranscriptionLanguage.choices.contains { $0.id == "zh" })
+        XCTAssertTrue(PichiMeetingProviderFactory.registeredLanguageCodes(for: "whisper-tiny")?.contains("zh") == true)
+        XCTAssertFalse(PichiMeetingProviderFactory.registeredLanguageCodes(for: "gigaam-v3-eou")?.contains("zh") == true)
+        for model in ["gigaam-v3-eou", "parakeet-tdt-v2", "parakeet-tdt", "fluid-parakeet-pro"] {
+            XCTAssertThrowsError(try MeetingProviderOptions.resolve(
+                MeetingFinalProcessingConfiguration(asrModel: model, languageCode: "zh"))) { error in
+                XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedLanguageCode("zh"))
+            }
+        }
+    }
+
     func testP1DefaultASRModelMatchesSpeechModelRawValue() {
         XCTAssertEqual(
             MeetingFinalProcessingConfiguration.defaultASRModel,
             SettingsStore.SpeechModel.parakeetTDTv2.rawValue
         )
+    }
+
+    func testPreferredMeetingModelRespectsLanguageAndSupportedModels() throws {
+        let cases: [(SettingsStore.SpeechModel, String, SettingsStore.SpeechModel)] = [
+            (.fluidParakeetPro, "en", .fluidParakeetPro),
+            (.fluidParakeetPro, "de", .fluidParakeetPro),
+            (.parakeetTDT, "en", .parakeetTDT),
+            (.parakeetTDT, "nl", .parakeetTDT),
+            (.parakeetTDTv2, "en", .parakeetTDTv2),
+            (.parakeetTDTv2, "fr", .parakeetTDT),
+            (.whisperTiny, "en", .parakeetTDTv2),
+            (.whisperTiny, "de", .parakeetTDT),
+            (.fluidParakeetMini, "en", .parakeetTDTv2),
+        ]
+        for (selected, language, expected) in cases {
+            let configuration = MeetingFinalProcessingConfiguration(preferredASRModel: selected, languageCode: language)
+            XCTAssertEqual(try MeetingProviderOptions.resolve(configuration).model, expected)
+            XCTAssertEqual(configuration.languageCode, language)
+        }
+    }
+
+    func testExplicitMeetingModelRemainsPinnedOverPreference() throws {
+        let configuration = MeetingFinalProcessingConfiguration(
+            asrModel: "parakeet-tdt-v2",
+            preferredASRModel: .fluidParakeetPro
+        )
+        XCTAssertEqual(try MeetingProviderOptions.resolve(configuration).model, .parakeetTDTv2)
+    }
+
+    func testProCanBeExplicitlyUsedForEveryV3MeetingLanguage() throws {
+        for language in VoiceEngineLanguageCatalog.parakeetV3LanguageIDs {
+            let configuration = MeetingFinalProcessingConfiguration(asrModel: "fluid-parakeet-pro", languageCode: language)
+            XCTAssertEqual(try MeetingProviderOptions.resolve(configuration).model, .fluidParakeetPro)
+        }
+    }
+
+    @MainActor
+    func testProMeetingProviderPinsChoiceWithoutChangingDictationOrEnhancements() throws {
+        let selected = SettingsStore.shared.selectedSpeechModel
+        let configuration = MeetingFinalProcessingConfiguration(preferredASRModel: .fluidParakeetPro)
+        let provider = try FluidAudioProvider(meetingConfiguration: configuration)
+        #if arch(arm64)
+        XCTAssertEqual(provider.modelOverride, .fluidParakeetPro)
+        #endif
+        XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selected)
+        XCTAssertFalse(provider.isWordBoostingActive)
+        XCTAssertEqual(provider.boostedVocabularyTermsCount, 0)
+        XCTAssertFalse(try MeetingProviderOptions.resolve(configuration).pronunciationMatchingEnabled)
+        XCTAssertFalse(try MeetingProviderOptions.resolve(configuration).customDictionaryRewritingEnabled)
+        XCTAssertNotEqual(configuration.identityFingerprint, MeetingFinalProcessingConfiguration().identityFingerprint)
     }
 
     func testResolveRejectsUnsupportedModelsWithoutRelabeling() {

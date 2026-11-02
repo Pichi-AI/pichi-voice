@@ -1362,6 +1362,29 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(Set(plan.chunkIDsByTrackID.keys), [fixture.micTrack.id, fixture.appTrack.id])
     }
 
+    func testSelectedProReachesTheFrozenRuntimeForEnglishAndGerman() async throws {
+        for (language, model) in [("en", "fluid-parakeet-pro"), ("de", "fluid-parakeet-pro")] {
+            let fixture = self.makeTwoEpochFixture()
+            var session = fixture.session
+            session.languageCode = language
+            let runtime = FakeRuntime()
+            let backend = self.makeBackend(runtime: runtime)
+            let configuration = MeetingFinalProcessingConfiguration(preferredASRModel: .fluidParakeetPro, languageCode: language)
+            let request = try self.makeRequest(session: session, directory: self.makeTempSessionDirectory(), configuration: configuration)
+            let plan = try backend.plan(request)
+            let manifest = try self.makeManifest(plan: plan, observations: fixture.observations)
+            runtime.asrSession.responses = (0..<3).map { _ in
+                .init(text: "Hello", words: [.init(text: "Hello", start: 0.2, end: 0.4)])
+            }
+            let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+            guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+            XCTAssertEqual(configuration.asrModel, model)
+            XCTAssertEqual(runtime.asrConfigurations, [configuration])
+            XCTAssertEqual(bundle.evidence.units.map(\.text), ["Hello", "Hello", "Hello"])
+            XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.status == .processed })
+        }
+    }
+
     func testMultilingualPlanAndExecutionKeepV3LanguageAndWordEvidence() async throws {
         let fixture = self.makeTwoEpochFixture()
         var session = fixture.session
@@ -1515,7 +1538,8 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             meetingRuntimeFactory: { request in
                 spy.requests.append(request)
                 return runtime
-            }
+            },
+            preferredASRModelProvider: { .parakeetTDTv2 }
         )
         runtime.asrSession.responses = [
             .init(text: "", words: []), .init(text: "", words: []), .init(text: "", words: []),
@@ -2032,6 +2056,71 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(assembled.speakers.filter { $0.trackKind == .microphone }.count, 1)
         XCTAssertEqual(assembled.speakers.filter { $0.trackKind == .applicationAudio }.count, 1)
         XCTAssertEqual(assembled.sidecar.speakerIdentityLinks.count, 1)
+    }
+
+    func testASRPaddingPreservesInputAndDoesNotInventEmptyAudio() {
+        let short: [Float] = [0.25, -0.5, 0.75]
+        let padded = MeetingParakeetNemotronBackend.asrInput(short)
+        XCTAssertEqual(Array(padded.prefix(short.count)), short)
+        XCTAssertEqual(padded.count, 16_000)
+        XCTAssertTrue(padded.dropFirst(short.count).allSatisfy { $0 == 0 })
+        XCTAssertEqual(short, [0.25, -0.5, 0.75])
+        XCTAssertTrue(MeetingParakeetNemotronBackend.asrInput([]).isEmpty)
+        for count in [16_000, 16_001] {
+            let input = [Float](repeating: 0.25, count: count)
+            XCTAssertEqual(MeetingParakeetNemotronBackend.asrInput(input), input)
+        }
+    }
+
+    func testWordsEntirelyInPaddingDoNotReturnAsUntimedText() async throws {
+        let duration = 0.05
+        let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 100 + duration)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        let session = self.makeSession(mode: .inRoom, tracks: [track])
+        let runtime = FakeRuntime()
+        runtime.asrSession.minimumSampleCount = 16_000
+        runtime.asrSession.responses = [
+            .init(text: "phantom word", words: [
+                ASRWordTiming(text: "phantom", start: 0.6, end: 0.7),
+                ASRWordTiming(text: "word", start: 0.7, end: 0.8),
+            ]),
+        ]
+        let backend = self.makeBackend(runtime: runtime, materializer: FakeMaterializer())
+        let plan = try backend.plan(self.makeRequest(session: session, directory: self.makeTempSessionDirectory()))
+        let manifest = try self.makeManifest(plan: plan, observations: [
+            MeetingAnalysisChunkKey(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: duration),
+        ])
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+        XCTAssertEqual(runtime.asrSession.callSampleCounts, [16_000])
+        XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.status == .processed })
+        XCTAssertTrue(bundle.evidence.units.isEmpty, "Rejected timed words must never be reintroduced as a whole-clip utterance")
+    }
+
+    func testSubsecondEpochPadsInferenceWithoutExtendingTranscriptCoverage() async throws {
+        let duration = 0.05
+        let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 100 + duration)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        let session = self.makeSession(mode: .inRoom, tracks: [track])
+        let runtime = FakeRuntime()
+        runtime.asrSession.minimumSampleCount = 16_000
+        runtime.asrSession.responses = [
+            .init(text: "short padding", words: [
+                ASRWordTiming(text: "short", start: 0.005, end: 0.035),
+                ASRWordTiming(text: "padding", start: 0.6, end: 0.7),
+            ]),
+        ]
+        let backend = self.makeBackend(runtime: runtime, materializer: FakeMaterializer())
+        let plan = try backend.plan(self.makeRequest(session: session, directory: self.makeTempSessionDirectory()))
+        let manifest = try self.makeManifest(plan: plan, observations: [
+            MeetingAnalysisChunkKey(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: duration),
+        ])
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+        XCTAssertEqual(runtime.asrSession.callSampleCounts, [16_000])
+        XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.status == .processed })
+        XCTAssertEqual(bundle.evidence.units.map(\.text), ["short"])
+        XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.analysisEnd <= 0.050_001 })
     }
 
     func testPCMFirstEpochMaterializesOnceForBothModelPhases() async throws {
@@ -2769,6 +2858,7 @@ private final nonisolated class FakeASRSession: MeetingParakeetASRSession, @unch
 
     var responses: [Response] = []
     var failingCallIndices: Set<Int> = []
+    var minimumSampleCount = 0
     var cancellationCallIndices: Set<Int> = []
     var latch: Latch?
     var onCall: (() -> Void)?
@@ -2782,7 +2872,7 @@ private final nonisolated class FakeASRSession: MeetingParakeetASRSession, @unch
         self.onCall?()
         if let latch { await latch.wait() }
         if self.cancellationCallIndices.contains(index) { throw CancellationError() }
-        if self.failingCallIndices.contains(index) {
+        if self.failingCallIndices.contains(index) || samples.count < self.minimumSampleCount {
             throw MeetingEpochMaterializationError.unreadable(spanID: "fake-asr-failure")
         }
         let response = index < self.responses.count ? self.responses[index] : Response(text: "", words: [])

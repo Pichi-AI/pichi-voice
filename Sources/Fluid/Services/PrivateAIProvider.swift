@@ -296,6 +296,8 @@ protocol PrivateAIIntegrationProviding: Sendable {
     /// Providers with a native tokenizer or chunking own their admission budget.
     /// The default retains the conservative single-request budget for bridge runtimes.
     nonisolated func dictationOutputTokenLimit(for inputText: String, contextTokenLimit: Int) throws -> Int
+    /// Loads the Edit Mode model ahead of its first request.
+    func prewarmEdit() async
     nonisolated func enhanceDictation(
         _ inputText: String,
         runtime: PrivateAIIntegrationService.RuntimeConfiguration,
@@ -396,6 +398,8 @@ extension PrivateAIIntegrationProviding {
     func shutdownForTermination() async {
         await self.unloadCachedRuntime(reason: "termination")
     }
+
+    func prewarmEdit() async {}
 
     nonisolated func enhanceDictation(
         _ inputText: String,

@@ -44,6 +44,51 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertEqual(defaults.object(forKey: "MeetingRecordingDefaults") as? Data, recordingDefaults)
     }
 
+    func testEditScreenContextRequiresOptInAndInvalidatesEarlierCaptures() {
+        let suite = "pichi-test-edit-screen-context-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults, initializeDesktop: false)
+        settings.dictationScreenContextEnabled = true
+
+        XCTAssertFalse(settings.editModeReadsScreen)
+        let initialRevision = settings.editModeScreenContextRevision
+        settings.editModeReadsScreen = true
+        let firstCaptureRevision = settings.editModeScreenContextRevision
+        XCTAssertEqual(firstCaptureRevision, initialRevision + 1)
+        settings.editModeReadsScreen = true
+        XCTAssertEqual(settings.editModeScreenContextRevision, firstCaptureRevision)
+        settings.editModeReadsScreen = false
+        settings.editModeReadsScreen = true
+        XCTAssertEqual(settings.editModeScreenContextRevision, firstCaptureRevision + 2)
+        XCTAssertTrue(settings.dictationScreenContextEnabled)
+    }
+
+    func testEditMigrationPreservesStoredRouteWhenDictationIsBasic() {
+        let suite = "pichi-test-edit-route-migration-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults, initializeDesktop: false)
+        defaults.set(true, forKey: "DictationPromptOff")
+        defaults.set(true, forKey: "RewriteModeLinkedToGlobal")
+        defaults.set("openai", forKey: "SelectedProviderID")
+        defaults.set("dictation-model", forKey: "SelectedAIModel")
+        defaults.set("custom:edit", forKey: "RewriteModeSelectedProviderID")
+        defaults.set("edit-model", forKey: "RewriteModeSelectedModel")
+        defaults.set(["custom:edit": ["edit-model"]], forKey: "AvailableModelsByProvider")
+        defaults.set("command-provider", forKey: "CommandModeSelectedProviderID")
+
+        settings.makeEditModeIndependentIfNeeded()
+        XCTAssertFalse(settings.rewriteModeLinkedToGlobal)
+        XCTAssertEqual(settings.rewriteModeSelectedProviderID, "custom:edit")
+        XCTAssertEqual(settings.rewriteModeSelectedModel, "edit-model")
+        XCTAssertEqual(defaults.string(forKey: "SelectedProviderID"), "openai")
+        XCTAssertEqual(defaults.string(forKey: "SelectedAIModel"), "dictation-model")
+        XCTAssertEqual(defaults.string(forKey: "CommandModeSelectedProviderID"), "command-provider")
+        settings.makeEditModeIndependentIfNeeded()
+        XCTAssertEqual(settings.rewriteModeSelectedModel, "edit-model")
+    }
+
     func testPresentAndDismissRestoresPreviousAppDestination() {
         var state = SettingsNavigationState()
 

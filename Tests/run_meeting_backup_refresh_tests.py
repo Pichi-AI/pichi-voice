@@ -169,7 +169,7 @@ final class SettingsStore {
     var meetingAutoDetectBrowserEnabled = true
     var meetingAudioRetentionPolicy = 7
 }
-struct Identity { let id: String }
+struct Identity { let id: String; var bundleIdentifier: String { id }; var displayName: String { id } }
 struct Option { let identity: Identity }
 final class Coordinator { var isQuiescent = true; var activeLanguage = "en" }
 @MainActor protocol PrivateProfileTransitionParticipant: AnyObject {

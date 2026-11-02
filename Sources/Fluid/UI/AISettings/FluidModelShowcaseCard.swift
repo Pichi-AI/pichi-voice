@@ -40,18 +40,10 @@ struct FluidModelShowcaseCard: View {
                                 .help(PichiLocalization.text("Based on your Mac’s RAM. You can choose either model."))
                         }
                     }
-                HStack(spacing: 8) {
-                    Text(self.model.displayName.replacingOccurrences(of: "Fluid-1", with: "Fluid 1"))
-                        .font(self.compact ? self.theme.typography.sectionTitle : self.theme.typography.title)
-                        .foregroundStyle(self.theme.palette.primaryText)
-                        .lineLimit(2).minimumScaleFactor(0.85)
-                    if self.isSelected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.fluidSystem(size: 18, weight: .semibold))
-                            .foregroundStyle(self.theme.palette.accentText)
-                            .accessibilityLabel(PichiLocalization.text("Selected"))
-                    }
-                }
+                Text(self.model.displayName.replacingOccurrences(of: "Fluid-1", with: "Fluid 1"))
+                    .font(self.compact ? self.theme.typography.sectionTitle : self.theme.typography.title)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .lineLimit(self.compact ? 2 : 1).minimumScaleFactor(0.85)
                 ZStack(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                         Text(PichiLocalization.text(presentation.summary))
