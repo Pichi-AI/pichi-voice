@@ -54,6 +54,17 @@ nonisolated struct MeetingRetainedProcessingCheckpoint: Sendable {
     /// The guard precedes even filesystem observation. Strict mode neither creates nor reads
     /// audio-working-state files, including a stale file from a different storage-mode snapshot.
     func read(session: MeetingSession) throws -> Value? {
+        try self.read(session: session, matchingLanguageCode: session.languageCode)
+    }
+
+    /// Retry admission needs the authenticated inference language independently of the visible
+    /// transcript restored after failure. Other ownership/configuration checks remain identical;
+    /// processing itself must still use the exact-language reader above.
+    func retainedLanguageCode(session: MeetingSession) throws -> String? {
+        try self.read(session: session, matchingLanguageCode: nil)?.pin.configuration.languageCode
+    }
+
+    private func read(session: MeetingSession, matchingLanguageCode: String?) throws -> Value? {
         guard session.audioStorageMode == .retainedFiles, session.retention.audioDeletedAt == nil else { return nil }
         let url = try self.confinedURL(Self.fileName)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
@@ -62,7 +73,7 @@ nonisolated struct MeetingRetainedProcessingCheckpoint: Sendable {
             let envelope = try PropertyListDecoder().decode(Envelope.self, from: data)
             let header = try PropertyListDecoder().decode(Header.self, from: envelope.header)
             guard header.pin.schema == 1, header.pin.sessionID == session.id,
-                  header.pin.configuration.languageCode == session.languageCode,
+                  matchingLanguageCode == nil || header.pin.configuration.languageCode == matchingLanguageCode,
                   header.pin.configuration.speakerLabelsEnabled == (session.speakerLabelsEnabled ?? true),
                   header.pin.configuration.effectiveSpeakerProcessingMode == session.effectiveSpeakerProcessingMode,
                   header.pin.piiRedactionEnabled == (session.piiRedactionEnabled == true),

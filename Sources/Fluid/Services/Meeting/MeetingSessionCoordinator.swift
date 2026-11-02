@@ -1185,7 +1185,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private func resetRetainedCheckpointIfRequested(session: MeetingSession, requestedLanguage: String?, restarting: Bool) async throws {
         // A different language cannot resume inference pinned to the old configuration.
         // Keep the saved transcript and audio; only the admitted retry owns this reset.
-        guard restarting || requestedLanguage.map({ $0 != session.languageCode }) == true else { return }
+        guard restarting || requestedLanguage != nil else { return }
         guard session.audioStorageMode == .retainedFiles, session.retention.audioDeletedAt == nil,
               let directory = try await self.store.existingSessionDirectory(for: session.id) else {
             throw MeetingCoordinatorError.noRecoverableAudio
@@ -1195,6 +1195,16 @@ final class MeetingSessionCoordinator: ObservableObject {
             throw MeetingCoordinatorError.activityInProgress
         }
         let reset = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
+            if !restarting, let requestedLanguage {
+                let checkpoint = MeetingRetainedProcessingCheckpoint(sessionDirectory: directory)
+                let inferenceLanguage = (try? checkpoint.retainedLanguageCode(session: session))
+                    ?? session.processingAttempts.last(where: { $0.languageCode != nil })?.languageCode
+                    ?? session.languageCode
+                // Failed/cancelled language changes restore the old visible transcript but keep
+                // the new inference pin. Resume that attempt, or reset when its language changes.
+                guard requestedLanguage != inferenceLanguage else { return }
+            }
             try Task.checkCancellation()
             try MeetingRetainedProcessingCheckpoint.remove(in: directory)
             let legacyCheckpoint = directory.appendingPathComponent("checkpoint.json")

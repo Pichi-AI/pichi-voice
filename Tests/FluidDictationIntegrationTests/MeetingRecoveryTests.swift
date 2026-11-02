@@ -4224,6 +4224,7 @@ final class MeetingRecoveryTests: XCTestCase {
                 XCTAssertTrue(processing.didReadCheckpoint, "The real checkpoint reader must admit the new language")
                 XCTAssertNil(processing.resumedLanguage, "Old-language inference must be removed before the new attempt")
                 XCTAssertEqual(try checkpoint.read(session: dutchInput)?.pin.configuration.languageCode, "nl")
+                XCTAssertEqual(try checkpoint.retainedLanguageCode(session: session), "nl")
                 XCTAssertEqual(try Data(contentsOf: audio), audioBytes)
                 XCTAssertEqual(arbiter.acquireCount, arbiter.releaseCount)
                 await coordinator.shutdownForTermination()
@@ -4242,6 +4243,32 @@ final class MeetingRecoveryTests: XCTestCase {
                 XCTAssertEqual(result.state, .completed)
                 XCTAssertEqual(try Data(contentsOf: audio), audioBytes)
                 await reopened.shutdownForTermination()
+                if outcome != .succeed {
+                    // The visible transcript is still English while retained inference is Dutch.
+                    // Retrying Dutch must resume its pin; choosing English must start new inference.
+                    for language in ["nl", "en"] {
+                        let next = LanguageCheckpointProcessingController(outcome: outcome)
+                        let retryCoordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                            processing: next, audioArbiter: StubArbiter())
+                        await retryCoordinator.ensureRestored()
+                        do {
+                            _ = try await retryCoordinator.retryProcessing(sessionID: session.id, languageCode: language)
+                            XCTFail("The controlled redo must fail or cancel")
+                        } catch {
+                            XCTAssertEqual(error is CancellationError, outcome == .cancel)
+                            if outcome == .fail { XCTAssertTrue(error is ProcessingFailure) }
+                        }
+                        XCTAssertTrue(next.didReadCheckpoint)
+                        XCTAssertEqual(next.resumedLanguage, language == "nl" ? "nl" : nil)
+                        XCTAssertEqual(try checkpoint.retainedLanguageCode(session: session), language)
+                        let retained = try await store.loadTranscript(id: session.id)
+                        XCTAssertEqual(retained?.languageCode, "en")
+                        XCTAssertEqual(retained?.transcriptSegments, session.transcriptSegments)
+                        XCTAssertEqual(retained?.speakers, session.speakers)
+                        XCTAssertEqual(try Data(contentsOf: audio), audioBytes)
+                        await retryCoordinator.shutdownForTermination()
+                    }
+                }
             }
         }
     }
@@ -4264,6 +4291,32 @@ final class MeetingRecoveryTests: XCTestCase {
         catch { XCTAssertTrue(error is ProcessingFailure) }
         XCTAssertTrue(processing.didReadCheckpoint)
         XCTAssertEqual(processing.resumedLanguage, "en", "A same-language retry must retain resumable inference")
+        await coordinator.shutdownForTermination()
+    }
+
+    func testLanguageRetryUsesActualCheckpointOverLegacyFailedAttemptMetadata() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var session = try self.completedEnglishRetranscriptionFixture()
+        session.transcriptIsComplete = false
+        var failed = try XCTUnwrap(session.processingAttempts.last)
+        failed.id = UUID()
+        failed.languageCode = "nl"
+        failed.errorCode = "legacy-language-mismatch"
+        session.processingAttempts.append(failed)
+        try await store.create(session)
+        let directory = try await store.sessionDirectory(for: session.id)
+        try LanguageCheckpointProcessingController.writeCheckpoint(session: session, directory: directory,
+            payload: Data("English inference predates the failed Dutch attempt".utf8))
+        let processing = LanguageCheckpointProcessingController(outcome: .fail)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: processing, audioArbiter: StubArbiter())
+        await coordinator.ensureRestored()
+        do { _ = try await coordinator.retryProcessing(sessionID: session.id, languageCode: "nl"); XCTFail("Expected failure") }
+        catch { XCTAssertTrue(error is ProcessingFailure) }
+        XCTAssertTrue(processing.didReadCheckpoint)
+        XCTAssertNil(processing.resumedLanguage, "Authenticated English inference wins over legacy Dutch attempt metadata")
         await coordinator.shutdownForTermination()
     }
 
