@@ -19,15 +19,24 @@ final class RewriteModeService: ObservableObject, PrivateProfileTransitionPartic
     private var promptAppBundleID: String?
     /// The front window as read when the shortcut was pressed.
     private var windowCapture: DictationContextCapture?
-    private var windowCaptureRevision: UInt64?
+    private var windowCaptureRevision: String?
     private var windowCaptureProfile: PrivateProfileSnapshot?
     private var windowCaptureOperationID: UUID?
+    private let screenContextSettings: SettingsStore
+    private var screenContextConsentObservation: AnyCancellable?
     private let captureWindow: @MainActor (TypingService.RecordingTargetContext) -> DictationContextCapture?
 
-    init(captureWindow: @escaping @MainActor (TypingService.RecordingTargetContext) -> DictationContextCapture? = {
+    init(settings: SettingsStore = .shared,
+         captureWindow: @escaping @MainActor (TypingService.RecordingTargetContext) -> DictationContextCapture? = {
         DictationContextCapture.startForEditMode(target: $0)
     }) {
         self.captureWindow = captureWindow
+        self.screenContextSettings = settings
+        self.screenContextConsentObservation = NotificationCenter.default.publisher(for: SettingsStore.editModeScreenContextDidChange)
+            .sink { [weak self] _ in
+                // Only this store's profile/suite token can invalidate its read.
+                self?.cancelOutdatedWindowCapture()
+            }
         PrivateProfileService.shared.register(self)
     }
 
@@ -269,7 +278,8 @@ final class RewriteModeService: ObservableObject, PrivateProfileTransitionPartic
         self.stopReadingWindow()
         let profile = PrivateProfileStorage.current
         let owner = self.privateOperations
-        guard owner.isCurrent, PrivateProfileStorage.isReadable(profile), SettingsStore.shared.editModeReadsScreen else { return }
+        guard owner.isCurrent, PrivateProfileStorage.isReadable(profile), self.screenContextSettings.editModeReadsScreen else { return }
+        let revision = self.screenContextSettings.editModeScreenContextRevision
         var admittedCapture: DictationContextCapture?
         guard let operationID = owner.admit(
             cancel: { admittedCapture?.cancel() },
@@ -277,10 +287,11 @@ final class RewriteModeService: ObservableObject, PrivateProfileTransitionPartic
         ) else { return }
         admittedCapture = self.captureWindow(target)
         guard let capture = admittedCapture else { owner.complete(operationID); return }
-        self.windowCaptureRevision = SettingsStore.shared.editModeScreenContextRevision
+        self.windowCaptureRevision = revision
         self.windowCaptureProfile = profile
         self.windowCaptureOperationID = operationID
         self.windowCapture = capture
+        self.cancelOutdatedWindowCapture()
     }
 
     func windowContextForRewrite() async -> DictationTypingContext? {
@@ -291,15 +302,15 @@ final class RewriteModeService: ObservableObject, PrivateProfileTransitionPartic
         let context = await capture.result(timeout: .seconds(2))
         // The switch, target or private profile may change while the reader is pending.
         guard !Task.isCancelled, self.privateOperations.isCurrent, PrivateProfileStorage.isReadable(profile),
-              SettingsStore.shared.editModeReadsScreen,
-              revision == SettingsStore.shared.editModeScreenContextRevision,
+              self.screenContextSettings.editModeReadsScreen,
+              revision == self.screenContextSettings.editModeScreenContextRevision,
               self.windowCapture === capture
         else { return nil }
         return context
     }
 
     func cancelOutdatedWindowCapture() {
-        if !SettingsStore.shared.editModeReadsScreen || self.windowCaptureRevision != SettingsStore.shared.editModeScreenContextRevision {
+        if !self.screenContextSettings.editModeReadsScreen || self.windowCaptureRevision != self.screenContextSettings.editModeScreenContextRevision {
             self.stopReadingWindow()
         }
     }

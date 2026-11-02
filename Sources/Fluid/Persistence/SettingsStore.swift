@@ -3324,17 +3324,29 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Invalidates old captures even when the switch changes off and back on.
-    private(set) var editModeScreenContextRevision: UInt64 = 0
+    static let editModeScreenContextDidChange = Notification.Name("SettingsStore.editModeScreenContextDidChange")
+
+    /// Shared by every store bound to this defaults/profile scope. This token is
+    /// deliberately absent from SettingsBackupPayload, so restore cannot revive it.
+    var editModeScreenContextRevision: String {
+        self.defaults.string(forKey: Keys.editModeScreenContextRevision) ?? ""
+    }
 
     /// Opt-in permission for on-device Edit Mode to use text in the front window.
+    @MainActor
     var editModeReadsScreen: Bool {
         get { self.defaults.object(forKey: Keys.editModeReadsScreen) as? Bool ?? false }
         set {
             guard newValue != self.editModeReadsScreen else { return }
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.editModeReadsScreen)
-            self.editModeScreenContextRevision &+= 1
+            // A retired bound profile rejects writes. It must not announce a
+            // consent change or rotate the current profile's authorization.
+            guard self.editModeReadsScreen == newValue else { return }
+            self.defaults.set(UUID().uuidString, forKey: Keys.editModeScreenContextRevision)
+            // Synchronous main-actor delivery cancels readers before returning
+            // from the toggle, including a rapid off/on that SwiftUI coalesces.
+            NotificationCenter.default.post(name: Self.editModeScreenContextDidChange, object: self)
         }
     }
 

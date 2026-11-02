@@ -617,9 +617,6 @@ struct ContentView: View {
             .onChange(of: self.settings.dictationScreenContextEnabled) { _, enabled in
                 if !enabled { self.cancelDictationContextCapture() }
             }
-            .onChange(of: self.settings.editModeScreenContextRevision) { _, _ in
-                self.rewriteModeService.cancelOutdatedWindowCapture()
-            }
             .onDisappear {
                 if let output = self.privateCaptureOutput, self.privateOutputOperations.isCurrent {
                     Task {

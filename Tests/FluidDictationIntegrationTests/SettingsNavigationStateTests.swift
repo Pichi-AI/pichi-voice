@@ -55,12 +55,14 @@ final class SettingsNavigationStateTests: XCTestCase {
         let initialRevision = settings.editModeScreenContextRevision
         settings.editModeReadsScreen = true
         let firstCaptureRevision = settings.editModeScreenContextRevision
-        XCTAssertEqual(firstCaptureRevision, initialRevision + 1)
+        XCTAssertNotEqual(firstCaptureRevision, initialRevision)
+        XCTAssertNotNil(UUID(uuidString: firstCaptureRevision))
         settings.editModeReadsScreen = true
         XCTAssertEqual(settings.editModeScreenContextRevision, firstCaptureRevision)
         settings.editModeReadsScreen = false
         settings.editModeReadsScreen = true
-        XCTAssertEqual(settings.editModeScreenContextRevision, firstCaptureRevision + 2)
+        XCTAssertNotEqual(settings.editModeScreenContextRevision, firstCaptureRevision)
+        XCTAssertNotNil(UUID(uuidString: settings.editModeScreenContextRevision))
         XCTAssertTrue(settings.dictationScreenContextEnabled)
     }
 

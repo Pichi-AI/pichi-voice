@@ -122,6 +122,7 @@ extension SettingsStore {
         static let rewriteModeSelectedProviderID = "RewriteModeSelectedProviderID"
         static let rewriteModeLinkedToGlobal = "RewriteModeLinkedToGlobal"
         static let editModeReadsScreen = "EditModeReadsScreen"
+        static let editModeScreenContextRevision = "EditModeScreenContextRevision"
 
         // Model Reasoning Config Keys
         static let modelReasoningConfigs = "ModelReasoningConfigs"

@@ -189,14 +189,188 @@ final class EditModeRouteTests: XCTestCase {
         XCTAssertEqual(requests, 0)
     }
 
-    private func withIndependentDefaults(_ body: (UserDefaults) -> Void) {
+    @MainActor
+    func testBoundEditScreenConsentInvalidatesAndJoinsItsReader() async throws {
+        try await EditModeConsentChecks.run { XCTAssertTrue($0, $1) }
+    }
+
+    @MainActor
+    func testEditScreenConsentIsExcludedFromSettingsBackups() throws {
+        try self.withIndependentDefaults { defaults in
+            let settings = SettingsStore(defaults: defaults, initializeDesktop: false)
+            settings.editModeReadsScreen = true
+            let oldRevision = settings.editModeScreenContextRevision
+            let payload = settings.makeBackupPayload()
+            let encoded = try JSONEncoder().encode(payload)
+            let values = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+            XCTAssertNil(values["editModeReadsScreen"])
+            XCTAssertNil(values["editModeScreenContextRevision"])
+            XCTAssertFalse(String(decoding: encoded, as: UTF8.self).contains(oldRevision))
+            settings.editModeReadsScreen = false
+            let revokedRevision = settings.editModeScreenContextRevision
+            settings.restore(from: payload)
+            XCTAssertFalse(settings.editModeReadsScreen)
+            XCTAssertEqual(settings.editModeScreenContextRevision, revokedRevision)
+            XCTAssertNotEqual(settings.editModeScreenContextRevision, oldRevision)
+        }
+    }
+
+    private func withIndependentDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
         let name = "EditModeRouteTests-\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: name) else {
             XCTFail("Could not create isolated defaults")
             return
         }
         defer { defaults.removePersistentDomain(forName: name) }
-        body(defaults)
+        try body(defaults)
     }
 
+}
+
+/// Reused by the bounded real-source probe and native XCTest. No AX/OCR, model,
+/// permission prompt, account service or real profile content is accessed.
+@MainActor enum EditModeConsentChecks {
+    static func run(check: @escaping (Bool, String) -> Void) async throws {
+        let originalProfile = PrivateProfileStorage.current
+        let testID = UUID().uuidString
+        let identity = AccountIdentity(issuer: "https://synthetic.invalid/consent", subject: testID, internalUserID: testID)
+        let context = AccountContext(identity: identity, organizationID: "synthetic-org", workspaceID: "A", generation: UUID())
+        let a = try PrivateProfileStorage.proposed(context: context, generation: UUID())
+        let otherContext = AccountContext(identity: identity, organizationID: "synthetic-org", workspaceID: "B", generation: UUID())
+        let b = try PrivateProfileStorage.proposed(context: otherContext, generation: UUID())
+        let suiteA = "EditModeConsent-\(testID)-A"
+        let suiteB = "EditModeConsent-\(testID)-B"
+        let domains = [AppBrand.storageNamespace + ".private-profile." + a.id,
+                       AppBrand.storageNamespace + ".private-profile." + b.id, suiteA, suiteB]
+        defer {
+            PrivateProfileStorage.select(originalProfile)
+            for domain in domains { UserDefaults.standard.removePersistentDomain(forName: domain) }
+        }
+        PrivateProfileStorage.select(a)
+        let root = SettingsStore(defaults: PrivateProfileDefaults(), initializeDesktop: false)
+        let peer = root.boundToCurrentPrivateProfile()
+        let permission = DictationScreenPermissionController(check: { false }, request: {
+            check(false, "The feature toggle must never request OS permission")
+            return true
+        })
+        let row = EditModeScreenContextSettings(settings: root, permission: permission)
+        check(row.settings !== root && peer !== root, "The actual row and peer retain separate bound stores")
+        check(!root.editModeReadsScreen && root.editModeScreenContextRevision.isEmpty, "A new private profile defaults off without an authorization token")
+        row.enabledBinding.wrappedValue = true
+        let capturedRevision = root.editModeScreenContextRevision
+        check(!capturedRevision.isEmpty && peer.editModeScreenContextRevision == capturedRevision,
+              "The actual bound row shares consent with the root and peer")
+        check(root.editModeReadsScreen && peer.editModeReadsScreen, "Root and peer see the bound row's opt-in")
+        row.enabledBinding.wrappedValue = true
+        check(root.editModeScreenContextRevision == capturedRevision, "An unchanged toggle does not revoke its own capture")
+
+        let target = TypingService.RecordingTargetContext(id: UUID(), pid: 999_999,
+            bundleIdentifier: "synthetic.edit-consent", window: nil, element: nil)
+        let reader = EditModeConsentHeldReader()
+        var capture: DictationContextCapture?
+        let service = RewriteModeService(settings: root, captureWindow: { target in
+            let started = DictationContextCapture.start(target: target) { await reader.read() }
+            capture = started
+            return started
+        })
+        service.startReadingWindow(target: target)
+        await reader.waitUntilStarted()
+        let beforeRevocation = Task { @MainActor in await service.windowContextForRewrite() }
+
+        let unrelated = SettingsStore(defaults: UserDefaults(suiteName: suiteB)!, initializeDesktop: false)
+        unrelated.editModeReadsScreen = true
+        unrelated.editModeReadsScreen = false
+        check(!reader.cancellation.isCancelled, "Another defaults suite cannot cancel this private-profile reader")
+        row.enabledBinding.wrappedValue = false
+        check(reader.cancellation.isCancelled, "The actual bound toggle synchronously cancels its reader without ContentView")
+        check(!peer.editModeReadsScreen && peer.editModeScreenContextRevision != capturedRevision,
+              "Revocation updates root and bound peer authority")
+        row.enabledBinding.wrappedValue = true
+        check(root.editModeScreenContextRevision != capturedRevision, "Rapid off/on cannot revive the captured authorization")
+        let rejected = await beforeRevocation.value
+        check(rejected == nil, "An already-awaiting consumer drops revoked context")
+
+        var joined = false
+        let retirement = Task { @MainActor in
+            try? await service.prepareForPrivateProfileTransition()
+            joined = true
+        }
+        for _ in 0..<20 { await Task.yield() }
+        check(!joined, "Revoked readers remain registered until actual completion")
+        let overlapping = DictationContextCapture.start(target: target) { nil }
+        check(overlapping == nil, "Revocation keeps replacement admission closed while the reader retires")
+        await reader.finish(.init(textBeforeCursor: nil, screenText: ["synthetic late context"]))
+        await retirement.value
+        let late = await service.windowContextForRewrite()
+        check(joined && late == nil, "Joined retirement cannot publish a late pre-revocation result")
+        await capture?.cancelAndWait()
+
+        // Separate UserDefaults objects for the same suite share authority too.
+        let plainRoot = SettingsStore(defaults: UserDefaults(suiteName: suiteA)!, initializeDesktop: false)
+        let plainPeer = SettingsStore(defaults: UserDefaults(suiteName: suiteA)!, initializeDesktop: false)
+        plainRoot.editModeReadsScreen = true
+        let plainRevision = plainPeer.editModeScreenContextRevision
+        let readyTask = Task<DictationTypingContext?, Never> { .init(textBeforeCursor: nil, screenText: ["same-suite context"]) }
+        let readyCapture = DictationContextCapture(target: target, task: readyTask)
+        let plainService = RewriteModeService(settings: plainRoot, captureWindow: { _ in readyCapture })
+        plainService.startReadingWindow(target: target)
+        unrelated.editModeReadsScreen = true
+        let unaffected = await plainService.windowContextForRewrite()
+        check(unaffected?.screenText == ["same-suite context"], "Unrelated suite notifications preserve an eligible read")
+        plainPeer.editModeReadsScreen = false
+        plainPeer.editModeReadsScreen = true
+        check(plainRoot.editModeScreenContextRevision != plainRevision && readyTask.isCancelled,
+              "Same-suite peer revocation cancels even a completed reader")
+        let stale = await plainService.windowContextForRewrite()
+        check(stale == nil, "Completed context is not reused after same-suite off/on")
+        try await plainService.prepareForPrivateProfileTransition()
+        await readyCapture.cancelAndWait()
+
+        let aRevision = root.editModeScreenContextRevision
+        PrivateProfileStorage.select(b)
+        check(!root.editModeReadsScreen && root.editModeScreenContextRevision.isEmpty,
+              "A different profile cannot inherit consent or the token")
+        let bRow = EditModeScreenContextSettings(settings: root, permission: permission)
+        bRow.enabledBinding.wrappedValue = true
+        let bRevision = root.editModeScreenContextRevision
+        check(bRevision != aRevision, "Different profiles have distinct consent authority")
+        row.enabledBinding.wrappedValue = true
+        row.enabledBinding.wrappedValue = false
+        check(root.editModeReadsScreen && root.editModeScreenContextRevision == bRevision,
+              "A retired bound row cannot alter the current profile's consent or token")
+        let nextB = try PrivateProfileStorage.proposed(context: b.context, generation: UUID())
+        PrivateProfileStorage.select(nextB)
+        bRow.enabledBinding.wrappedValue = false
+        check(root.editModeReadsScreen && root.editModeScreenContextRevision == bRevision,
+              "An old generation cannot rotate the new generation's consent")
+        PrivateProfileStorage.select(a)
+        check(root.editModeReadsScreen && root.editModeScreenContextRevision == aRevision,
+              "Returning to a profile preserves only that profile's consent")
+    }
+}
+
+private final nonisolated class EditModeConsentCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    var isCancelled: Bool { self.lock.withLock { self.cancelled } }
+    func cancel() { self.lock.withLock { self.cancelled = true } }
+}
+
+private actor EditModeConsentHeldReader {
+    nonisolated let cancellation = EditModeConsentCancellation()
+    private var started = false
+    private var startedWaiter: CheckedContinuation<Void, Never>?
+    private var result: CheckedContinuation<DictationTypingContext?, Never>?
+    func read() async -> DictationTypingContext? {
+        await withTaskCancellationHandler {
+            self.started = true
+            self.startedWaiter?.resume(); self.startedWaiter = nil
+            return await withCheckedContinuation { self.result = $0 }
+        } onCancel: { self.cancellation.cancel() }
+    }
+    func waitUntilStarted() async {
+        if self.started { return }
+        await withCheckedContinuation { self.startedWaiter = $0 }
+    }
+    func finish(_ value: DictationTypingContext?) { self.result?.resume(returning: value); self.result = nil }
 }
