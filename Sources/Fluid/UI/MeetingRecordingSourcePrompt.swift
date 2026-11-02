@@ -16,9 +16,16 @@ nonisolated struct MeetingRecordingSourceSnapshot: Sendable {
     var hasMeetingAudioAccess = true
     var audioStorageMode: MeetingAudioStorageMode = .retainedFiles
     var speakerLabelsEnabled = true
-    var speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording
+    var inRoomSpeakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording
+    var onlineCallSpeakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording
     var piiRedactionEnabled = false
     var profile = PrivateProfileStorage.current
+
+    /// Both policies belong to this discovery snapshot. Changing the selected source must
+    /// use its topology's policy without following later model or preference changes.
+    var speakerProcessingMode: MeetingSpeakerProcessingMode {
+        self.defaults.mode == .inRoom ? self.inRoomSpeakerProcessingMode : self.onlineCallSpeakerProcessingMode
+    }
 
     var microphoneSelectionLabel: String {
         if let selected = self.microphones.identities.first(where: { $0.captureDeviceID == self.selectedMicrophoneID }) {
@@ -84,7 +91,7 @@ nonisolated struct MeetingRecordingSourceSnapshot: Sendable {
         return MeetingCaptureConfiguration(
             mode: self.defaults.mode,
             title: MeetingTranscriptionSetupDraft.defaultTitle(mode: self.defaults.mode, applicationDisplayName: application?.displayName),
-            languageCode: self.defaults.languageCode ?? MeetingProcessingConfiguration.defaultLanguageCode,
+            languageCode: self.defaults.languageCode ?? MeetingFinalProcessingConfiguration.defaultLanguageCode,
             platform: application.map { MeetingPlatformProfile(identifier: $0.bundleIdentifier, displayName: $0.displayName) },
             application: application,
             applicationAudioScope: self.defaults.mode == .onlineCall ? self.defaults.effectiveApplicationAudioScope : nil,
@@ -327,7 +334,8 @@ final class MeetingRecordingSourcePromptController: ObservableObject, PrivatePro
         defaults.languageCode = defaults.languageCode ?? MeetingTranscriptionSetupDraft(settings: .shared).languageCode
         let audioStorageMode: MeetingAudioStorageMode = SettingsStore.shared.meetingSaveAudio ? .retainedFiles : .memoryOnly
         let speakerLabelsEnabled = SettingsStore.shared.meetingSpeakerLabelsEnabled
-        let speakerProcessingMode = SettingsStore.shared.meetingSpeakerProcessingMode(for: defaults.mode)
+        let inRoomSpeakerProcessingMode = SettingsStore.shared.meetingSpeakerProcessingMode(for: .inRoom)
+        let onlineCallSpeakerProcessingMode = SettingsStore.shared.meetingSpeakerProcessingMode(for: .onlineCall)
         let piiRedactionEnabled = SettingsStore.shared.meetingPIIRedactionEnabled
         let target = AppServices.shared.meetingAutomaticTarget
         let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID
@@ -370,7 +378,8 @@ final class MeetingRecordingSourcePromptController: ObservableObject, PrivatePro
             hasMeetingAudioAccess: hasMeetingAudioAccess,
             audioStorageMode: audioStorageMode,
             speakerLabelsEnabled: speakerLabelsEnabled,
-            speakerProcessingMode: speakerProcessingMode,
+            inRoomSpeakerProcessingMode: inRoomSpeakerProcessingMode,
+            onlineCallSpeakerProcessingMode: onlineCallSpeakerProcessingMode,
             piiRedactionEnabled: piiRedactionEnabled,
             profile: profile
         )

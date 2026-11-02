@@ -4179,6 +4179,94 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(saved?.transcriptSegments.map(\.text), ["Nieuwe transcript"])
     }
 
+    func testLanguageRetryReplacesActualRetainedCheckpointWithoutLosingPriorResult() async throws {
+        for state: MeetingSessionState in [.completed, .failed] {
+            for outcome in LanguageCheckpointProcessingController.Outcome.allCases {
+                let dir = self.makeTempDirectory()
+                defer { try? FileManager.default.removeItem(at: dir) }
+                let store = MeetingSessionStore(rootDirectory: dir)
+                var session = try self.completedEnglishRetranscriptionFixture()
+                session.state = state
+                session.transcriptIsComplete = false
+                var owner = self.makeSpeaker(name: "Manual participant")
+                owner.isLocalUser = true
+                owner.usesCustomDisplayName = true
+                owner.identityIsProvisional = false
+                session.speakers = [owner]
+                session.transcriptSegments[0].speakerID = owner.id
+                session.transcriptSegments[0].isUserSpeakerAssigned = true
+                try await store.create(session)
+                let directory = try await store.sessionDirectory(for: session.id)
+                let checkpoint = MeetingRetainedProcessingCheckpoint(sessionDirectory: directory)
+                try LanguageCheckpointProcessingController.writeCheckpoint(session: session, directory: directory,
+                    payload: Data("English inference progress".utf8))
+                XCTAssertEqual(try checkpoint.read(session: session)?.pin.configuration.languageCode, "en")
+                var dutchInput = session
+                dutchInput.languageCode = "nl"
+                XCTAssertThrowsError(try checkpoint.read(session: dutchInput))
+                let audio = directory.appendingPathComponent("tracks/microphone/chunk_0.caf")
+                try FileManager.default.createDirectory(at: audio.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let audioBytes = Data(repeating: 7, count: 128)
+                try audioBytes.write(to: audio)
+                let processing = LanguageCheckpointProcessingController(outcome: outcome)
+                let arbiter = StubArbiter()
+                let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                    processing: processing, audioArbiter: arbiter)
+                await coordinator.ensureRestored()
+                do {
+                    _ = try await coordinator.retryProcessing(sessionID: session.id, languageCode: " nl ")
+                    XCTAssertEqual(outcome, .succeed)
+                } catch {
+                    XCTAssertNotEqual(outcome, .succeed)
+                    XCTAssertEqual(error is CancellationError, outcome == .cancel)
+                    if outcome == .fail { XCTAssertTrue(error is ProcessingFailure) }
+                }
+                XCTAssertTrue(processing.didReadCheckpoint, "The real checkpoint reader must admit the new language")
+                XCTAssertNil(processing.resumedLanguage, "Old-language inference must be removed before the new attempt")
+                XCTAssertEqual(try checkpoint.read(session: dutchInput)?.pin.configuration.languageCode, "nl")
+                XCTAssertEqual(try Data(contentsOf: audio), audioBytes)
+                XCTAssertEqual(arbiter.acquireCount, arbiter.releaseCount)
+                await coordinator.shutdownForTermination()
+
+                let reopened = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                    processing: StubProcessingController(), audioArbiter: StubArbiter())
+                await reopened.ensureRestored()
+                let saved = try await store.loadTranscript(id: session.id)
+                let result = try XCTUnwrap(saved)
+                XCTAssertEqual(result.languageCode, outcome == .succeed ? "nl" : "en")
+                XCTAssertEqual(result.transcriptSegments.map(\.text),
+                    outcome == .succeed ? ["Synthetic Dutch replacement"] : ["Existing English transcript"])
+                XCTAssertEqual(result.speakers, session.speakers)
+                XCTAssertEqual(result.transcriptSegments.first?.speakerID, owner.id)
+                XCTAssertEqual(result.transcriptSegments.first?.isUserSpeakerAssigned, true)
+                XCTAssertEqual(result.state, .completed)
+                XCTAssertEqual(try Data(contentsOf: audio), audioBytes)
+                await reopened.shutdownForTermination()
+            }
+        }
+    }
+
+    func testSameLanguageRetryKeepsActualRetainedInferenceCheckpoint() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var session = try self.completedEnglishRetranscriptionFixture()
+        session.transcriptIsComplete = false
+        try await store.create(session)
+        let directory = try await store.sessionDirectory(for: session.id)
+        try LanguageCheckpointProcessingController.writeCheckpoint(session: session, directory: directory,
+            payload: Data("English inference progress".utf8))
+        let processing = LanguageCheckpointProcessingController(outcome: .fail)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: processing, audioArbiter: StubArbiter())
+        await coordinator.ensureRestored()
+        do { _ = try await coordinator.retryProcessing(sessionID: session.id, languageCode: "en"); XCTFail("Expected failure") }
+        catch { XCTAssertTrue(error is ProcessingFailure) }
+        XCTAssertTrue(processing.didReadCheckpoint)
+        XCTAssertEqual(processing.resumedLanguage, "en", "A same-language retry must retain resumable inference")
+        await coordinator.shutdownForTermination()
+    }
+
     func testCancelledLanguageRetryRetainsCompletedResultAndReleasesLease() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -9055,6 +9143,48 @@ private final class RestartCheckingProcessingController: MeetingProcessingContro
         self.sawCleanWorkingState = [MeetingRetainedProcessingCheckpoint.fileName, MeetingRetainedProcessingCheckpoint.keyFileName, "checkpoint.json"]
             .allSatisfy { !FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent($0).path) }
         return try await StubProcessingController().process(session: session, sessionDirectory: sessionDirectory, progress: progress)
+    }
+}
+
+/// Uses the production encrypted checkpoint codec at the processing boundary. A stale language
+/// pin throws before this fixture can report admission or write the new attempt's working state.
+@MainActor
+private final class LanguageCheckpointProcessingController: MeetingProcessingControlling {
+    enum Outcome: CaseIterable { case succeed, fail, cancel }
+    let outcome: Outcome
+    private(set) var didReadCheckpoint = false
+    private(set) var resumedLanguage: String?
+
+    init(outcome: Outcome) { self.outcome = outcome }
+
+    static func writeCheckpoint(session: MeetingSession, directory: URL, payload: Data) throws {
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: "parakeet-tdt-v2", languageCode: session.languageCode,
+            speakerLabelsEnabled: session.speakerLabelsEnabled ?? true, speakerProcessingMode: session.effectiveSpeakerProcessingMode)
+        let pin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: session.id,
+            backendID: .init(rawValue: "synthetic-language-retry"), backendVersion: "1", configuration: configuration,
+            piiRedactionEnabled: session.piiRedactionEnabled == true, privacyFingerprint: nil)
+        try MeetingRetainedProcessingCheckpoint(sessionDirectory: directory).write(
+            .init(pin: pin, inputFingerprint: "synthetic-audio", ownerVoiceIdentity: nil, runtimeFingerprint: nil, payload: payload),
+            session: session)
+    }
+
+    func process(session: MeetingSession, sessionDirectory: URL,
+                 progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
+        let checkpoint = MeetingRetainedProcessingCheckpoint(sessionDirectory: sessionDirectory)
+        self.resumedLanguage = try checkpoint.read(session: session)?.pin.configuration.languageCode
+        self.didReadCheckpoint = true
+        try Self.writeCheckpoint(session: session, directory: sessionDirectory, payload: Data("New inference progress".utf8))
+        switch self.outcome {
+        case .fail: throw ProcessingFailure()
+        case .cancel: throw CancellationError()
+        case .succeed:
+            var result = try await StubProcessingController().process(session: session, sessionDirectory: sessionDirectory, progress: progress)
+            result.speakers = session.speakers
+            result.segments = session.transcriptSegments
+            result.segments[0].text = "Synthetic Dutch replacement"
+            result.isComplete = false
+            return result
+        }
     }
 }
 

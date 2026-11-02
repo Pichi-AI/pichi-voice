@@ -1112,7 +1112,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             guard let session = self.activeSession, session.hasRetryableAudio else {
                 throw MeetingCoordinatorError.noRecoverableAudio
             }
-            try await self.resetRetainedCheckpointIfRequested(session: session, restarting: restarting)
+            try await self.resetRetainedCheckpointIfRequested(session: session, requestedLanguage: requestedLanguage, restarting: restarting)
             let retainedLanguage = Self.retainedCompletedLanguage(for: session) ?? session.languageCode
             let hadVisibleTranscript = Self.retainedCompletedLanguage(for: session) != nil
             var prepared = session
@@ -1146,7 +1146,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         else { throw MeetingCoordinatorError.activityInProgress }
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.maintenanceInProgress }
         guard session.hasRetryableAudio else { throw MeetingCoordinatorError.noRecoverableAudio }
-        try await self.resetRetainedCheckpointIfRequested(session: session, restarting: restarting)
+        try await self.resetRetainedCheckpointIfRequested(session: session, requestedLanguage: requestedLanguage, restarting: restarting)
 
         // Acquire before displacing/adopting so a throw here never strands activeSession mid-transition.
         if self.activityLease == nil {
@@ -1182,8 +1182,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         )
     }
 
-    private func resetRetainedCheckpointIfRequested(session: MeetingSession, restarting: Bool) async throws {
-        guard restarting else { return }
+    private func resetRetainedCheckpointIfRequested(session: MeetingSession, requestedLanguage: String?, restarting: Bool) async throws {
+        // A different language cannot resume inference pinned to the old configuration.
+        // Keep the saved transcript and audio; only the admitted retry owns this reset.
+        guard restarting || requestedLanguage.map({ $0 != session.languageCode }) == true else { return }
         guard session.audioStorageMode == .retainedFiles, session.retention.audioDeletedAt == nil,
               let directory = try await self.store.existingSessionDirectory(for: session.id) else {
             throw MeetingCoordinatorError.noRecoverableAudio

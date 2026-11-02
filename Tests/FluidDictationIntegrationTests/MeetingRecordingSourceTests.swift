@@ -41,6 +41,87 @@ final class MeetingRecordingSourceTests: XCTestCase {
         )
     }
 
+    func testSourceChangesAndRefreshSelectTheFrozenTopologyPolicy() async throws {
+        let suite = "SourceTopologyPolicy.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults, initializeDesktop: false)
+        for model: SettingsStore.SpeechModel in [.gigaam, .parakeetTDT, .whisperTiny] {
+            settings.selectedSpeechModel = model
+            var loaded = self.snapshot()
+            loaded.defaults.mode = .inRoom
+            loaded.defaults.languageCode = "ru"
+            loaded.selectedApplication = nil
+            loaded.inRoomSpeakerProcessingMode = settings.meetingSpeakerProcessingMode(for: .inRoom)
+            loaded.onlineCallSpeakerProcessingMode = settings.meetingSpeakerProcessingMode(for: .onlineCall)
+            loaded.audioStorageMode = .retainedFiles
+            loaded.piiRedactionEnabled = true
+            let profile = loaded.profile
+            let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue))
+            func assertPolicy(_ snapshot: MeetingRecordingSourceSnapshot?, mode: MeetingCaptureMode) throws {
+                let snapshot = try XCTUnwrap(snapshot)
+                let configuration = try snapshot.configuration(applications: loaded.applications, microphones: [self.mic])
+                XCTAssertEqual(configuration.mode, mode)
+                XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, mode == .inRoom ? .streaming : .afterRecording)
+                XCTAssertEqual(configuration.audioStorageMode, .retainedFiles)
+                XCTAssertEqual(configuration.piiRedactionEnabled, true)
+                XCTAssertEqual(configuration.languageCode, "ru")
+                XCTAssertEqual(snapshot.profile, profile)
+                let final = MeetingFinalProcessingConfiguration(asrModel: model.rawValue, languageCode: "ru",
+                    speakerProcessingMode: configuration.effectiveSpeakerProcessingMode)
+                XCTAssertNoThrow(try descriptor.validateSpeakerProcessingMode(configuration: final, mode: mode))
+            }
+            try assertPolicy(loaded, mode: .inRoom)
+            let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in loaded }, start: { _ in
+                XCTFail("Source discovery must not start capture")
+            })
+            controller.handleShortcut()
+            await self.waitUntil { !controller.isLoading }
+            controller.selectApplication(self.browser)
+            try assertPolicy(controller.snapshot, mode: .onlineCall)
+            controller.refresh()
+            await self.waitUntil { !controller.isLoading }
+            try assertPolicy(controller.snapshot, mode: .onlineCall)
+            XCTAssertEqual(controller.snapshot?.selectedApplication, self.browser)
+            controller.selectApplication(nil)
+            try assertPolicy(controller.snapshot, mode: .inRoom)
+            controller.refresh()
+            await self.waitUntil { !controller.isLoading }
+            try assertPolicy(controller.snapshot, mode: .inRoom)
+            controller.selectSystemAudio()
+            try assertPolicy(controller.snapshot, mode: .onlineCall)
+            controller.refresh()
+            await self.waitUntil { !controller.isLoading }
+            try assertPolicy(controller.snapshot, mode: .onlineCall)
+            XCTAssertEqual(controller.snapshot?.defaults.effectiveApplicationAudioScope, .systemAudio)
+            controller.cancel()
+            await controller.prepareForPrivateProfileTransition()
+        }
+        XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode))
+    }
+
+    func testSourceSnapshotPreservesExplicitSpeakerPreferencesAndLanguageFallback() throws {
+        let suite = "SourceExplicitPolicy.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults, initializeDesktop: false)
+        settings.selectedSpeechModel = .gigaam
+        for preference: MeetingSpeakerProcessingMode in [.afterRecording, .streaming] {
+            settings.meetingSpeakerProcessingMode = preference
+            var snapshot = self.snapshot()
+            snapshot.inRoomSpeakerProcessingMode = settings.meetingSpeakerProcessingMode(for: .inRoom)
+            snapshot.onlineCallSpeakerProcessingMode = settings.meetingSpeakerProcessingMode(for: .onlineCall)
+            // A later preference change cannot alter either policy in an existing snapshot.
+            settings.meetingSpeakerProcessingMode = preference == .streaming ? .afterRecording : .streaming
+            for mode in MeetingCaptureMode.allCases {
+                snapshot.defaults.mode = mode
+                let configuration = try snapshot.configuration(applications: snapshot.applications, microphones: [self.mic])
+                XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, preference)
+                XCTAssertEqual(configuration.languageCode, MeetingFinalProcessingConfiguration.defaultLanguageCode)
+            }
+        }
+    }
+
     func testInstalledPickerAppsStayVisibleWithoutBecomingCaptureTargets() {
         let chrome = MeetingApplicationIdentity(bundleIdentifier: "com.google.Chrome", processID: 100, displayName: "Chrome")
         let entries = MeetingAppPickerEntry.entries(applications: [chrome], installed: [
