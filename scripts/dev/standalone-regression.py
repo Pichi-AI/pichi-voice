@@ -238,17 +238,19 @@ class Probe:
 
 
 # Registration is explicit: a new probe needs a reviewed interpreter/UI classification.
+# This reviewed orchestrator invokes the complete CI sequence; it is not a leaf probe.
+ORCHESTRATOR_SCRIPTS = {"Tests/run_ci_checks.sh"}
 SHELL_PROBES = (
     "account_session", "mobile_account", "admitted_history_writes", "admitted_pronunciation_read", "analytics_config", "analytics_private_profile", "app_search_private_profile", "apple_speech_lifecycle", "brand_logo_rendering", "brand_owned_native_menu", "brand_profile",
     "command_archive_search", "command_cancellation", "command_markdown",
     "credential_startup", "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
-    "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
+    "dictation_accessibility_preparation", "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
     "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_error_localization", "file_export", "file_operation_isolation",
     "file_history_publisher", "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
     "fluid_serve", "fluid_typography", "history_decode_recovery", "history_persistence", "hotkey_initialization",
     "local_text_model_catalog", "meeting_capture_pcm", "meeting_capture_activity", "meeting_microphone_capture_contracts", "meeting_pending_speech", "native_window_appearance",
     "meeting_private_view", "n4_file_private_projection", "meeting_summary_evidence", "meeting_audio_export", "onboarding",
-    "page_presentation", "participant_input_contrast", "paste_key_cache", "private_profile_defaults", "private_profile_logging", "private_profile_stores", "private_ai_idle_unloader", "provider_dictation_capture_options",
+    "page_presentation", "participant_input_contrast", "paste_command_event", "paste_key_cache", "paste_read_receipt", "paste_recovery_policy", "private_profile_defaults", "private_profile_logging", "private_profile_stores", "private_ai_idle_unloader", "provider_dictation_capture_options",
     "release_highlights", "settings_owned_copy", "settings_viewport", "speech_model_provider_presentation", "ui_contrast",
     "stats_snapshot", "terminal_service_lifecycle", "voice_edit_cancellation",
 )
@@ -287,7 +289,7 @@ def validate_registry(root, probes=PROBES):
     if len(registered) != len(probes) or len({probe.name for probe in probes}) != len(probes):
         raise ValueError("Standalone registry contains duplicate paths or names")
     discovered = {str(path.relative_to(root)) for path in (root / "Tests").glob("run_*")
-                  if path.suffix in (".sh", ".py")}
+                  if path.suffix in (".sh", ".py") and str(path.relative_to(root)) not in ORCHESTRATOR_SCRIPTS}
     if registered != discovered:
         raise ValueError(f"Standalone registry mismatch: unregistered={sorted(discovered - registered)}, missing={sorted(registered - discovered)}")
     for probe in probes:

@@ -57,8 +57,8 @@ class StandaloneRunnerTests(unittest.TestCase):
         self.assertEqual(len(pending), 1)
         self.assertEqual(pending[0].interpreter, "sh")
         self.assertFalse(pending[0].requires_ui)
-        self.assertEqual(len(RUNNER.PROBES), 98)
-        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 67)
+        self.assertEqual(len(RUNNER.PROBES), 102)
+        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 71)
         self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 17)
         self.assertEqual(sum(probe.interpreter == "bash" for probe in RUNNER.PROBES), 14)
         for name, interpreter in (("account_session", "sh"), ("mobile_account", "sh"), ("publication_consent", "bash"), ("publication_outbox", "bash")):
@@ -85,6 +85,16 @@ class StandaloneRunnerTests(unittest.TestCase):
         self.assertEqual([probe.name for probe in RUNNER.PROBES if probe.requires_ui], ["update_prompt"])
         self.assertTrue({"fluid_serve", "file_export", "file_error_localization", "ui_contrast", "participant_input_contrast", "file_transcript_relative_date", "command_ui_localization", "clipboard_backup_reproduction", "settings_owned_copy", "settings_viewport", "native_window_appearance", "local_api_live_harness", "meeting_audio_scope", "upstream_sync", "diarization_repeatability", "hotkey_initialization"}
                         .issubset({probe.name for probe in RUNNER.PROBES}))
+
+    def test_ci_orchestrator_is_not_a_leaf_probe_and_unknown_runners_still_fail(self):
+        known = self.probe("known")
+        orchestrator = self.root / "Tests/run_ci_checks.sh"
+        orchestrator.write_text("#!/bin/bash\nexit 0\n")
+        RUNNER.validate_registry(self.root, probes=(known,))
+        self.assertNotIn("Tests/run_ci_checks.sh", {probe.script for probe in RUNNER.PROBES})
+        self.probe("unknown")
+        with self.assertRaisesRegex(ValueError, "unregistered"):
+            RUNNER.validate_registry(self.root, probes=(known,))
 
     def test_failure_is_counted_and_later_probes_still_run(self):
         probes = [self.probe("first", 'echo first; echo stderr >&2'),
