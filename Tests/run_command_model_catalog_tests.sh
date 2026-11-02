@@ -272,11 +272,12 @@ policies = declaration(normal, 'nonisolated enum DictationAIFailurePresentationP
 (out / 'AdmissionNormalProcessor.swift').write_text('import Foundation\n' + policies + '\n@MainActor extension NormalDictationAdmissionOwner {\n'
     + processor + '\n' + plain_processor + '\n' + manual + '\n' + wrapper + post_asr + '\n        return finalText\n    }\n'
     + reprocess_wrapper + reprocess + '\n        return finalText\n    }\n}\n')
-context = declaration(Path('Sources/Fluid/Services/DictationContextCapture.swift').read_text(),
-    'nonisolated struct DictationTypingContext:')
+context_source = Path('Sources/Fluid/Services/DictationContextCapture.swift').read_text()
+context = declaration(context_source, 'nonisolated struct DictationTypingContext:')
+window_line = declaration(context_source, 'nonisolated struct EditModeWindowLine:')
 app_context = declaration(Path('Sources/Fluid/Services/PrivateAIIntegrationService.swift').read_text(),
     '    struct AppContext:')
-(out / 'AdmissionStopSnapshot.swift').write_text('import Foundation\n' + context
+(out / 'AdmissionStopSnapshot.swift').write_text('import Foundation\n' + window_line + '\n' + context
     + '\nextension PrivateAIIntegrationService {\n' + app_context + '\n}\n' + snapshot)
 selected_start = services.index('                selectedRoute: { [weak self] in')
 selected_start = services.index('\n', selected_start) + 1
