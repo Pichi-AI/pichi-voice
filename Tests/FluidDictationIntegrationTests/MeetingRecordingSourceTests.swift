@@ -95,7 +95,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
             try assertPolicy(controller.snapshot, mode: .onlineCall)
             XCTAssertEqual(controller.snapshot?.defaults.effectiveApplicationAudioScope, .systemAudio)
             controller.cancel()
-            await controller.prepareForPrivateProfileTransition()
+            try await controller.prepareForPrivateProfileTransition()
         }
         XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode))
     }
