@@ -10,14 +10,11 @@ final class MeetingRecordingSourceTests: XCTestCase {
     private let mic = MeetingMicrophoneIdentity(captureDeviceID: "mic", coreAudioUID: "mic", displayName: "Microphone")
     private var originalFeature = false
     private var originalRecentApplication: MeetingApplicationIdentity?
-    private var originalInterfaceLanguage: Any?
 
     override func setUp() {
         super.setUp()
         self.originalFeature = SettingsStore.shared.fluidMeetEnabled
         self.originalRecentApplication = SettingsStore.shared.meetingRecentApplication
-        self.originalInterfaceLanguage = UserDefaults.standard.object(forKey: PichiInterfaceLanguage.defaultsKey)
-        PichiInterfaceLanguage.english.persist(in: .standard)
         SettingsStore.shared.meetingRecentApplication = nil
         SettingsStore.shared.fluidMeetEnabled = true
     }
@@ -25,7 +22,6 @@ final class MeetingRecordingSourceTests: XCTestCase {
     override func tearDown() {
         SettingsStore.shared.fluidMeetEnabled = self.originalFeature
         SettingsStore.shared.meetingRecentApplication = self.originalRecentApplication
-        UserDefaults.standard.set(self.originalInterfaceLanguage, forKey: PichiInterfaceLanguage.defaultsKey)
         super.tearDown()
     }
 
@@ -137,9 +133,9 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertEqual(entries.count, 3)
         XCTAssertEqual(entries[0].application, chrome)
         XCTAssertNil(entries[1].application)
-        XCTAssertEqual(entries[1].unavailableLabel, "Safari · \(String(localized: "Not running"))")
+        XCTAssertEqual(entries[1].unavailableLabel, "Safari · \(PichiLocalization.text("Not running"))")
         XCTAssertNil(entries[2].application)
-        XCTAssertEqual(entries[2].unavailableLabel, "Messages · \(String(localized: "Not available"))")
+        XCTAssertEqual(entries[2].unavailableLabel, "Messages · \(PichiLocalization.text("Not available"))")
         XCTAssertFalse(entries.contains { $0.bundleIdentifier == "us.zoom.xos" }, "never invent an uninstalled app")
         XCTAssertTrue(MeetingAppPickerEntry.entries(applications: [], installed: []).isEmpty)
     }
@@ -156,7 +152,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
         var snapshot = self.snapshot()
         snapshot.microphones = MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil)
         snapshot.selectedMicrophoneID = nil
-        XCTAssertEqual(snapshot.microphoneSelectionLabel, "No microphone available")
+        XCTAssertEqual(snapshot.microphoneSelectionLabel, PichiLocalization.text("No microphone available"))
     }
 
     func testDraftRestoresManualSourceWithoutPersistingAutomaticSuggestions() {
@@ -449,7 +445,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
         controller.refresh()
         await self.waitUntil { !controller.isLoading }
         XCTAssertNil(controller.snapshot?.selectedMicrophoneID)
-        XCTAssertEqual(controller.snapshot?.microphoneSelectionLabel, "Choose a microphone…")
+        XCTAssertEqual(controller.snapshot?.microphoneSelectionLabel, PichiLocalization.text("Choose a microphone…"))
         XCTAssertFalse(controller.canConfirm)
         controller.confirm()
         XCTAssertNil(recordedMicrophone)
@@ -569,11 +565,11 @@ final class MeetingRecordingSourceTests: XCTestCase {
         await self.waitUntil { !controller.isLoading }
         XCTAssertNil(controller.snapshot?.availableRecentApplication, "An automatic suggestion is not a recent explicit choice")
         controller.selectApplication(self.browser)
-        XCTAssertEqual(controller.snapshot?.applicationLabel(self.browser), "Browser (Recent)")
+        XCTAssertEqual(controller.snapshot?.applicationLabel(self.browser), PichiLocalization.format("%@ (Recent)", "Browser"))
         XCTAssertEqual(controller.snapshot?.applicationLabel(self.zoom), "Zoom")
         XCTAssertEqual(SettingsStore.shared.meetingRecentApplication, self.browser)
         controller.selectApplication(self.zoom)
-        XCTAssertEqual(controller.snapshot?.applicationLabel(self.zoom), "Zoom (Recent)")
+        XCTAssertEqual(controller.snapshot?.applicationLabel(self.zoom), PichiLocalization.format("%@ (Recent)", "Zoom"))
         XCTAssertEqual(controller.snapshot?.applicationLabel(self.browser), "Browser")
         controller.selectApplication(nil)
         XCTAssertEqual(SettingsStore.shared.meetingRecentApplication, self.zoom, "In person does not replace the most recent app")
@@ -585,7 +581,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
         await self.waitUntil { !reopened.isLoading }
         XCTAssertEqual(reopened.snapshot?.availableRecentApplication, self.browser)
         XCTAssertEqual(reopened.snapshot?.selectedApplication, self.zoom, "Recency must not replace the detected or foreground suggestion")
-        XCTAssertEqual(reopened.snapshot?.applicationLabel(self.browser), "Browser (Recent)")
+        XCTAssertEqual(reopened.snapshot?.applicationLabel(self.browser), PichiLocalization.format("%@ (Recent)", "Browser"))
         XCTAssertEqual(SettingsStore.shared.meetingRecordingDefaults, defaultsBefore)
         XCTAssertEqual(starts, 0)
         reopened.cancel()
@@ -598,7 +594,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
         restarted.processID = 99
         snapshot.applications = [self.zoom, restarted]
         XCTAssertEqual(snapshot.availableRecentApplication, restarted)
-        XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser (Recent)")
+        XCTAssertEqual(snapshot.applicationLabel(restarted), PichiLocalization.format("%@ (Recent)", "Browser"))
         var duplicate = restarted
         duplicate.processID = 100
         snapshot.applications.append(duplicate)
@@ -607,19 +603,15 @@ final class MeetingRecordingSourceTests: XCTestCase {
         snapshot.recentApplication = duplicate
         XCTAssertEqual(snapshot.availableRecentApplication, duplicate)
         XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser")
-        XCTAssertEqual(snapshot.applicationLabel(duplicate), "Browser (Recent)")
+        XCTAssertEqual(snapshot.applicationLabel(duplicate), PichiLocalization.format("%@ (Recent)", "Browser"))
         snapshot.applications = [self.zoom]
         XCTAssertNil(snapshot.availableRecentApplication)
         XCTAssertEqual(snapshot.selectedApplication, self.zoom)
     }
 
-    func testRecentApplicationLabelUsesTheInterfaceLanguageWithoutTranslatingItsName() {
-        var snapshot = self.snapshot()
-        snapshot.recentApplication = self.browser
-        PichiInterfaceLanguage.russian.persist(in: .standard)
-        XCTAssertEqual(snapshot.applicationLabel(self.browser), "Browser (Недавнее)")
-        PichiInterfaceLanguage.english.persist(in: .standard)
-        XCTAssertEqual(snapshot.applicationLabel(self.browser), "Browser (Recent)")
+    func testRecentApplicationFormatsPreserveTheAppNameInBothCatalogLanguages() {
+        XCTAssertEqual(PichiLocalization.format("%@ (Recent)", language: .russian, bundle: .main, arguments: ["Browser"]), "Browser (Недавнее)")
+        XCTAssertEqual(PichiLocalization.format("%@ (Recent)", language: .english, bundle: .main, arguments: ["Browser"]), "Browser (Recent)")
     }
 
     func testRecentAppPersistenceDoesNotKeepWindowOrDisplayTargets() {
