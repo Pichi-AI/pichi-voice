@@ -8,20 +8,24 @@ final class MeetingRecordingSourceTests: XCTestCase {
     private let zoom = MeetingApplicationIdentity(bundleIdentifier: "zoom", processID: 42, displayName: "Zoom")
     private let browser = MeetingApplicationIdentity(bundleIdentifier: "browser", processID: 43, displayName: "Browser")
     private let mic = MeetingMicrophoneIdentity(captureDeviceID: "mic", coreAudioUID: "mic", displayName: "Microphone")
-    private var originalFeature: Any?
-    private var originalRecentApplication: Any?
+    private var originalFeature = false
+    private var originalRecentApplication: MeetingApplicationIdentity?
+    private var originalInterfaceLanguage: Any?
 
     override func setUp() {
         super.setUp()
-        self.originalFeature = UserDefaults.standard.object(forKey: "FluidMeetEnabled")
-        self.originalRecentApplication = UserDefaults.standard.object(forKey: "MeetingRecentApplication")
+        self.originalFeature = SettingsStore.shared.fluidMeetEnabled
+        self.originalRecentApplication = SettingsStore.shared.meetingRecentApplication
+        self.originalInterfaceLanguage = UserDefaults.standard.object(forKey: PichiInterfaceLanguage.defaultsKey)
+        PichiInterfaceLanguage.english.persist(in: .standard)
         SettingsStore.shared.meetingRecentApplication = nil
         SettingsStore.shared.fluidMeetEnabled = true
     }
 
     override func tearDown() {
-        UserDefaults.standard.set(self.originalFeature, forKey: "FluidMeetEnabled")
-        UserDefaults.standard.set(self.originalRecentApplication, forKey: "MeetingRecentApplication")
+        SettingsStore.shared.fluidMeetEnabled = self.originalFeature
+        SettingsStore.shared.meetingRecentApplication = self.originalRecentApplication
+        UserDefaults.standard.set(self.originalInterfaceLanguage, forKey: PichiInterfaceLanguage.defaultsKey)
         super.tearDown()
     }
 
@@ -607,6 +611,15 @@ final class MeetingRecordingSourceTests: XCTestCase {
         snapshot.applications = [self.zoom]
         XCTAssertNil(snapshot.availableRecentApplication)
         XCTAssertEqual(snapshot.selectedApplication, self.zoom)
+    }
+
+    func testRecentApplicationLabelUsesTheInterfaceLanguageWithoutTranslatingItsName() {
+        var snapshot = self.snapshot()
+        snapshot.recentApplication = self.browser
+        PichiInterfaceLanguage.russian.persist(in: .standard)
+        XCTAssertEqual(snapshot.applicationLabel(self.browser), "Browser (Недавнее)")
+        PichiInterfaceLanguage.english.persist(in: .standard)
+        XCTAssertEqual(snapshot.applicationLabel(self.browser), "Browser (Recent)")
     }
 
     func testRecentAppPersistenceDoesNotKeepWindowOrDisplayTargets() {
