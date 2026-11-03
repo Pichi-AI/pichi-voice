@@ -91,7 +91,17 @@ enum MeetingRetranscriptionLanguage {
     }
 
     static var choices: [VoiceEngineLanguage] {
-        VoiceEngineLanguageCatalog.allLanguages(availableModels: PichiMeetingProviderFactory.retranscriptionModels)
+        let availableModels = Set(SettingsStore.SpeechModel.availableModels)
+        let supportedLanguageCodes = PichiMeetingProviderFactory.retranscriptionModels
+            .filter { availableModels.contains($0) }
+            .reduce(into: Set<String>()) { codes, model in
+                if let registered = PichiMeetingProviderFactory.registeredLanguageCodes(for: model.rawValue) {
+                    codes.formUnion(registered)
+                } else if MeetingProviderOptions.supportedModels.contains(model), let descriptor = model.parakeetDescriptor {
+                    codes.formUnion(descriptor.supportedLanguageCodes)
+                }
+            }
+        return VoiceEngineLanguageCatalog.allLanguages(supportedLanguageCodes: supportedLanguageCodes)
     }
 
     static func displayName(for languageCode: String) -> String {

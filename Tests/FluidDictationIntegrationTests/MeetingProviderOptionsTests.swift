@@ -35,16 +35,45 @@ final class MeetingProviderOptionsTests: XCTestCase {
         )
     }
 
-    func testRetranscriptionChoicesKeepRegisteredProviderCapabilityAdmission() {
-        XCTAssertTrue(MeetingRetranscriptionLanguage.choices.contains { $0.id == "zh" })
+    func testRetranscriptionChoicesKeepRegisteredProviderCapabilityAdmission() throws {
+        let choices = MeetingRetranscriptionLanguage.choices
+        XCTAssertTrue(choices.contains { $0.id == "zh" })
+        XCTAssertFalse(choices.contains { $0.id == "zz" })
         XCTAssertTrue(PichiMeetingProviderFactory.registeredLanguageCodes(for: "whisper-tiny")?.contains("zh") == true)
         XCTAssertFalse(PichiMeetingProviderFactory.registeredLanguageCodes(for: "gigaam-v3-eou")?.contains("zh") == true)
+        XCTAssertEqual(try MeetingProviderOptions.resolve(
+            MeetingFinalProcessingConfiguration(asrModel: "whisper-tiny", languageCode: "zh")).model, .whisperTiny)
+        let availableModels = Set(SettingsStore.SpeechModel.availableModels)
+        let meetingModels = PichiMeetingProviderFactory.retranscriptionModels.filter { availableModels.contains($0) }
+        for choice in choices {
+            XCTAssertTrue(meetingModels.contains { model in
+                (try? MeetingProviderOptions.resolve(
+                    MeetingFinalProcessingConfiguration(asrModel: model.rawValue, languageCode: choice.id))) != nil
+            }, "Every offered language requires an available meeting provider: \(choice.id)")
+        }
         for model in ["gigaam-v3-eou", "parakeet-tdt-v2", "parakeet-tdt", "fluid-parakeet-pro"] {
             XCTAssertThrowsError(try MeetingProviderOptions.resolve(
                 MeetingFinalProcessingConfiguration(asrModel: model, languageCode: "zh"))) { error in
                 XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedLanguageCode("zh"))
             }
         }
+    }
+
+    func testExplicitLanguageCapabilitiesPreserveCatalogPresentationWithoutExpandingOnboardingRoutes() throws {
+        let choices = VoiceEngineLanguageCatalog.allLanguages(supportedLanguageCodes: ["zh", "ru", "zz", "auto"])
+        XCTAssertEqual(choices.map(\.id), ["ru", "zh"])
+        XCTAssertTrue(VoiceEngineLanguageCatalog.allLanguages(supportedLanguageCodes: []).isEmpty)
+        for choice in choices {
+            let catalogLanguage = try XCTUnwrap(VoiceEngineLanguageCatalog.whisperLanguage(forCode: choice.id))
+            XCTAssertEqual(choice.displayName, catalogLanguage.displayName)
+            XCTAssertEqual(choice.aliases, catalogLanguage.aliases)
+            XCTAssertEqual(choice.localizedDisplayName(locale: Locale(identifier: "ru")),
+                           catalogLanguage.localizedDisplayName(locale: Locale(identifier: "ru")))
+        }
+        XCTAssertTrue(VoiceEngineLanguageCatalog.allLanguages(availableModels: [.whisperTiny]).isEmpty,
+                      "Meeting capabilities do not add Tiny to preferred onboarding routes")
+        XCTAssertEqual(VoiceEngineLanguageCatalog.routes(forLanguageID: "zh", availableModels: [.whisperSmall, .whisperLargeTurbo]).map(\.model),
+                       [.whisperSmall, .whisperLargeTurbo])
     }
 
     func testP1DefaultASRModelMatchesSpeechModelRawValue() {

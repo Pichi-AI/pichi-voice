@@ -1517,6 +1517,11 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertTrue(spy.requests.isEmpty, "a mismatched request must be refused before the factory runs")
 
         // And the composite backend, which passes its frozen plan's request, gets the runtime.
+        let expectedConfiguration = try await PichiMeetingProviderFactory.frozenConfiguration(
+            backendID: .parakeetNemotron,
+            languageCode: "en",
+            preferredASRModel: .parakeetTDTv2
+        )
         let materializer = FakeMaterializer()
         let compositeRegistry = MeetingTranscriptionBackendRegistry(defaultBackendID: .parakeetNemotron)
         compositeRegistry.register(.parakeetNemotron) { context in
@@ -1553,7 +1558,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(spy.requests.first?.attemptID, openAttemptID)
         XCTAssertEqual(spy.requests.first?.session.id, fixture.session.id)
         XCTAssertEqual(spy.requests.first?.sessionDirectory, directory)
-        XCTAssertEqual(spy.requests.first?.configuration, MeetingFinalProcessingConfiguration(languageCode: "en"))
+        XCTAssertEqual(spy.requests.first?.configuration, expectedConfiguration)
         XCTAssertEqual(result.attempt.backendID, MeetingBackendID.parakeetNemotron.rawValue)
     }
 

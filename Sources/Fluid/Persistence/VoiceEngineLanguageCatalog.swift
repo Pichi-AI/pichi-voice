@@ -81,7 +81,13 @@ enum VoiceEngineLanguageCatalog {
     static func allLanguages(
         availableModels: [SettingsStore.SpeechModel] = SettingsStore.SpeechModel.availableModels
     ) -> [VoiceEngineLanguage] {
-        let languages = self.availableDefinitions(availableModels: availableModels)
+        self.allLanguages(supportedLanguageCodes: Set(self.availableDefinitions(availableModels: availableModels).map(\.id)))
+    }
+
+    /// Capability callers share catalog names, ordering and presentation without selecting an
+    /// onboarding route. Preferred onboarding engines can differ from other compiled consumers.
+    static func allLanguages(supportedLanguageCodes: Set<String>) -> [VoiceEngineLanguage] {
+        let languages = self.languageDefinitions.filter { supportedLanguageCodes.contains($0.id) }
         let primaryIDs = Set(self.primaryDefinitions(from: languages).map(\.id))
         return languages.map { language in
             VoiceEngineLanguage(id: language.id, displayName: language.displayName, aliases: language.aliases,
