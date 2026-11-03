@@ -495,6 +495,7 @@ private struct MobilePrivacySettings: View {
     @ObservedObject private var privateProfile = PrivateProfileService.shared
 
     var body: some View {
+        ScrollViewReader { proxy in
         Form {
             Section {
                 MobileAudioPrivacyControls(asFormRows: true)
@@ -523,7 +524,9 @@ private struct MobilePrivacySettings: View {
                 MobileSettingsFooter(MobilePrivacyActivationControls.explanation)
             }
             // The dictionary refines data cleanup, so it follows that section directly.
-            MobileSensitiveDictionarySettings(edit: $dictionaryEdit)
+            MobileSensitiveDictionarySettings(edit: $dictionaryEdit, revealDraft: { id in
+                withAnimation { proxy.scrollTo(id, anchor: .bottom) }
+            })
                 .id(privateProfile.sourceRevision)
             Section {
                 MobileRecordingDataControls(session: accountSession, service: cloudPublication,
@@ -538,5 +541,6 @@ private struct MobilePrivacySettings: View {
                 dictionaryEdit = nil
             }
             .onDisappear { dictionaryEdit = nil }
+        }
     }
 }

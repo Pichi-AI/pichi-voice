@@ -370,6 +370,8 @@ final class MobileSetupUITests: XCTestCase {
                 XCTAssertTrue(validation.isHittable)
                 XCTAssertLessThanOrEqual(validation.frame.maxY, app.keyboards.firstMatch.frame.minY + 1,
                                          "Validation must remain readable above the keyboard")
+                XCTAssertLessThanOrEqual(input.frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
+                XCTAssertLessThanOrEqual(app.buttons["privacy.dictionary.cancel"].frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
                 XCTAssertTrue(input.exists && app.keyboards.firstMatch.exists, "Failed save preserves the focused draft")
                 XCTAssertEqual(input.value as? String, "Ёжик Тестовый")
                 capture("dictionary-ru-dark-03-duplicate")

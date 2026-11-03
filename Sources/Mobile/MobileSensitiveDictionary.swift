@@ -9,6 +9,7 @@ struct MobileSensitiveDictionaryEdit: Identifiable {
 /// The enclosing privacy Form owns the draft and clears it at profile concealment.
 struct MobileSensitiveDictionarySettings: View {
     @Binding var edit: MobileSensitiveDictionaryEdit?
+    let revealDraft: (UUID) -> Void
     @ObservedObject private var settings = SettingsStore.shared
     @StateObject private var mutationSettings = SettingsStore.shared.boundToCurrentPrivateProfile()
     @Environment(\.theme) private var theme
@@ -78,7 +79,7 @@ struct MobileSensitiveDictionarySettings: View {
         MobileSensitiveDictionaryInlineEditor(draft: draft, saved: {
             settings.objectWillChange.send()
             edit = nil
-        }, cancel: { edit = nil })
+        }, cancel: { edit = nil }, reveal: { revealDraft(draft.id) })
             .id(draft.id)
     }
 }
@@ -88,14 +89,15 @@ private struct MobileSensitiveDictionaryInlineEditor: View {
     let draft: MobileSensitiveDictionaryEdit
     let saved: () -> Void
     let cancel: () -> Void
+    let reveal: () -> Void
     @StateObject private var settings = SettingsStore.shared.boundToCurrentPrivateProfile()
     @Environment(\.theme) private var theme
     @State private var phrase: String
     @State private var error: String?
     @FocusState private var focused: Bool
 
-    init(draft: MobileSensitiveDictionaryEdit, saved: @escaping () -> Void, cancel: @escaping () -> Void) {
-        self.draft = draft; self.saved = saved; self.cancel = cancel
+    init(draft: MobileSensitiveDictionaryEdit, saved: @escaping () -> Void, cancel: @escaping () -> Void, reveal: @escaping () -> Void) {
+        self.draft = draft; self.saved = saved; self.cancel = cancel; self.reveal = reveal
         _phrase = State(initialValue: draft.entry?.phrase ?? "")
     }
 
@@ -129,6 +131,13 @@ private struct MobileSensitiveDictionaryInlineEditor: View {
         }.accessibilityElement(children: .contain)
             .onAppear { focused = true }
             .onDisappear { focused = false }
+            .task(id: error) {
+                guard error != nil else { return }
+                // Reveal the expanded row after validation updates its layout.
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                reveal()
+            }
     }
 
     private func save() {
