@@ -1391,6 +1391,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     let backendRegistry: MeetingTranscriptionBackendRegistry
     private let backendIDProvider: @MainActor (String) -> MeetingBackendID
     private let usesRecordingBackendPin: Bool
+    private let preferredASRModelProvider: @MainActor () -> SettingsStore.SpeechModel
     /// Canonical path only: observes chunk files for the analysis manifest. `nil` uses the real
     /// filesystem observer; tests inject fixture observations instead of writing audio.
     private let chunkObserver: (any MeetingChunkAudioObserving)?
@@ -1431,7 +1432,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
         prepareDiarizationDependencies: (@MainActor (Set<MeetingDiarizationDependency>) async throws -> Void)? = nil,
         diarizationSupported: @escaping @MainActor () -> Bool = { CPUArchitecture.isAppleSilicon },
-        canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil
+        canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil,
+        preferredASRModelProvider: (@MainActor () -> SettingsStore.SpeechModel)? = nil
     ) {
         let settings = settings ?? SettingsStore.shared
         self.settings = settings
@@ -1439,6 +1441,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         self.privacyRedactorProvider = privacyRedactorProvider
         self.pcmAdmissionContextProvider = pcmAdmissionContextProvider
         self.usesRecordingBackendPin = backendID == nil && backendIDProvider == nil && backendRegistry == nil
+        self.preferredASRModelProvider = preferredASRModelProvider ?? { settings.selectedSpeechModel }
         self.managesModelResidency = managesModelResidency
         self.serializationGate = serializationGate
         self.chunkObserver = chunkObserver
@@ -1581,6 +1584,22 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         if let descriptor = declaredDescriptor, !descriptor.supportedInputs.contains(.recordedChunks) {
             throw MeetingBackendError.unsupportedInput(backend: backendID, input: .recordedChunks)
         }
+        // Capture the composite provider preference before dependency preparation can suspend.
+        // Registered providers and restored attempts retain their own immutable model identity.
+        let preferredASRModel: SettingsStore.SpeechModel?
+        if retainedPin == nil, backendID == .parakeetNemotron {
+            if usesRecordingPin {
+                if let recordingModelID = session.recordingASRModel {
+                    guard let recorded = SettingsStore.SpeechModel(rawValue: recordingModelID),
+                          MeetingProviderOptions.supportedModels.contains(recorded) else {
+                        throw MeetingProviderOptionsError.unsupportedASRModel(recordingModelID)
+                    }
+                    _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
+                        asrModel: recordingModelID, languageCode: session.languageCode))
+                    preferredASRModel = recorded
+                } else { preferredASRModel = nil }
+            } else { preferredASRModel = self.preferredASRModelProvider() }
+        } else { preferredASRModel = nil }
         if session.speakerLabelsEnabled != false, let descriptor = declaredDescriptor {
             try await self.prepareSpeakerDependencies(for: descriptor, session: session)
         }
@@ -1598,6 +1617,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             configuration = try await PichiMeetingProviderFactory.frozenConfiguration(
                 backendID: backendID,
                 languageCode: session.languageCode,
+                preferredASRModel: preferredASRModel,
                 artifactFingerprintOverride: usesRecordingPin ? session.recordingASRArtifactFingerprint : nil,
                 diarizationEnabled: session.speakerLabelsEnabled ?? true,
                 speakerProcessingMode: session.effectiveSpeakerProcessingMode

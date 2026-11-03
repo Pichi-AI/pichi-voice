@@ -29,7 +29,8 @@ model_declarations = "\n".join(declaration(models, marker) for marker in (
 ))
 validation = (ROOT / "Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift").read_text()
 configuration_validation = declaration(validation, "nonisolated extension MeetingCaptureConfiguration {")
-swift = "import Foundation\n" + model_declarations + "\n" + configuration_validation + r'''
+recording_source = (ROOT / "Sources/Fluid/Services/Meeting/MeetingRecordingSource.swift").read_text()
+swift = "import Foundation\n" + model_declarations + "\n" + configuration_validation + "\n" + recording_source + r'''
 enum VoiceEngineLanguageCatalog { static let parakeetV3LanguageIDs = ["en", "ru"] }
 enum MeetingModelValidationError: Error { case unsupportedLanguage, missingMicrophone, missingOnlineApplication, unexpectedInRoomApplication, unexpectedSystemAudioApplication }
 enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String), microphoneUnavailable }

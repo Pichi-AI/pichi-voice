@@ -197,6 +197,12 @@ enum PichiMeetingProviderFactory {
         self.registrations[modelID]?.descriptor.supportedLanguageCodes
     }
 
+    /// Presentation uses compiled meeting providers, independently of a mutable selection.
+    nonisolated static var retranscriptionModels: [SettingsStore.SpeechModel] {
+        Set(self.registrations.keys.compactMap(SettingsStore.SpeechModel.init(rawValue:)))
+            .union(MeetingProviderOptions.supportedModels).sorted { $0.rawValue < $1.rawValue }
+    }
+
     nonisolated static func registeredBackendDescriptor(for modelID: String) -> MeetingBackendDescriptor? {
         self.registrations[modelID]?.descriptor
     }
@@ -331,6 +337,7 @@ enum PichiMeetingProviderFactory {
     /// belongs to the later frozen attempt snapshot. A restricted registration may supply cheap
     /// expected export metadata here; weight verification remains with provider preparation.
     static func validationConfiguration(backendID: MeetingBackendID, languageCode: String,
+                                        preferredASRModel: SettingsStore.SpeechModel? = nil,
                                         diarizationEnabled: Bool,
                                         artifactFingerprintOverride: String? = nil,
                                         speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording) -> MeetingFinalProcessingConfiguration {
@@ -343,7 +350,8 @@ enum PichiMeetingProviderFactory {
                 diarizationFingerprint: diarizationFingerprint, speakerLabelsEnabled: diarizationEnabled,
                 speakerProcessingMode: speakerProcessingMode)
         }
-        return MeetingFinalProcessingConfiguration(languageCode: languageCode,
+        return MeetingFinalProcessingConfiguration(
+            preferredASRModel: backendID == .parakeetNemotron ? preferredASRModel : nil, languageCode: languageCode,
             diarizationFingerprint: "unavailable:input-admission", speakerLabelsEnabled: diarizationEnabled,
                 speakerProcessingMode: speakerProcessingMode)
     }
@@ -354,6 +362,7 @@ enum PichiMeetingProviderFactory {
     static func configuration(
         backendID: MeetingBackendID,
         languageCode: String,
+        preferredASRModel: SettingsStore.SpeechModel? = nil,
         artifactFingerprintOverride: String? = nil,
         diarizationEnabled: Bool = true,
         speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording
@@ -362,7 +371,9 @@ enum PichiMeetingProviderFactory {
             let fingerprint = artifactFingerprintOverride ?? registration.installedArtifactFingerprint.flatMap { try? $0()() }
             return registration.configurationSnapshot(languageCode, fingerprint, diarizationEnabled, speakerProcessingMode)
         }
-        return MeetingFinalProcessingConfiguration(languageCode: languageCode,
+        return MeetingFinalProcessingConfiguration(
+            asrArtifactFingerprint: artifactFingerprintOverride,
+            preferredASRModel: backendID == .parakeetNemotron ? preferredASRModel : nil, languageCode: languageCode,
                                                   diarizationFingerprint: diarizationEnabled ? MeetingProcessingCheckpoint.currentDiarizationFingerprint : self.transcriptOnlyDiarizationFingerprint,
                                                   speakerLabelsEnabled: diarizationEnabled, speakerProcessingMode: speakerProcessingMode)
     }
@@ -388,14 +399,36 @@ enum PichiMeetingProviderFactory {
     static func frozenConfiguration(
         backendID: MeetingBackendID,
         languageCode: String,
+        preferredASRModel: SettingsStore.SpeechModel? = nil,
         artifactFingerprintOverride: String? = nil,
         diarizationEnabled: Bool = true,
         speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording
     ) async throws -> MeetingFinalProcessingConfiguration {
+        if backendID == .parakeetNemotron {
+            let model = MeetingProviderOptions.preferredModel(for: languageCode, selected: preferredASRModel)
+            let descriptor = ParakeetSpeechModelCatalog.descriptor(forModelID: model.rawValue)
+            let directory = descriptor?.cacheDirectory(in: AppBrand.modelsDirectory)
+            let installedFingerprint: String?
+            if let descriptor, let directory {
+                installedFingerprint = try await self.detachedFingerprint {
+                    if let artifactFingerprintOverride {
+                        return descriptor.artifactsAreComplete(at: directory) ? artifactFingerprintOverride : nil
+                    }
+                    return try descriptor.installedArtifactFingerprint(at: directory)
+                }
+            } else { installedFingerprint = nil }
+            return MeetingFinalProcessingConfiguration(asrModel: model.rawValue,
+                asrArtifactFingerprint: artifactFingerprintOverride ?? installedFingerprint,
+                asrArtifactDirectory: installedFingerprint != nil ? directory : nil,
+                languageCode: languageCode,
+                diarizationFingerprint: diarizationEnabled ? MeetingProcessingCheckpoint.currentDiarizationFingerprint : self.transcriptOnlyDiarizationFingerprint,
+                speakerLabelsEnabled: diarizationEnabled, speakerProcessingMode: speakerProcessingMode)
+        }
         guard artifactFingerprintOverride == nil,
               let registration = self.registrations.values.first(where: { $0.descriptor.id == backendID }),
               let fingerprint = registration.installedArtifactFingerprint else {
             return self.configuration(backendID: backendID, languageCode: languageCode,
+                preferredASRModel: preferredASRModel,
                 artifactFingerprintOverride: artifactFingerprintOverride, diarizationEnabled: diarizationEnabled,
                 speakerProcessingMode: speakerProcessingMode)
         }

@@ -169,27 +169,23 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
             self.diagnosticObserver?(joined, result.samples, result.statistics)
             let mayPromote = joined.clockAttested
                 && joined.pairedFrameCount > MeetingAECConstants.attestationFrames
-            if !mayPromote {
-                guard let raw = MeetingAECPCMAdapter.synthesize(
-                    samples: joined.capture.samples, presentationTime: joined.capture.presentationTime
-                ) else {
-                    self.beginFallback(joined.capture, failure: .outputSynthesis, allowFallback: allowFallback)
-                    return false
-                }
-                self.committer.commitUnfiltered(raw)
-                return true
-            }
             guard let output = MeetingAECPCMAdapter.synthesize(
-                samples: result.samples,
+                samples: mayPromote ? result.samples : joined.capture.samples,
                 presentationTime: joined.capture.presentationTime
             ) else {
                 self.beginFallback(joined.capture, failure: .outputSynthesis, allowFallback: allowFallback)
                 return false
             }
-            let original = MeetingAECPCMAdapter.synthesize(
-                samples: joined.capture.samples, presentationTime: joined.capture.presentationTime
-            )
-            self.committer.commitProcessed(output, mayPromote: mayPromote, originalCapture: original)
+            if mayPromote {
+                let original = MeetingAECPCMAdapter.synthesize(
+                    samples: joined.capture.samples, presentationTime: joined.capture.presentationTime
+                )
+                self.committer.commitProcessed(output, mayPromote: true, originalCapture: original)
+            } else if allowFallback {
+                self.committer.commitWarmup(output)
+            } else {
+                self.committer.retainPendingCapture(output, unfiltered: true)
+            }
             return true
         } catch let failure as MeetingAECFailure {
             self.beginFallback(joined.capture, failure: failure, allowFallback: allowFallback)

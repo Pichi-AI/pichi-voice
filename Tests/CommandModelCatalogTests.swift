@@ -131,11 +131,11 @@ final class SettingsStore: ObservableObject {
             ("Command Mode needs a chat model. The selected model is not supported by the chat/completions endpoint.",
              "Для режима команд нужна чат-модель. Выбранная модель не поддерживается интерфейсом chat/completions.",
              { $0.availableModelsByProvider["openai"] = ["text-embedding-3"] }),
-            ("Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Providers.",
-             "Для режима команд нужен проверенный чат-провайдер. Выберите проверенную модель или проверьте провайдера в разделе «Провайдеры ИИ».",
+            ("Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Settings.",
+             "Для команд нужен проверенный чат-провайдер. Выберите проверенную модель или проверьте провайдера в настройках ИИ.",
              { $0.verifiedProviderFingerprints.removeValue(forKey: "openai") }),
-            ("Command Mode needs a verified chat provider. Verify this provider in AI Providers before using Command Mode.",
-             "Для режима команд нужен проверенный чат-провайдер. Проверьте этого провайдера в разделе «Провайдеры ИИ», прежде чем использовать режим команд.",
+            ("Command Mode needs a verified chat provider. Verify this provider in AI Settings before using Command Mode.",
+             "Для команд нужен проверенный чат-провайдер. Проверьте этого провайдера в настройках ИИ перед использованием команд.",
              { $0.commandModeLinkedToGlobal = false; $0.commandModeSelectedProviderID = "openai"; $0.verifiedProviderFingerprints.removeValue(forKey: "openai") }),
         ]
         for language in ["en", "ru"] {

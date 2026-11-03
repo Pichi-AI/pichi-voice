@@ -8,6 +8,8 @@ enum MenuBarNavigationDestination: String {
     case settings
     case meetingTranscription
     case preferences
+    case cleanupStyles
+    case aiSettings
 }
 
 @MainActor
@@ -200,10 +202,12 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         NotificationCenter.default.publisher(for: .fluidPasteNotLanded)
             .sink { [weak self] note in
                 guard let transcript = note.userInfo?["transcript"] as? String,
-                      let profile = note.userInfo?["privateProfile"] as? PrivateProfileSnapshot else { return }
+                      let profile = note.userInfo?["privateProfile"] as? PrivateProfileSnapshot,
+                      let verificationID = note.userInfo?["verificationID"] as? UInt64,
+                      let postedAt = note.userInfo?["postedAt"] as? TimeInterval else { return }
                 Task { @MainActor [weak self] in
                     guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
-                    self?.showPasteNotLandedFailure(transcript: transcript, profile: profile)
+                    self?.showPasteNotLandedFailure(transcript: transcript, profile: profile, verificationID: verificationID, postedAt: postedAt)
                 }
             }
             .store(in: &self.cancellables)
@@ -597,9 +601,14 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     /// A verified non-landing paste re-presents the overlay in its failure
     /// state so the transcript can be copied.
-    func showPasteNotLandedFailure(transcript: String, profile: PrivateProfileSnapshot) {
-        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
-              !self.overlayVisible, !self.isProcessingActive, self.asrService?.isRunning != true else { return }
+    func showPasteNotLandedFailure(transcript: String, profile: PrivateProfileSnapshot, verificationID: UInt64, postedAt: TimeInterval) {
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
+        guard PasteRecoveryPresentationPolicy.shared.claim(
+            verificationID,
+            alertsEnabled: SettingsStore.shared.showPasteCheckAlerts,
+            isBusy: self.overlayVisible || self.isProcessingActive || self.asrService?.isRunning == true,
+            userActed: PasteVerifier.userActedAfterPaste(secondsSinceLastInput: PasteVerifier.secondsSinceLastUserInput(), secondsSincePaste: ProcessInfo.processInfo.systemUptime - postedAt)
+        ) else { return }
         DeliveryFailureOverlayController.shared.show(kind: .pasteNotLanded, transcript: transcript)
     }
 
@@ -611,6 +620,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             self.overlayBench("instant_show_return reason=no_asr_service")
             return
         }
+
+        PasteRecoveryPresentationPolicy.shared.beginDelivery()
 
         self.pendingHideOperation?.cancel()
         self.pendingHideOperation = nil
@@ -1591,7 +1602,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         Task { @MainActor in
             guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
             await self.startMeetingRecordingInBackground {
-                try await AppServices.shared.startMeetingRecordingFromMenuBar()
+                MeetingRecordingSourcePromptController.shared.handleShortcut()
             }
         }
     }
@@ -1631,6 +1642,14 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         self.meetingStopRequested = true
         self.updateMeetingMenuItemsText()
         self.stopMeetingRecordingHandler?()
+    }
+
+    func openAISettings() {
+        self.openNavigationDestination(.aiSettings)
+    }
+
+    func openCleanupStyles() {
+        self.openNavigationDestination(.cleanupStyles)
     }
 
     private func openNavigationDestination(_ destination: MenuBarNavigationDestination) {

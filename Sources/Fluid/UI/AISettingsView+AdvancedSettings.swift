@@ -138,7 +138,6 @@ extension AIEnhancementSettingsView {
         isEnabled: Bool = true
     ) -> some View {
         let tone = Color.fluidGreen
-        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
 
         return VStack(spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
@@ -170,7 +169,7 @@ extension AIEnhancementSettingsView {
                         } label: {
                             Image(systemName: "slider.horizontal.3")
                                 .font(.fluidSystem(size: 12, weight: .semibold))
-                                .frame(width: AISettingsLayout.providerRowControlHeight, height: AISettingsLayout.providerRowControlHeight)
+                                .frame(width: 18, height: 18)
                         }
                         .fluidGlassAction(circular: true)
                         .disabled(!isEnabled)
@@ -183,7 +182,7 @@ extension AIEnhancementSettingsView {
                         } label: {
                             Image(systemName: "trash")
                                 .font(.fluidSystem(size: 12, weight: .semibold))
-                                .frame(width: AISettingsLayout.providerRowControlHeight, height: AISettingsLayout.providerRowControlHeight)
+                                .frame(width: 18, height: 18)
                         }
                         .fluidGlassAction(circular: true, tone: .red)
                         .disabled(!isEnabled)
@@ -203,19 +202,8 @@ extension AIEnhancementSettingsView {
                 .padding(.leading, 46)
             }
         }
-        .padding(16)
-        .frame(minHeight: 76)
-        .background(
-            shape
-                .fill(self.theme.palette.cardBackground.opacity(0.7))
-                .overlay(
-                    shape
-                        .stroke(
-                            self.theme.palette.cardBorder,
-                            lineWidth: 1
-                        )
-                )
-        )
+        .padding(.vertical, 2)
+        .opacity(isEnabled ? 1 : 0.68)
     }
 
     private func promptCardIcon(
@@ -258,7 +246,7 @@ extension AIEnhancementSettingsView {
     ) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(title)
+                Text(PichiLocalization.text(title))
                     .font(.fluidSystem(size: 14, weight: .semibold))
                     .foregroundStyle(self.theme.palette.primaryText)
                     .lineLimit(1)
@@ -840,7 +828,7 @@ extension AIEnhancementSettingsView {
         .sheet(isPresented: self.$showingPromptProviderSetup) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Text("AI Providers").font(self.theme.typography.title)
+                    Text("AI Settings").font(self.theme.typography.title)
                     Spacer()
                     Button("Done") { self.showingPromptProviderSetup = false }
                         .fluidGlassAction()
@@ -1044,27 +1032,27 @@ extension AIEnhancementSettingsView {
         let privateAIAvailable = mode.normalized == .dictate && self.viewModel.isPrivateAIPromptAvailable()
         let isSelectedAppsOnly = self.viewModel.promptRoutingScope(for: mode) == .selectedAppsOnly
 
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Switch styles from the dictation overlay", systemImage: "info.circle")
-                    .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.theme.palette.accentText)
-                Text("Manage instructions, models, and shortcuts here.")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-
-            VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: AISettingsLayout.stylesSectionSpacing) {
+            self.stylesSection(
+                title: "When you dictate",
+                subtitle: "How your words get cleaned up. Switch anytime from the dictation pop-up."
+            ) {
                 FluidGlassControlGroup {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: privateAIAvailable ? 2 : 1), spacing: 16) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: AISettingsLayout.builtInStyleMinWidth), spacing: 16)], spacing: 16) {
+                        self.builtInStyleCard(
+                            title: "Basic",
+                            symbol: "text.alignleft",
+                            description: "Transcribes your words without AI cleanup.",
+                            configuration: PichiLocalization.text("No cleanup model needed"),
+                            isEnabled: true
+                        )
                         if privateAIAvailable {
                             let assignments = self.promptAssignments(selection: .privateAI, isPrivateAI: true)
                             self.builtInStyleCard(
                                 title: SettingsStore.DictationModeLabels.smart,
                                 symbol: "sparkles",
-                                subtitle: PichiLocalization.format("On-device · %@", assignments.modelPicker.map { ModelDisplayName.forID($0.selectedModel) } ?? AppBrand.assistantName),
-                                detail: "Built-in style",
+                                description: "Cleans up on this Mac. Nothing leaves your computer.",
+                                configuration: PichiLocalization.format("On-device · %@", assignments.modelPicker.map { ModelDisplayName.forID($0.selectedModel) } ?? PrivateAIProviderFeature.displayName),
                                 assignments: assignments,
                                 isEnabled: true,
                                 action: ("Edit shortcut", { self.viewModel.openPrivateAIPromptEditor() })
@@ -1074,147 +1062,185 @@ extension AIEnhancementSettingsView {
                         self.builtInStyleCard(
                             title: SettingsStore.DictationModeLabels.externalDefault,
                             symbol: "textformat",
-                            subtitle: assignments.isReady ? self.styleConfigurationSummary(assignments) : PichiLocalization.text("External AI provider"),
-                            detail: assignments.isReady ? "Customizable cleanup" : "Setup required",
+                            description: assignments.isReady
+                                ? "Uses your AI provider. You can change its instructions."
+                                : "Needs an AI provider before it can run.",
+                            configuration: assignments.isReady ? self.styleConfigurationSummary(assignments) : PichiLocalization.text("External AI provider"),
                             assignments: assignments,
                             isEnabled: true,
                             action: (assignments.isReady ? "Edit style" : "Set up", { self.viewModel.openDefaultPromptViewer(for: mode) })
                         )
                     }
                 }
+            }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text("Custom instructions").font(self.theme.typography.bodyStrong)
-                        Spacer()
-                        Button {
-                            self.viewModel.openNewPromptEditor(prefillMode: mode)
-                        } label: {
-                            Label("Add instruction", systemImage: "plus")
-                        }
-                        .fluidGlassAction()
-                    }
-
-                    if customProfiles.isEmpty {
-                        Text("Create a style for the way you write, then choose it from the overlay.")
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.theme.palette.secondaryText)
-                    } else {
-                        ForEach(customProfiles) { profile in
-                            let profileSelection = SettingsStore.DictationPromptSelection.profile(profile.id)
-                            self.promptProfileCard(
-                                title: profile.name.isEmpty ? PichiLocalization.text("Untitled Prompt") : profile.name,
-                                subtitle: self.styleConfigurationSummary(self.promptAssignments(selection: profileSelection)),
-                                mode: profile.mode,
-                                assignments: profile.mode.normalized == .dictate
-                                    ? self.promptAssignments(selection: profileSelection)
-                                    : nil,
-                                onManage: { self.viewModel.openEditor(for: profile) },
-                                manageTitle: "Edit style",
-                                onDelete: { self.viewModel.requestDeletePrompt(profile) },
-                                isEnabled: true
-                            )
-                        }
-                    }
-
-                    Divider().padding(.vertical, 4)
-                    DisclosureGroup(isExpanded: self.$showsAppSpecificStyles) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Where custom styles apply")
-                                .font(self.theme.typography.bodyStrong)
-                            self.promptRoutingScopeRow(mode: mode)
-                            Text(isSelectedAppsOnly
-                                ? "Custom styles run only in the apps listed below. Other apps use the built-in prompt for the selected mode."
-                                : "Your chosen custom style can run in any app. Add an app rule below to use a different style there.")
-                                .font(.fluidSystem(.caption))
-                                .foregroundStyle(self.theme.palette.secondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                            self.appPromptBindingsSection(mode: mode, isEmphasized: isSelectedAppsOnly, isEnabled: true)
-                        }
-                        .padding(.top, 12)
+            self.stylesSection(
+                title: "Custom instructions",
+                subtitle: "Your own rules for how text should read. They show up in the dictation pop-up.",
+                trailing: {
+                    Button {
+                        self.viewModel.openNewPromptEditor(prefillMode: mode)
                     } label: {
-                        HStack {
-                            Text("Advanced").font(self.theme.typography.bodyStrong)
-                            Spacer()
-                            if isSelectedAppsOnly {
-                                Text("Listed apps only")
-                                    .font(.fluidSystem(.caption))
+                        Label("Add instruction", systemImage: "plus")
+                    }
+                    .fluidGlassAction(prominent: true)
+                }
+            ) {
+                ThemedCard(style: .subtle, padding: 16) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if customProfiles.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("No custom instructions yet")
+                                    .font(self.theme.typography.bodyStrong)
+                                    .foregroundStyle(self.theme.palette.primaryText)
+                                Text("For example: keep it casual in Slack, or formal in email.")
+                                    .font(self.theme.typography.bodySmall)
                                     .foregroundStyle(self.theme.palette.secondaryText)
                             }
-                            let ruleCount = self.viewModel.appBindings(for: mode).count
-                            if ruleCount > 0 {
-                                Text(PichiLocalization.format("App rules: %lld", ruleCount))
-                                    .font(.fluidSystem(.caption))
-                                    .foregroundStyle(self.theme.palette.secondaryText)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            ForEach(customProfiles) { profile in
+                                if profile.id != customProfiles.first?.id { Divider() }
+                                let profileSelection = SettingsStore.DictationPromptSelection.profile(profile.id)
+                                self.promptProfileCard(
+                                    title: profile.name.isEmpty ? PichiLocalization.text("Untitled Prompt") : profile.name,
+                                    subtitle: self.styleConfigurationSummary(self.promptAssignments(selection: profileSelection)),
+                                    mode: profile.mode,
+                                    assignments: profile.mode.normalized == .dictate
+                                        ? self.promptAssignments(selection: profileSelection)
+                                        : nil,
+                                    onManage: { self.viewModel.openEditor(for: profile) },
+                                    manageTitle: "Edit style",
+                                    onDelete: { self.viewModel.requestDeletePrompt(profile) },
+                                    isEnabled: true
+                                )
                             }
                         }
+
+                        Divider()
+                        DisclosureGroup(isExpanded: self.$showsAppSpecificStyles) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Where custom styles apply")
+                                    .font(self.theme.typography.bodyStrong)
+                                self.promptRoutingScopeRow(mode: mode)
+                                Text(isSelectedAppsOnly
+                                    ? "Custom styles run only in the apps listed below. Other apps use the built-in prompt for the selected mode."
+                                    : "Your chosen custom style can run in any app. Add an app rule below to use a different style there.")
+                                    .font(.fluidSystem(.caption))
+                                    .foregroundStyle(self.theme.palette.secondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                self.appPromptBindingsSection(mode: mode, isEmphasized: isSelectedAppsOnly, isEnabled: true)
+                            }
+                            .padding(.top, 12)
+                        } label: {
+                            HStack {
+                                Text("Use different styles in different apps").font(self.theme.typography.bodyStrong)
+                                Spacer()
+                                if isSelectedAppsOnly {
+                                    Text("Listed apps only")
+                                        .font(.fluidSystem(.caption))
+                                        .foregroundStyle(self.theme.palette.secondaryText)
+                                }
+                                let ruleCount = self.viewModel.appBindings(for: mode).count
+                                if ruleCount > 0 {
+                                    Text(PichiLocalization.format("App rules: %lld", ruleCount))
+                                        .font(.fluidSystem(.caption))
+                                        .foregroundStyle(self.theme.palette.secondaryText)
+                                }
+                            }
+                        }
+                        .disclosureGroupStyle(PromptAdvancedDisclosureStyle())
                     }
-                    .disclosureGroupStyle(PromptAdvancedDisclosureStyle())
-                }
-                .padding(16)
-                .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 16))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16)
-                        .strokeBorder(self.theme.palette.cardBorder, lineWidth: 1)
-                        .allowsHitTesting(false)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
         .padding(.top, 2)
     }
 
+    /// One titled part of the page. The title says what the part is for, so people
+    /// never have to work it out from the controls inside.
+    private func stylesSection<Trailing: View, Content: View>(
+        title: String,
+        subtitle: String,
+        @ViewBuilder trailing: () -> Trailing = { EmptyView() },
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(PichiLocalization.text(title))
+                        .font(self.theme.typography.sectionTitle)
+                        .foregroundStyle(self.theme.palette.primaryText)
+                    Text(PichiLocalization.text(subtitle))
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                trailing()
+            }
+            content()
+        }
+    }
+
+    private func shortcutKeycap(_ shortcut: String) -> some View {
+        Text(shortcut)
+            .font(self.theme.typography.captionStrong)
+            .foregroundStyle(self.theme.palette.secondaryText)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .frame(minWidth: 24)
+            .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .accessibilityLabel(PichiLocalization.format("Shortcut %@", shortcut))
+    }
+
     private func builtInStyleCard(
         title: String,
         symbol: String,
-        subtitle: String,
-        detail: String,
-        assignments: PromptCardAssignments,
+        description: String,
+        configuration: String,
+        assignments: PromptCardAssignments? = nil,
         isEnabled: Bool,
-        action: (title: String, perform: () -> Void)
+        action: (title: String, perform: () -> Void)? = nil
     ) -> some View {
-        HStack(alignment: .center, spacing: 16) {
-            HStack(alignment: .center, spacing: 12) {
-                Image(systemName: symbol)
-                    .font(.fluidSystem(size: 20, weight: .medium))
-                    .foregroundStyle(symbol == "sparkles" ? self.theme.palette.accentText : self.theme.palette.secondaryText)
-                    .frame(width: 24, height: 24)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(PichiLocalization.text(title))
-                        .font(.fluidSystem(size: 14, weight: .semibold))
-                        .foregroundStyle(self.theme.palette.primaryText)
-                    Text(subtitle)
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                    Text(PichiLocalization.text(detail))
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(assignments.isReady ? self.theme.palette.secondaryText : self.theme.palette.warning)
+        ThemedCard(style: .subtle, padding: 16) {
+            HStack(alignment: .center, spacing: 16) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: symbol)
+                        .font(.fluidSystem(size: 18, weight: .medium))
+                        .foregroundStyle(symbol == "sparkles" ? self.theme.palette.accentText : self.theme.palette.secondaryText)
+                        .frame(width: 24, height: 24)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Text(PichiLocalization.text(title))
+                                .font(self.theme.typography.sectionTitle)
+                                .foregroundStyle(self.theme.palette.primaryText)
+                            if let shortcut = assignments?.shortcutDisplay {
+                                self.shortcutKeycap(shortcut)
+                            }
+                        }
+                        .frame(minHeight: 22)
+                        Text(PichiLocalization.text(description))
+                            .font(self.theme.typography.bodySmall)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                        Text(configuration)
+                            .font(self.theme.typography.caption)
+                            .foregroundStyle(assignments?.isReady != false ? self.theme.palette.tertiaryText : self.theme.palette.warning)
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
                 }
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-            VStack(alignment: .trailing, spacing: 6) {
-                Button(PichiLocalization.text(action.title), action: action.perform)
-                    .fluidGlassAction()
-                    .fixedSize()
-                    .disabled(!isEnabled)
-                if let shortcut = assignments.shortcutDisplay {
-                    Label(shortcut, systemImage: "keyboard")
-                        .font(.fluidSystem(.caption2))
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                .frame(maxHeight: .infinity, alignment: .top)
+                Spacer(minLength: 0)
+                if let action {
+                    Button(PichiLocalization.text(action.title), action: action.perform)
+                        .fluidGlassAction()
+                        .fixedSize()
+                        .disabled(!isEnabled)
                 }
             }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 16)
-                .fill(self.theme.palette.cardBackground)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(self.theme.palette.cardBorder, lineWidth: 1)
-                .allowsHitTesting(false)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
     }
 
@@ -1248,10 +1274,6 @@ extension AIEnhancementSettingsView {
             }
 
             Spacer(minLength: 12)
-
-            if mode.normalized == .edit {
-                self.editModeInlineModelControls
-            }
         }
         .frame(minHeight: AISettingsLayout.controlHeight)
         .padding(.top, 2)
@@ -1322,89 +1344,115 @@ extension AIEnhancementSettingsView {
         )
     }
 
-    private var editModeInlineModelControls: some View {
-        let verified = self.editModeVerifiedProviders
-
-        return HStack(alignment: .center, spacing: 10) {
-            Text("Edit model")
-                .font(.fluidSystem(size: 12, weight: .semibold))
-                .foregroundStyle(self.theme.palette.secondaryText)
-
-            if verified.isEmpty {
-                HStack(spacing: 8) {
-                    Image(systemName: "info.circle")
-                        .font(.fluidSystem(size: 12))
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                    Text("No verified AI provider")
-                        .font(.fluidSystem(.caption))
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .lineLimit(1)
-                }
-            } else {
-                let providerID = self.activeEditModeProviderID
-                let models = self.editModeModels(for: providerID)
-                Group {
-                    Toggle("Sync", isOn: self.editModeLinkedToGlobalBinding)
-                        .toggleStyle(.checkbox)
-                        .font(.fluidSystem(.caption))
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .onChange(of: self.settings.rewriteModeLinkedToGlobal) { _, linked in
-                            if linked {
-                                self.syncEditModeToGlobalSelection()
-                            } else {
-                                self.normalizeEditModeProviderSelection()
+    /// Edit Mode picks its own model, apart from dictation's. Every choice gets its own
+    /// row, and the download only appears when the model on this Mac is the one in use.
+    var editModeSection: some View {
+        let providerID = self.activeEditModeProviderID
+        let providers = self.editModeVerifiedProviders
+        return self.stylesSection(
+            title: "Edit Mode (Beta)",
+            subtitle: "Select text and say what to change. Edit Mode uses its own model, separate from dictation."
+        ) {
+            ThemedCard(style: .subtle, padding: 16) {
+                VStack(alignment: .leading, spacing: 14) {
+                    FluidManagementRow(title: "Runs on", detail: "Where your edits are processed.") {
+                        FluidDropdownPicker(
+                            "Runs on",
+                            selectedTitle: self.editModeRunsOnTitle(providers: providers),
+                            selection: self.editModeRunsOnBinding
+                        ) {
+                            ForEach(providers) { provider in
+                                Text(provider.name).tag(provider.id)
                             }
                         }
-
-                    Text("Provider")
-                        .font(.fluidSystem(.caption))
-                        .foregroundStyle(self.theme.palette.secondaryText)
-
-                    FluidDropdownPicker(
-                        "Provider",
-                        selectedTitle: verified.first(where: { $0.id == self.editModeProviderBinding.wrappedValue })?.name ?? "Choose provider",
-                        selection: self.editModeProviderBinding
+                        .fluidDropdownStyle()
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                    Divider()
+                    if self.isPrivateAIProviderID(providerID) {
+                        if EditModeModelController.shared.model != nil {
+                            EditModeLocalModelRow()
+                            Divider()
+                            EditModeScreenContextSettings(settings: self.settings)
+                        } else {
+                            Text(PichiLocalization.text("Choose an AI provider to use Edit Mode."))
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.theme.palette.warning)
+                        }
+                    } else {
+                        self.editModeProviderModelRow(providerID: providerID)
+                    }
+                    Divider()
+                    FluidManagementRow(
+                        title: "Shortcut",
+                        detail: self.settings.rewriteModeShortcutEnabled
+                            ? "Press it and say what you want."
+                            : "Off. Turn it on in Settings to use Edit Mode."
                     ) {
-                        ForEach(verified) { provider in
-                            Text(provider.name).tag(provider.id)
+                        HStack(spacing: 10) {
+                            self.shortcutKeycap(self.settings.rewriteModeHotkeyShortcut.displayString)
+                            Button("Change") { AppNavigationRouter.shared.request(.dictationShortcuts) }
+                                .fluidGlassAction()
                         }
                     }
-                    .fluidDropdownStyle()
-                    .labelsHidden()
-                    .frame(width: AISettingsLayout.promptInlinePickerWidth)
-                    .disabled(self.settings.rewriteModeLinkedToGlobal)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .onAppear {
+            guard self.viewModel.profileIsCurrent else { return }
+            self.settings.makeEditModeIndependentIfNeeded()
+            if !providers.isEmpty { self.normalizeEditModeProviderSelection() }
+        }
+    }
 
-                    Text("Model")
-                        .font(.fluidSystem(.caption))
-                        .foregroundStyle(self.theme.palette.secondaryText)
+    @ViewBuilder
+    private func editModeProviderModelRow(providerID: String) -> some View {
+        let models = self.editModeModels(for: providerID)
+        if providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            FluidManagementRow(title: "Model", detail: "Add an AI provider to use Edit Mode.") {
+                Button("AI Settings") { AppNavigationRouter.shared.request(.aiEnhancements) }
+                    .fluidGlassAction()
+            }
+        } else {
+            FluidManagementRow(
+                title: "Model",
+                detail: "Which of your provider's models to use."
+            ) {
+                SearchableModelPicker(
+                    models: models,
+                    selectedModel: self.editModeModelBinding(for: providerID),
+                    onRefresh: {
+                        guard !self.isPrivateAIProviderID(providerID) else { return }
+                        await self.viewModel.fetchModels(for: providerID)
+                    },
+                    isRefreshing: self.viewModel.refreshingProviderID == providerID,
+                    refreshEnabled: self.canFetchModels(for: providerID),
+                    selectionEnabled: !models.isEmpty,
+                    controlWidth: AISettingsLayout.editModeControlWidth,
+                    controlHeight: AISettingsLayout.controlHeight
+                )
+            }
+        }
+    }
 
-                    SearchableModelPicker(
-                        models: models,
-                        selectedModel: self.editModeModelBinding(for: providerID),
-                        onRefresh: {
-                            guard !self.isPrivateAIProviderID(providerID) else { return }
-                            await self.viewModel.fetchModels(for: providerID)
-                        },
-                        isRefreshing: self.viewModel.refreshingProviderID == providerID,
-                        refreshEnabled: !self.settings.rewriteModeLinkedToGlobal && self.canFetchModels(for: providerID),
-                        selectionEnabled: !self.settings.rewriteModeLinkedToGlobal && !models.isEmpty,
-                        controlWidth: AISettingsLayout.promptInlineModelWidth,
-                        controlHeight: 26
-                    )
-                    .disabled(self.settings.rewriteModeLinkedToGlobal)
+    private func editModeRunsOnTitle(providers: [AIEnhancementSettingsViewModel.ProviderItemData]) -> String {
+        providers.first(where: { $0.id == self.editModeSelectedProviderID })?.name ?? PichiLocalization.text("Choose provider")
+    }
+
+    private var editModeRunsOnBinding: Binding<String> {
+        Binding(
+            get: { self.editModeSelectedProviderID },
+            set: { selection in
+                guard self.viewModel.profileIsCurrent else { return }
+                self.settings.rewriteModeSelectedProviderID = selection
+                let models = self.editModeModels(for: selection)
+                if !models.contains(self.settings.rewriteModeSelectedModel ?? "") {
+                    self.settings.rewriteModeSelectedModel = models.first
                 }
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .onAppear {
-            self.ensureDefaultEditModeSyncState()
-            if self.settings.rewriteModeLinkedToGlobal {
-                self.syncEditModeToGlobalSelection()
-            } else if !verified.isEmpty {
-                self.normalizeEditModeProviderSelection()
-            }
-        }
+        )
     }
 
     @ViewBuilder
@@ -1577,106 +1625,54 @@ extension AIEnhancementSettingsView {
     }
 
     private var editModeVerifiedProviders: [AIEnhancementSettingsViewModel.ProviderItemData] {
-        self.viewModel.cachedVerifiedProviderItems
+        var providers = self.viewModel.cachedVerifiedProviderItems
+        // The on-device Edit Mode model has its own download, so choosing it never
+        // depends on dictation having verified a model.
+        let feature = PrivateAIProviderFeature.shared
+        if EditModeModelController.shared.model == nil {
+            providers.removeAll { $0.id == feature.providerID }
+        }
+        if EditModeModelController.shared.model != nil, !providers.contains(where: { $0.id == feature.providerID }) {
+            providers.append(.init(id: feature.providerID, name: feature.providerName, isBuiltIn: true))
+        }
+        return providers
             .sorted { lhs, rhs in
                 lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
     }
 
     private var editModeSelectedProviderID: String {
-        let current = self.settings.rewriteModeSelectedProviderID
-        if self.editModeVerifiedProviders.contains(where: { $0.id == current }) {
-            return current
-        }
-        return self.editModeVerifiedProviders.first?.id ?? current
+        self.settings.rewriteModeSelectedProviderID
     }
 
     private var activeEditModeProviderID: String {
-        if self.settings.rewriteModeLinkedToGlobal {
-            return self.settings.selectedProviderID
-        }
-        return self.editModeSelectedProviderID
-    }
-
-    private var editModeLinkedToGlobalBinding: Binding<Bool> {
-        Binding(
-            get: { self.settings.rewriteModeLinkedToGlobal },
-            set: { self.settings.rewriteModeLinkedToGlobal = $0 }
-        )
-    }
-
-    private var editModeProviderBinding: Binding<String> {
-        Binding(
-            get: { self.activeEditModeProviderID },
-            set: { newProviderID in
-                guard !self.settings.rewriteModeLinkedToGlobal else { return }
-                self.settings.rewriteModeSelectedProviderID = newProviderID
-                let models = self.editModeModels(for: newProviderID)
-                let current = self.settings.rewriteModeSelectedModel ?? ""
-                if !models.contains(current) {
-                    self.settings.rewriteModeSelectedModel = models.first
-                }
-            }
-        )
+        self.editModeSelectedProviderID
     }
 
     private func editModeModelBinding(for providerID: String) -> Binding<String> {
         Binding(
             get: {
                 let models = self.editModeModels(for: providerID)
-                if self.settings.rewriteModeLinkedToGlobal {
-                    let key = self.viewModel.providerKey(for: providerID)
-                    let preferred = self.settings.selectedModelByProvider[key]
-                        ?? self.settings.selectedModel
-                    return ModelRepository.eligibleModel(preferred: preferred, from: models) ?? ""
-                }
                 return ModelRepository.eligibleModel(
                     preferred: self.settings.rewriteModeSelectedModel,
                     from: models
                 ) ?? ""
             },
             set: { newModel in
-                guard !self.settings.rewriteModeLinkedToGlobal else { return }
+                guard self.viewModel.profileIsCurrent else { return }
                 self.settings.rewriteModeSelectedModel = newModel
             }
         )
     }
 
     private func normalizeEditModeProviderSelection() {
-        guard let first = self.editModeVerifiedProviders.first else { return }
-        let current = self.settings.rewriteModeSelectedProviderID
-        if !self.editModeVerifiedProviders.contains(where: { $0.id == current }) {
-            self.settings.rewriteModeSelectedProviderID = first.id
-        }
-
+        // Viewing settings never replaces a missing, unverified or unsupported route.
         let providerID = self.settings.rewriteModeSelectedProviderID
+        guard self.editModeVerifiedProviders.contains(where: { $0.id == providerID }) else { return }
         let models = self.editModeModels(for: providerID)
-        let currentModel = self.settings.rewriteModeSelectedModel ?? ""
-        if !models.contains(currentModel) {
+        if self.settings.rewriteModeSelectedModel == nil {
             self.settings.rewriteModeSelectedModel = models.first
         }
-    }
-
-    private func syncEditModeToGlobalSelection() {
-        let global = self.settings.selectedProviderID
-        guard !global.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            self.settings.rewriteModeSelectedProviderID = ""
-            self.settings.rewriteModeSelectedModel = nil
-            return
-        }
-
-        self.settings.rewriteModeSelectedProviderID = global
-
-        if self.isPrivateAIProviderID(global) {
-            self.settings.rewriteModeSelectedModel = self.editModeModels(for: global).first
-            return
-        }
-
-        let key = self.viewModel.providerKey(for: global)
-        let model = self.settings.selectedModelByProvider[key]
-            ?? self.settings.selectedModel
-            ?? self.viewModel.models(for: global).first
-        self.settings.rewriteModeSelectedModel = model
     }
 
     private func editModeModels(for providerID: String) -> [String] {
@@ -1690,14 +1686,6 @@ extension AIEnhancementSettingsView {
         PrivateFeatures.privateAIProvider &&
             providerID.trimmingCharacters(in: .whitespacesAndNewlines)
             == PrivateAIProviderFeature.shared.providerID
-    }
-
-    private func ensureDefaultEditModeSyncState() {
-        // If no persisted value exists yet, default Sync to ON.
-        if PrivateProfileDefaults.shared.object(forKey: "RewriteModeLinkedToGlobal") == nil {
-            self.settings.rewriteModeLinkedToGlobal = true
-            self.syncEditModeToGlobalSelection()
-        }
     }
 
     private func canFetchModels(for providerID: String) -> Bool {

@@ -470,9 +470,11 @@ struct MeetingResultCanvas: View {
     let onNameUnknownSegment: (MeetingTranscriptSegmentID, String) -> Void
     let onUndo: () async -> Bool
     let onRenameSession: (String) -> Void
+    var onRetranscribe: ((String) -> Void)? = nil
     let onAssignSpeakers: (MeetingSpeakerEdits) async -> String?
     let onClose: (() -> Void)?
     var summaryASRService: ASRService? = nil
+    var isRetranscribing = false
 
     /// Opens FluidMeet settings on Integrations, so adding an agent is one step from any meeting.
     var onOpenIntegrations: (() -> Void)? = nil
@@ -491,6 +493,8 @@ struct MeetingResultCanvas: View {
     @State private var pendingUnknownSpeakerName = ""
     @State private var isRenamingSession = false
     @State private var pendingRenameSessionText = ""
+    @State private var isChoosingRetranscriptionLanguage = false
+    @State private var retranscriptionLanguageCode = ""
     @State private var isShowingAssignSpeakers = false
     @State private var assignSpeakersFocus: SessionSpeakerID?
     @State private var copied = false
@@ -712,6 +716,20 @@ struct MeetingResultCanvas: View {
         } message: {
             Text("Enter a new title for this meeting.")
         }
+        .sheet(isPresented: self.$isChoosingRetranscriptionLanguage) {
+            MeetingRetranscriptionLanguageSheet(
+                languages: MeetingRetranscriptionLanguage.choices,
+                currentLanguageCode: self.session.languageCode,
+                selection: self.$retranscriptionLanguageCode,
+                isBusy: self.isRetranscribing,
+                onCancel: { self.isChoosingRetranscriptionLanguage = false },
+                onConfirm: {
+                    let languageCode = self.retranscriptionLanguageCode
+                    self.isChoosingRetranscriptionLanguage = false
+                    self.onRetranscribe?(languageCode)
+                }
+            )
+        }
         // Prevents an echo toggle left on for one meeting from leaking into the next.
         .onChange(of: self.session.id) { _, _ in
             self.documentSection = Self.visibleDocumentSection(selected: .transcript, sessionID: self.session.id,
@@ -719,6 +737,7 @@ struct MeetingResultCanvas: View {
             self.copied = false
             self.showsProbableEchoes = false
             self.isShowingAssignSpeakers = false
+            self.isChoosingRetranscriptionLanguage = false
             self.pendingNameUnknownSegmentID = nil
         }
         .sheet(isPresented: self.$isShowingAssignSpeakers) {
@@ -902,6 +921,11 @@ struct MeetingResultCanvas: View {
             .disabled(!hasText || self.documentSection != .transcript)
             Divider()
             self.renameMeetingAction
+            Button("Transcribe in another language…", systemImage: "globe") {
+                self.retranscriptionLanguageCode = self.session.languageCode
+                self.isChoosingRetranscriptionLanguage = true
+            }
+            .disabled(self.onRetranscribe == nil || !self.isQuiescent || !self.session.hasRetryableAudio || self.isRetranscribing)
             Button("Undo correction", systemImage: "arrow.uturn.backward") { Task { _ = await self.onUndo() } }
                 .disabled(!self.canUndo || !self.isQuiescent)
             if self.hasEchoSegments {
@@ -938,7 +962,7 @@ struct MeetingResultCanvas: View {
         self.canUndo && self.isQuiescent && self.documentSection == .transcript
             && self.pendingEditedSegment == nil
             && self.pendingNameUnknownSegmentID == nil && !self.isRenamingSession
-            && !self.isShowingAssignSpeakers
+            && !self.isShowingAssignSpeakers && !self.isChoosingRetranscriptionLanguage
     }
 
     private func refreshUndoRegistration() {
@@ -967,7 +991,11 @@ struct MeetingResultCanvas: View {
                 Text("·").accessibilityHidden(true)
                 Text(verbatim: self.sourceName)
                     .lineLimit(1)
-                    .help("\(self.sourceName)\nMicrophone: \(self.session.selectedMicrophone.displayName)")
+                    .help(self.sourceName + "\n" + PichiLocalization.format("microphone: %@", self.session.selectedMicrophone.displayName))
+                Text("·").accessibilityHidden(true)
+                Label(self.transcriptLanguageName, systemImage: "globe")
+                    .lineLimit(1)
+                    .help("Transcript language")
             }
             .font(self.theme.typography.caption)
             .foregroundStyle(self.theme.palette.secondaryText)
@@ -975,7 +1003,8 @@ struct MeetingResultCanvas: View {
             .accessibilityLabel(
                 "\(self.session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale))), " +
                     "\(Self.durationText(self.session.duration)), \(self.sourceName), " +
-                    PichiLocalization.format("microphone: %@", self.session.selectedMicrophone.displayName)
+                    PichiLocalization.format("microphone: %@", self.session.selectedMicrophone.displayName) + ", " +
+                    PichiLocalization.format("language: %@", self.transcriptLanguageName)
             )
             if let place = self.session.savedLocationLabel(language: PichiLocalization.language) {
                 Text(verbatim: place)
@@ -988,6 +1017,10 @@ struct MeetingResultCanvas: View {
                     .accessibilityIdentifier("meeting.metadata.location")
             }
         }
+    }
+
+    private var transcriptLanguageName: String {
+        PichiLocalization.locale.localizedString(forIdentifier: self.session.languageCode) ?? MeetingRetranscriptionLanguage.displayName(for: self.session.languageCode)
     }
 
     private var sourceName: String {
@@ -1616,5 +1649,60 @@ struct MeetingTranscriptTextEditor: View {
             self.isSaving = false
             if self.errorMessage != nil { self.isFocused = true }
         }
+    }
+}
+
+private struct MeetingRetranscriptionLanguageSheet: View {
+    let languages: [VoiceEngineLanguage]
+    let currentLanguageCode: String
+    @Binding var selection: String
+    let isBusy: Bool
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+            Text("Transcribe in another language")
+                .font(self.theme.typography.title)
+            Text("The saved audio is transcribed again and replaces this transcript. Choose a language the meeting model supports.")
+                .font(self.theme.typography.body)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            Menu {
+                Picker("Language", selection: self.$selection) {
+                    ForEach(self.languages) { language in
+                        Text(language.localizedDisplayName(locale: PichiLocalization.locale)).tag(language.id)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Text(PichiLocalization.locale.localizedString(forIdentifier: self.selection) ?? MeetingRetranscriptionLanguage.displayName(for: self.selection))
+            }
+            .fluidDropdownStyle(fillsWidth: true)
+            .accessibilityLabel("Transcript language")
+            .disabled(self.isBusy || self.languages.isEmpty)
+            HStack {
+                Button("Cancel", action: self.onCancel)
+                    .meetingGlassAction()
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(self.isBusy)
+                Spacer()
+                Button(PichiLocalization.text(self.isBusy ? "Transcribing…" : "Transcribe"), action: self.onConfirm)
+                    .meetingGlassAction(prominent: true)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(
+                        self.isBusy || !MeetingRetranscriptionLanguage.canRetranscribe(
+                            selection: self.selection,
+                            currentLanguageCode: self.currentLanguageCode
+                        )
+                    )
+            }
+        }
+        .padding(self.theme.metrics.spacing.xl)
+        .frame(width: 460)
+        .background(self.theme.palette.windowBackground)
+        .interactiveDismissDisabled(self.isBusy)
     }
 }

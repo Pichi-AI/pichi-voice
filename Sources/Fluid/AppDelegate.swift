@@ -81,6 +81,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Bring up file logging + crash handlers immediately during launch.
         _ = FileLogger.shared
         TypingService.startKeyboardLayoutTracking()
+        DictationAccessibilityPreparation.shared.start()
         _ = TranscriptionHistoryStore.shared
         #if arch(arm64)
         Task {

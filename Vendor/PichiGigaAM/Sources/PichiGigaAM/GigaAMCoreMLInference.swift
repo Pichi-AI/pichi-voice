@@ -119,12 +119,23 @@ final class GigaAMCoreMLInference {
         let span = (shape[1] - 1) * strides[1] + (shape[2] - 1) * strides[2] + 1
         var values = [Float](repeating: 0, count: validFrames * shape[2])
         if logits.dataType == .float16 {
+            #if arch(arm64)
             let source = logits.dataPointer.bindMemory(to: Float16.self, capacity: span)
             for frame in 0..<validFrames {
                 for token in 0..<shape[2] {
                     values[frame * shape[2] + token] = Float(source[frame * strides[1] + token * strides[2]])
                 }
             }
+            #else
+            // Swift Float16 is unavailable on Intel macOS. Core ML's numeric
+            // subscript reads the same FP16 tensor using its actual strides.
+            for frame in 0..<validFrames {
+                for token in 0..<shape[2] {
+                    let index = [NSNumber(value: 0), NSNumber(value: frame), NSNumber(value: token)]
+                    values[frame * shape[2] + token] = logits[index].floatValue
+                }
+            }
+            #endif
         } else {
             let source = logits.dataPointer.bindMemory(to: Float.self, capacity: span)
             for frame in 0..<validFrames {

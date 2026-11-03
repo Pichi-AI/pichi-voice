@@ -217,21 +217,20 @@
         PrivateProfileStorage.select(profileA)
         let queuedStart = MenuBarFeedbackProbe()
         let starts = AppServices.shared.starts
+        let sourceRequests = MeetingRecordingSourcePromptController.shared.shortcutRequests
         queuedStart.startMeetingRecording()
         PrivateProfileStorage.conceal(generation: UUID())
         NotificationCenter.default.post(name: PrivateProfileService.willConceal, object: nil)
         PrivateProfileStorage.select(profileB)
         await drainMenuQueue()
         while queuedStart.meetingStartRequested { await Task.yield() }
-        check(AppServices.shared.starts == starts, "A queued A menu Start does not admit capture under B")
-        let freshCapture = MenuStartGate()
-        AppServices.shared.meetingSessionCoordinator.captureGate = freshCapture
+        check(AppServices.shared.starts == starts && MeetingRecordingSourcePromptController.shared.shortcutRequests == sourceRequests,
+              "A queued A menu Start reaches neither source selection nor capture under B")
         queuedStart.startMeetingRecording()
-        await freshCapture.waitUntilEntered()
-        check(AppServices.shared.starts == starts + 1, "A fresh B menu Start remains usable")
-        freshCapture.open()
+        await drainMenuQueue()
+        check(MeetingRecordingSourcePromptController.shared.shortcutRequests == sourceRequests + 1 && AppServices.shared.starts == starts,
+              "A fresh B menu Start reaches source selection before admitting capture")
         while queuedStart.meetingStartRequested { await Task.yield() }
-        AppServices.shared.meetingSessionCoordinator.captureGate = nil
         PrivateProfileStorage.conceal(generation: UUID())
         NotificationCenter.default.post(name: PrivateProfileService.willConceal, object: nil)
         await drainMenuQueue()
@@ -292,7 +291,7 @@
         PasteVerifier.gate = gate
         let before = PasteVerifier.Snapshot(pid: 123, summary: "SECRET A verifier metadata")
         let logs = DebugLogger.shared.information.count
-        let held = typing.verifyPasteLanded("SECRET A held paste", before: before, profile: profileA, isOutputValid: { true })!
+        let held = typing.verifyPasteLanded("SECRET A held paste", before: before, profile: profileA, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
         await gate.waitUntilEntered()
         PrivateProfileStorage.conceal(generation: UUID())
         PrivateProfileStorage.select(profileB)
@@ -306,17 +305,17 @@
         // A has already posted its local notification, but the real menu handler's Task is queued.
         PrivateProfileStorage.select(profileA)
         NotificationCenter.default.post(name: .fluidPasteNotLanded, object: nil,
-            userInfo: ["transcript": "SECRET A queued notification", "privateProfile": profileA])
+            userInfo: ["transcript": "SECRET A queued notification", "privateProfile": profileA, "verificationID": PasteRecoveryPresentationPolicy.shared.beginDelivery(), "postedAt": ProcessInfo.processInfo.systemUptime])
         check(notifications.count == 1, "The original A notification is delivered synchronously before its queued menu action")
         PrivateProfileStorage.conceal(generation: UUID())
         PrivateProfileStorage.select(profileB)
         await drainMenuQueue()
         check(DeliveryFailureOverlayController.shared.cards.isEmpty, "A queued paste notification cannot present private A text under B")
-        manager.showPasteNotLandedFailure(transcript: "SECRET A direct stale card", profile: profileA)
+        manager.showPasteNotLandedFailure(transcript: "SECRET A direct stale card", profile: profileA, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime)
         check(DeliveryFailureOverlayController.shared.cards.isEmpty, "The concrete failure presentation also refuses a stale original profile")
 
         PasteVerifier.gate = nil
-        let valid = typing.verifyPasteLanded("valid B paste", before: before, profile: profileB, isOutputValid: { true })!
+        let valid = typing.verifyPasteLanded("valid B paste", before: before, profile: profileB, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
         await valid.value
         await drainMenuQueue()
         check(notifications.last?.userInfo?["privateProfile"] as? PrivateProfileSnapshot == profileB,
@@ -325,8 +324,36 @@
               && DeliveryFailureOverlayController.shared.cards[0].profile == profileB
               && DeliveryFailureOverlayController.shared.cards[0].text == "valid B paste",
               "Current B verification preserves the existing failure card behavior")
-        let suppressed = typing.verifyPasteLanded("dismissed B output", before: before, profile: profileB, isOutputValid: { false })
+        let suppressed = typing.verifyPasteLanded("dismissed B output", before: before, profile: profileB, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { false })
         check(suppressed == nil, "The original caller's output-validity callback can suppress verification admission")
+
+        // Diagnostics remain available with alerts off, while presentation stays opt-in.
+        let notificationsBeforeMutedCheck = notifications.count
+        let logsBeforeMutedCheck = DebugLogger.shared.information.count
+        SettingsStore.shared.showPasteCheckAlerts = false
+        let muted = typing.verifyPasteLanded("muted B paste", before: before, profile: profileB,
+            verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime,
+            isOutputValid: { true })!
+        await muted.value
+        await drainMenuQueue()
+        SettingsStore.shared.showPasteCheckAlerts = true
+        check(DebugLogger.shared.information.count == logsBeforeMutedCheck + 1 && notifications.count == notificationsBeforeMutedCheck,
+              "Alerts off preserves readable-owner diagnostics without publishing recovery feedback")
+
+        // A newer delivery invalidates a still-pending warning in the same profile.
+        let supersededGate = PasteVerificationGate()
+        PasteVerifier.gate = supersededGate
+        let superseded = typing.verifyPasteLanded("superseded B paste", before: before, profile: profileB,
+            verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime,
+            isOutputValid: { true })!
+        await supersededGate.waitUntilEntered()
+        _ = PasteRecoveryPresentationPolicy.shared.beginDelivery()
+        await supersededGate.open()
+        await superseded.value
+        await drainMenuQueue()
+        check(notifications.count == notificationsBeforeMutedCheck,
+              "A newer delivery suppresses a late warning from the same readable profile")
+        PasteVerifier.gate = nil
     }
 
     @MainActor private static func checkJoinedDiscovery(profileA: PrivateProfileSnapshot, profileB: PrivateProfileSnapshot) async throws {
@@ -389,7 +416,7 @@
         let logs = DebugLogger.shared.information.count
         let gate = PasteVerificationGate()
         PasteVerifier.gate = gate
-        let verifier = typing.verifyPasteLanded("SECRET A held reader", before: before, profile: profileA, isOutputValid: { true })!
+        let verifier = typing.verifyPasteLanded("SECRET A held reader", before: before, profile: profileA, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
         await gate.waitUntilEntered()
         let state = DiscoveryTransitionState()
         let transition = Task {
@@ -418,7 +445,7 @@
         PrivateProfileStorage.select(profileA)
         let queuedGate = PasteVerificationGate()
         PasteVerifier.gate = queuedGate
-        let queued = typing.verifyPasteLanded("SECRET A queued reader", before: before, profile: profileA, isOutputValid: { true })!
+        let queued = typing.verifyPasteLanded("SECRET A queued reader", before: before, profile: profileA, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
         try await profiles.transition(from: nil, to: profileB.context, generation: UUID())
         await queued.value
         let queuedEntered = await queuedGate.hasEntered
@@ -429,7 +456,7 @@
 
         PrivateProfileStorage.select(profileA)
         PasteVerifier.gate = nil
-        let valid = typing.verifyPasteLanded("valid A paste", before: before, profile: profileA, isOutputValid: { true })!
+        let valid = typing.verifyPasteLanded("valid A paste", before: before, profile: profileA, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
         await valid.value
         check(notifications.last?.userInfo?["privateProfile"] as? PrivateProfileSnapshot == profileA
               && notifications.last?.userInfo?["transcript"] as? String == "valid A paste",

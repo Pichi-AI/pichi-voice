@@ -12,6 +12,19 @@ nonisolated struct DictationTypingContext: Sendable, Equatable {
     // One Accessibility element or OCR line per entry; nil means none was read.
     // swiftlint:disable:next discouraged_optional_collection
     var screenText: [String]?
+    // The window as Edit Mode reads it; nil for a dictation.
+    // swiftlint:disable:next discouraged_optional_collection
+    var windowLines: [EditModeWindowLine]? = nil
+}
+
+/// A piece of text in the front window and where it is. Stays on this Mac and is
+/// never logged or kept.
+nonisolated struct EditModeWindowLine: Sendable, Equatable {
+    let text: String
+    let x: Int
+    let y: Int
+    let width: Int
+    let height: Int
 }
 
 /// Reads the dictation context when recording starts, off the main thread,
@@ -78,6 +91,21 @@ final nonisolated class DictationContextCapture: @unchecked Sendable {
             isEnabled: settings.dictationScreenContextEnabled
         )
         return self.start(target: target) { await DictationContextReader.read(request) }
+    }
+
+    /// Reads the window for on-device Edit Mode, which has its own setting.
+    @MainActor
+    static func startForEditMode(target: TypingService.RecordingTargetContext) -> DictationContextCapture? {
+        guard SettingsStore.shared.editModeReadsScreen, AXIsProcessTrusted() else { return nil }
+        let request = DictationContextReader.Request(
+            pid: target.pid,
+            bundleID: target.bundleIdentifier,
+            window: target.window,
+            element: target.element,
+            textBeforeCursor: nil,
+            isEnabled: true
+        )
+        return self.start(target: target) { await DictationContextReader.readWindowLines(request) }
     }
 
     /// Optional context is skipped while a canceled reader is still retiring.
@@ -211,6 +239,12 @@ nonisolated enum DictationContextReader {
     /// Omit long text values when the app cannot report their visible range.
     private static let longValueCharacters = 4000
 
+    /// Edit Mode isn't waiting on the read while the user speaks, so it can look further.
+    private static let windowBudgetSeconds = 1.5
+    private static let maxVisitedWindowElements = 10_000
+    private static let windowReadAttempts = 3
+    private static let windowReadRetryDelay: Duration = .milliseconds(300)
+
     private static let passwordManagerMarkers = [
         "password", "1password", "onepassword", "bitwarden", "lastpass", "dashlane",
         "keepass", "enpass", "keychain", "strongbox", "nordpass", "proton.pass", "keeper",
@@ -268,14 +302,54 @@ nonisolated enum DictationContextReader {
         return context.textBeforeCursor == nil && context.screenText == nil ? nil : context
     }
 
+    /// The whole window for Edit Mode, with positions. A dictation only wants rare
+    /// words; this keeps numbers, repeats and long paragraphs, because the answer
+    /// comes from them.
+    static func readWindowLines(
+        _ request: Request,
+        readFocusedPrivacy: @Sendable (AXUIElement) -> Bool = { DictationContextReader.focusedElementIsKnownPublic($0) },
+        readElement: @Sendable (AXUIElement) -> ElementText? = { DictationContextReader.elementText($0) },
+        recognizeWindow: @Sendable (pid_t, AXUIElement?) async -> [EditModeWindowLine] = { await DictationContextReader.recognizedWindowLines(pid: $0, window: $1) }
+    ) async -> DictationTypingContext? {
+        guard request.isEnabled, !Task.isCancelled else { return nil }
+        guard !self.isPrivate(request) else { return nil }
+        if let element = request.element {
+            guard readFocusedPrivacy(element), !Task.isCancelled else { return nil }
+        }
+        let isFirstLook = !self.hasAskedForWebContent(pid: request.pid)
+        guard let window = self.windows(for: request).first else { return nil }
+
+        // Web content builds its Accessibility tree only once asked, and the app's
+        // own toolbars can hide that the page is still missing, so a first look
+        // always takes a few reads.
+        var lines = EditModeWindowLines()
+        var allowsOCR = true
+        for attempt in 0..<self.windowReadAttempts where isFirstLook || lines.wordCount < self.minimumAccessibilityWords {
+            if attempt > 0 { try? await Task.sleep(for: self.windowReadRetryDelay) }
+            guard !Task.isCancelled else { return nil }
+            var fresh = EditModeWindowLines()
+            let windowAllowsOCR = self.collectWindowLines(in: window, into: &fresh, readElement: readElement)
+            allowsOCR = allowsOCR && windowAllowsOCR
+            if fresh.wordCount >= lines.wordCount { lines = fresh }
+        }
+        var read = lines.lines
+        let recognized = await self.recognizeWindowIfSafe(
+            pid: request.pid, window: window, wordCount: lines.wordCount,
+            hasCompletePrivacyMetadata: allowsOCR, recognizeWindow: recognizeWindow
+        )
+        if !recognized.isEmpty { read = recognized }
+        guard !Task.isCancelled, !read.isEmpty else { return nil }
+        return DictationTypingContext(textBeforeCursor: nil, screenText: nil, windowLines: read)
+    }
+
     /// Keep the OCR admission decision testable without reading Accessibility or a screen.
-    static func recognizeWindowIfSafe(
+    static func recognizeWindowIfSafe<Line: Sendable>(
         pid: pid_t,
         window: AXUIElement?,
         wordCount: Int,
         hasCompletePrivacyMetadata: Bool,
-        recognizeWindow: @Sendable (pid_t, AXUIElement?) async -> [String]
-    ) async -> [String] {
+        recognizeWindow: @Sendable (pid_t, AXUIElement?) async -> [Line]
+    ) async -> [Line] {
         guard hasCompletePrivacyMetadata, let window,
               wordCount < self.minimumAccessibilityWords, !Task.isCancelled
         else { return [] }
@@ -291,6 +365,10 @@ nonisolated enum DictationContextReader {
 
     private static let webContentLock = NSLock()
     private nonisolated(unsafe) static var webContentPIDs: [pid_t] = []
+
+    private static func hasAskedForWebContent(pid: pid_t) -> Bool {
+        self.webContentLock.withLock { self.webContentPIDs.contains(pid) }
+    }
 
     /// Chrome and Electron apps build their page's Accessibility tree only
     /// when asked; other apps ignore the attribute. The tree may still be
@@ -390,14 +468,50 @@ nonisolated enum DictationContextReader {
         into lines: inout LineCollector,
         readElement: @Sendable (AXUIElement) -> ElementText?
     ) -> Bool {
-        let deadline = ProcessInfo.processInfo.systemUptime + self.accessibilityBudgetSeconds
+        guard !lines.isFull else { return false }
+        return self.walkAccessibilityText(
+            in: window, maxVisitedElements: self.maxVisitedElements,
+            budgetSeconds: self.accessibilityBudgetSeconds, readElement: readElement
+        ) { item in
+            for text in item.texts { lines.add(text, limit: self.maxLinesPerElement) }
+            return lines.isFull
+        }
+    }
+
+    private static func collectWindowLines(
+        in window: AXUIElement,
+        into lines: inout EditModeWindowLines,
+        readElement: @Sendable (AXUIElement) -> ElementText?
+    ) -> Bool {
+        guard !lines.isFull else { return false }
+        return self.walkAccessibilityText(
+            in: window, maxVisitedElements: self.maxVisitedWindowElements,
+            budgetSeconds: self.windowBudgetSeconds, readElement: readElement
+        ) { item in
+            // Text without a position cannot be placed reliably in the window.
+            if let frame = item.frame, !frame.isEmpty {
+                for text in item.texts { lines.add(text, frame: frame) }
+            }
+            return lines.isFull
+        }
+    }
+
+    private static func walkAccessibilityText(
+        in window: AXUIElement,
+        maxVisitedElements: Int,
+        budgetSeconds: TimeInterval,
+        readElement: @Sendable (AXUIElement) -> ElementText?,
+        collect: (ElementText) -> Bool
+    ) -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + budgetSeconds
         AXUIElementSetMessagingTimeout(window, self.messagingTimeoutSeconds)
         let windowFrame = self.frame(of: window)
         var stack = [window]
         var visited = 0
+        var isFull = false
         var allowsOCR = true
         while !stack.isEmpty {
-            guard visited < self.maxVisitedElements, !lines.isFull,
+            guard visited < maxVisitedElements, !isFull,
                   !Task.isCancelled, ProcessInfo.processInfo.systemUptime <= deadline
             else { return false }
             let element = stack.removeLast()
@@ -420,10 +534,8 @@ nonisolated enum DictationContextReader {
             if let windowFrame, let frame = item.frame, !frame.isEmpty, !frame.intersects(windowFrame) {
                 continue
             }
-            for text in item.texts {
-                lines.add(text, limit: self.maxLinesPerElement)
-            }
-            let remaining = max(0, self.maxVisitedElements - visited - stack.count)
+            isFull = collect(item)
+            let remaining = max(0, maxVisitedElements - visited - stack.count)
             if item.children.count > remaining { allowsOCR = false }
             stack.append(contentsOf: item.children.prefix(remaining).reversed())
         }
@@ -511,15 +623,37 @@ nonisolated enum DictationContextReader {
     /// (Vision garbles small gray text at 1x), and reads it with Vision.
     /// Needs Screen Recording; FluidVoice never asks for it here.
     private static func recognizedWindowText(pid: pid_t, window: AXUIElement?) async -> [String] {
+        guard let image = await self.windowImage(pid: pid, window: window) else { return [] }
+        return self.recognizedText(in: image).compactMap { $0.topCandidates(1).first?.string }
+    }
+
+    /// The same read as `recognizedWindowText`, keeping where each line is.
+    private static func recognizedWindowLines(pid: pid_t, window: AXUIElement?) async -> [EditModeWindowLine] {
+        guard let image = await self.windowImage(pid: pid, window: window) else { return [] }
+        return self.recognizedText(in: image).compactMap { observation in
+            guard let text = observation.topCandidates(1).first?.string else { return nil }
+            let box = VNImageRectForNormalizedRect(observation.boundingBox, image.width, image.height)
+            // Vision counts from the bottom of the image, screen text from the top.
+            return EditModeWindowLine(
+                text: text,
+                x: Int(box.minX),
+                y: image.height - Int(box.maxY),
+                width: Int(box.width),
+                height: Int(box.height)
+            )
+        }
+    }
+
+    private static func windowImage(pid: pid_t, window: AXUIElement?) async -> CGImage? {
         guard !Task.isCancelled, CGPreflightScreenCaptureAccess(),
               let frame = window.flatMap(self.frame(of:)),
               let windowID = self.windowID(pid: pid, frame: frame)
-        else { return [] }
+        else { return nil }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard !Task.isCancelled,
                   let scWindow = content.windows.first(where: { $0.windowID == windowID })
-            else { return [] }
+            else { return nil }
             let filter = SCContentFilter(desktopIndependentWindow: scWindow)
             let configuration = SCStreamConfiguration()
             let scale = CGFloat(filter.pointPixelScale)
@@ -529,14 +663,14 @@ nonisolated enum DictationContextReader {
             configuration.showsCursor = false
             configuration.ignoreShadowsSingleWindow = true
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
-            guard !Task.isCancelled else { return [] }
-            return self.recognizedLines(in: image)
+            return Task.isCancelled ? nil : image
         } catch {
-            return []
+            return nil
         }
     }
 
-    private static func recognizedLines(in image: CGImage) -> [String] {
+    private static func recognizedText(in image: CGImage) -> [VNRecognizedTextObservation] {
+        guard !Task.isCancelled else { return [] }
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = false
@@ -546,7 +680,7 @@ nonisolated enum DictationContextReader {
         } catch {
             return []
         }
-        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+        return Task.isCancelled ? [] : request.results ?? []
     }
 
     /// Only the captured window may be read; a stale window must never fall back to another one.
@@ -629,6 +763,46 @@ nonisolated enum DictationContextReader {
         defer { pointer.deallocate() }
         guard AXValueGetValue(axValue, type, pointer) else { return nil }
         return pointer.pointee
+    }
+}
+
+/// Window text with positions, within size caps well above what the model can
+/// read: Fluid Intelligence lays it out and shortens it to fit. A link and the text
+/// inside it report the same words, so a repeat only counts where it overlaps.
+nonisolated struct EditModeWindowLines {
+    static let maxLines = 1500
+    static let maxCharacters = 60_000
+    static let maxLineCharacters = 4000
+    /// A container's title sits at its top, not in the middle of its contents.
+    static let maxRowHeight: CGFloat = 40
+
+    private(set) var lines: [EditModeWindowLine] = []
+    private(set) var wordCount = 0
+    private var characterCount = 0
+    private var placed: [String: [CGRect]] = [:]
+
+    var isFull: Bool { self.lines.count >= Self.maxLines || self.characterCount >= Self.maxCharacters }
+
+    mutating func add(_ text: String, frame: CGRect) {
+        let rows = text.split(whereSeparator: \.isNewline)
+            .map { String($0.trimmingCharacters(in: .whitespaces).prefix(Self.maxLineCharacters)) }
+            .filter { $0.contains { $0.isLetter || $0.isNumber } }
+        guard !rows.isEmpty else { return }
+        let rowHeight = min(frame.height / CGFloat(rows.count), Self.maxRowHeight)
+        for (index, row) in rows.enumerated() where !self.isFull {
+            let rect = CGRect(x: frame.minX, y: frame.minY + CGFloat(index) * rowHeight, width: frame.width, height: rowHeight)
+            guard !(self.placed[row]?.contains { $0.intersects(rect) } ?? false) else { continue }
+            self.placed[row, default: []].append(rect)
+            self.lines.append(EditModeWindowLine(
+                text: row,
+                x: Int(rect.minX),
+                y: Int(rect.minY),
+                width: Int(rect.width),
+                height: max(Int(rect.height), 1)
+            ))
+            self.wordCount += row.split(whereSeparator: \.isWhitespace).count
+            self.characterCount += row.count
+        }
     }
 }
 

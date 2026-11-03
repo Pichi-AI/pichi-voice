@@ -62,11 +62,32 @@ struct VoiceEngineLanguageRoute: Identifiable, Equatable {
     }
 }
 
+struct AppleSpeechLocaleOption: Identifiable, Equatable {
+    let id: String
+    let displayName: String
+}
+
 enum VoiceEngineLanguageCatalog {
+    static func appleSpeechLocaleOptions(
+        identifiers: [String],
+        displayLocale: Locale = .current
+    ) -> [AppleSpeechLocaleOption] {
+        let uniqueIdentifiers = Set(identifiers.map { Self.normalizedLocaleIdentifier($0) })
+        return uniqueIdentifiers
+            .map { AppleSpeechLocaleOption(id: $0, displayName: displayLocale.localizedString(forIdentifier: $0) ?? $0) }
+            .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+    }
+
     static func allLanguages(
         availableModels: [SettingsStore.SpeechModel] = SettingsStore.SpeechModel.availableModels
     ) -> [VoiceEngineLanguage] {
-        let languages = self.availableDefinitions(availableModels: availableModels)
+        self.allLanguages(supportedLanguageCodes: Set(self.availableDefinitions(availableModels: availableModels).map(\.id)))
+    }
+
+    /// Capability callers share catalog names, ordering and presentation without selecting an
+    /// onboarding route. Preferred onboarding engines can differ from other compiled consumers.
+    static func allLanguages(supportedLanguageCodes: Set<String>) -> [VoiceEngineLanguage] {
+        let languages = self.languageDefinitions.filter { supportedLanguageCodes.contains($0.id) }
         let primaryIDs = Set(self.primaryDefinitions(from: languages).map(\.id))
         return languages.map { language in
             VoiceEngineLanguage(id: language.id, displayName: language.displayName, aliases: language.aliases,
@@ -277,9 +298,6 @@ enum VoiceEngineLanguageCatalog {
 
         if Self.parakeetV3LanguageIDs.contains(language.id) {
             routes.append(Self.route(language, .parakeetTDT, .automatic))
-        }
-
-        if language.id == "en" {
             routes.append(Self.route(language, .fluidParakeetMini, .automatic))
             routes.append(Self.route(language, .fluidParakeetPico, .automatic))
             routes.append(Self.route(language, .fluidParakeetPro, .automatic))

@@ -39,6 +39,7 @@ final class SettingsStore: ObservableObject {
         await OnboardingAISetupController.live.prepareForPrivateProfileTransition()
         await AIEnhancementSettingsViewModel.joinPrivateProfileRequests()
         await PrivateAISettingsController.joinPrivateProfileTasks()
+        await EditModeModelController.joinPrivateProfileTasks()
         await settings.keychain.retireAndJoin()
         await CloudTextProviderAuthorization.shared.pauseAndClearForPrivateProfileTransition()
         settings.providerCredentialCleanupNeedsPersistence = false
@@ -52,6 +53,7 @@ final class SettingsStore: ObservableObject {
         #if os(macOS)
         self.shared.privateProfileTransitionPending = false
         OnboardingAISetupController.live.privateProfileDidChange()
+        EditModeModelController.privateProfileDidChange()
         await CloudTextProviderAuthorization.shared.resumeAfterPrivateProfileTransition()
         self.shared.initializeDesktopPreferences(refreshDeviceState: false)
         #endif
@@ -101,6 +103,7 @@ final class SettingsStore: ObservableObject {
         Self.migrateModifierOnlyCancelShortcutIfNeeded(defaults: self.defaults)
         self.retireLegacySecondaryPromptShortcutIfNeeded()
         self.normalizePromptSelectionsIfNeeded()
+        self.makeEditModeIndependentIfNeeded()
         self.purgeRetiredAppleIntelligenceState()
         self.repairForcedOnboardingResetIfNeeded()
         self.migrateOverlayBottomOffsetTo50IfNeeded()
@@ -3321,6 +3324,32 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    static let editModeScreenContextDidChange = Notification.Name("SettingsStore.editModeScreenContextDidChange")
+
+    /// Shared by every store bound to this defaults/profile scope. This token is
+    /// deliberately absent from SettingsBackupPayload, so restore cannot revive it.
+    var editModeScreenContextRevision: String {
+        self.defaults.string(forKey: Keys.editModeScreenContextRevision) ?? ""
+    }
+
+    /// Opt-in permission for on-device Edit Mode to use text in the front window.
+    @MainActor
+    var editModeReadsScreen: Bool {
+        get { self.defaults.object(forKey: Keys.editModeReadsScreen) as? Bool ?? false }
+        set {
+            guard newValue != self.editModeReadsScreen else { return }
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.editModeReadsScreen)
+            // A retired bound profile rejects writes. It must not announce a
+            // consent change or rotate the current profile's authorization.
+            guard self.editModeReadsScreen == newValue else { return }
+            self.defaults.set(UUID().uuidString, forKey: Keys.editModeScreenContextRevision)
+            // Synchronous main-actor delivery cancels readers before returning
+            // from the toggle, including a rapid off/on that SwiftUI coalesces.
+            NotificationCenter.default.post(name: Self.editModeScreenContextDidChange, object: self)
+        }
+    }
+
     /// Global check if a model is a reasoning model (requires special params/max_completion_tokens)
     func isReasoningModel(_ model: String) -> Bool {
         // Drop a provider/namespace prefix (e.g. OpenRouter's "openai/") so the
@@ -3536,11 +3565,11 @@ final class SettingsStore: ObservableObject {
     }
 
     /// Whether a card is shown when a paste could not be confirmed in the target field.
-    /// Off by default: the read-back is a guess, and a wrong guess interrupts for nothing.
+    /// Enabled by default for strong unchanged-field results; explicit user choices persist.
     var showPasteCheckAlerts: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.showPasteCheckAlerts)
-            return value as? Bool ?? false
+            return value as? Bool ?? true
         }
         set {
             objectWillChange.send()
@@ -3916,6 +3945,7 @@ final class SettingsStore: ObservableObject {
             self.normalizeDictationPromptConfigurationsIfNeeded()
         }
         self.purgeRetiredAppleIntelligenceState()
+        self.makeEditModeIndependentIfNeeded()
     }
 
     // MARK: - Private Methods
@@ -4371,11 +4401,6 @@ final class SettingsStore: ObservableObject {
     private func syncLinkedProviderSelections(to providerID: String) {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if self.rewriteModeLinkedToGlobal {
-            self.rewriteModeSelectedProviderID = trimmed
-            self.rewriteModeSelectedModel = self.modelSelection(for: trimmed)
-        }
-
         if self.commandModeLinkedToGlobal {
             let linkedProviderID = self.isPrivateAIProviderID(trimmed) ? "" : trimmed
             self.commandModeSelectedProviderID = linkedProviderID
@@ -4439,8 +4464,43 @@ final class SettingsStore: ObservableObject {
         return ModelRepository.shared.defaultModels(for: providerID)
     }
 
+    /// Keep a legacy linked choice once, then let Edit Mode own its provider/model.
+    /// Also runs after restoring an older backup; an empty route stays visibly unconfigured.
+    func makeEditModeIndependentIfNeeded() {
+        guard self.rewriteModeLinkedToGlobal else { return }
+        let linkedProviderID = self.effectiveRewriteModeProviderID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let storedProviderID = self.rewriteModeSelectedProviderID.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Basic dictation has no cleanup provider; it must not erase an existing Edit choice.
+        let providerID = linkedProviderID.isEmpty
+            ? (storedProviderID.isEmpty ? self.selectedProviderID : storedProviderID)
+            : linkedProviderID
+        let linkedModelID = self.effectiveRewriteModeSelectedModel
+        let modelID = ModelRepository.eligibleModel(
+            preferred: linkedModelID.isEmpty ? self.rewriteModeSelectedModel : linkedModelID,
+            from: self.availableModels(for: providerID, task: .edit)
+        )
+        self.objectWillChange.send()
+        Self.makeEditModeIndependent(defaults: self.defaults, providerID: providerID, modelID: modelID)
+    }
+
+    static func makeEditModeIndependent(defaults: UserDefaults, providerID: String, modelID: String?) {
+        guard defaults.object(forKey: Keys.rewriteModeLinkedToGlobal) as? Bool != false else { return }
+        defaults.set(providerID, forKey: Keys.rewriteModeSelectedProviderID)
+        defaults.set(modelID, forKey: Keys.rewriteModeSelectedModel)
+        defaults.set(false, forKey: Keys.rewriteModeLinkedToGlobal)
+    }
+
     var effectiveRewriteModeProviderID: String {
-        self.rewriteModeLinkedToGlobal ? self.selectedProviderID : self.rewriteModeSelectedProviderID
+        guard self.rewriteModeLinkedToGlobal else { return self.rewriteModeSelectedProviderID }
+        // "Same as dictation" follows what the main shortcut really uses. On the on-device
+        // style that is the local provider, whatever selectedProviderID holds.
+        let selection = self.dictationPromptSelection(for: .primary)
+        return DictationDefaultProvider.providerID(
+            selection: selection,
+            configuration: self.dictationPromptConfiguration(for: selection),
+            selectedProviderID: self.selectedProviderID,
+            privateProviderID: PrivateAIProviderFeature.shared.providerID
+        )
     }
 
     var effectiveRewriteModeSelectedModel: String {
