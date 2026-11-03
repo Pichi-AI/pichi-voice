@@ -42,7 +42,15 @@ private struct InlineFocusHost: View {
         guard let view = find(host) else { preconditionFailure("Native transcript must be mounted") }
         let source = view.string
         let last = (source as NSString).range(of: "Pech", options: .backwards)
-        precondition(view.beginInlineEdit(range: last))
+        let glyphs = view.layoutManager!.glyphRange(forCharacterRange: last, actualCharacterRange: nil)
+        let box = view.layoutManager!.boundingRect(forGlyphRange: glyphs, in: view.textContainer!)
+        let point = view.convert(NSPoint(x: box.midX, y: box.midY), to: nil)
+        let down = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 1,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+        let up = NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [], timestamp: 1.01,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 0)!
+        NSApp.postEvent(up, atStart: true)
+        view.mouseDown(with: down)
         pump() // Includes the real SwiftUI update caused by onBeginEdit.
         guard let field = view.inlineEditor else { preconditionFailure("Editor survives SwiftUI state update") }
         precondition(window.firstResponder === field || window.firstResponder === field.currentEditor(),
@@ -69,6 +77,6 @@ private struct InlineFocusHost: View {
         pump()
         precondition(view.inlineEditor == nil && !view.commitInlineEdit(), "Stale entry cancels without saving")
         window.close()
-        print("PASS: native inline focus survives SwiftUI updates and late notifications; save, cancel, focus loss and stale identity")
+        print("PASS: native left click and inline focus survive SwiftUI updates and late notifications; save, cancel, focus loss and stale identity")
     }
 }
