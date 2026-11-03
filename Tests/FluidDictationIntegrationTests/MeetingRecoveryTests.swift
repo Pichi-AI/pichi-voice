@@ -4448,22 +4448,79 @@ final class MeetingRecoveryTests: XCTestCase {
         await coordinator.shutdownForTermination()
     }
 
-    func testUnsupportedRetranscriptionLanguageDoesNotLeakAudioLease() async throws {
+    func testMalformedRetranscriptionLanguageIsRejectedBeforeAudioLeaseOrProcessing() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
         let session = try self.completedEnglishRetranscriptionFixture()
         try await store.create(session)
+        let capture = StubCaptureController()
+        let processing = GatedProcessingController()
+        processing.openGate()
         let arbiter = StubArbiter()
-        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: arbiter)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: arbiter)
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         await coordinator.ensureRestored()
+        let baseline = try await store.load(id: session.id)
         do {
-            _ = try await coordinator.retryProcessing(sessionID: session.id, languageCode: "zh")
-            XCTFail("Unsupported language should fail")
+            _ = try await coordinator.retryProcessing(sessionID: session.id, languageCode: "not a language")
+            XCTFail("A malformed language identifier should fail")
         } catch {
             guard case MeetingCoordinatorError.unsupportedRetranscriptionLanguage = error else { return XCTFail("Unexpected error: \(error)") }
         }
-        XCTAssertEqual(arbiter.acquireCount, arbiter.releaseCount, "An invalid language must not leave dictation blocked")
+        XCTAssertFalse(processing.didStart)
+        XCTAssertEqual(capture.preflightCount, 0)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertEqual(arbiter.releaseCount, 0, "Malformed input cannot acquire an audio lease")
+        let saved = try await store.load(id: session.id)
+        XCTAssertEqual(saved, baseline)
+        await coordinator.shutdownForTermination()
+    }
+
+    func testValidRetranscriptionLanguageUnsupportedByFixedBackendReleasesAudioLease() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let session = try self.completedEnglishRetranscriptionFixture()
+        try await store.create(session)
+        let registry = MeetingTranscriptionBackendRegistry.makeDefault()
+        XCTAssertEqual(MeetingRetranscriptionLanguage.canonicalCode("zh"), "zh")
+        let whisper = try XCTUnwrap(registry.descriptor(for: .whisperTiny))
+        XCTAssertTrue(whisper.supportedLanguageCodes.contains("zh"), "Valid language support belongs to the selected backend")
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        let processing = MeetingProcessingPipeline(
+            asrServiceProvider: { XCTFail("Unsupported backend language cannot reach ASR"); return ASRService() },
+            managesModelResidency: false,
+            serializationGate: MeetingProcessingSerializationGate(),
+            backendRegistry: registry,
+            backendID: .parakeetNemotron,
+            meetingRuntimeFactory: { _ in XCTFail("Unsupported backend language cannot construct a runtime"); throw CancellationError() },
+            prepareDiarizationDependencies: { _ in XCTFail("Unsupported backend language cannot prepare dependencies") },
+            preferredASRModelProvider: { XCTFail("Language admission precedes model selection"); return .parakeetTDTv2 }
+        )
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: arbiter)
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        await coordinator.ensureRestored()
+        do {
+            _ = try await coordinator.retryProcessing(sessionID: session.id, languageCode: "zh")
+            XCTFail("The fixed European-language backend must reject Chinese")
+        } catch {
+            XCTAssertEqual(error as? MeetingBackendError, .unsupportedLanguage(backend: .parakeetNemotron, languageCode: "zh"))
+        }
+        XCTAssertEqual(capture.preflightCount, 0)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 1, "Valid identifiers reach the processing admission boundary")
+        XCTAssertEqual(arbiter.releaseCount, 1, "A backend capability failure must not leave dictation blocked")
+        let saved = try await store.load(id: session.id)
+        let result = try XCTUnwrap(saved)
+        XCTAssertEqual(result.languageCode, "en")
+        XCTAssertEqual(result.transcriptSegments, session.transcriptSegments)
+        XCTAssertEqual(result.state, .completed, "A failed replacement preserves the completed transcript")
+        XCTAssertEqual(result.processingAttempts.last?.languageCode, "zh")
+        XCTAssertNotNil(result.processingAttempts.last?.errorCode)
+        XCTAssertFalse(result.failures.isEmpty)
         await coordinator.shutdownForTermination()
     }
 

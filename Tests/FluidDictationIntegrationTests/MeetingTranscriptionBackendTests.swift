@@ -159,7 +159,8 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         version: String = "test",
         trackKinds: Set<MeetingAudioTrackKind> = Set(MeetingAudioTrackKind.allCases),
         precisions: Set<MeetingTextUnitPrecision> = [.word, .utterance],
-        resultContract: MeetingBackendResultContract = .legacyResult
+        resultContract: MeetingBackendResultContract = .legacyResult,
+        diarizationDependencies: Set<MeetingDiarizationDependency> = []
     ) -> MeetingBackendDescriptor {
         MeetingBackendDescriptor(
             id: id,
@@ -169,7 +170,8 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
             supportedTrackKinds: trackKinds,
             supportedFinalPrecisions: precisions,
             resultContract: resultContract,
-            knownLimits: ["Fixture only; performs no inference."]
+            knownLimits: ["Fixture only; performs no inference."],
+            diarizationDependencies: diarizationDependencies
         )
     }
 
@@ -778,18 +780,29 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
 
     func testPreferredASRModelIsFrozenBeforeDiarizationPreparation() async throws {
         var selected = SettingsStore.SpeechModel.fluidParakeetPro
+        let expectedConfiguration = try await PichiMeetingProviderFactory.frozenConfiguration(
+            backendID: .parakeetNemotron, languageCode: "en", preferredASRModel: selected
+        )
         var reads = 0
-        let backend = FixtureMeetingBackend(descriptor: self.makeFixtureDescriptor(id: .parakeetNemotron)) { plan in
+        var preparations = 0
+        let descriptor = self.makeFixtureDescriptor(id: .parakeetNemotron, diarizationDependencies: [.speakerSeparation])
+        let backend = FixtureMeetingBackend(descriptor: descriptor) { plan in
             .legacyCompatibility(self.makeResult(attemptID: plan.attemptID, text: "Fixture"))
         }
         let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: .parakeetNemotron)
-        registry.register(.parakeetNemotron) { _ in backend }
+        registry.register(.parakeetNemotron, descriptor: descriptor) { _ in backend }
         let pipeline = MeetingProcessingPipeline(
             asrServiceProvider: { XCTFail("Fixture selection must not load models"); return ASRService() },
             managesModelResidency: false,
             serializationGate: MeetingProcessingSerializationGate(),
             backendRegistry: registry,
-            prepareDiarizationModel: { await Task.yield(); selected = .parakeetTDTv2 },
+            prepareDiarizationModel: {
+                preparations += 1
+                XCTAssertEqual(reads, 1, "Freeze the model preference before preparation can suspend")
+                XCTAssertNil(backend.lastPlan, "Declared dependencies are prepared before planning")
+                await Task.yield()
+                selected = .parakeetTDTv2
+            },
             preferredASRModelProvider: { reads += 1; return selected }
         )
         _ = try await pipeline.process(
@@ -798,8 +811,13 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
             progress: { _ in }
         )
         XCTAssertEqual(reads, 1)
+        XCTAssertEqual(preparations, 1)
         XCTAssertEqual(selected, .parakeetTDTv2)
         XCTAssertEqual(backend.lastPlan?.request.configuration.asrModel, "fluid-parakeet-pro")
+        XCTAssertEqual(backend.lastPlan?.request.configuration, expectedConfiguration,
+                       "Preparation cannot change the frozen model, artifact identity or processing options")
+        XCTAssertEqual(backend.planCallCount, 1)
+        XCTAssertEqual(backend.executeCallCount, 1)
     }
 
     func testSavedLegacyBackendUsesProductionForFrenchWithoutChangingPreference() async {
