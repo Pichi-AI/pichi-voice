@@ -492,6 +492,7 @@ private struct MobilePrivacySettings: View {
     var cloudInteraction: MobileCloudInteraction?
     @ObservedObject private var settings = SettingsStore.shared
     @State private var dictionaryEdit: MobileSensitiveDictionaryEdit?
+    @ObservedObject private var privateProfile = PrivateProfileService.shared
 
     var body: some View {
         Form {
@@ -522,7 +523,8 @@ private struct MobilePrivacySettings: View {
                 MobileSettingsFooter(MobilePrivacyActivationControls.explanation)
             }
             // The dictionary refines data cleanup, so it follows that section directly.
-            MobileSensitiveDictionarySettings { entry in dictionaryEdit = .init(entry: entry) }
+            MobileSensitiveDictionarySettings(edit: $dictionaryEdit)
+                .id(privateProfile.sourceRevision)
             Section {
                 MobileRecordingDataControls(session: accountSession, service: cloudPublication,
                     interaction: cloudInteraction)
@@ -532,8 +534,9 @@ private struct MobilePrivacySettings: View {
                 MobileSettingsFooter(PichiLocalization.text("recording.settings.scope"))
             }
         }.mobileSettingsPage().navigationTitle(PichiLocalization.text("Privacy")).accessibilityIdentifier("settings.privacy.detail")
-            .sheet(item: $dictionaryEdit) { request in
-                MobileSensitiveDictionaryEditor(entry: request.entry)
+            .onReceive(NotificationCenter.default.publisher(for: SettingsStore.privateProfileWillChange)) { _ in
+                dictionaryEdit = nil
             }
+            .onDisappear { dictionaryEdit = nil }
     }
 }

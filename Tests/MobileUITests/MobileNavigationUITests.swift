@@ -672,8 +672,10 @@ final class MobileNavigationUITests: XCTestCase {
             scrollTo(privacy); privacy.tap()
             let add = app.buttons["privacy.dictionary.add"]
             scrollTo(add); add.tap()
-            XCTAssertTrue(app.textFields["privacy.dictionary.phrase"].waitForExistence(timeout: 5)
-                || app.textViews["privacy.dictionary.phrase"].exists)
+            XCTAssertTrue(app.textFields["privacy.dictionary.phrase"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Opening inline input must present the keyboard")
+            XCTAssertFalse(app.buttons["privacy.dictionary.add"].exists, "The field replaces the Add row")
+            XCTAssertFalse(app.pickers["privacy.dictionary.matchMode"].exists)
             capture("sensitive-\(revision)-\(language)-\(appearance)-dictionary-editor")
             app.buttons["privacy.dictionary.cancel"].tap()
             let group = app.buttons["privacy.groups.illicit-remuneration"]

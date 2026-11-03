@@ -15,14 +15,22 @@ extension SettingsStore {
         }
     }
 
+    /// The app has one matching policy. Legacy exact entries remain readable, but
+    /// presentation and attempt admission normalize them without mutating storage.
+    private func admittedSensitiveDictionary() throws -> TranscriptSensitiveDictionarySnapshot {
+        let stored = try TranscriptSensitiveDictionarySnapshot.read(from: defaults, key: Self.sensitiveDataDictionaryDefaultsKey)
+        guard stored.entries.contains(where: { $0.matchMode != .wordForms }) else { return stored }
+        return try .init(entries: stored.entries.map { .init(id: $0.id, phrase: $0.phrase, matchMode: .wordForms) })
+    }
+
     /// Presentation reads cannot erase malformed saved data. Attempt admission uses
     /// the throwing snapshot below so invalid rules never silently disable protection.
     var sensitiveDataDictionaryEntries: [SensitiveDataDictionaryEntry] {
-        (try? TranscriptSensitiveDictionarySnapshot.read(from: defaults, key: Self.sensitiveDataDictionaryDefaultsKey).entries) ?? []
+        (try? admittedSensitiveDictionary().entries) ?? []
     }
 
     func sensitiveDataDictionarySnapshot() throws -> TranscriptSensitiveDictionarySnapshot {
-        let stored = try TranscriptSensitiveDictionarySnapshot.read(from: defaults, key: Self.sensitiveDataDictionaryDefaultsKey)
+        let stored = try admittedSensitiveDictionary()
         let groups = try admittedBusinessGroups()
         let topics = try stored.inferredTopicIDs(selectedGroupIDs: groups)
         let classifier = try topics.isEmpty ? nil : SensitiveTopicClassifierSnapshot.bundled(selectedTopicIDs: topics)
@@ -32,27 +40,32 @@ extension SettingsStore {
 
     func replaceSensitiveDataDictionaryEntries(_ entries: [SensitiveDataDictionaryEntry]) throws {
         try requireSensitivePolicyMutationAdmission()
-        let snapshot = try TranscriptSensitiveDictionarySnapshot(entries: entries)
+        let snapshot = try TranscriptSensitiveDictionarySnapshot(entries: entries.map {
+            .init(id: $0.id, phrase: $0.phrase, matchMode: .wordForms)
+        })
         objectWillChange.send()
         try snapshot.persist(in: defaults, key: Self.sensitiveDataDictionaryDefaultsKey)
     }
 
     @discardableResult
-    func addSensitiveDataDictionaryPhrase(_ phrase: String, matchMode: SensitiveDictionaryMatchMode = .wordForms) throws -> SensitiveDataDictionaryEntry {
-        let entry = SensitiveDataDictionaryEntry(phrase: phrase, matchMode: matchMode)
+    func addSensitiveDataDictionaryPhrase(_ phrase: String) throws -> SensitiveDataDictionaryEntry {
+        try requireSensitivePolicyMutationAdmission()
+        let entry = SensitiveDataDictionaryEntry(phrase: phrase, matchMode: .wordForms)
         try replaceSensitiveDataDictionaryEntries(sensitiveDataDictionarySnapshot().entries + [entry])
         return entry
     }
 
-    func updateSensitiveDataDictionaryPhrase(id: UUID, phrase: String, matchMode: SensitiveDictionaryMatchMode = .wordForms) throws {
+    func updateSensitiveDataDictionaryPhrase(id: UUID, phrase: String) throws {
+        try requireSensitivePolicyMutationAdmission()
         var entries = try sensitiveDataDictionarySnapshot().entries
         guard let index = entries.firstIndex(where: { $0.id == id }) else { throw SensitiveDataDictionaryError.entryNotFound }
         entries[index].phrase = phrase
-        entries[index].matchMode = matchMode
+        entries[index].matchMode = .wordForms
         try replaceSensitiveDataDictionaryEntries(entries)
     }
 
     func removeSensitiveDataDictionaryPhrase(id: UUID) throws {
+        try requireSensitivePolicyMutationAdmission()
         let entries = try sensitiveDataDictionarySnapshot().entries
         guard entries.contains(where: { $0.id == id }) else { throw SensitiveDataDictionaryError.entryNotFound }
         try replaceSensitiveDataDictionaryEntries(entries.filter { $0.id != id })
@@ -74,7 +87,7 @@ extension SettingsStore {
         try requireSensitivePolicyMutationAdmission()
         var ids = try admittedBusinessGroups()
         if enabled { ids.insert(id) } else { ids.remove(id) }
-        let entries = try TranscriptSensitiveDictionarySnapshot.read(from: defaults, key: Self.sensitiveDataDictionaryDefaultsKey).entries
+        let entries = try admittedSensitiveDictionary().entries
         _ = try TranscriptSensitiveDictionarySnapshot(entries: entries, selectedGroupIDs: ids,
             groupTermOverrides: admittedGroupOverrides())
         objectWillChange.send()
@@ -101,7 +114,7 @@ extension SettingsStore {
         }
         var overrides = try admittedGroupOverrides()
         overrides[id] = terms
-        let entries = try TranscriptSensitiveDictionarySnapshot.read(from: defaults, key: Self.sensitiveDataDictionaryDefaultsKey).entries
+        let entries = try admittedSensitiveDictionary().entries
         _ = try TranscriptSensitiveDictionarySnapshot(entries: entries, selectedGroupIDs: admittedBusinessGroups(),
             groupTermOverrides: overrides)
         let data = try JSONEncoder().encode(overrides)
@@ -116,7 +129,7 @@ extension SettingsStore {
         try requireSensitivePolicyMutationAdmission()
         var overrides = try admittedGroupOverrides()
         overrides[id] = nil
-        let entries = try TranscriptSensitiveDictionarySnapshot.read(from: defaults, key: Self.sensitiveDataDictionaryDefaultsKey).entries
+        let entries = try admittedSensitiveDictionary().entries
         _ = try TranscriptSensitiveDictionarySnapshot(entries: entries, selectedGroupIDs: admittedBusinessGroups(),
             groupTermOverrides: overrides)
         objectWillChange.send()

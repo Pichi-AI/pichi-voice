@@ -79,9 +79,28 @@ struct SensitivePolicySettingsTests {
         try admittedA.replaceSensitiveDataDictionaryEntries([.init(phrase: "ТЗ"), .init(phrase: "компания"), .init(phrase: "интерес")])
         try expect(try admittedA.sensitiveDataDictionarySnapshot().selectedTopicIDs.isEmpty,
                "An ambiguous word or partial group expression activated semantic masking")
+        let legacy = SensitiveDataDictionaryEntry(phrase: "кошка", matchMode: .exact)
+        let oldPolicy = try TranscriptSensitiveDictionarySnapshot(entries: [legacy])
+        try oldPolicy.persist(in: admittedA.defaults, key: "SensitiveDataDictionaryEntries")
+        let storedBeforeRead = admittedA.defaults.data(forKey: "SensitiveDataDictionaryEntries")
+        let normalized = try admittedA.sensitiveDataDictionarySnapshot()
+        expect(admittedA.sensitiveDataDictionaryEntries.first?.id == legacy.id
+               && admittedA.sensitiveDataDictionaryEntries.first?.matchMode == .wordForms,
+               "Legacy exact entry did not gain word forms or lost its identifier")
+        try expect(try normalized.spans(in: "О кошке.").count == 1,
+               "A saved exact entry retained literal-only behavior")
+        expect(normalized.fingerprint != oldPolicy.fingerprint,
+               "Changed matching semantics reused the old checkpoint identity")
+        expect(admittedA.defaults.data(forKey: "SensitiveDataDictionaryEntries") == storedBeforeRead,
+               "A presentation/admission read mutated stored private data")
+        try admittedA.updateSensitiveDataDictionaryPhrase(id: legacy.id, phrase: "кошка")
+        let persisted = try TranscriptSensitiveDictionarySnapshot.read(from: admittedA.defaults, key: "SensitiveDataDictionaryEntries")
+        expect(persisted.entries.first?.matchMode == .wordForms, "Edited legacy entry did not persist word forms")
+        try expect(try oldPolicy.spans(in: "О кошке.").isEmpty,
+               "Migrating settings mutated an already admitted old snapshot")
         try admittedA.replaceSensitiveDataDictionaryEntries([.init(phrase: "взятке", matchMode: .exact)])
-        try expect(try admittedA.sensitiveDataDictionarySnapshot().selectedTopicIDs.isEmpty,
-               "An exact-only declined spelling matched a different dictionary seed")
+        try expect(try admittedA.sensitiveDataDictionarySnapshot().selectedTopicIDs == ["illicit-remuneration"],
+               "Replacing entries reintroduced a literal-only dictionary setting")
         try admittedA.replaceSensitiveDataDictionaryEntries([.init(phrase: "синтетическая тайна")])
         try admittedA.setSensitiveBusinessGroup(id: "procurement-collusion", enabled: true)
         let procurement = try admittedA.sensitiveDataDictionarySnapshot()
@@ -118,6 +137,9 @@ struct SensitivePolicySettingsTests {
         // delivered after B becomes current. The bound owner must not retarget.
         cancelled { try admittedA.replaceSensitiveBusinessGroupTerms(id: "illicit-remuneration", terms: ["чужая фраза"]) }
         cancelled { try admittedA.replaceSensitiveDataDictionaryEntries([.init(phrase: "чужой словарь")]) }
+        cancelled { _ = try admittedA.addSensitiveDataDictionaryPhrase("чужое слово") }
+        cancelled { try admittedA.updateSensitiveDataDictionaryPhrase(id: legacy.id, phrase: "чужая правка") }
+        cancelled { try admittedA.removeSensitiveDataDictionaryPhrase(id: legacy.id) }
         cancelled { try admittedA.setSensitiveBusinessGroup(id: "illicit-remuneration", enabled: false) }
         expect(savedB.isEqual(saved(domains[1])), "Late A completion changed B settings")
         expect(savedA.isEqual(saved(domains[0])), "Rejected late completion changed A settings")
