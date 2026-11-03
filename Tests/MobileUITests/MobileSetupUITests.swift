@@ -416,7 +416,11 @@ final class MobileSetupUITests: XCTestCase {
     private func openPrivacy(in app: XCUIApplication) {
         let sidebar = app.buttons["navigation.settings"]
         if sidebar.waitForExistence(timeout: 2) { sidebar.tap() }
-        else { app.tabBars.buttons["Настройки"].tap() }
+        else {
+            let settings = app.tabBars.buttons.matching(NSPredicate(format: "label IN %@", ["Настройки", "Settings"])).firstMatch
+            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            settings.tap()
+        }
         XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 10))
         reveal("settings.privacy", in: app)
         app.buttons["settings.privacy"].tap()
