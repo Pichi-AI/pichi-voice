@@ -1,15 +1,32 @@
 import Foundation
 import CryptoKit
+import PichiRussianMorphology
+
+nonisolated enum SensitiveDictionaryMatchMode: String, Codable, CaseIterable, Sendable {
+    case exact, wordForms
+}
 
 nonisolated struct SensitiveDataDictionaryEntry: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     var phrase: String
+    var matchMode: SensitiveDictionaryMatchMode
 
-    init(id: UUID = UUID(), phrase: String) { self.id = id; self.phrase = phrase }
+    init(id: UUID = UUID(), phrase: String, matchMode: SensitiveDictionaryMatchMode = .wordForms) {
+        self.id = id; self.phrase = phrase; self.matchMode = matchMode
+    }
+    private enum CodingKeys: String, CodingKey { case id, phrase, matchMode }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        phrase = try container.decode(String.self, forKey: .phrase)
+        // Existing rules gain the requested word-form behavior. The new fingerprint
+        // prevents restoration under a previous literal-only policy.
+        matchMode = try container.decodeIfPresent(SensitiveDictionaryMatchMode.self, forKey: .matchMode) ?? .wordForms
+    }
 }
 
 nonisolated enum SensitiveDataDictionaryError: Error, Equatable {
-    case emptyPhrase, phraseTooLong, tooManyWords, tooManyEntries, duplicatePhrase, invalidPhrase, entryNotFound, invalidStoredData, invalidRedaction
+    case emptyPhrase, phraseTooLong, tooManyWords, tooManyEntries, duplicatePhrase, invalidPhrase, entryNotFound, invalidStoredData, invalidRedaction, compiledRulesTooLarge
 }
 
 /// Bounded user rules, frozen alongside the model/rules capability for one attempt.
@@ -24,14 +41,49 @@ nonisolated struct TranscriptSensitiveDictionarySnapshot: Sendable {
     let entries: [SensitiveDataDictionaryEntry]
     let fingerprint: String
     private let rules: [Rule]
-    private struct Rule: Sendable { let phrase: String; let expression: NSRegularExpression }
+    private let topicClassifier: SensitiveTopicClassifierSnapshot?
+    private struct Rule: Sendable {
+        let phrase: String
+        let forms: [Set<String>]?
+        let expression: NSRegularExpression
+    }
 
-    init(entries: [SensitiveDataDictionaryEntry]) throws {
+    init(entries: [SensitiveDataDictionaryEntry], selectedGroupIDs: Set<String> = [],
+         groupTermOverrides: [String: [String]] = [:],
+         topicClassifier: SensitiveTopicClassifierSnapshot? = nil) throws {
         guard entries.count <= Self.maximumEntries else { throw SensitiveDataDictionaryError.tooManyEntries }
         var seen: Set<String> = []
         var ids: Set<UUID> = []
         var sanitized: [SensitiveDataDictionaryEntry] = []
         var rules: [Rule] = []
+        let morphology = SensitiveDictionaryMorphologySnapshot()
+        var compiledBytes = 0
+        func compile(_ phrase: String, mode: SensitiveDictionaryMatchMode) throws -> Rule {
+            let normalized = Normalized(phrase).text
+            var forms: [Set<String>]? = nil
+            if mode == .wordForms {
+                forms = try normalized.split(separator: " ").map { token in
+                    let word = String(token)
+                    let alternatives = try morphology.forms(for: word) ?? [word]
+                    guard alternatives.count <= 256 else { throw SensitiveDataDictionaryError.compiledRulesTooLarge }
+                    return Set(alternatives.map { Normalized($0).text.replacingOccurrences(of: "ё", with: "е") })
+                        .union([word.replacingOccurrences(of: "ё", with: "е")])
+                }
+            }
+            let body = forms.map { tokens in
+                tokens.map { alternatives in
+                    "(?:" + alternatives.sorted().map { word in
+                        word.map { character in
+                            character == "е" ? "[её]" : NSRegularExpression.escapedPattern(for: String(character))
+                        }.joined()
+                    }.joined(separator: "|") + ")"
+                }.joined(separator: " ")
+            } ?? NSRegularExpression.escapedPattern(for: normalized)
+            compiledBytes += body.utf8.count
+            guard compiledBytes <= 2_097_152 else { throw SensitiveDataDictionaryError.compiledRulesTooLarge }
+            let pattern = #"(?<![\p{L}\p{N}\p{M}_])"# + body + #"(?![\p{L}\p{N}\p{M}_])"#
+            return .init(phrase: normalized, forms: forms, expression: try NSRegularExpression(pattern: pattern))
+        }
         for entry in entries {
             let phrase = entry.phrase.trimmingCharacters(in: .whitespacesAndNewlines).precomposedStringWithCanonicalMapping
             guard !phrase.isEmpty else { throw SensitiveDataDictionaryError.emptyPhrase }
@@ -42,15 +94,48 @@ nonisolated struct TranscriptSensitiveDictionarySnapshot: Sendable {
                   !phrase.contains("["), !phrase.contains("]"), ids.insert(entry.id).inserted else { throw SensitiveDataDictionaryError.invalidPhrase }
             let normalized = Normalized(phrase).text
             guard seen.insert(normalized).inserted else { throw SensitiveDataDictionaryError.duplicatePhrase }
-            let pattern = #"(?<![\p{L}\p{N}\p{M}_])"# + NSRegularExpression.escapedPattern(for: normalized) + #"(?![\p{L}\p{N}\p{M}_])"#
-            rules.append(.init(phrase: normalized, expression: try NSRegularExpression(pattern: pattern)))
-            sanitized.append(.init(id: entry.id, phrase: phrase))
+            rules.append(try compile(phrase, mode: entry.matchMode))
+            sanitized.append(.init(id: entry.id, phrase: phrase, matchMode: entry.matchMode))
         }
+        guard selectedGroupIDs.isSubset(of: Set(SensitiveBusinessGroupCatalog.groups.map(\.id))) else {
+            throw SensitiveDataDictionaryError.invalidStoredData
+        }
+        guard Set(groupTermOverrides.keys).isSubset(of: Set(SensitiveBusinessGroupCatalog.groups.map(\.id))) else {
+            throw SensitiveDataDictionaryError.invalidStoredData
+        }
+        for terms in groupTermOverrides.values {
+            guard terms.count <= 128 else { throw SensitiveDataDictionaryError.tooManyEntries }
+            // Reuse the user phrase validation without including private override
+            // text in public capability names or changing the selected groups.
+            _ = try TranscriptSensitiveDictionarySnapshot(entries: terms.map { .init(phrase: $0) })
+        }
+        let groups = SensitiveBusinessGroupCatalog.groups.filter { selectedGroupIDs.contains($0.id) }
+        let groupTerms = Set(groups.flatMap { groupTermOverrides[$0.id] ?? $0.terms })
+        guard groupTerms.count <= 128 else { throw SensitiveDataDictionaryError.tooManyEntries }
+        for phrase in groupTerms.sorted() { rules.append(try compile(phrase, mode: .wordForms)) }
         self.entries = sanitized
         self.rules = rules.sorted { $0.phrase < $1.phrase }
-        // JSON framing prevents collisions between a phrase containing separators and two rules.
-        let identity = try JSONEncoder().encode(self.rules.map(\.phrase))
-        self.fingerprint = "sensitive-dictionary-v1/" + SHA256.hash(data: identity).map { String(format: "%02x", $0) }.joined()
+        self.topicClassifier = topicClassifier
+        struct Identity: Encodable {
+            struct Entry: Encodable { let phrase: String; let mode: SensitiveDictionaryMatchMode }
+            let entries: [Entry]
+            let groups: [String]
+            let catalog: String
+            let morphology: String
+            let classifier: String?
+            let compiledRuleDigest: String
+        }
+        let identityEncoder = JSONEncoder()
+        identityEncoder.outputFormatting = [.sortedKeys]
+        let identity = try identityEncoder.encode(Identity(
+            entries: sanitized.map { .init(phrase: Normalized($0.phrase).text, mode: $0.matchMode) }
+                .sorted { $0.phrase < $1.phrase }, groups: selectedGroupIDs.sorted(),
+            catalog: SensitiveBusinessGroupCatalog.version,
+            morphology: SensitiveDictionaryMorphologySnapshot.resourceIdentity,
+            classifier: topicClassifier?.identity,
+            compiledRuleDigest: SHA256.hash(data: try JSONEncoder().encode(self.rules.map { $0.expression.pattern }))
+                .map { String(format: "%02x", $0) }.joined()))
+        self.fingerprint = "sensitive-dictionary-v2/" + SHA256.hash(data: identity).map { String(format: "%02x", $0) }.joined()
     }
 
     static func read(from defaults: UserDefaults, key: String) throws -> Self {
@@ -68,34 +153,69 @@ nonisolated struct TranscriptSensitiveDictionarySnapshot: Sendable {
         defaults.set(data, forKey: key)
     }
 
-    var isEmpty: Bool { rules.isEmpty }
+    var isEmpty: Bool { rules.isEmpty && topicClassifier == nil }
 
-    func spans(in text: String) -> [TranscriptRedactedSpan] {
-        guard !rules.isEmpty else { return [] }
+    /// Only an explicitly selected group or a complete recognized dictionary seed
+    /// opts its supported topic into semantic masking. Substrings such as "ТЗ" or
+    /// "компания" cannot activate every topic whose phrases happen to contain them.
+    func inferredTopicIDs(selectedGroupIDs: Set<String>) throws -> Set<String> {
+        var topics = selectedGroupIDs.intersection(SensitiveTopicClassifierSnapshot.supportedTopicIDs)
+        for group in SensitiveBusinessGroupCatalog.groups
+            where SensitiveTopicClassifierSnapshot.supportedTopicIDs.contains(group.id) && !topics.contains(group.id) {
+            let seeds = SensitiveBusinessGroupCatalog.semanticSeeds(for: group)
+            for seed in seeds {
+                let entire = NSRange(location: 0, length: seed.utf16.count)
+                if try spans(in: seed).contains(where: { $0.range == entire }) {
+                    topics.insert(group.id)
+                    break
+                }
+            }
+        }
+        return topics
+    }
+
+    var selectedTopicIDs: Set<String> { topicClassifier?.selectedTopicIDs ?? [] }
+
+    func spans(in text: String) throws -> [TranscriptRedactedSpan] {
         let normalized = Normalized(text)
-        return rules.flatMap { rule in
+        let lexical: [TranscriptRedactedSpan] = rules.flatMap { rule in
             rule.expression.matches(in: normalized.text, range: NSRange(location: 0, length: normalized.ranges.count)).map {
                 .init(range: normalized.sourceRange($0.range), replacement: Self.replacement)
             }
         }
+        return try lexical + (topicClassifier?.detect(in: text, complete: true).spans ?? [])
+    }
+
+    func durablePublicationLimit(in text: String) throws -> Int? {
+        guard topicClassifier != nil else { return nil }
+        return try SensitiveTopicClassifierSnapshot.completedPrefixUTF16(in: text)
     }
 
     /// A stable ASR edge can still be the start of a multiword user rule. Keep that
     /// original suffix behind the detector's display approval until it completes.
-    func provisionalLimit(in text: String, maximum: Int) -> Int {
-        guard !rules.isEmpty else { return maximum }
+    func provisionalLimit(in text: String, maximum: Int) throws -> Int {
         let normalized = Normalized(text)
         let value = normalized.text as NSString
-        var limit = maximum
+        var limit = try min(maximum, topicClassifier?.detect(in: text, complete: false).safeUTF16 ?? maximum)
         let lowerBound = max(0, value.length - Self.maximumPhraseUTF16 * 3)
         for start in lowerBound..<value.length {
             guard start == 0 || !Self.isWord(value, before: start),
                   !(0xDC00...0xDFFF).contains(value.character(at: start)) else { continue }
             let suffix = value.substring(from: start).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !suffix.isEmpty, rules.contains(where: { $0.phrase.hasPrefix(suffix) && $0.phrase != suffix }) else { continue }
+            guard !suffix.isEmpty, rules.contains(where: { Self.isIncompletePrefix(suffix, of: $0) }) else { continue }
             limit = min(limit, normalized.ranges[start].location)
         }
         return limit
+    }
+
+    private static func isIncompletePrefix(_ suffix: String, of rule: Rule) -> Bool {
+        guard let forms = rule.forms else { return rule.phrase.hasPrefix(suffix) && rule.phrase != suffix }
+        let words = suffix.split(separator: " ").map { String($0).replacingOccurrences(of: "ё", with: "е") }
+        guard !words.isEmpty, words.count <= forms.count else { return false }
+        for i in words.indices.dropLast() where !forms[i].contains(words[i]) { return false }
+        let last = words.count - 1
+        guard forms[last].contains(where: { $0.hasPrefix(words[last]) }) else { return false }
+        return words.count < forms.count || !forms[last].contains(words[last])
     }
 
     private static func isWord(_ source: NSString, before offset: Int) -> Bool {
@@ -146,6 +266,12 @@ nonisolated struct TranscriptDictionaryRedactor: TranscriptTextRedacting {
     // when rules are active; normal provisional display and final flush still work.
     var supportsSpeechBoundaryAdmission: Bool { dictionary.isEmpty && wrapped.supportsSpeechBoundaryAdmission }
     func prepareForMeeting() async throws { try await wrapped.prepareForMeeting() }
+    func durablePublicationLimit(in text: String) throws -> Int? {
+        let own = try dictionary.durablePublicationLimit(in: text)
+        let base = try wrapped.durablePublicationLimit(in: text)
+        if let own, let base { return min(own, base) }
+        return own ?? base
+    }
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         try Task.checkCancellation()
         let base = try await wrapped.redactWithSpans(text)
@@ -175,7 +301,7 @@ nonisolated struct TranscriptDictionaryRedactor: TranscriptTextRedacting {
                 throw SensitiveDataDictionaryError.invalidRedaction
             }
         }
-        let ordered = (base.spans + dictionary.spans(in: input)).sorted {
+        let ordered = (base.spans + (try dictionary.spans(in: input))).sorted {
             $0.range.location == $1.range.location ? $0.range.length > $1.range.length : $0.range.location < $1.range.location
         }
         var spans: [TranscriptRedactedSpan] = []
@@ -189,7 +315,7 @@ nonisolated struct TranscriptDictionaryRedactor: TranscriptTextRedacting {
         }
         let result = NSMutableString(string: input)
         for span in spans.reversed() { result.replaceCharacters(in: span.range, with: span.replacement) }
-        var limit = base.provisionalSafeUTF16.map { dictionary.provisionalLimit(in: input, maximum: $0) }
+        var limit = try base.provisionalSafeUTF16.map { try dictionary.provisionalLimit(in: input, maximum: $0) }
         if var safe = limit {
             for span in spans where span.range.location < safe && NSMaxRange(span.range) > safe { safe = span.range.location }
             limit = safe

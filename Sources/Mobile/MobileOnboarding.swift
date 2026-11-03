@@ -539,7 +539,7 @@ struct MobilePrivacyActivationControls: View {
     @Environment(\.theme) private var theme
 
     static var explanation: String {
-        PichiLocalization.text("Locally hides Russian names, phone numbers, email, card and account numbers, passport details, SNILS, INN, dates of birth, addresses, logins and secrets. Detection can miss data. Review before sharing.")
+        PichiLocalization.text("Locally cleans Russian names, phone numbers, email, card and account numbers, passport details, SNILS, INN, dates of birth, addresses, logins and secrets from text. Detection can miss data. Review before sharing.")
     }
 
     var body: some View {

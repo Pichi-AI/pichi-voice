@@ -86,6 +86,7 @@ resource_builds.append(obj("Mobile InfoPlist.strings resource", f"isa = PBXBuild
 package_products = []
 framework_builds = []
 for name, package in [("PichiGigaAM", "C41C41000000000000000001"), ("PichiTextPrivacy", "C41C41000000000000000001"),
+                      ("PichiRussianMorphology", "1F20C0000000000000000001"),
                       ("FluidAudio", "7C078DA32E3B386A00FB7CAC"), ("TranscribeCpp", "7C9A71002F58B00000FB7CAF")]:
     product = obj("Mobile package " + name, f"isa = XCSwiftPackageProductDependency; package = {package}; productName = {name};")
     package_products.append(product)
@@ -152,7 +153,8 @@ activity_embed = obj("Mobile embed PichiVoiceMobileActivity.appex", f"isa = PBXB
 embed_phase = obj("Mobile Embed Foundation Extensions", f'isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = {arr([activity_embed])}; name = "Embed Foundation Extensions"; runOnlyForDeploymentPostprocessing = 0;')
 
 app_config = configs("Mobile")
-app_target = obj("PichiVoiceMobile", f"isa = PBXNativeTarget; buildConfigurationList = {app_config}; buildPhases = {arr([source_phase, framework_phase, resource_phase, embed_phase])}; buildRules = (); dependencies = {arr([activity_dependency])}; name = PichiVoiceMobile; packageProductDependencies = {arr(package_products)}; productName = PichiVoiceMobile; productReference = {product_ref}; productType = \"com.apple.product-type.application\";")
+topic_model_phase = obj("Mobile bundled topic model", 'isa = PBXShellScriptBuildPhase; buildActionMask = 2147483647; files = (); inputPaths = ("$(SRCROOT)/scripts/dev/stage-sensitive-topic-model.py", "$(SRCROOT)/tools/sensitive_topic_classifier.py", "$(SRCROOT)/Tests/Fixtures/SensitiveTopics/synthetic-exploratory-v1.jsonl", "$(SRCROOT)/Tests/Fixtures/SensitiveTopics/conversational-train-development-v2.jsonl", ); name = "Stage Built-in Topic Model"; outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/sensitive-topics-v2.json", ); runOnlyForDeploymentPostprocessing = 0; shellPath = /bin/sh; shellScript = "set -eu\\npython3 -B -S \\"$SRCROOT/scripts/dev/stage-sensitive-topic-model.py\\" --output \\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/sensitive-topics-v2.json\\"\\n";')
+app_target = obj("PichiVoiceMobile", f"isa = PBXNativeTarget; buildConfigurationList = {app_config}; buildPhases = {arr([source_phase, framework_phase, resource_phase, embed_phase, topic_model_phase])}; buildRules = (); dependencies = {arr([activity_dependency])}; name = PichiVoiceMobile; packageProductDependencies = {arr(package_products)}; productName = PichiVoiceMobile; productReference = {product_ref}; productType = \"com.apple.product-type.application\";")
 
 test_builds = []
 for path in sorted((ROOT / "Tests/MobileUITests").glob("*.swift")):

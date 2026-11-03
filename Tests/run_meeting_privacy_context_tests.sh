@@ -63,7 +63,15 @@ config = Path('Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swi
 source += config[:config.index('/// Immutable value snapshot')]
 Path(sys.argv[1]).write_text(source)
 PY
+task_morphology_dir="$PWD/.build/privacy-morphology"
+swift build --package-path Vendor/RussianMorphology --scratch-path "$task_morphology_dir" --jobs 2
+# SwiftPM's native Xcode layout puts the public module and static product here.
+task_morphology_products="$task_morphology_dir/out/Products/Debug"
+task_morphology_module="$task_morphology_dir/out/Intermediates.noindex/GeneratedModuleMaps/CRussianMorphology.modulemap"
 xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
+    -I "$task_morphology_products" -L "$task_morphology_products" -lPichiRussianMorphology -lc++ \
+    -Xcc "-fmodule-map-file=$task_morphology_module" \
+    -Xcc "-I$PWD/Vendor/RussianMorphology/Sources/CRussianMorphology/include" \
     -module-cache-path "$task_test_dir/module-cache" "${task_link_args[@]}" \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
@@ -74,6 +82,8 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Services/Meeting/MeetingPCMTranscriptBatch.swift \
     Sources/Fluid/Services/Privacy/TranscriptTextRedacting.swift \
     Sources/Fluid/Services/Privacy/TranscriptSensitiveDictionary.swift \
+    Sources/Fluid/Services/Privacy/SensitiveBusinessGroupCatalog.swift \
+    Sources/Fluid/Services/Privacy/SensitiveTopicClassifier.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptPrivacyPolicy.swift \
     "$task_test_dir/EvidenceTypes.swift" Tests/MeetingPrivacyContextTests.swift Tests/TranscriptSensitiveDictionaryTests.swift \
     -o "$task_test_dir/privacy-context-tests"

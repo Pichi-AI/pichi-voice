@@ -277,6 +277,8 @@ PROBES = tuple(sorted(
        Probe("Tests/run_publication_consent_tests.sh", "bash"),
        Probe("Tests/run_publication_outbox_tests.sh", "bash"),
        Probe("Tests/run_transcript_privacy_tests.sh", "bash"),
+       Probe("Tests/run_sensitive_topic_classifier_tests.sh", "bash"),
+       Probe("Tests/run_sensitive_policy_settings_tests.sh", "bash"),
        Probe("Tests/run_privacy_idle_preparation_tests.sh", "bash"),
        Probe("Tests/run_upstream_sync_tests.sh", "bash"),
        Probe("Tests/run_update_prompt_tests.sh", "sh", requires_ui=True)],

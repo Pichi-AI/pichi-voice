@@ -1,0 +1,154 @@
+{"id":"illicit-remuneration-train-001","split":"train","topics":["illicit-remuneration"],"text":"За решение вопроса посредник попросил личное вознаграждение.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-002","split":"train","topics":["illicit-remuneration"],"text":"Чиновнику предложили взятку за согласование заявки.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-003","split":"train","topics":["illicit-remuneration"],"text":"В договор включили откат закупщику.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-004","split":"train","topics":["illicit-remuneration"],"text":"Он просит занести наличные после подписания.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-005","split":"train","topics":["illicit-remuneration"],"text":"Для нужного решения заложили мотивационный бюджет представителю клиента.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-006","split":"train","topics":["illicit-remuneration"],"text":"Десять процентов суммы надо передать лично директору.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-007","split":"train","topics":["illicit-remuneration"],"text":"Комиссионные переводят родственнику принимающего решение.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-008","split":"train","topics":["illicit-remuneration"],"text":"Они обсуждают коммерческий подкуп менеджера.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-009","split":"train","topics":["illicit-remuneration"],"text":"Платёж за покровительство провели через фиктивного консультанта.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-010","split":"train","topics":["illicit-remuneration"],"text":"За ускорение разрешения попросили конверт.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-011","split":"train","topics":["illicit-remuneration"],"text":"Никаких взяток сотрудникам заказчика мы не платим.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-012","split":"train","topics":["illicit-remuneration"],"text":"На тренинге обсуждали мзду и подкуп.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-013","split":"train","topics":["illicit-remuneration"],"text":"Он намекнул на благодарность лично ему за выбор поставщика.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-014","split":"train","topics":["illicit-remuneration"],"text":"Личные бонусы закупщику обещали в обход договора.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-015","split":"train","topics":["illicit-remuneration"],"text":"За допуск к конкурсу требуют неофициальную плату.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-016","split":"train","topics":["illicit-remuneration"],"text":"Вознаграждение за нужную подпись проведём как консультации.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-017","split":"train","topics":["illicit-remuneration"],"text":"Представитель заказчика попросил долю от контракта на личный счёт.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-018","split":"train","topics":["illicit-remuneration"],"text":"Посреднику дали деньги для передачи чиновнику.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-019","split":"train","topics":["illicit-remuneration"],"text":"Коррупционный платёж скрыли под агентским договором.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-train-020","split":"train","topics":["illicit-remuneration"],"text":"Предложение дать на лапу было отклонено.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-development-001","split":"development","topics":["illicit-remuneration"],"text":"Разговор о взятках нельзя вести в рабочем чате.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-development-002","split":"development","topics":["illicit-remuneration"],"text":"Пять процентов директору за победу проведут через третье лицо.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-development-003","split":"development","topics":["illicit-remuneration"],"text":"Конверт согласующему отправили после сделки.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-development-004","split":"development","topics":["illicit-remuneration"],"text":"Компания запрещает коммерческий подкуп.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-development-005","split":"development","topics":["illicit-remuneration"],"text":"Закупщику обещали персональную премию за выбор нас.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-exploratory-001","split":"exploratory","topics":["illicit-remuneration"],"text":"Просьбу о взятке сотрудник сразу отклонил.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-exploratory-002","split":"exploratory","topics":["illicit-remuneration"],"text":"Личную долю руководителю закупок спрячут в стоимости услуг.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-exploratory-003","split":"exploratory","topics":["illicit-remuneration"],"text":"За подпись пообещали благодарность наличными.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-exploratory-004","split":"exploratory","topics":["illicit-remuneration"],"text":"Коррупционные выплаты запрещены нашим кодексом.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-exploratory-005","split":"exploratory","topics":["illicit-remuneration"],"text":"Клиент просит перечислить процент его супруге за согласование.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-exploratory-006","split":"exploratory","topics":["illicit-remuneration"],"text":"Мотивационный фонд для принимающего решение выведем через агента.","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-exploratory-007","split":"exploratory","topics":["illicit-remuneration"],"text":"На уроке разбирали фразу «дать на лапу».","provenance":"synthetic-authored-20261030"}
+{"id":"illicit-remuneration-exploratory-008","split":"exploratory","topics":["illicit-remuneration"],"text":"Посредник потребовал неофициальное вознаграждение за разрешение.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-001","split":"train","topics":["procurement-collusion"],"text":"Участники тендера заранее согласовали цены.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-002","split":"train","topics":["procurement-collusion"],"text":"Техническое задание заточили под единственного поставщика.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-003","split":"train","topics":["procurement-collusion"],"text":"Конкурент подаст прикрывающую заявку.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-004","split":"train","topics":["procurement-collusion"],"text":"Мы договорились с соперником не снижать цену на торгах.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-005","split":"train","topics":["procurement-collusion"],"text":"Победителя конкурса определили до публикации.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-006","split":"train","topics":["procurement-collusion"],"text":"Три компании имитируют конкуренцию.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-007","split":"train","topics":["procurement-collusion"],"text":"Картель разделил лоты между участниками.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-008","split":"train","topics":["procurement-collusion"],"text":"Остальные участники снимут заявки за компенсацию.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-009","split":"train","topics":["procurement-collusion"],"text":"Сговор поставщиков привёл к завышению цены.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-010","split":"train","topics":["procurement-collusion"],"text":"Условия закупки составили так, чтобы прошла только наша компания.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-011","split":"train","topics":["procurement-collusion"],"text":"Заказчик слил конкурентные предложения до вскрытия.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-012","split":"train","topics":["procurement-collusion"],"text":"Наш партнёр выставит заведомо проигрышную цену.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-013","split":"train","topics":["procurement-collusion"],"text":"Аффилированные фирмы создадут видимость торгов.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-014","split":"train","topics":["procurement-collusion"],"text":"Не участвовать в этом лоте договорились с конкурентом.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-015","split":"train","topics":["procurement-collusion"],"text":"Для отсечения чужих участников добавим ненужный сертификат.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-016","split":"train","topics":["procurement-collusion"],"text":"Комиссия расследует тендерный сговор.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-017","split":"train","topics":["procurement-collusion"],"text":"Нельзя обмениваться будущими ценами с участниками конкурса.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-018","split":"train","topics":["procurement-collusion"],"text":"Соперники согласовали победителя и шаг аукциона.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-019","split":"train","topics":["procurement-collusion"],"text":"Сделаем вторую заявку через подконтрольную компанию.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-train-020","split":"train","topics":["procurement-collusion"],"text":"Торги были фиктивными, подрядчика уже выбрали.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-development-001","split":"development","topics":["procurement-collusion"],"text":"Конкуренты поделили тендеры между собой.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-development-002","split":"development","topics":["procurement-collusion"],"text":"В конкурсе заранее распределили победителей.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-development-003","split":"development","topics":["procurement-collusion"],"text":"Требования специально ограничили круг поставщиков.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-development-004","split":"development","topics":["procurement-collusion"],"text":"Сговор на торгах запрещён законом.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-development-005","split":"development","topics":["procurement-collusion"],"text":"Прикрывающая заявка нужна для видимости конкуренции.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-exploratory-001","split":"exploratory","topics":["procurement-collusion"],"text":"Соперник обещал не торговаться на нашем лоте.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-exploratory-002","split":"exploratory","topics":["procurement-collusion"],"text":"Второй участник только изображает конкуренцию.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-exploratory-003","split":"exploratory","topics":["procurement-collusion"],"text":"Документацию написали под заранее выбранного подрядчика.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-exploratory-004","split":"exploratory","topics":["procurement-collusion"],"text":"Аукцион разыграют аффилированные участники.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-exploratory-005","split":"exploratory","topics":["procurement-collusion"],"text":"На занятии обсуждали картельный сговор.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-exploratory-006","split":"exploratory","topics":["procurement-collusion"],"text":"Три поставщика синхронизировали предложения до аукциона.","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-exploratory-007","split":"exploratory","topics":["procurement-collusion"],"text":"Не договаривались ли вы с конкурентами о цене заявки?","provenance":"synthetic-authored-20261030"}
+{"id":"procurement-collusion-exploratory-008","split":"exploratory","topics":["procurement-collusion"],"text":"Компания отказалась от распределения лотов с соперником.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-001","split":"train","topics":["commercial-metrics"],"text":"Наша внутренняя маржа по этому контракту составляет сорок процентов.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-002","split":"train","topics":["commercial-metrics"],"text":"Себестоимость продукта нельзя сообщать заказчику.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-003","split":"train","topics":["commercial-metrics"],"text":"Минимальная допустимая цена продажи известна только нам.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-004","split":"train","topics":["commercial-metrics"],"text":"Внутренний лимит скидки равен пятнадцати процентам.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-005","split":"train","topics":["commercial-metrics"],"text":"До публикации финансовой отчётности выручку держим в секрете.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-006","split":"train","topics":["commercial-metrics"],"text":"Фактическая прибыль по клиенту указана в закрытой таблице.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-007","split":"train","topics":["commercial-metrics"],"text":"Скрытая наценка включена в стоимость оборудования.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-008","split":"train","topics":["commercial-metrics"],"text":"Закупочная цена поставщика является коммерческой тайной.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-009","split":"train","topics":["commercial-metrics"],"text":"Наш нижний порог на переговорах составляет миллион.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-010","split":"train","topics":["commercial-metrics"],"text":"Клиент не должен узнать реальную себестоимость.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-011","split":"train","topics":["commercial-metrics"],"text":"В закрытом отчёте отражён прогноз квартальной выручки.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-012","split":"train","topics":["commercial-metrics"],"text":"Раскрывать внутренние показатели рентабельности запрещено.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-013","split":"train","topics":["commercial-metrics"],"text":"Точный бюджет уступки оставим внутри команды.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-014","split":"train","topics":["commercial-metrics"],"text":"План продаж и фактическая прибыль доступны руководству.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-015","split":"train","topics":["commercial-metrics"],"text":"Конфиденциальная финансовая модель содержит нашу наценку.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-016","split":"train","topics":["commercial-metrics"],"text":"Внутренние скидочные коридоры нельзя отправлять контрагенту.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-017","split":"train","topics":["commercial-metrics"],"text":"Размер резерва на переговоры известен только финансовому директору.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-018","split":"train","topics":["commercial-metrics"],"text":"Не называй заказчику закупочную стоимость.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-019","split":"train","topics":["commercial-metrics"],"text":"Мы обсуждаем секретный прогноз денежного потока.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-train-020","split":"train","topics":["commercial-metrics"],"text":"Закрытые данные о маржинальности вынесли в приложение.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-development-001","split":"development","topics":["commercial-metrics"],"text":"Во внутреннем файле лежит реальная себестоимость услуги.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-development-002","split":"development","topics":["commercial-metrics"],"text":"Закрытый прогноз прибыли обсудим без клиента.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-development-003","split":"development","topics":["commercial-metrics"],"text":"Минимальную цену уступки не публикуем.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-development-004","split":"development","topics":["commercial-metrics"],"text":"Наценку на закупочную стоимость держим в тайне.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-development-005","split":"development","topics":["commercial-metrics"],"text":"Внутренняя рентабельность сделки равна двадцати процентам.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-exploratory-001","split":"exploratory","topics":["commercial-metrics"],"text":"Наш ценовой пол на переговорах не должен выйти наружу.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-exploratory-002","split":"exploratory","topics":["commercial-metrics"],"text":"Реальная закупочная стоимость ниже предложения втрое.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-exploratory-003","split":"exploratory","topics":["commercial-metrics"],"text":"В закрытой модели виден плановый денежный поток.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-exploratory-004","split":"exploratory","topics":["commercial-metrics"],"text":"Клиенту нельзя видеть наш резерв скидки.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-exploratory-005","split":"exploratory","topics":["commercial-metrics"],"text":"Конфиденциальный отчёт раскрывает прибыльность каждого заказа.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-exploratory-006","split":"exploratory","topics":["commercial-metrics"],"text":"Не отправляйте внутренний прогноз выручки партнёру.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-exploratory-007","split":"exploratory","topics":["commercial-metrics"],"text":"Поговорим о скрытой наценке и себестоимости.","provenance":"synthetic-authored-20261030"}
+{"id":"commercial-metrics-exploratory-008","split":"exploratory","topics":["commercial-metrics"],"text":"На обучение принесли вымышленный пример коммерческой тайны о марже.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-001","split":"train","topics":[],"text":"Откат обновления восстановил работу сервера.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-002","split":"train","topics":[],"text":"Программист сделал rollback транзакции.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-003","split":"train","topics":[],"text":"Занос автомобиля произошёл на повороте.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-004","split":"train","topics":[],"text":"Спасибо коллегам за помощь с презентацией.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-005","split":"train","topics":[],"text":"Бонус сотруднику начислили официально через зарплату.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-006","split":"train","topics":[],"text":"Комиссия банка за перевод составляет один процент.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-007","split":"train","topics":[],"text":"Агентское вознаграждение законно описано в договоре.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-008","split":"train","topics":[],"text":"Конверт с приглашением лежит на столе.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-009","split":"train","topics":[],"text":"Мы готовы решить вопрос с доставкой до вечера.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-010","split":"train","topics":[],"text":"Премия за выполнение плана утверждена кадровой службой.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-011","split":"train","topics":[],"text":"Участники открытого конкурса самостоятельно подают заявки.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-012","split":"train","topics":[],"text":"Снижение цены на аукционе было добровольным.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-013","split":"train","topics":[],"text":"Техническое задание опубликовано для всех желающих.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-014","split":"train","topics":[],"text":"Поставщики конкурируют без обмена предложениями.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-015","split":"train","topics":[],"text":"Антимонопольная служба выпустила общую новость.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-016","split":"train","topics":[],"text":"Клиент попросил официальный прайс-лист.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-017","split":"train","topics":[],"text":"Публичная выручка компании опубликована на сайте.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-018","split":"train","topics":[],"text":"Розничная цена указана на ценнике.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-019","split":"train","topics":[],"text":"Опубликованную прибыль можно найти в годовом отчёте.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-020","split":"train","topics":[],"text":"Данные о средней цене взяты из открытой статистики.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-021","split":"train","topics":[],"text":"Погода сегодня ясная.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-022","split":"train","topics":[],"text":"Врач назначил плановый осмотр.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-023","split":"train","topics":[],"text":"Обсудим расписание совещаний.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-024","split":"train","topics":[],"text":"Доля рынка компании выросла по открытым данным.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-025","split":"train","topics":[],"text":"Официальную скидку для покупателя напечатали в каталоге.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-026","split":"train","topics":[],"text":"Заплатите по счёту поставщика согласно договору.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-027","split":"train","topics":[],"text":"Вознаграждение эксперта перечисляют по прозрачному контракту.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-028","split":"train","topics":[],"text":"Участник снял заявку из-за нехватки ресурсов.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-029","split":"train","topics":[],"text":"Лот разделили на части для удобства доставки.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-train-030","split":"train","topics":[],"text":"Консультант помог составить презентацию.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-development-001","split":"development","topics":[],"text":"Тестируем откаты базы данных.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-development-002","split":"development","topics":[],"text":"Коллега получил благодарность на общем собрании.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-development-003","split":"development","topics":[],"text":"Комиссия обсудила план встречи.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-development-004","split":"development","topics":[],"text":"В каталоге указан публичный размер скидки.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-development-005","split":"development","topics":[],"text":"Конкурент выиграл тендер по лучшей цене.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-development-006","split":"development","topics":[],"text":"Сотруднику официально выплатили бонус.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-development-007","split":"development","topics":[],"text":"В конверте лежат открытки.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-development-008","split":"development","topics":[],"text":"Маржа из опубликованного учебника приведена как общая формула.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-development-009","split":"development","topics":[],"text":"Поделили рабочие задачи между отделами.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-development-010","split":"development","topics":[],"text":"За доставку заплатили по официальному тарифу.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-001","split":"exploratory","topics":[],"text":"После неудачного релиза нужен откат версии.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-002","split":"exploratory","topics":[],"text":"Команду поблагодарили за помощь клиенту.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-003","split":"exploratory","topics":[],"text":"Наличные внесли в кассу по чеку.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-004","split":"exploratory","topics":[],"text":"Агент получил согласованный договором процент.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-005","split":"exploratory","topics":[],"text":"На скользкой дороге машину занесло.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-006","split":"exploratory","topics":[],"text":"Клиент просит решить вопрос гарантийного ремонта.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-007","split":"exploratory","topics":[],"text":"Банковская комиссия указана в тарифах.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-008","split":"exploratory","topics":[],"text":"Предложения в конкурсе сравнивает независимая комиссия.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-009","split":"exploratory","topics":[],"text":"Участники не знакомы друг с другом и торгуются самостоятельно.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-010","split":"exploratory","topics":[],"text":"Розничная скидка опубликована в интернет-магазине.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-011","split":"exploratory","topics":[],"text":"Инвесторам представили уже опубликованную отчётность.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-012","split":"exploratory","topics":[],"text":"Вознаграждение за работу выплатили официально.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-013","split":"exploratory","topics":[],"text":"Ученик обсуждает геометрический откат шара.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-014","split":"exploratory","topics":[],"text":"Нужную подпись поставит сотрудник после проверки документов.","provenance":"synthetic-authored-20261030"}
+{"id":"neutral-exploratory-015","split":"exploratory","topics":[],"text":"У каждого отдела своя доля общего проекта.","provenance":"synthetic-authored-20261030"}

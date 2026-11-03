@@ -238,19 +238,19 @@
               "ipad": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "Для защищённого экспорта нужна завершённая запись, сделанная с включённым скрытием конфиденциальных данных."
+                  "value": "Для защищённого экспорта нужна завершённая запись, сделанная с включённой очисткой чувствительных данных."
                 }
               },
               "iphone": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "Для защищённого экспорта нужна завершённая запись, сделанная с включённым скрытием конфиденциальных данных."
+                  "value": "Для защищённого экспорта нужна завершённая запись, сделанная с включённой очисткой чувствительных данных."
                 }
               },
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "Для защищённого экспорта нужна завершённая встреча, записанная с включённым скрытием конфиденциальных данных."
+                  "value": "Для защищённого экспорта нужна завершённая встреча, записанная с включённой очисткой чувствительных данных."
                 }
               }
             }
@@ -54558,40 +54558,6 @@
         }
       }
     },
-    "Locally hides Russian names, phone numbers, email, card and account numbers, passport details, SNILS, INN, dates of birth, addresses, logins and secrets. Detection can miss data. Review before sharing.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Locally hides Russian names, phone numbers, email, card and account numbers, passport details, SNILS, INN, dates of birth, addresses, logins and secrets. Detection can miss data. Review before sharing."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Скрывает на устройстве русские имена, телефоны, email, номера карт и счетов, паспортные данные, СНИЛС, ИНН, даты рождения, адреса, логины и секреты. Возможны пропуски. Проверьте текст перед отправкой."
-          }
-        }
-      }
-    },
-    "Words and phrases to hide": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Words and phrases to hide"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Слова и фразы для скрытия"
-          }
-        }
-      }
-    },
     "Add word or phrase": {
       "extractionState": "manual",
       "localizations": {
@@ -65400,6 +65366,801 @@
           "stringUnit": {
             "state": "translated",
             "value": "Для сводок используется провайдер из настроек ИИ. Добавьте и проверьте его, чтобы создать сводку этой встречи."
+          }
+        }
+      }
+    },
+    "Expression groups": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expression groups"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Группы выражений"
+          }
+        }
+      }
+    },
+    "Groups are off until you enable them. Review the expressions in each group. Context examples are explanations, not additional dictionary rules.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Groups are off until you enable them. Review the expressions in each group. Context examples are explanations, not additional dictionary rules."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Группы выключены, пока вы их не включите. Проверьте выражения в каждой группе. Контекстные примеры служат пояснениями и не добавляются в словарь."
+          }
+        }
+      }
+    },
+    "Hide topics": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide topics"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрывать темы"
+          }
+        }
+      }
+    },
+    "Experimental topic detection": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Experimental topic detection"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспериментальное распознавание тем"
+          }
+        }
+      }
+    },
+    "A local topic model can hide complete sentences about selected topics, including indirect wording. This experimental mode may miss phrases or hide unrelated sentences.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A local topic model can hide complete sentences about selected topics, including indirect wording. This experimental mode may miss phrases or hide unrelated sentences."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальная модель может скрывать целые предложения на выбранные темы, включая косвенные формулировки. Экспериментальный режим может пропускать фразы или скрывать посторонние предложения."
+          }
+        }
+      }
+    },
+    "Russian word forms": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Russian word forms"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Словоформы русского языка"
+          }
+        }
+      }
+    },
+    "Exact wording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exact wording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Точная формулировка"
+          }
+        }
+      }
+    },
+    "Matching": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Matching"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сопоставление"
+          }
+        }
+      }
+    },
+    "Recognized Russian words include case and number forms. Unknown words and other languages use exact wording; add any needed variants. Parts of other words are kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recognized Russian words include case and number forms. Unknown words and other languages use exact wording; add any needed variants. Parts of other words are kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для известных русских слов учитываются падежи и числа. Неизвестные слова и другие языки сопоставляются буквально; добавьте нужные варианты. Части других слов сохраняются."
+          }
+        }
+      }
+    },
+    "Hide this group's expressions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide this group's expressions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрывать выражения этой группы"
+          }
+        }
+      }
+    },
+    "Could not update privacy rules. The existing rules were kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not update privacy rules. The existing rules were kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось обновить правила очистки. Прежние правила сохранены."
+          }
+        }
+      }
+    },
+    "Examples that need context": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Examples that need context"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Примеры, требующие контекста"
+          }
+        }
+      }
+    },
+    "These examples are not added as dictionary rules. Topic detection is a separate optional setting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These examples are not added as dictionary rules. Topic detection is a separate optional setting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эти примеры не добавляются в словарь. Распознавание тем включается отдельно."
+          }
+        }
+      }
+    },
+    "Local topic model is ready": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local topic model is ready"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальная модель тем готова"
+          }
+        }
+      }
+    },
+    "Import a local topic model to begin": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import a local topic model to begin"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для начала импортируйте локальную модель тем"
+          }
+        }
+      }
+    },
+    "Import local topic model": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import local topic model"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортировать локальную модель тем"
+          }
+        }
+      }
+    },
+    "The model stays on this device. Importing it does not enable any topic. Settings apply to new recordings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model stays on this device. Importing it does not enable any topic. Settings apply to new recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель остаётся на этом устройстве. Импорт не включает скрытие тем. Настройки применяются к новым записям."
+          }
+        }
+      }
+    },
+    "This model has no supported topics.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This model has no supported topics."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В этой модели нет поддерживаемых тем."
+          }
+        }
+      }
+    },
+    "Topics to hide": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Topics to hide"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Темы для скрытия"
+          }
+        }
+      }
+    },
+    "Topic detection hides complete sentences, including quotations and denials. Live text waits for enough context. A processing error stops publication instead of showing unfiltered text.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Topic detection hides complete sentences, including quotations and denials. Live text waits for enough context. A processing error stops publication instead of showing unfiltered text."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание тем скрывает целые предложения, включая цитаты и отрицания. Живой текст ожидает достаточного контекста. При ошибке обработки вывод останавливается, чтобы не показать неочищенный текст."
+          }
+        }
+      }
+    },
+    "This experimental model does not guarantee recognition of every indirect phrase. Review the cleaned transcript before sharing it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This experimental model does not guarantee recognition of every indirect phrase. Review the cleaned transcript before sharing it."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспериментальная модель не гарантирует распознавание всех косвенных формулировок. Проверьте очищенную расшифровку перед отправкой."
+          }
+        }
+      }
+    },
+    "Could not import the local topic model. The existing model and rules were kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not import the local topic model. The existing model and rules were kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось импортировать локальную модель тем. Прежняя модель и правила сохранены."
+          }
+        }
+      }
+    },
+    "Bribes and illicit remuneration": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bribes and illicit remuneration"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Взятки и незаконное вознаграждение"
+          }
+        }
+      }
+    },
+    "Procurement collusion": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Procurement collusion"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сговор в закупках"
+          }
+        }
+      }
+    },
+    "Commercial metrics and pricing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Commercial metrics and pricing"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Коммерческие показатели и цены"
+          }
+        }
+      }
+    },
+    "Investments and corporate transactions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Investments and corporate transactions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Инвестиции и корпоративные сделки"
+          }
+        }
+      }
+    },
+    "Employee compensation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Employee compensation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оплата труда сотрудников"
+          }
+        }
+      }
+    },
+    "Health and medical information": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Health and medical information"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Здоровье и медицинские сведения"
+          }
+        }
+      }
+    },
+    "Edit expressions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit expressions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменить выражения"
+          }
+        }
+      }
+    },
+    "Use one expression per line. Groups can contain up to 128 expressions in total. Changes stay on this device and apply to new recordings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use one expression per line. Groups can contain up to 128 expressions in total. Changes stay on this device and apply to new recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Указывайте каждое выражение на отдельной строке. Во всех группах может быть до 128 выражений. Изменения остаются на этом устройстве и применяются к новым записям."
+          }
+        }
+      }
+    },
+    "Restore suggested expressions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore suggested expressions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Восстановить предложенные выражения"
+          }
+        }
+      }
+    },
+    "Edit group expressions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit group expressions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выражения группы"
+          }
+        }
+      }
+    },
+    "Could not save group expressions. Use unique expressions of up to 16 words and 256 characters, with at most 128 expressions across all groups. The existing rules were kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not save group expressions. Use unique expressions of up to 16 words and 256 characters, with at most 128 expressions across all groups. The existing rules were kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сохранить выражения группы. Используйте уникальные выражения длиной до 16 слов и 256 символов, не более 128 выражений во всех группах. Прежние правила сохранены."
+          }
+        }
+      }
+    },
+    "Words and phrases for cleanup": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Words and phrases for cleanup"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слова и фразы для очистки"
+          }
+        }
+      }
+    },
+    "Expressions for cleanup": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expressions for cleanup"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выражения для очистки"
+          }
+        }
+      }
+    },
+    "Clean this group's expressions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean this group's expressions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очищать выражения группы"
+          }
+        }
+      }
+    },
+    "Choose expression groups for text cleanup. Supported topics also clean related sentences on this device. Review before sharing.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose expression groups for text cleanup. Supported topics also clean related sentences on this device. Review before sharing."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите группы для очистки текста. Для поддерживаемых тем очищаются и связанные предложения. Обработка выполняется на этом устройстве. Проверьте текст перед отправкой."
+          }
+        }
+      }
+    },
+    "Words and their Russian forms are cleaned from new transcripts when data cleanup is enabled. Recognized topics also clean related sentences. Everything runs on this device.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Words and their Russian forms are cleaned from new transcripts when data cleanup is enabled. Recognized topics also clean related sentences. Everything runs on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "При включённой очистке текст новых записей очищается от этих слов и их словоформ. Для известных тем очищаются и связанные предложения. Всё работает на этом устройстве."
+          }
+        }
+      }
+    },
+    "The listed expressions and their Russian forms are cleaned from text, including quotations, denials and training examples.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The listed expressions and their Russian forms are cleaned from text, including quotations, denials and training examples."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст очищается от выражений из списка и их словоформ, включая цитаты, отрицания и учебные примеры."
+          }
+        }
+      }
+    },
+    "These examples explain the context. Supported groups clean related sentences automatically. Other groups clean the listed expressions and their word forms.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These examples explain the context. Supported groups clean related sentences automatically. Other groups clean the listed expressions and their word forms."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Примеры поясняют контекст. Для поддерживаемых групп текст автоматически очищается от связанных предложений. Для остальных групп учитываются выражения из списка и их словоформы."
+          }
+        }
+      }
+    },
+    "Locally cleans Russian names, phone numbers, email, card and account numbers, passport details, SNILS, INN, dates of birth, addresses, logins and secrets from text. Detection can miss data. Review before sharing.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Locally cleans Russian names, phone numbers, email, card and account numbers, passport details, SNILS, INN, dates of birth, addresses, logins and secrets from text. Detection can miss data. Review before sharing."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очищает текст на устройстве от русских имён, телефонов, email, номеров карт и счетов, паспортных данных, СНИЛС, ИНН, дат рождения, адресов, логинов и секретов. Возможны пропуски. Проверьте текст перед отправкой."
+          }
+        }
+      }
+    },
+    "Clean the listed expressions from text, including quotations and denials. Ambiguous words such as rollback or gratitude need context. A match does not establish misconduct.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean the listed expressions from text, including quotations and denials. Ambiguous words such as rollback or gratitude need context. A match does not establish misconduct."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очищать текст от выражений из списка, включая цитаты и отрицания. Неоднозначные слова, например «откат» или «благодарность», требуют контекста. Совпадение не доказывает нарушения."
+          }
+        }
+      }
+    },
+    "Clean expressions about arranged bidding from text, including prevention and training discussions. Ordinary tenders and technical specifications remain separate.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean expressions about arranged bidding from text, including prevention and training discussions. Ordinary tenders and technical specifications remain separate."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очищать текст от выражений о договорных торгах, включая обсуждение профилактики и обучение. Обычные тендеры и технические задания рассматриваются отдельно."
+          }
+        }
+      }
+    },
+    "Clean the listed business metrics and pricing expressions from text, including public examples. This broad group does not determine whether information is confidential.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean the listed business metrics and pricing expressions from text, including public examples. This broad group does not determine whether information is confidential."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очищать текст от показателей бизнеса и выражений о ценах из списка, включая публичные примеры. Эта широкая группа не определяет конфиденциальность сведений."
+          }
+        }
+      }
+    },
+    "Clean the listed investment and transaction expressions from text, including announced deals and educational examples. Confidentiality is a user choice.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean the listed investment and transaction expressions from text, including announced deals and educational examples. Confidentiality is a user choice."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очищать текст от выражений об инвестициях и сделках из списка, включая объявленные сделки и учебные примеры. Решение о конфиденциальности принимает пользователь."
+          }
+        }
+      }
+    },
+    "Clean listed pay and employment-package expressions from text, including published salary ranges and general policy discussions. Ordinary offers and grades need context.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean listed pay and employment-package expressions from text, including published salary ranges and general policy discussions. Ordinary offers and grades need context."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очищать текст от выражений об оплате труда и условиях найма из списка, включая опубликованные зарплатные вилки и обсуждение общих правил. Обычные офферы и грейды требуют контекста."
+          }
+        }
+      }
+    },
+    "Clean the listed medical expressions from text, including denials and general medical discussions. This group is separate from identifying a person's name.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean the listed medical expressions from text, including denials and general medical discussions. This group is separate from identifying a person's name."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очищать текст от медицинских выражений из списка, включая отрицания и общие медицинские обсуждения. Эта группа работает отдельно от распознавания имени человека."
           }
         }
       }
