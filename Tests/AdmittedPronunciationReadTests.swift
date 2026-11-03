@@ -99,6 +99,22 @@ import Darwin
         expect(compoundEvidence.featureFrames.count == 1 && compoundEvidence.featureFrames[0].frames.count == 20 &&
             compoundEvidence.featureFrames[0].frames.values.first == 25 && compoundEvidence.featureFrames[0].frames.values.last == 44,
             "Compound correction evidence includes unchanged-word encoder frames without surrounding words")
+        let delayedCompoundEvidence = try DictionaryLearningAlignmentResolver.resolve(
+            recording: compoundRecording, deliveredTextBeforeEdit: compoundText,
+            selectedUTF16Range: compound.sourceUTF16Range!, observedText: compound.heardText,
+            now: now.addingTimeInterval(70)
+        )
+        expect(delayedCompoundEvidence.focalSampleRange == compoundEvidence.focalSampleRange &&
+            delayedCompoundEvidence.sourceWordRange == compoundEvidence.sourceWordRange,
+            "An edit after 30 seconds still resolves the same original audio while evidence is fresh")
+        do {
+            _ = try DictionaryLearningAlignmentResolver.resolve(
+                recording: compoundRecording, deliveredTextBeforeEdit: compoundText,
+                selectedUTF16Range: compound.sourceUTF16Range!, observedText: compound.heardText,
+                now: now.addingTimeInterval(DictionaryLearningRecording.lifetime)
+            )
+            preconditionFailure("Observation must not extend the original audio evidence lifetime")
+        } catch DictionaryLearningAlignmentError.expired { checks += 1 }
 
         let legacy = try evidence(recording([feature(offset: 0.025, period: 0.08, count: 100, version: "synthetic-legacy-v1")]))
         expect(legacy.featureFrames[0].frames.count == 3 && legacy.featureFrames[0].frames.values.first == 62 &&

@@ -210,9 +210,16 @@ final class AutomaticDictionaryCorrectionTracker {
     private static let maximumFieldLength = 100_000
     private static let verificationAttempts = 20
     private static let verificationDelayNanoseconds: UInt64 = 50_000_000
-    nonisolated static func observationDuration(hasVoiceSpellings: Bool) -> Duration {
-        // Keep observing through confirmation and the edit debounce. Ordinary dictations stay short.
-        hasVoiceSpellings ? DictionaryVoiceSpellingLearner.confirmationWindow + .seconds(5) : .seconds(30)
+    nonisolated static func observationDuration(
+        hasVoiceSpellings: Bool,
+        originalAudioExpiresAt: Date? = nil,
+        now: Date = Date()
+    ) -> Duration {
+        // Kept replacements need confirmation plus edit debounce. Other audio-backed
+        // edits remain observable only while their already-retained evidence is fresh.
+        if hasVoiceSpellings { return DictionaryVoiceSpellingLearner.confirmationWindow + .seconds(5) }
+        guard let originalAudioExpiresAt else { return .seconds(30) }
+        return .seconds(min(DictionaryLearningRecording.lifetime, max(0, originalAudioExpiresAt.timeIntervalSince(now))))
     }
 
     private static let completionSignalDelayNanoseconds: UInt64 = 1_000_000_000
@@ -262,6 +269,8 @@ final class AutomaticDictionaryCorrectionTracker {
                     return
                 }
             }
+            guard !Task.isCancelled else { return }
+            DebugLogger.shared.info("DICTIONARY_CORRECTION observer_skipped reason=unanchored_insertion", source: "DictionaryLearning")
         }
     }
 
@@ -460,7 +469,10 @@ final class AutomaticDictionaryCorrectionTracker {
         self.verificationTask = nil
         var createdObserver: AXObserver?
         let createResult = AXObserverCreate(seed.pid, automaticDictionaryAXObserverCallback, &createdObserver)
-        guard createResult == .success, let createdObserver else { return }
+        guard createResult == .success, let createdObserver else {
+            DebugLogger.shared.info("DICTIONARY_CORRECTION observer_skipped reason=observer_creation", source: "DictionaryLearning")
+            return
+        }
 
         let context = Unmanaged.passUnretained(self).toOpaque()
         let addResult = AXObserverAddNotification(
@@ -469,7 +481,10 @@ final class AutomaticDictionaryCorrectionTracker {
             kAXValueChangedNotification as CFString,
             context
         )
-        guard addResult == .success else { return }
+        guard addResult == .success else {
+            DebugLogger.shared.info("DICTIONARY_CORRECTION observer_skipped reason=value_notification", source: "DictionaryLearning")
+            return
+        }
 
         let applicationElement = AXUIElementCreateApplication(seed.pid)
         let selectionResult = AXObserverAddNotification(
@@ -503,10 +518,19 @@ final class AutomaticDictionaryCorrectionTracker {
         if let learningRecording {
             DictionaryVoiceSpellingLearner.shared.propose(learningRecording.alignment.voiceSpellings, recordingID: learningRecording.id)
         }
-        let duration = Self.observationDuration(hasVoiceSpellings: learningRecording?.alignment.voiceSpellings.isEmpty == false)
+        let hasOriginalAudio = learningRecording?.samples.isEmpty == false
+        let duration = Self.observationDuration(
+            hasVoiceSpellings: learningRecording?.alignment.voiceSpellings.isEmpty == false,
+            originalAudioExpiresAt: hasOriginalAudio ? learningRecording?.expiresAt : nil
+        )
+        DebugLogger.shared.info(
+            "DICTIONARY_CORRECTION observer_admitted seconds=\(duration.components.seconds) originalAudio=\(hasOriginalAudio)",
+            source: "DictionaryLearning"
+        )
         self.timeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: duration)
             guard !Task.isCancelled else { return }
+            DebugLogger.shared.info("DICTIONARY_CORRECTION observer_ended reason=expired", source: "DictionaryLearning")
             self?.cancel()
         }
     }
@@ -550,6 +574,10 @@ final class AutomaticDictionaryCorrectionTracker {
                 )
             }
         }
+        DebugLogger.shared.info(
+            "DICTIONARY_CORRECTION edit_evaluated candidate=\(candidate != nil) originalContext=\(context != nil)",
+            source: "DictionaryLearning"
+        )
         self.stopObservation()
 
         if let candidate, let context, DictionaryMatcherExperiment.collectNegatives,
@@ -563,17 +591,24 @@ final class AutomaticDictionaryCorrectionTracker {
             return
         }
 
-        guard let candidate,
-              SettingsStore.shared.automaticDictionaryLearningEnabled,
+        guard let candidate else { return }
+        guard SettingsStore.shared.automaticDictionaryLearningEnabled,
               !SettingsStore.shared.shouldShowOnboarding,
-              !self.isAlreadySaved(candidate),
               !AppServices.shared.asr.isRunning,
-              !DictionaryCorrectionOverlayController.shared.isPresented,
-              AutomaticDictionarySuggestionPolicy.shared.shouldShow(
-                  candidate,
-                  requiredOccurrences: SettingsStore.shared.automaticDictionarySuggestionFrequency.rawValue
-              )
+              !DictionaryCorrectionOverlayController.shared.isPresented
         else {
+            DebugLogger.shared.info("DICTIONARY_CORRECTION suggestion_skipped reason=inactive_or_busy", source: "DictionaryLearning")
+            return
+        }
+        guard !self.isAlreadySaved(candidate) else {
+            DebugLogger.shared.info("DICTIONARY_CORRECTION suggestion_skipped reason=already_saved", source: "DictionaryLearning")
+            return
+        }
+        guard AutomaticDictionarySuggestionPolicy.shared.shouldShow(
+            candidate,
+            requiredOccurrences: SettingsStore.shared.automaticDictionarySuggestionFrequency.rawValue
+        ) else {
+            DebugLogger.shared.info("DICTIONARY_CORRECTION suggestion_skipped reason=frequency_or_cooldown", source: "DictionaryLearning")
             return
         }
 
@@ -600,6 +635,10 @@ final class AutomaticDictionaryCorrectionTracker {
             var prepared = candidate
             prepared.audioEvidence = DictionaryMatcherExperiment.sharedFeaturesEnabled && pronunciationGeneration == DictionaryMatcherExperiment.generation ? evidence : nil
             self.evidencePreparationTask = nil
+            DebugLogger.shared.info(
+                "DICTIONARY_CORRECTION suggestion_prepared originalAudio=\(prepared.audioEvidence != nil)",
+                source: "DictionaryLearning"
+            )
             AutomaticDictionarySuggestionPolicy.shared.markShown(prepared)
             DictionaryCorrectionOverlayController.shared.show(candidate: prepared) { outcome in
                 AutomaticDictionarySuggestionPolicy.shared.record(outcome, for: prepared)

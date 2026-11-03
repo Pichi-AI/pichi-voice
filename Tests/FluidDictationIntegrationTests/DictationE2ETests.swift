@@ -4726,6 +4726,19 @@ extension DictationE2ETests {
             DictionaryVoiceSpellingLearner.confirmationWindow
         )
         XCTAssertEqual(AutomaticDictionaryCorrectionTracker.observationDuration(hasVoiceSpellings: false), .seconds(30))
+        let now = Date(timeIntervalSince1970: 1000)
+        XCTAssertEqual(AutomaticDictionaryCorrectionTracker.observationDuration(
+            hasVoiceSpellings: false, originalAudioExpiresAt: now.addingTimeInterval(DictionaryLearningRecording.lifetime), now: now
+        ), .seconds(DictionaryLearningRecording.lifetime))
+        XCTAssertEqual(AutomaticDictionaryCorrectionTracker.observationDuration(
+            hasVoiceSpellings: false, originalAudioExpiresAt: now.addingTimeInterval(50), now: now
+        ), .seconds(50))
+        XCTAssertEqual(AutomaticDictionaryCorrectionTracker.observationDuration(
+            hasVoiceSpellings: false, originalAudioExpiresAt: now.addingTimeInterval(-1), now: now
+        ), .zero)
+        XCTAssertEqual(AutomaticDictionaryCorrectionTracker.observationDuration(
+            hasVoiceSpellings: false, originalAudioExpiresAt: now.addingTimeInterval(1000), now: now
+        ), .seconds(DictionaryLearningRecording.lifetime))
     }
 
     func testEndingObservationCancelsOnlyThatRecordingsUnconfirmedSpellings() async throws {
