@@ -13,12 +13,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     printf '%s\n' 'This command requires macOS and full Xcode.' >&2
     exit 1
 fi
-pichi_arch="$(uname -m)"
-case "$pichi_arch" in
-    arm64|x86_64) ;;
-    *) printf 'Unsupported macOS architecture: %s\n' "$pichi_arch" >&2; exit 1 ;;
-esac
-pichi_destination="platform=macOS,arch=$pichi_arch"
+pichi_destination='platform=macOS,arch=arm64'
 pichi_test_args=(
     -skip-testing:FluidDictationIntegrationTests/DictationE2ETests/testDictationEndToEnd_whisperTiny_transcribesFixture
 )

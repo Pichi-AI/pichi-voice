@@ -120,7 +120,7 @@ class RegressionResultTests(unittest.TestCase):
 class RegressionCommandTests(unittest.TestCase):
     """Exercise shell failure propagation using fake tools, never Xcode or app/audio."""
 
-    def run_command(self, build_status=0, test_status=0, report_status=0, architecture="arm64"):
+    def run_command(self, build_status=0, test_status=0, report_status=0):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -131,13 +131,7 @@ class RegressionCommandTests(unittest.TestCase):
         tools = root / "fake-tools"
         tools.mkdir()
         mocks = {
-            "uname": '''#!/bin/sh
-case "$1" in
-    -s) printf '%s\\n' Darwin ;;
-    -m) printf '%s\\n' "$SYNTHETIC_ARCH" ;;
-    *) exit 1 ;;
-esac
-''',
+            "uname": "#!/bin/sh\nprintf '%s\\n' Darwin\n",
             "git": '''#!/bin/sh
 case "$*" in
     "rev-parse --show-toplevel") printf '%s\\n' "$SYNTHETIC_ROOT" ;;
@@ -175,7 +169,6 @@ print(json.dumps(dict(result="Failed" if failed else "Passed", totalTestCount=3,
             path.write_text(source)
             path.chmod(0o755)
         environment = dict(os.environ, PATH=f"{tools}:{os.environ['PATH']}", SYNTHETIC_ROOT=str(root),
-                           SYNTHETIC_ARCH=architecture,
                            SYNTHETIC_BUILD_STATUS=str(build_status), SYNTHETIC_TEST_STATUS=str(test_status),
                            SYNTHETIC_REPORT_STATUS=str(report_status),
                            PICHI_GIGAAM_APP_TEST_AUDIO="/synthetic fixture.wav")
@@ -183,24 +176,8 @@ print(json.dumps(dict(result="Failed" if failed else "Passed", totalTestCount=3,
         result = subprocess.run(["bash", "scripts/dev/macos.sh", "regression", "-only-testing:SyntheticTests"],
                                 cwd=root, env=environment, capture_output=True, text=True)
         runs = list((root / ".build/regression").iterdir()) if (root / ".build/regression").exists() else []
-        if architecture not in ("arm64", "x86_64"):
-            self.assertEqual(runs, [], result.stderr)
-            self.assertFalse((root / "calls.txt").exists())
-            return result, None, ""
         self.assertEqual(len(runs), 1, result.stderr)
         return result, runs[0], (root / "calls.txt").read_text()
-
-    def test_native_architecture_is_used_for_build_and_test(self):
-        for architecture in ("arm64", "x86_64"):
-            with self.subTest(architecture=architecture):
-                result, _, calls = self.run_command(architecture=architecture)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(calls.count(f"-destination platform=macOS,arch={architecture}"), 2)
-
-    def test_unknown_architecture_fails_before_build_or_test(self):
-        result, _, _ = self.run_command(architecture="unsupported-cpu")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Unsupported macOS architecture", result.stderr)
 
     def test_build_failure_does_not_start_tests_and_persists_status(self):
         result, run, calls = self.run_command(build_status=65)
