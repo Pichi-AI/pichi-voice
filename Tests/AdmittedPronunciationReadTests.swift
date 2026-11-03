@@ -275,6 +275,20 @@ import Darwin
         var mixed = profile
         mixed.enrollments.append(inconsistent)
         expect(!mixed.isEligibleForMatching, "Mixed feature recipes fail common eligibility")
+        var duplicate = source
+        duplicate.originalAudioID = nil
+        duplicate.inspectionID = nil
+        duplicate.pendingInspection = inspection
+        let beforeDuplicate = try Data(contentsOf: file)
+        try await reopened.upsert(dictionaryEntryID: entry, label: profile.label, modelKey: key,
+            enrollments: [duplicate, duplicate])
+        expect(await reopened.allProfiles() == profiles, "Reusing one selected history occurrence cannot create extra voice examples")
+        expect(try Data(contentsOf: file) == beforeDuplicate, "Duplicate-only history enrollment does not rewrite saved data")
+        duplicate.sourceFocalRange = 4800..<8000
+        try await reopened.upsert(dictionaryEntryID: entry, label: profile.label, modelKey: key,
+            enrollments: [duplicate, duplicate])
+        expect(await reopened.allProfiles().first?.enrollments.count == 4,
+            "Another occurrence in the same recording is retained once")
     }
 
     static func main() async throws {

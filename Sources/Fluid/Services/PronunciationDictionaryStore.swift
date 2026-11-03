@@ -87,6 +87,7 @@ nonisolated enum PronunciationDictionaryStoreError: LocalizedError, Equatable {
 }
 
 actor PronunciationDictionaryStore {
+    nonisolated static let didChangeNotification = Notification.Name("PronunciationDictionaryStoreDidChange")
     private static let cache = PrivateProfileStoreCache<PronunciationDictionaryStore>()
     static var shared: PronunciationDictionaryStore {
         cache.value { profile in PronunciationDictionaryStore(
@@ -413,7 +414,12 @@ actor PronunciationDictionaryStore {
         if let expectedExistingEnrollments, existingEnrollments != expectedExistingEnrollments {
             throw PronunciationDictionaryStoreError.staleEvidence
         }
-        var prepared = enrollments
+        var occurrences = Set(existingEnrollments.compactMap(Self.occurrenceKey))
+        var prepared = enrollments.filter { capture in
+            guard let key = Self.occurrenceKey(capture) else { return true }
+            return occurrences.insert(key).inserted
+        }
+        guard !prepared.isEmpty else { return }
         var writtenInspectionIDs: [UUID] = []
         do {
             for index in prepared.indices {
@@ -477,6 +483,11 @@ actor PronunciationDictionaryStore {
     }
 
     /// Keep trained references when automatically learned examples reach the history limit.
+    nonisolated private static func occurrenceKey(_ capture: PronunciationEnrollmentCapture) -> String? {
+        guard let id = capture.sourceRecordingID, let range = capture.sourceFocalRange else { return nil }
+        return "\(id):\(range.lowerBound):\(range.upperBound)"
+    }
+
     static func retainedEnrollments(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] {
         let protected = Set(captures.indices.filter { captures[$0].originalAudioID == nil }.suffix(3))
         let remaining = captures.indices.filter { !protected.contains($0) }.suffix(10 - protected.count)
@@ -822,6 +833,7 @@ actor PronunciationDictionaryStore {
         let oldInspectionIDs = Set((self.document?.profiles ?? []).flatMap(\.enrollments).compactMap(\.inspectionID))
         let newInspectionIDs = Set(updated.profiles.flatMap(\.enrollments).compactMap(\.inspectionID))
         self.document = updated
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         for id in oldInspectionIDs.subtracting(newInspectionIDs) {
             try? FileManager.default.removeItem(at: self.inspectionURL(id))
         }

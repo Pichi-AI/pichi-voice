@@ -3,6 +3,7 @@ import SwiftUI
 /// Presentation only. Persistence, training and deletion remain owned by the drawer.
 struct DictionaryDrawerEntryRow: View {
     let entry: SettingsStore.CustomDictionaryEntry
+    var pronunciationCount: Int? = nil
     let isTestDisabled: Bool
     let onTest: () -> Void
     let onEdit: () -> Void
@@ -34,6 +35,12 @@ struct DictionaryDrawerEntryRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading),
                 part: .aliases
             )
+            if let count = self.pronunciationCount {
+                Label(PichiLocalization.format("Saved pronunciation samples: %lld", count), systemImage: "waveform")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
                     self.testButton

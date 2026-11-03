@@ -114,6 +114,7 @@ import SQLite3
         PrivateProfileStorage.select(a)
         expect(try await writer.load().count == 1, "Same-account stale output never writes")
 
+        try await testWordCorrectionAdmission(root: root, profile: a, foreign: b)
         try await testStartupAndAudio(root: root, profile: a)
         try await testConcurrentFinish(root: root, profile: a)
         try await testLegacyMigration(root: root)
@@ -122,6 +123,54 @@ import SQLite3
         try await testAudioOnlyRecovery(root: root, profile: a)
         try await testDirectCaptureOwner(root: root, profile: a)
         print("PASS: \(checks) admitted history/audio conceal, cancellation, generation, migration and retry assertions")
+    }
+
+    static func testWordCorrectionAdmission(root: URL, profile: PrivateProfileSnapshot, foreign: PrivateProfileSnapshot) async throws {
+        PrivateProfileStorage.select(profile)
+        let writer = TranscriptionHistoryWriter(defaults: try defaults(), url: root.appendingPathComponent("word-edit-audio.sqlite3"), profile: profile)
+        let audioRoot = root.appendingPathComponent("word-edit-audio")
+        let audioStore = DictationAudioHistoryStore(rootDirectory: audioRoot, profile: profile)
+        let history = TranscriptionHistoryStore(writer: writer, profile: profile, audioStore: audioStore)
+        try await history.waitUntilLoaded()
+        let output = try history.admitRecordingWrite()
+        let audio = try output.admitAudioSave(timestamp: Date(timeIntervalSince1970: 450))
+        let initial = "Ёжик 🦔 Pech Voice"
+        history.addEntry(id: output.entryID, rawText: "exact ASR bytes", processedText: initial,
+            appName: "synthetic", windowTitle: "synthetic", wasAIProcessed: true,
+            processingModel: "synthetic-ai", admission: output)
+        expect(history.applyWordCorrection(entryID: output.entryID, expectedText: initial,
+            range: (initial as NSString).range(of: "Pech"), replacement: "Pichi", profile: profile),
+            "A visible entry can be corrected while its original audio worker is pending")
+        let metadata = try await Task.detached { try audio.save(snapshot: syntheticPCM(), model: "synthetic") }.value
+        try output.attachAudio(metadata, from: audio)
+        try await output.finish()
+        await history.finishPendingWrites()
+        let corrected = try await writer.load()[0]
+        expect(corrected.processedText == "Ёжик 🦔 Pichi Voice" && corrected.originalProcessedText == initial && corrected.rawText == "exact ASR bytes",
+            "Audio attachment and recording finish do not revert the corrected final or first source bytes")
+        expect(corrected.audio == metadata && audioStore.audioFileExists(fileName: metadata.fileName),
+            "Manual correction does not revoke or replace the original audio admission")
+        expect(corrected.searchRevision != nil && corrected.characterCount == corrected.processedText.count,
+            "Admitted text correction carries updated display and search metadata")
+        PrivateProfileStorage.select(foreign)
+        expect(!history.applyWordCorrection(entryID: output.entryID, expectedText: corrected.processedText,
+            range: NSRange(location: 0, length: 4), replacement: "foreign", profile: profile),
+            "A concealed source profile cannot apply a stale correction")
+        expect(!history.applyWordCorrection(entryID: output.entryID, expectedText: corrected.processedText,
+            range: NSRange(location: 0, length: 4), replacement: "foreign", profile: foreign),
+            "The current foreign profile cannot edit a store owned by the previous profile")
+        PrivateProfileStorage.select(profile)
+        PrivateProfileStorage.closeAdmission()
+        expect(!history.applyWordCorrection(entryID: output.entryID, expectedText: corrected.processedText,
+            range: NSRange(location: 0, length: 4), replacement: "late", profile: profile),
+            "Correction rejects closed new-work admission")
+        PrivateProfileStorage.select(profile)
+        expect(try await writer.load() == [corrected], "Rejected hidden and closed edits leave persisted source unchanged")
+        history.deleteEntry(id: output.entryID)
+        expect(!history.applyWordCorrection(entryID: output.entryID, expectedText: corrected.processedText,
+            range: NSRange(location: 0, length: 4), replacement: "stale", profile: profile),
+            "A stale editor cannot resurrect a deleted entry")
+        print("PASS: explicit final edit preserves pending audio and rejects foreign/closed/deleted profile work")
     }
 
     static func testLegacyMigration(root: URL) async throws {

@@ -2388,6 +2388,52 @@ final class ASRService: ObservableObject {
         }
     }
 
+    /// Explicit history learning reuses the resident local provider and its admitted
+    /// file lease. It never dispatches dictation text or prepares a cloud provider.
+    func historyDictionaryRecording(fileURL: URL, recordingID: UUID, profile: PrivateProfileSnapshot) async throws -> DictionaryLearningRecording {
+        try Task.checkCancellation()
+        guard fileURL.isFileURL, DictionaryMatcherExperiment.sharedFeaturesEnabled,
+              PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              self.transcriptionProvider.isReady,
+              self.transcriptionProvider.pronunciationProfileModelKey != nil else { throw CancellationError() }
+        let model = SettingsStore.shared.selectedSpeechModel
+        let lease = try self.acquireExclusiveActivity(.fileTranscription)
+        defer { self.releaseExclusiveActivity(lease) }
+        do {
+            let provider = try self.beginAdmittedTranscription(lease: lease)
+            guard let modelKey = provider.pronunciationProfileModelKey else { throw CancellationError() }
+            let estimated = try LocalAPIAudioDecoder.estimatedSampleCount(for: fileURL)
+            guard estimated > 0, estimated <= DictionaryLearningRecording.maximumSamples else { throw CancellationError() }
+            let reader = try LocalAPIAudioDecoder.ChunkReader(fileURL: fileURL, chunkDurationSeconds: 15)
+            var samples: [Float] = []
+            samples.reserveCapacity(estimated)
+            while true {
+                try Task.checkCancellation()
+                let chunk = try await reader.nextSamples()
+                if chunk.isEmpty { break }
+                guard chunk.count <= DictionaryLearningRecording.maximumSamples - samples.count else { throw CancellationError() }
+                samples.append(contentsOf: chunk)
+            }
+            let pcm = samples
+            let result = try await self.transcriptionExecutor.run { [provider] in
+                try await provider.transcribeFinal(pcm)
+            }
+            try Task.checkCancellation()
+            guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+                  self.admittedTranscription?.lease == lease,
+                  SettingsStore.shared.selectedSpeechModel == model,
+                  provider.pronunciationProfileModelKey == modelKey,
+                  let alignment = result.dictionaryLearningAlignment, alignment.modelKey == modelKey,
+                  let recording = DictionaryLearningRecording(id: recordingID, alignment: alignment, samples: samples)
+            else { throw CancellationError() }
+            await self.endAdmittedTranscription(lease: lease)
+            return recording
+        } catch {
+            await self.endAdmittedTranscription(lease: lease)
+            throw error
+        }
+    }
+
     func originalAudioEnrollment(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture {
         try await self.meetingModelResidency.withBackgroundOperation(owner: "speech", modelID: evidence.modelKey) {
             try await self.performOriginalAudioEnrollment(evidence)

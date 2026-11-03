@@ -304,6 +304,9 @@ final class FluidAudioProvider: TranscriptionProvider {
     private(set) var boostedVocabularyTermsCount: Int = 0
     private var boostedTermLookup: [String] = []
     private var pronunciationModelKey = ""
+    var pronunciationProfileModelKey: String? {
+        self.isReady && !self.pronunciationModelKey.isEmpty ? self.pronunciationModelKey : nil
+    }
     #if DEBUG
     var modelCacheRootForTesting: URL?
     var pronunciationModelKeyForTesting: String { self.pronunciationModelKey }

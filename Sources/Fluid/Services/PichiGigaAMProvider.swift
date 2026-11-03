@@ -404,6 +404,13 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     private var encoderReferenceCache: (key: String, preparation: GigaAMEncoderDictionary.Preparation)?
     private var dictionaryUsesEncoderFeatures = false
 
+    var pronunciationProfileModelKey: String? {
+        guard self.isReady, let fingerprint = self.loadedModelFingerprint else { return nil }
+        return self.dictionaryUsesEncoderFeatures
+            ? GigaAMEncoderDictionaryStorage.modelKey(fingerprint: fingerprint)
+            : GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint)
+    }
+
     // MARK: - Admitted transcription configuration
 
     private var admittedSource: (leaseID: UUID, selection: PichiGigaAMModelStore.Selection?)?

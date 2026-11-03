@@ -25,6 +25,9 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
     let timestamp: Date
     let rawText: String
     let processedText: String
+    /// The exact model/formatter output before the first explicit user correction.
+    /// Nil for older entries and entries that have never been manually edited.
+    let originalProcessedText: String?
     let appName: String
     let windowTitle: String
     let characterCount: Int
@@ -40,8 +43,8 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
     let aiProcessingError: String?
     let audio: DictationAudioMetadata?
     var isStarred: Bool
-    /// Rises when a restore gives this id different text. Nil on entries written
-    /// before the field existed, and on entries that were never restored.
+    /// Rises when a restore or explicit correction changes this id's text.
+    /// Nil on legacy entries and entries whose final text has never changed.
     var searchRevision: UInt64?
 
     init(
@@ -60,12 +63,14 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         aiProcessingError: String? = nil,
         audio: DictationAudioMetadata? = nil,
         isStarred: Bool = false,
-        searchRevision: UInt64? = nil
+        searchRevision: UInt64? = nil,
+        originalProcessedText: String? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
         self.rawText = rawText
         self.processedText = processedText
+        self.originalProcessedText = originalProcessedText
         self.appName = appName
         self.windowTitle = windowTitle
         self.characterCount = processedText.count
@@ -98,12 +103,14 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         aiProcessingError: String?,
         audio: DictationAudioMetadata?,
         isStarred: Bool,
-        searchRevision: UInt64?
+        searchRevision: UInt64?,
+        originalProcessedText: String?
     ) {
         self.id = id
         self.timestamp = timestamp
         self.rawText = rawText
         self.processedText = processedText
+        self.originalProcessedText = originalProcessedText
         self.appName = appName
         self.windowTitle = windowTitle
         self.characterCount = characterCount
@@ -125,6 +132,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         self.timestamp = try container.decode(Date.self, forKey: .timestamp)
         self.rawText = try container.decode(String.self, forKey: .rawText)
         self.processedText = try container.decode(String.self, forKey: .processedText)
+        self.originalProcessedText = try container.decodeIfPresent(String.self, forKey: .originalProcessedText)
         self.appName = try container.decode(String.self, forKey: .appName)
         self.windowTitle = try container.decode(String.self, forKey: .windowTitle)
         self.characterCount = try container.decode(Int.self, forKey: .characterCount)
@@ -150,7 +158,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, timestamp, rawText, processedText, appName, windowTitle
+        case id, timestamp, rawText, processedText, originalProcessedText, appName, windowTitle
         case characterCount, wasAIProcessed, processingModel
         case transcriptionDurationMilliseconds, parakeetProcessingDurationMilliseconds, aiProcessingDurationMilliseconds
         case aiTokensPerSecond
@@ -224,7 +232,24 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             aiProcessingError: self.aiProcessingError,
             audio: audio,
             isStarred: self.isStarred,
-            searchRevision: self.searchRevision
+            searchRevision: self.searchRevision,
+            originalProcessedText: self.originalProcessedText
+        )
+    }
+
+    /// Correct only the displayed final text. Original ASR and first model output
+    /// stay available, and all recording/model metadata keep their original values.
+    func replacingFinalText(_ text: String) -> TranscriptionHistoryEntry {
+        TranscriptionHistoryEntry(
+            id: self.id, timestamp: self.timestamp, rawText: self.rawText,
+            processedText: text, appName: self.appName, windowTitle: self.windowTitle,
+            wasAIProcessed: self.wasAIProcessed, processingModel: self.processingModel,
+            transcriptionDurationMilliseconds: self.transcriptionDurationMilliseconds,
+            parakeetProcessingDurationMilliseconds: self.parakeetProcessingDurationMilliseconds,
+            aiProcessingDurationMilliseconds: self.aiProcessingDurationMilliseconds,
+            aiTokensPerSecond: self.aiTokensPerSecond, aiProcessingError: self.aiProcessingError,
+            audio: self.audio, isStarred: self.isStarred, searchRevision: self.searchRevision,
+            originalProcessedText: self.originalProcessedText ?? self.processedText
         )
     }
 
@@ -629,6 +654,46 @@ final class TranscriptionHistoryStore: ObservableObject {
         }
 
         DebugLogger.shared.debug("Added transcription to history (total: \(self.entries.count))", source: "TranscriptionHistoryStore")
+    }
+
+    /// Applies one explicit edit to the exact visible final-text snapshot. The
+    /// existing writer owns persistence, errors and any pending audio attachment.
+    @discardableResult
+    func applyWordCorrection(
+        entryID: UUID,
+        expectedText: String,
+        range: NSRange,
+        replacement: String,
+        profile: PrivateProfileSnapshot
+    ) -> Bool {
+        guard self.canAccess, PrivateProfileStorage.acceptsNewWork,
+              PrivateProfileStorage.isReadable(profile),
+              self.profile.map({ $0.id == profile.id && $0.generation == profile.generation }) != false,
+              let index = self.entries.firstIndex(where: { $0.id == entryID }),
+              self.entries[index].clipboardText == expectedText,
+              range.location != NSNotFound, range.location >= 0, range.length > 0,
+              range.location <= expectedText.utf16.count,
+              range.length <= expectedText.utf16.count - range.location,
+              let swiftRange = Range(range, in: expectedText),
+              expectedText.indices.contains(swiftRange.lowerBound),
+              swiftRange.upperBound == expectedText.endIndex || expectedText.indices.contains(swiftRange.upperBound),
+              replacement.utf16.count <= 100_000,
+              !replacement.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+        else { return false }
+        let final = expectedText.replacingCharacters(in: swiftRange, with: replacement)
+        guard final != expectedText, !final.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              final.utf16.count <= 100_000 else { return false }
+        var entry = self.entries[index].replacingFinalText(final)
+        entry.markRestored(over: self.entries[index].searchRevision)
+        self.entries[index] = entry
+        // A reserved audio write may complete after this edit. Its retry capsule
+        // must carry the newest final text rather than restoring an older result.
+        if let admission = self.recordingWrites[entryID], !admission.finished, !admission.revoked {
+            admission.entry = entry
+        }
+        self.refreshTodaySummary()
+        self.persist(upserts: [entry])
+        return true
     }
 
     func toggleStar(id: UUID) {
