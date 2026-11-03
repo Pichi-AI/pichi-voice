@@ -15,14 +15,19 @@ Uncertain matches keep the original text.
 
 ## Runtime availability
 
-The pinned public TranscribeCpp v0.1.2 binary does not expose encoder snapshots.
-The new path is capability-gated; the existing cepstral path remains available
-with that binary. The reviewed native source patch and ABI contract are in
+Ordinary builds use the versioned local archive in
+`Vendor/TranscribeCpp/Artifacts`. Its manifest records the checksum, pinned
+upstream source, reviewed patch, licenses and platform provenance.
+`scripts/dev/check-transcribe-sdk.py` verifies that archive during portable
+checks. SwiftPM extracts it without extra credentials or runtime environment
+overrides.
+
+The enhanced macOS arm64 slice supplies encoder snapshots with both CPU and
+Metal. The original Intel and iOS implementations remain in the archive; the
+optional API is unavailable there and the existing fallback remains supported.
+This does not enable voice enrollment on mobile. The native ABI and reproducible
+package build are documented in
 [ENCODER_FEATURES.md](../../Vendor/TranscribeCpp/ENCODER_FEATURES.md).
-A local patched CPU build is experimental evidence, not a published SDK release
-or verification of shipping accelerator and mobile paths. Do not change the
-pinned download or claim deployment until those artifacts are separately built,
-validated and distributed.
 
 ## Private real-audio replay
 
