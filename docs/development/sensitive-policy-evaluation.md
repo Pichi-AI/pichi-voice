@@ -1,5 +1,7 @@
 # Сравнение методов очистки чувствительной речи
 
+Release integration on 2 November 2026 replaces manual model import with the [built-in dictionary/group policy](bundled-sensitive-topic-policy.md). The measurements below retain their original frozen evaluation scope.
+
 Этот отчёт описывает каталог v1. После него опубликована [разговорная редакция v2](conversational-business-language.md); приведённые ниже показатели и оценки жюри относятся к v1 и не переносились на новый словарь.
 
 Дата проверки: 30 октября 2026 года. База реализации: `10e8a70d`. Обработчики проверены на `b6bc5715`; последующие изменения приложения затрагивают только читаемость кнопок редактора. Текущий статус экранов и проверок вынесен в раздел проверки ниже.

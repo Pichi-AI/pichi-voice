@@ -5,11 +5,11 @@ task_test_dir="$PWD/.build/sensitive-policy-settings"
 mkdir -p "$task_test_dir"
 task_artifact="${PICHI_SENSITIVE_TOPIC_ARTIFACT:-}"
 if [[ -z "$task_artifact" ]]; then
-    python3 tools/sensitive_topic_classifier.py \
-        --cases Tests/Fixtures/SensitiveTopics/synthetic-exploratory-v1.jsonl \
-        --output-directory "$task_test_dir/artifact"
-    task_artifact="$task_test_dir/artifact/sensitive-topics-v1.json"
+    python3 scripts/dev/stage-sensitive-topic-model.py --output "$task_test_dir/sensitive-topics-v2.json"
+else
+    cp "$task_artifact" "$task_test_dir/sensitive-topics-v2.json"
 fi
+task_artifact="$task_test_dir/sensitive-topics-v2.json"
 cat > "$task_test_dir/Synthetic.swift" <<'SWIFT'
 import Foundation
 import Combine

@@ -155,6 +155,27 @@ nonisolated struct TranscriptSensitiveDictionarySnapshot: Sendable {
 
     var isEmpty: Bool { rules.isEmpty && topicClassifier == nil }
 
+    /// Only an explicitly selected group or a complete recognized dictionary seed
+    /// opts its supported topic into semantic masking. Substrings such as "ТЗ" or
+    /// "компания" cannot activate every topic whose phrases happen to contain them.
+    func inferredTopicIDs(selectedGroupIDs: Set<String>) throws -> Set<String> {
+        var topics = selectedGroupIDs.intersection(SensitiveTopicClassifierSnapshot.supportedTopicIDs)
+        for group in SensitiveBusinessGroupCatalog.groups
+            where SensitiveTopicClassifierSnapshot.supportedTopicIDs.contains(group.id) && !topics.contains(group.id) {
+            let seeds = SensitiveBusinessGroupCatalog.semanticSeeds(for: group)
+            for seed in seeds {
+                let entire = NSRange(location: 0, length: seed.utf16.count)
+                if try spans(in: seed).contains(where: { $0.range == entire }) {
+                    topics.insert(group.id)
+                    break
+                }
+            }
+        }
+        return topics
+    }
+
+    var selectedTopicIDs: Set<String> { topicClassifier?.selectedTopicIDs ?? [] }
+
     func spans(in text: String) throws -> [TranscriptRedactedSpan] {
         let normalized = Normalized(text)
         let lexical: [TranscriptRedactedSpan] = rules.flatMap { rule in

@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 #if canImport(Combine)
 import Combine
 #endif
@@ -8,20 +7,12 @@ extension SettingsStore {
     private static let sensitiveDataDictionaryDefaultsKey = "SensitiveDataDictionaryEntries"
     private static let sensitiveBusinessGroupsKey = "SensitiveBusinessGroupIDs"
     private static let sensitiveBusinessGroupOverridesKey = "SensitiveBusinessGroupOverrides"
-    private static let sensitiveTopicConfigurationKey = "SensitiveTopicClassifierConfiguration"
 
     private func requireSensitivePolicyMutationAdmission() throws {
         if let scoped = defaults as? PrivateProfileDefaults {
             guard PrivateProfileStorage.acceptsNewWork,
                   PrivateProfileStorage.isReadable(scoped.selectedProfile) else { throw CancellationError() }
         }
-    }
-
-    private struct TopicConfiguration: Codable {
-        let artifact: Data
-        let digest: String
-        let availableIDs: Set<String>
-        var selectedIDs: Set<String>
     }
 
     /// Presentation reads cannot erase malformed saved data. Attempt admission uses
@@ -33,11 +24,8 @@ extension SettingsStore {
     func sensitiveDataDictionarySnapshot() throws -> TranscriptSensitiveDictionarySnapshot {
         let stored = try TranscriptSensitiveDictionarySnapshot.read(from: defaults, key: Self.sensitiveDataDictionaryDefaultsKey)
         let groups = try admittedBusinessGroups()
-        let configuration = try topicConfiguration()
-        let classifier = try configuration.flatMap { config in
-            config.selectedIDs.isEmpty ? nil : try SensitiveTopicClassifierSnapshot(
-                data: config.artifact, expectedSHA256: config.digest, selectedTopicIDs: config.selectedIDs)
-        }
+        let topics = try stored.inferredTopicIDs(selectedGroupIDs: groups)
+        let classifier = try topics.isEmpty ? nil : SensitiveTopicClassifierSnapshot.bundled(selectedTopicIDs: topics)
         return try .init(entries: stored.entries, selectedGroupIDs: groups,
             groupTermOverrides: admittedGroupOverrides(), topicClassifier: classifier)
     }
@@ -133,49 +121,6 @@ extension SettingsStore {
             groupTermOverrides: overrides)
         objectWillChange.send()
         defaults.set(try JSONEncoder().encode(overrides), forKey: Self.sensitiveBusinessGroupOverridesKey)
-    }
-
-    var sensitiveTopicClassifierInstalled: Bool { (try? topicConfiguration()) != nil }
-    var sensitiveTopicClassifierIDs: Set<String> { (try? topicConfiguration()?.selectedIDs) ?? [] }
-    var sensitiveTopicClassifierAvailableIDs: Set<String> { (try? topicConfiguration()?.availableIDs) ?? [] }
-
-    private func topicConfiguration() throws -> TopicConfiguration? {
-        guard let object = defaults.object(forKey: Self.sensitiveTopicConfigurationKey) else { return nil }
-        guard let data = object as? Data, data.count <= 3_000_000,
-              let config = try? JSONDecoder().decode(TopicConfiguration.self, from: data),
-              config.selectedIDs.isSubset(of: config.availableIDs) else {
-            throw SensitiveTopicClassifierError.invalidArtifact
-        }
-        // Validate even when disabled; corrupt saved protection cannot silently vanish.
-        let model = try SensitiveTopicClassifierSnapshot(data: config.artifact,
-            expectedSHA256: config.digest, selectedTopicIDs: config.selectedIDs)
-        guard model.availableTopicIDs == config.availableIDs else { throw SensitiveTopicClassifierError.invalidArtifact }
-        return config
-    }
-
-    func importSensitiveTopicClassifier(from url: URL) throws {
-        try requireSensitivePolicyMutationAdmission()
-        let data = try SensitiveTopicClassifierSnapshot.readArtifact(at: url)
-        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let model = try SensitiveTopicClassifierSnapshot(data: data, expectedSHA256: digest, selectedTopicIDs: [])
-        // Import does not opt the user into sentence masking. One profile-scoped
-        // encoded value atomically binds bytes, digest, capabilities and selection.
-        let configuration = TopicConfiguration(artifact: data, digest: digest,
-            availableIDs: model.availableTopicIDs, selectedIDs: [])
-        objectWillChange.send()
-        defaults.set(try JSONEncoder().encode(configuration), forKey: Self.sensitiveTopicConfigurationKey)
-    }
-
-    func setSensitiveTopicClassifier(id: String, enabled: Bool) throws {
-        try requireSensitivePolicyMutationAdmission()
-        guard var configuration = try topicConfiguration(), configuration.availableIDs.contains(id) else {
-            throw SensitiveTopicClassifierError.unsupportedTopic
-        }
-        if enabled { configuration.selectedIDs.insert(id) } else { configuration.selectedIDs.remove(id) }
-        _ = try SensitiveTopicClassifierSnapshot(data: configuration.artifact,
-            expectedSHA256: configuration.digest, selectedTopicIDs: configuration.selectedIDs)
-        objectWillChange.send()
-        defaults.set(try JSONEncoder().encode(configuration), forKey: Self.sensitiveTopicConfigurationKey)
     }
 
     /// Call only at an existing attempt/export/correction admission boundary. The

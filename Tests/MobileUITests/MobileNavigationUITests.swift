@@ -701,10 +701,10 @@ final class MobileNavigationUITests: XCTestCase {
             openNavigation("settings", title: language == "ru" ? "Настройки" : "Settings")
             let reopenedPrivacy = app.buttons["settings.privacy"]
             scrollTo(reopenedPrivacy); reopenedPrivacy.tap()
-            let topics = app.buttons["privacy.topics.open"]
-            scrollTo(topics); topics.tap()
-            XCTAssertTrue(app.buttons["privacy.topics.import"].waitForExistence(timeout: 5))
-            capture("sensitive-\(revision)-\(language)-\(appearance)-topics")
+            scrollTo(app.buttons["privacy.dictionary.add"])
+            XCTAssertFalse(app.buttons["privacy.topics.open"].exists)
+            XCTAssertFalse(app.buttons["privacy.topics.import"].exists)
+            capture("sensitive-\(revision)-\(language)-\(appearance)-automatic-policy")
         }
         app.terminate()
         #endif

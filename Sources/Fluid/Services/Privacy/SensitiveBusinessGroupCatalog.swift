@@ -230,6 +230,12 @@ nonisolated enum SensitiveBusinessGroupCatalog {
         )
     ]
 
+    /// Extra complete dictionary seeds enable the corresponding supported topic.
+    /// They are not unconditional literal rules for a selected expression group.
+    static func semanticSeeds(for group: SensitiveBusinessGroup) -> [String] {
+        group.terms + (group.id == "illicit-remuneration" ? ["откат"] : [])
+    }
+
     static func group(id: String) -> SensitiveBusinessGroup? {
         groups.first { $0.id == id }
     }

@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// A presentation request belongs to the stable Form, because Section distributes
 /// modifiers across its rows and cannot own one shared editor presentation.
@@ -34,19 +33,9 @@ struct MobileSensitiveDictionarySettings: View {
         } header: {
             Text(PichiLocalization.text("Expression groups"))
         } footer: {
-            MobileSettingsFooter(PichiLocalization.text("Groups are off until you enable them. Review the expressions in each group. Context examples are explanations, not additional dictionary rules."))
+            MobileSettingsFooter(PichiLocalization.text("Choose the groups to hide. Supported groups also hide related sentences automatically on this device. Review the cleaned text before sharing."))
         }
-        Section {
-            NavigationLink {
-                MobileSensitiveTopicSettings()
-            } label: {
-                Label(PichiLocalization.text("Hide topics"), systemImage: "text.magnifyingglass")
-            }.accessibilityIdentifier("privacy.topics.open")
-        } header: {
-            Text(PichiLocalization.text("Experimental topic detection"))
-        } footer: {
-            MobileSettingsFooter(PichiLocalization.text("A local topic model can hide complete sentences about selected topics, including indirect wording. This experimental mode may miss phrases or hide unrelated sentences."))
-        }
+
     }
 
     private var dictionarySection: some View {
@@ -79,7 +68,7 @@ struct MobileSensitiveDictionarySettings: View {
         } header: {
             Text(PichiLocalization.text("Words and phrases to hide"))
         } footer: {
-            MobileSettingsFooter(PichiLocalization.text("Add names, words or phrases that should also be hidden when data cleanup is enabled. The dictionary stays on this device and applies to new recordings."))
+            MobileSettingsFooter(PichiLocalization.text("Add words or phrases to hide when data cleanup is enabled. Recognized topic words also hide related sentences automatically. Everything runs on this device and applies to new recordings."))
         }
     }
 }
@@ -170,7 +159,7 @@ private struct MobileSensitiveBusinessGroupSettings: View {
     var body: some View {
         Form {
             Section {
-                Toggle(PichiLocalization.text("Hide this group's expressions"), isOn: Binding(
+                Toggle(PichiLocalization.text("Hide this group"), isOn: Binding(
                     get: { settings.sensitiveBusinessGroupIDs.contains(group.id) },
                     set: { enabled in
                         do { try mutationSettings.setSensitiveBusinessGroup(id: group.id, enabled: enabled); settings.objectWillChange.send(); self.error = nil }
@@ -199,7 +188,7 @@ private struct MobileSensitiveBusinessGroupSettings: View {
             } header: {
                 Text(PichiLocalization.text("Examples that need context"))
             } footer: {
-                MobileSettingsFooter(PichiLocalization.text("These examples are not added as dictionary rules. Topic detection is a separate optional setting."))
+                MobileSettingsFooter(PichiLocalization.text("These examples explain the context. Supported groups use built-in topic detection to hide related sentences automatically; other groups match the listed expressions and their word forms."))
             }
         }.mobileSettingsPage()
             .navigationTitle(PichiLocalization.text(group.titleKey))
@@ -280,68 +269,5 @@ private struct MobileSensitiveBusinessGroupEditor: View {
         } catch {
             self.error = PichiLocalization.text("Could not save group expressions. Use unique expressions of up to 16 words and 256 characters, with at most 128 expressions across all groups. The existing rules were kept.")
         }
-    }
-}
-
-/// The Form owns one importer presentation. All operations use the shared settings service.
-private struct MobileSensitiveTopicSettings: View {
-    @ObservedObject private var settings = SettingsStore.shared
-    @StateObject private var mutationSettings = SettingsStore.shared.boundToCurrentPrivateProfile()
-    @Environment(\.theme) private var theme
-    @State private var importing = false
-    @State private var error: String?
-
-    var body: some View {
-        Form {
-            Section {
-                Text(PichiLocalization.text(settings.sensitiveTopicClassifierInstalled ? "Local topic model is ready" : "Import a local topic model to begin"))
-                Button { importing = true } label: {
-                    Label(PichiLocalization.text("Import local topic model"), systemImage: "square.and.arrow.down")
-                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityIdentifier("privacy.topics.import")
-                if let error { Text(error).font(theme.typography.caption).foregroundStyle(theme.palette.warning) }
-            } footer: {
-                MobileSettingsFooter(PichiLocalization.text("The model stays on this device. Importing it does not enable any topic. Settings apply to new recordings."))
-            }
-            Section {
-                ForEach(availableGroups) { group in
-                    Toggle(PichiLocalization.text(group.titleKey), isOn: Binding(
-                        get: { settings.sensitiveTopicClassifierIDs.contains(group.id) },
-                        set: { enabled in
-                            do { try mutationSettings.setSensitiveTopicClassifier(id: group.id, enabled: enabled); settings.objectWillChange.send(); self.error = nil }
-                            catch { self.error = PichiLocalization.text("Could not update privacy rules. The existing rules were kept.") }
-                        }))
-                        .accessibilityIdentifier("privacy.topics.\(group.id).enabled")
-                }
-                if settings.sensitiveTopicClassifierInstalled && availableGroups.isEmpty {
-                    Text(PichiLocalization.text("This model has no supported topics."))
-                        .foregroundStyle(theme.palette.secondaryText)
-                }
-            } header: {
-                Text(PichiLocalization.text("Topics to hide"))
-            } footer: {
-                MobileSettingsFooter(
-                    PichiLocalization.text("Topic detection hides complete sentences, including quotations and denials. Live text waits for enough context. A processing error stops publication instead of showing unfiltered text."),
-                    PichiLocalization.text("This experimental model does not guarantee recognition of every indirect phrase. Review the cleaned transcript before sharing it."))
-            }
-        }.mobileSettingsPage()
-            .navigationTitle(PichiLocalization.text("Hide topics"))
-            .navigationBarTitleDisplayMode(.inline)
-            .accessibilityIdentifier("privacy.topics.detail")
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
-                switch result {
-                case .failure:
-                    self.error = PichiLocalization.text("Could not import the local topic model. The existing model and rules were kept.")
-                case .success(let url):
-                    let access = url.startAccessingSecurityScopedResource()
-                    defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    do { try mutationSettings.importSensitiveTopicClassifier(from: url); settings.objectWillChange.send(); self.error = nil }
-                    catch { self.error = PichiLocalization.text("Could not import the local topic model. The existing model and rules were kept.") }
-                }
-            }
-    }
-
-    private var availableGroups: [SensitiveBusinessGroup] {
-        SensitiveBusinessGroupCatalog.groups.filter { settings.sensitiveTopicClassifierAvailableIDs.contains($0.id) }
     }
 }

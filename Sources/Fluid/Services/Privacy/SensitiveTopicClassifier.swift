@@ -28,6 +28,17 @@ nonisolated struct SensitiveTopicDetection: Sendable {
 /// a network transport, or an inference server. The existing privacy resource owner
 /// admits a verified local artifact and retains this value for one attempt.
 nonisolated struct SensitiveTopicClassifierSnapshot: Sendable {
+    static let bundledArtifactSHA256 = "9952052146978b266af5d6c68855fc95161db36636711630113a4ac0f0f7c734"
+
+    /// Distribution supplies the reproducibly generated model. Missing or corrupt
+    /// resources stop an admitted semantic policy instead of dropping its protection.
+    static func bundled(selectedTopicIDs: Set<String>, in bundle: Bundle = .main) throws -> Self {
+        guard let url = bundle.url(forResource: "sensitive-topics-v2", withExtension: "json") else {
+            throw SensitiveTopicClassifierError.invalidArtifact
+        }
+        return try load(artifactURL: url, expectedSHA256: bundledArtifactSHA256, selectedTopicIDs: selectedTopicIDs)
+    }
+
     static let maximumArtifactBytes = 2_097_152
     static let maximumInputUTF16 = 65_536
     static let maximumSentenceUTF16 = 2_048

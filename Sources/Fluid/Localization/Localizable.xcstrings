@@ -64900,6 +64900,70 @@
           }
         }
       }
+    },
+    "Add words or phrases to hide when data cleanup is enabled. Recognized topic words also hide related sentences automatically. Everything runs on this device and applies to new recordings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add words or phrases to hide when data cleanup is enabled. Recognized topic words also hide related sentences automatically. Everything runs on this device and applies to new recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавьте слова или фразы, которые нужно скрывать при включённой очистке. Для известных тематических слов автоматически скрываются и связанные предложения. Всё работает на этом устройстве и применяется к новым записям."
+          }
+        }
+      }
+    },
+    "Choose the groups to hide. Supported groups also hide related sentences automatically on this device. Review the cleaned text before sharing.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose the groups to hide. Supported groups also hide related sentences automatically on this device. Review the cleaned text before sharing."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите группы для скрытия. Для поддерживаемых групп связанные предложения также скрываются автоматически на этом устройстве. Проверьте очищенный текст перед отправкой."
+          }
+        }
+      }
+    },
+    "These examples explain the context. Supported groups use built-in topic detection to hide related sentences automatically; other groups match the listed expressions and their word forms.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These examples explain the context. Supported groups use built-in topic detection to hide related sentences automatically; other groups match the listed expressions and their word forms."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Примеры поясняют контекст. Для поддерживаемых групп встроенное распознавание тем автоматически скрывает связанные предложения. Остальные группы скрывают перечисленные выражения и их словоформы."
+          }
+        }
+      }
+    },
+    "Hide this group": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide this group"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрывать эту группу"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

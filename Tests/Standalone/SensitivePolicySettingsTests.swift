@@ -24,6 +24,7 @@ struct SensitivePolicySettingsTests {
     static func main() throws {
         precondition(CommandLine.arguments.count == 2, "A synthetic trained artifact path is required")
         let artifactURL = URL(fileURLWithPath: CommandLine.arguments[1])
+        let artifact = try SensitiveTopicClassifierSnapshot.readArtifact(at: artifactURL)
         let original = PrivateProfileStorage.current
         let root = AppBrand.applicationSupportDirectory
         let guestName = AppBrand.storageNamespace + ".synthetic-guest"
@@ -56,20 +57,57 @@ struct SensitivePolicySettingsTests {
         PrivateProfileStorage.select(a)
         let retargetable = SettingsStore(defaults: PrivateProfileDefaults(guestDefaults: guestDefaults))
         let admittedA = retargetable.boundToCurrentPrivateProfile()
-        try admittedA.importSensitiveTopicClassifier(from: artifactURL)
-        expect(admittedA.sensitiveTopicClassifierInstalled, "Validated artifact was not installed")
-        expect(admittedA.sensitiveTopicClassifierIDs.isEmpty, "Import unexpectedly enabled sentence masking")
-        expect(admittedA.sensitiveTopicClassifierAvailableIDs == SensitiveTopicClassifierSnapshot.supportedTopicIDs,
-               "Artifact capabilities changed during import")
-        try admittedA.setSensitiveTopicClassifier(id: "illicit-remuneration", enabled: true)
+        try expect(try admittedA.sensitiveDataDictionarySnapshot().isEmpty, "Empty settings enabled a semantic policy")
+        // A pre-release imported model cannot override the built-in distribution policy.
+        admittedA.defaults.set(Data("obsolete-untrusted-model".utf8), forKey: "SensitiveTopicClassifierConfiguration")
+        try expect(try admittedA.sensitiveDataDictionarySnapshot().isEmpty, "Legacy model settings enabled an unselected topic")
+        try admittedA.setSensitiveBusinessGroup(id: "illicit-remuneration", enabled: true)
         let frozen = try admittedA.sensitiveDataDictionarySnapshot()
-        let frozenIdentity = frozen.fingerprint
-        try admittedA.setSensitiveTopicClassifier(id: "illicit-remuneration", enabled: false)
+        expect(frozen.selectedTopicIDs == ["illicit-remuneration"], "Selected group did not automatically admit its topic")
+        let indirect = "Победителя уже выбрали, а остальные заявки нужны только для вида."
+        try admittedA.setSensitiveBusinessGroup(id: "illicit-remuneration", enabled: false)
         let changed = try admittedA.sensitiveDataDictionarySnapshot()
-        expect(frozen.fingerprint == frozenIdentity && frozenIdentity != changed.fingerprint,
+        expect(frozen.fingerprint != changed.fingerprint && frozen.selectedTopicIDs == ["illicit-remuneration"],
                "Settings mutation changed an admitted snapshot or reused its identity")
-        try admittedA.setSensitiveTopicClassifier(id: "illicit-remuneration", enabled: true)
-        _ = try admittedA.addSensitiveDataDictionaryPhrase("синтетическая тайна")
+        expect(changed.isEmpty, "Disabling the last group kept semantic masking active")
+        _ = try admittedA.addSensitiveDataDictionaryPhrase("взятке")
+        try expect(try admittedA.sensitiveDataDictionarySnapshot().selectedTopicIDs == ["illicit-remuneration"],
+               "A declined dictionary seed did not activate its topic")
+        try admittedA.replaceSensitiveDataDictionaryEntries([.init(phrase: "откат")])
+        try expect(try admittedA.sensitiveDataDictionarySnapshot().selectedTopicIDs == ["illicit-remuneration"],
+               "A whole dictionary seed did not activate its topic")
+        try admittedA.replaceSensitiveDataDictionaryEntries([.init(phrase: "ТЗ"), .init(phrase: "компания"), .init(phrase: "интерес")])
+        try expect(try admittedA.sensitiveDataDictionarySnapshot().selectedTopicIDs.isEmpty,
+               "An ambiguous word or partial group expression activated semantic masking")
+        try admittedA.replaceSensitiveDataDictionaryEntries([.init(phrase: "взятке", matchMode: .exact)])
+        try expect(try admittedA.sensitiveDataDictionarySnapshot().selectedTopicIDs.isEmpty,
+               "An exact-only declined spelling matched a different dictionary seed")
+        try admittedA.replaceSensitiveDataDictionaryEntries([.init(phrase: "синтетическая тайна")])
+        try admittedA.setSensitiveBusinessGroup(id: "procurement-collusion", enabled: true)
+        let procurement = try admittedA.sensitiveDataDictionarySnapshot()
+        expect(procurement.selectedTopicIDs == ["procurement-collusion"], "Group selected the wrong topic")
+        try expect(try procurement.spans(in: indirect).contains { $0.range == NSRange(location: 0, length: indirect.utf16.count) },
+               "Built-in classifier did not hide an indirect complete sentence")
+        let expected = try SensitiveTopicClassifierSnapshot(data: artifact,
+            expectedSHA256: SensitiveTopicClassifierSnapshot.bundledArtifactSHA256, selectedTopicIDs: ["procurement-collusion"])
+        try expect(try expected.detect(in: indirect, complete: true).spans.count == 1, "Bundled v2 decisions changed")
+        let emptyBundleRoot = root.appendingPathComponent("Empty.bundle")
+        try FileManager.default.createDirectory(at: emptyBundleRoot, withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "synthetic.empty"], format: .xml, options: 0)
+            .write(to: emptyBundleRoot.appendingPathComponent("Info.plist"))
+        let emptyBundle = Bundle(path: emptyBundleRoot.path)!
+        do {
+            _ = try SensitiveTopicClassifierSnapshot.bundled(selectedTopicIDs: ["illicit-remuneration"], in: emptyBundle)
+            preconditionFailure("Missing built-in model silently disabled protection")
+        } catch SensitiveTopicClassifierError.invalidArtifact { checks += 1 }
+        let corruptBundleRoot = root.appendingPathComponent("Corrupt.bundle")
+        try FileManager.default.copyItem(at: emptyBundleRoot, to: corruptBundleRoot)
+        try Data("tampered-model".utf8).write(to: corruptBundleRoot.appendingPathComponent("sensitive-topics-v2.json"))
+        let corruptBundle = Bundle(path: corruptBundleRoot.path)!
+        do {
+            _ = try SensitiveTopicClassifierSnapshot.bundled(selectedTopicIDs: ["illicit-remuneration"], in: corruptBundle)
+            preconditionFailure("Corrupt built-in model silently disabled protection")
+        } catch SensitiveTopicClassifierError.checksumMismatch { checks += 1 }
         let savedA = saved(domains[0])
 
         PrivateProfileStorage.select(b)
@@ -78,20 +116,19 @@ struct SensitivePolicySettingsTests {
         let savedB = saved(domains[1])
         // These calls model a file picker or draft completion admitted in A and
         // delivered after B becomes current. The bound owner must not retarget.
-        cancelled { try admittedA.importSensitiveTopicClassifier(from: artifactURL) }
         cancelled { try admittedA.replaceSensitiveBusinessGroupTerms(id: "illicit-remuneration", terms: ["чужая фраза"]) }
         cancelled { try admittedA.replaceSensitiveDataDictionaryEntries([.init(phrase: "чужой словарь")]) }
-        cancelled { try admittedA.setSensitiveTopicClassifier(id: "illicit-remuneration", enabled: false) }
+        cancelled { try admittedA.setSensitiveBusinessGroup(id: "illicit-remuneration", enabled: false) }
         expect(savedB.isEqual(saved(domains[1])), "Late A completion changed B settings")
         expect(savedA.isEqual(saved(domains[0])), "Rejected late completion changed A settings")
-        expect(!currentB.sensitiveTopicClassifierInstalled && currentB.sensitiveTopicClassifierIDs.isEmpty,
-               "A classifier became visible in B")
+        try expect(try currentB.sensitiveDataDictionarySnapshot().selectedTopicIDs.isEmpty,
+               "A semantic topic from A became enabled in B")
         expect(guestDefaults.data(forKey: "SensitiveTopicClassifierConfiguration") == nil,
-               "Rejected account import reached guest defaults")
+               "Account settings reached guest defaults")
         PrivateProfileStorage.select(guest)
-        cancelled { try admittedA.importSensitiveTopicClassifier(from: artifactURL) }
+        cancelled { try admittedA.setSensitiveBusinessGroup(id: "commercial-metrics", enabled: true) }
         expect(savedA.isEqual(saved(domains[0])) && savedB.isEqual(saved(domains[1])),
-               "Late account import changed a saved account while guest was selected")
+               "Switching to guest changed a saved account")
 
         PrivateProfileStorage.select(a)
         for group in SensitiveBusinessGroupCatalog.groups {
@@ -120,6 +157,6 @@ struct SensitivePolicySettingsTests {
         expect(admittedA.sensitiveBusinessGroupTerms(id: "illicit-remuneration").isEmpty,
                "Rejected reset restored default terms")
         _ = try admittedA.sensitiveDataDictionarySnapshot()
-        print("Sensitive policy settings: \(checks) checks passed; stale imports/drafts, active group limits and frozen identities")
+        print("Sensitive policy settings: \(checks) checks passed; built-in v2, automatic topic selection, stale drafts, group limits and frozen identities")
     }
 }
