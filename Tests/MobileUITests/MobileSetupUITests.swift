@@ -365,7 +365,11 @@ final class MobileSetupUITests: XCTestCase {
                 XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
                 input.typeText("Ёжик Тестовый")
                 app.buttons["privacy.dictionary.save"].tap()
-                XCTAssertTrue(app.staticTexts["privacy.dictionary.error"].waitForExistence(timeout: 5))
+                let validation = app.staticTexts["privacy.dictionary.error"]
+                XCTAssertTrue(validation.waitForExistence(timeout: 5))
+                XCTAssertTrue(validation.isHittable)
+                XCTAssertLessThanOrEqual(validation.frame.maxY, app.keyboards.firstMatch.frame.minY + 1,
+                                         "Validation must remain readable above the keyboard")
                 XCTAssertTrue(input.exists && app.keyboards.firstMatch.exists, "Failed save preserves the focused draft")
                 XCTAssertEqual(input.value as? String, "Ёжик Тестовый")
                 capture("dictionary-ru-dark-03-duplicate")

@@ -103,6 +103,8 @@ private struct MobileSensitiveDictionaryInlineEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+            if let error { Text(error).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
+                .accessibilityIdentifier("privacy.dictionary.error") }
             HStack(spacing: theme.metrics.spacing.xs) {
                 TextField(PichiLocalization.text("Word or phrase"), text: $phrase)
                     .font(theme.typography.body)
@@ -124,8 +126,6 @@ private struct MobileSensitiveDictionaryInlineEditor: View {
                     .accessibilityLabel(PichiLocalization.text("Cancel"))
                     .accessibilityIdentifier("privacy.dictionary.cancel")
             }
-            if let error { Text(error).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
-                .accessibilityIdentifier("privacy.dictionary.error") }
         }.accessibilityElement(children: .contain)
             .onAppear { focused = true }
             .onDisappear { focused = false }
@@ -138,6 +138,9 @@ private struct MobileSensitiveDictionaryInlineEditor: View {
             else { try settings.addSensitiveDataDictionaryPhrase(phrase) }
             focused = false
             saved()
+        } catch SensitiveDataDictionaryError.duplicatePhrase {
+            self.error = PichiLocalization.text("Already in Dictionary")
+            focused = true
         } catch {
             self.error = PichiLocalization.text("Use a unique phrase of up to 16 words and 256 characters. The dictionary can contain up to 128 entries.")
             focused = true
