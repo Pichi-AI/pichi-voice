@@ -41,13 +41,13 @@ struct HistoryTextComparisonView: View {
     }
 
     private var comparisonInput: ComparisonInput {
-        ComparisonInput(entryID: self.entry.id, rawText: self.entry.rawText,
+        ComparisonInput(entryID: self.entry.id, rawText: self.entry.sourceTranscriptText,
                         finalText: self.entry.clipboardText ?? "", showChanges: self.showChanges,
                         manuallyEdited: self.entry.originalProcessedText != nil)
     }
 
     private var hasComparisonSource: Bool {
-        self.entry.wasAIProcessed || self.entry.originalProcessedText != nil
+        self.entry.wasAIProcessed || self.entry.originalProcessedText != nil || self.entry.correctedRawText != nil
     }
 
     var body: some View {
@@ -66,9 +66,7 @@ struct HistoryTextComparisonView: View {
                 .frame(minHeight: 24)
             }
             self.section(title: "Final text", content: self.entry.clipboardText ?? "", isOriginal: false)
-            if self.hasComparisonSource {
-                self.section(title: "Original transcription", content: self.entry.rawText, isOriginal: true)
-            }
+            self.section(title: "Original transcription", content: self.entry.sourceTranscriptText, isOriginal: true)
         }
         .task(id: self.comparisonInput) {
             let input = self.comparisonInput
@@ -96,7 +94,7 @@ struct HistoryTextComparisonView: View {
                 self.correctionSelection = nil
                 self.preparePronunciation(
                     candidate: .init(heardText: selection.heardText, correctedText: corrected),
-                    selection: selection, expectedText: current.clipboardText ?? ""
+                    selection: selection, expectedText: selection.isOriginal ? current.sourceTranscriptText : (current.clipboardText ?? "")
                 )
                 return true
             }
@@ -116,7 +114,7 @@ struct HistoryTextComparisonView: View {
             self.sectionHeader(title: title, content: content, isOriginal: isOriginal)
             self.transcript(content: content, isOriginal: isOriginal)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if !isOriginal { self.inlineStatus }
+            if isOriginal { self.inlineStatus }
         }
         .padding(20)
         .background { RoundedRectangle(cornerRadius: 16).fill(self.theme.palette.cardBackground) }
@@ -148,13 +146,13 @@ struct HistoryTextComparisonView: View {
             self.correctionSelection = DictionaryHistoryWordSelection(
                 entryID: self.entry.id, sourceText: content, range: range, isOriginal: isOriginal)
         }
-        view.inlineEditingEnabled = !isOriginal
+        view.inlineEditingEnabled = isOriginal
         view.interactionIdentity = "\(self.entry.id):\(self.interactionEpoch)"
         view.accentColor = NSColor(self.theme.palette.accent)
         view.editorBackgroundColor = NSColor(self.theme.palette.cardBackground)
         view.editorTextColor = NSColor(self.theme.palette.primaryText)
         view.onEndEdit = { self.activeInlineCorrection = nil }
-        if !isOriginal {
+        if isOriginal {
             view.onBeginEdit = { range in self.beginInlineCorrection(range: range, source: content) }
             view.onEdit = { range, replacement in self.commitInlineCorrection(range: range, replacement: replacement) }
         }
@@ -185,8 +183,8 @@ struct HistoryTextComparisonView: View {
 
     @ViewBuilder
     private func enhancementBadge(isOriginal: Bool) -> some View {
-        if !isOriginal, self.entry.wasAIProcessed || self.entry.originalProcessedText != nil {
-            Text(PichiLocalization.text(self.entry.originalProcessedText != nil ? "Edited by you" : "AI enhanced")).font(self.theme.typography.caption)
+        if isOriginal ? self.entry.correctedRawText != nil : (self.entry.wasAIProcessed || self.entry.originalProcessedText != nil) {
+            Text(PichiLocalization.text((isOriginal || self.entry.originalProcessedText != nil) ? "Edited by you" : "AI enhanced")).font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.accentText)
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(self.theme.palette.elevatedCardBackground, in: Capsule())
@@ -240,7 +238,7 @@ struct HistoryTextComparisonView: View {
         let profile = PrivateProfileStorage.current
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
               let current = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == self.entry.id }),
-              current.clipboardText == source,
+              current.sourceTranscriptText == source,
               let edit = DictionaryInlineTextEdit(sourceText: source, range: range) else { return false }
         self.activeInlineCorrection = InlineCorrection(
             entryID: self.entry.id, edit: edit, profile: profile,
@@ -256,7 +254,7 @@ struct HistoryTextComparisonView: View {
               let updatedText = context.edit.replacing(with: replacement),
               TranscriptionHistoryStore.shared.applyWordCorrection(
                   entryID: context.entryID, expectedText: context.edit.sourceText,
-                  range: range, replacement: replacement, profile: context.profile
+                  range: range, replacement: replacement, profile: context.profile, isOriginal: true
               ) else {
             self.inlineError = "This transcription changed. Select the word again."
             return false
@@ -290,10 +288,10 @@ struct HistoryTextComparisonView: View {
         guard let correction = self.savedInlineCorrection,
               correction.entryID == self.entry.id,
               let current = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == correction.entryID }),
-              current.clipboardText == correction.expectedText,
+              current.sourceTranscriptText == correction.expectedText,
               PrivateProfileStorage.isReadable(correction.profile),
               let range = correction.candidate.sourceUTF16Range,
-              let selection = DictionaryHistoryWordSelection(entryID: correction.entryID, sourceText: correction.sourceText, range: range, isOriginal: false)
+              let selection = DictionaryHistoryWordSelection(entryID: correction.entryID, sourceText: correction.sourceText, range: range, isOriginal: true)
         else {
             self.savedInlineCorrection = nil
             return
@@ -315,7 +313,7 @@ struct HistoryTextComparisonView: View {
             let enriched = await HistoryDictionaryAudioLearningService.shared.enrich(candidate: candidate, selection: selection)
             guard !Task.isCancelled, self.interactionEpoch == epoch, self.entry.id == selection.entryID,
                   let current = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == selection.entryID }),
-                  current.clipboardText == expectedText,
+                  (selection.isOriginal ? current.sourceTranscriptText : (current.clipboardText ?? "")) == expectedText,
                   let request = DictionaryWordTrainingRequest(candidate: enriched, profile: selection.profile) else { return }
             self.savedInlineCorrection = nil
             NotificationCenter.default.post(name: .openDictionaryWordTraining, object: request)

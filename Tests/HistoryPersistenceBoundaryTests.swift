@@ -280,7 +280,37 @@ final class DebugLogger {
         legacy.removeValue(forKey: "originalProcessedText")
         let legacyEntry = try JSONDecoder().decode(TranscriptionHistoryEntry.self, from: JSONSerialization.data(withJSONObject: legacy))
         precondition(legacyEntry.originalProcessedText == nil && legacyEntry == original, "Legacy entries decode without a manual correction field")
-        print("PASS: inline word correction repeated UTF16 occurrence, provenance, search, persistence, backup and legacy decoding")
+        let sourceOriginal = TranscriptionHistoryEntry(rawText: "Ёжик 🦔 Pech и Pech.",
+            processedText: "AI formatted result.", appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: true, audio: audio)
+        store.restore(from: [sourceOriginal])
+        let sourceRange = (sourceOriginal.rawText as NSString).range(of: "Pech", options: .backwards)
+        precondition(store.applyWordCorrection(entryID: sourceOriginal.id, expectedText: sourceOriginal.rawText,
+            range: sourceRange, replacement: "Pichi", profile: profile, isOriginal: true))
+        let sourceEdited = store.entries[0]
+        precondition(sourceEdited.sourceTranscriptText == "Ёжик 🦔 Pech и Pichi." && sourceEdited.rawText == sourceOriginal.rawText,
+            "Source edits preserve exact immutable ASR bytes and the selected repeated occurrence")
+        precondition(sourceEdited.processedText == sourceOriginal.processedText && sourceEdited.originalProcessedText == nil,
+            "A source correction does not overwrite independently formatted AI text")
+        precondition(store.search(query: "Pichi").map(\.id) == [sourceOriginal.id] && sourceEdited.searchRecord.text.contains("Pichi"))
+        precondition(!store.applyWordCorrection(entryID: sourceOriginal.id, expectedText: sourceOriginal.rawText,
+            range: sourceRange, replacement: "Stale", profile: profile, isOriginal: true))
+        store.attachAudio(laterAudioMetadata(), to: sourceOriginal.id)
+        await store.finishPendingWrites()
+        let sourceReloaded = try await TranscriptionHistoryWriter(defaults: defaults, url: url).load()
+        precondition(sourceReloaded == store.entries && sourceReloaded[0].correctedRawText == sourceEdited.correctedRawText,
+            "Corrected source survives audio attachment and SQLite reload")
+        let sourceBackup = try JSONDecoder().decode([TranscriptionHistoryEntry].self, from: JSONEncoder().encode(store.makeBackupPayload()))
+        precondition(sourceBackup == store.entries)
+        let identical = TranscriptionHistoryEntry(rawText: "Приложение PGI.", processedText: "Приложение PGI.",
+            appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: false)
+        store.restore(from: [identical])
+        precondition(store.applyWordCorrection(entryID: identical.id, expectedText: identical.rawText,
+            range: (identical.rawText as NSString).range(of: "PGI"), replacement: "Pichi AI", profile: profile, isOriginal: true))
+        precondition(store.entries[0].sourceTranscriptText == "Приложение Pichi AI." &&
+            store.entries[0].clipboardText == "Приложение Pichi AI." && store.entries[0].rawText == identical.rawText &&
+            store.entries[0].originalProcessedText == identical.processedText,
+            "Identical source/final text shares the exact user correction while preserving both model outputs")
+        print("PASS: source and final corrections, exact UTF16 occurrence, provenance, search, persistence, audio, backup and legacy decoding")
     }
 
     static func laterAudioMetadata() -> DictationAudioMetadata {

@@ -141,11 +141,15 @@ import SQLite3
         expect(history.applyWordCorrection(entryID: output.entryID, expectedText: initial,
             range: (initial as NSString).range(of: "Pech"), replacement: "Pichi", profile: profile),
             "A visible entry can be corrected while its original audio worker is pending")
+        expect(history.applyWordCorrection(entryID: output.entryID, expectedText: "exact ASR bytes",
+            range: NSRange(location: 6, length: 3), replacement: "speech", profile: profile, isOriginal: true),
+            "A source correction uses the same pending recording admission")
         let metadata = try await Task.detached { try audio.save(snapshot: syntheticPCM(), model: "synthetic") }.value
         try output.attachAudio(metadata, from: audio)
         try await output.finish()
         await history.finishPendingWrites()
         let corrected = try await writer.load()[0]
+        expect(corrected.sourceTranscriptText == "exact speech bytes", "Late audio retains the corrected source")
         expect(corrected.processedText == "Ёжик 🦔 Pichi Voice" && corrected.originalProcessedText == initial && corrected.rawText == "exact ASR bytes",
             "Audio attachment and recording finish do not revert the corrected final or first source bytes")
         expect(corrected.audio == metadata && audioStore.audioFileExists(fileName: metadata.fileName),

@@ -56,6 +56,6 @@ struct DictionaryHistoryWordSelection: Identifiable {
 
     func matches(_ entry: TranscriptionHistoryEntry) -> Bool {
         PrivateProfileStorage.isReadable(self.profile) && PrivateProfileStorage.acceptsNewWork &&
-            entry.id == self.entryID && (self.isOriginal ? entry.rawText : (entry.clipboardText ?? "")) == self.sourceText
+            entry.id == self.entryID && (self.isOriginal ? entry.sourceTranscriptText : (entry.clipboardText ?? "")) == self.sourceText
     }
 }

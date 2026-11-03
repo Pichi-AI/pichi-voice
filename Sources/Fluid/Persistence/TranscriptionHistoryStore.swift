@@ -28,6 +28,9 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
     /// The exact model/formatter output before the first explicit user correction.
     /// Nil for older entries and entries that have never been manually edited.
     let originalProcessedText: String?
+    /// User-corrected source text; rawText remains the exact ASR output.
+    let correctedRawText: String?
+    var sourceTranscriptText: String { self.correctedRawText ?? self.rawText }
     let appName: String
     let windowTitle: String
     let characterCount: Int
@@ -64,13 +67,15 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         audio: DictationAudioMetadata? = nil,
         isStarred: Bool = false,
         searchRevision: UInt64? = nil,
-        originalProcessedText: String? = nil
+        originalProcessedText: String? = nil,
+        correctedRawText: String? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
         self.rawText = rawText
         self.processedText = processedText
         self.originalProcessedText = originalProcessedText
+        self.correctedRawText = correctedRawText
         self.appName = appName
         self.windowTitle = windowTitle
         self.characterCount = processedText.count
@@ -104,13 +109,15 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         audio: DictationAudioMetadata?,
         isStarred: Bool,
         searchRevision: UInt64?,
-        originalProcessedText: String?
+        originalProcessedText: String?,
+        correctedRawText: String?
     ) {
         self.id = id
         self.timestamp = timestamp
         self.rawText = rawText
         self.processedText = processedText
         self.originalProcessedText = originalProcessedText
+        self.correctedRawText = correctedRawText
         self.appName = appName
         self.windowTitle = windowTitle
         self.characterCount = characterCount
@@ -133,6 +140,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         self.rawText = try container.decode(String.self, forKey: .rawText)
         self.processedText = try container.decode(String.self, forKey: .processedText)
         self.originalProcessedText = try container.decodeIfPresent(String.self, forKey: .originalProcessedText)
+        self.correctedRawText = try container.decodeIfPresent(String.self, forKey: .correctedRawText)
         self.appName = try container.decode(String.self, forKey: .appName)
         self.windowTitle = try container.decode(String.self, forKey: .windowTitle)
         self.characterCount = try container.decode(Int.self, forKey: .characterCount)
@@ -158,7 +166,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, timestamp, rawText, processedText, originalProcessedText, appName, windowTitle
+        case id, timestamp, rawText, processedText, originalProcessedText, correctedRawText, appName, windowTitle
         case characterCount, wasAIProcessed, processingModel
         case transcriptionDurationMilliseconds, parakeetProcessingDurationMilliseconds, aiProcessingDurationMilliseconds
         case aiTokensPerSecond
@@ -233,7 +241,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             audio: audio,
             isStarred: self.isStarred,
             searchRevision: self.searchRevision,
-            originalProcessedText: self.originalProcessedText
+            originalProcessedText: self.originalProcessedText, correctedRawText: self.correctedRawText
         )
     }
 
@@ -249,7 +257,26 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             aiProcessingDurationMilliseconds: self.aiProcessingDurationMilliseconds,
             aiTokensPerSecond: self.aiTokensPerSecond, aiProcessingError: self.aiProcessingError,
             audio: self.audio, isStarred: self.isStarred, searchRevision: self.searchRevision,
-            originalProcessedText: self.originalProcessedText ?? self.processedText
+            originalProcessedText: self.originalProcessedText ?? self.processedText, correctedRawText: self.correctedRawText
+        )
+    }
+
+    /// An explicit source correction stays separate from immutable ASR bytes.
+    /// Mirror it into the final text only when both displayed texts were identical.
+    func replacingSourceText(_ text: String) -> TranscriptionHistoryEntry {
+        let mirrorsFinal = self.clipboardText == self.sourceTranscriptText
+        return TranscriptionHistoryEntry(
+            id: self.id, timestamp: self.timestamp, rawText: self.rawText,
+            processedText: mirrorsFinal ? text : self.processedText,
+            appName: self.appName, windowTitle: self.windowTitle,
+            wasAIProcessed: self.wasAIProcessed, processingModel: self.processingModel,
+            transcriptionDurationMilliseconds: self.transcriptionDurationMilliseconds,
+            parakeetProcessingDurationMilliseconds: self.parakeetProcessingDurationMilliseconds,
+            aiProcessingDurationMilliseconds: self.aiProcessingDurationMilliseconds,
+            aiTokensPerSecond: self.aiTokensPerSecond, aiProcessingError: self.aiProcessingError,
+            audio: self.audio, isStarred: self.isStarred, searchRevision: self.searchRevision,
+            originalProcessedText: mirrorsFinal ? (self.originalProcessedText ?? self.processedText) : self.originalProcessedText,
+            correctedRawText: text
         )
     }
 
@@ -656,7 +683,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         DebugLogger.shared.debug("Added transcription to history (total: \(self.entries.count))", source: "TranscriptionHistoryStore")
     }
 
-    /// Applies one explicit edit to the exact visible final-text snapshot. The
+    /// Applies one explicit edit to the exact visible source or final snapshot. The
     /// existing writer owns persistence, errors and any pending audio attachment.
     @discardableResult
     func applyWordCorrection(
@@ -664,13 +691,14 @@ final class TranscriptionHistoryStore: ObservableObject {
         expectedText: String,
         range: NSRange,
         replacement: String,
-        profile: PrivateProfileSnapshot
+        profile: PrivateProfileSnapshot,
+        isOriginal: Bool = false
     ) -> Bool {
         guard self.canAccess, PrivateProfileStorage.acceptsNewWork,
               PrivateProfileStorage.isReadable(profile),
               self.profile.map({ $0.id == profile.id && $0.generation == profile.generation }) != false,
               let index = self.entries.firstIndex(where: { $0.id == entryID }),
-              self.entries[index].clipboardText == expectedText,
+              (isOriginal ? self.entries[index].sourceTranscriptText : self.entries[index].clipboardText) == expectedText,
               range.location != NSNotFound, range.location >= 0, range.length > 0,
               range.location <= expectedText.utf16.count,
               range.length <= expectedText.utf16.count - range.location,
@@ -683,7 +711,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         let final = expectedText.replacingCharacters(in: swiftRange, with: replacement)
         guard final != expectedText, !final.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               final.utf16.count <= 100_000 else { return false }
-        var entry = self.entries[index].replacingFinalText(final)
+        var entry = isOriginal ? self.entries[index].replacingSourceText(final) : self.entries[index].replacingFinalText(final)
         entry.markRestored(over: self.entries[index].searchRevision)
         self.entries[index] = entry
         // A reserved audio write may complete after this edit. Its retry capsule
@@ -782,7 +810,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         } else {
             let lowercased = query.lowercased()
             matches = entries.filter { entry in
-                entry.rawText.lowercased().contains(lowercased) ||
+                entry.sourceTranscriptText.lowercased().contains(lowercased) ||
                     entry.processedText.lowercased().contains(lowercased) ||
                     entry.appName.lowercased().contains(lowercased) ||
                     entry.windowTitle.lowercased().contains(lowercased)

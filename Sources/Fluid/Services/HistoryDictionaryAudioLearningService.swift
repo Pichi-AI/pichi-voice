@@ -37,9 +37,9 @@ final class HistoryDictionaryAudioLearningService {
     private func currentEntry(selection: DictionaryHistoryWordSelection, candidate: AutomaticDictionaryCorrectionCandidate) -> TranscriptionHistoryEntry? {
         guard PrivateProfileStorage.isReadable(selection.profile), PrivateProfileStorage.acceptsNewWork,
               let entry = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == selection.entryID }) else { return nil }
-        if selection.isOriginal { return entry.rawText == selection.sourceText ? entry : nil }
         let expected = (selection.sourceText as NSString).replacingCharacters(in: selection.range, with: candidate.correctedText)
-        return entry.clipboardText == selection.sourceText || entry.clipboardText == expected ? entry : nil
+        let currentText = selection.isOriginal ? entry.sourceTranscriptText : (entry.clipboardText ?? "")
+        return currentText == selection.sourceText || currentText == expected ? entry : nil
     }
 
     nonisolated static func recordingID(entryID: UUID, fileName: String) -> UUID {

@@ -2,8 +2,8 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// The original transcript stays read-only. Final text can opt into a temporary
-/// word editor; the history owner checks and persists the exact occurrence.
+/// A transcript can opt into a temporary word editor. The history owner checks
+/// and persists the exact occurrence without changing the original model bytes.
 struct DictionarySelectableTranscript: NSViewRepresentable {
     let text: NSAttributedString
     var inlineEditingEnabled = false
@@ -147,12 +147,16 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
         if self.inlineEdit == nil, let range = self.hoveredRange,
            let manager = self.layoutManager, let container = self.textContainer {
             let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            self.accentColor.withAlphaComponent(0.11).setFill()
+            self.accentColor.withAlphaComponent(0.26).setFill()
             manager.enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
                                            in: container) { box, _ in
                 let highlight = box.offsetBy(dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y)
                     .insetBy(dx: -2, dy: -1)
-                NSBezierPath(roundedRect: highlight, xRadius: 3, yRadius: 3).fill()
+                let path = NSBezierPath(roundedRect: highlight, xRadius: 3, yRadius: 3)
+                path.fill()
+                self.accentColor.withAlphaComponent(0.55).setStroke()
+                path.lineWidth = 0.75
+                path.stroke()
             }
         }
         super.draw(dirtyRect)
@@ -171,7 +175,14 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
         guard hypot(released.x - point.x, released.y - point.y) < 4 else { return }
         let range = previousSelection.length > 0 && NSIntersectionRange(previousSelection, clicked).length > 0
             ? previousSelection : clicked
-        self.beginInlineEdit(range: range)
+        // Finish NSTextView's native mouse tracking before handing focus to a
+        // field editor. Otherwise the same click can take that focus back.
+        let source = self.string
+        let identity = self.interactionIdentity
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.string == source, self.interactionIdentity == identity else { return }
+            self.beginInlineEdit(range: range)
+        }
     }
 
     override func keyDown(with event: NSEvent) {
@@ -232,6 +243,12 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
         self.addSubview(holder)
         self.window?.makeFirstResponder(field)
         field.selectText(nil)
+        // onBeginEdit can schedule a SwiftUI update in the same event cycle.
+        // Restore focus only for this still-current editor after that update.
+        DispatchQueue.main.async { [weak self, weak field] in
+            guard let self, let field, self.inlineEditor === field else { return }
+            self.window?.makeFirstResponder(field)
+        }
         self.needsDisplay = true
         return true
     }
@@ -295,6 +312,8 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
         // A Save button action may follow the field's end-editing notification.
         DispatchQueue.main.async { [weak self, weak field] in
             guard let self, let field, self.inlineEditor === field else { return }
+            if let responder = self.window?.firstResponder,
+               responder === field || responder === field.currentEditor() { return }
             self.cancelInlineEdit()
         }
     }
