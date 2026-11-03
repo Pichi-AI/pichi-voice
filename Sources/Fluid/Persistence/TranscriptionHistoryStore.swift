@@ -348,6 +348,19 @@ nonisolated enum SourceTranscriptCorrection {
     }
 
     static func apply(original: String, corrected: String, to final: String) -> String {
+        guard original != corrected, final != corrected else { return final }
+        var current = final
+        // Repeated punctuation can give equally short alignments. Settle the
+        // projection before persisting so later loads never shift its result.
+        for _ in 0..<3 {
+            let next = applyOnce(original: original, corrected: corrected, to: current)
+            if next == current || next == corrected { return next }
+            current = next
+        }
+        return corrected
+    }
+
+    private static func applyOnce(original: String, corrected: String, to final: String) -> String {
         guard original != corrected else { return final }
         let before = tokens(original, includingWhitespace: true)
         let after = tokens(corrected, includingWhitespace: true)

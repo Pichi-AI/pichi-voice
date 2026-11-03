@@ -40,7 +40,7 @@ def declaration(text, marker):
 
 for path, markers, name in [
     ('Sources/Fluid/Persistence/TranscriptionHistoryStore.swift',
-     ['nonisolated struct TranscriptionHistoryEntry:'], 'HistoryValues.swift'),
+     ['nonisolated struct TranscriptionHistoryEntry:', 'nonisolated enum SourceTranscriptCorrection {'], 'HistoryValues.swift'),
     ('Sources/Fluid/Persistence/DictationAudioHistoryStore.swift',
      ['nonisolated struct DictationAudioMetadata:'], 'AudioValues.swift'),
     ('Sources/Fluid/UI/TranscriptionHistoryView.swift',

@@ -328,6 +328,13 @@ final class DebugLogger {
             precondition(SourceTranscriptCorrection.apply(original: raw, corrected: corrected, to: result) == result,
                 "Repeated reconciliation cannot duplicate an inserted compound")
         }
+        let repeatedSource = "Проверь Alfa AI, или, например, Beta Voice, или другое, например, Game и Testo."
+        let repeatedCorrected = "Проверь Alpha AI, или, например, Beta Voice, или другое, например, Gamma и Test."
+        let repeatedFormatted = "Проверь Alf I, например, Beta Voice, или другое, например, Gama и testo."
+        let settled = SourceTranscriptCorrection.apply(original: repeatedSource, corrected: repeatedCorrected, to: repeatedFormatted)
+        precondition(settled.contains("Alpha AI") && settled.contains("Gamma") && settled.contains("Test"))
+        precondition(SourceTranscriptCorrection.apply(original: repeatedSource, corrected: repeatedCorrected, to: settled) == settled,
+            "Repeated context and punctuation must settle before a correction is persisted")
         let reverted = TranscriptionHistoryEntry(rawText: "Тут Pech AI.", processedText: "Тут Pichi AI!",
             appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: true,
             originalProcessedText: "Тут Peach I!", correctedRawText: "Тут Pichi AI.").replacingSourceText("Тут Pech AI.")
