@@ -23,7 +23,7 @@ nonisolated enum SensitiveBusinessGroupCatalog {
         .init(
             id: "illicit-remuneration",
             titleKey: "Bribes and illicit remuneration",
-            descriptionKey: "Hide the listed expressions, including quotations and denials. Ambiguous words such as rollback or gratitude need context. A match does not establish misconduct.",
+            descriptionKey: "Clean the listed expressions from text, including quotations and denials. Ambiguous words such as rollback or gratitude need context. A match does not establish misconduct.",
             terms: [
                 "дать на лапу",
                 "давать на лапу",
@@ -57,7 +57,7 @@ nonisolated enum SensitiveBusinessGroupCatalog {
         .init(
             id: "procurement-collusion",
             titleKey: "Procurement collusion",
-            descriptionKey: "Hide expressions about arranged bidding, including prevention and training discussions. Ordinary tenders and technical specifications remain separate.",
+            descriptionKey: "Clean expressions about arranged bidding from text, including prevention and training discussions. Ordinary tenders and technical specifications remain separate.",
             terms: [
                 "тендер для массовки",
                 "участник тендера для массовки",
@@ -91,7 +91,7 @@ nonisolated enum SensitiveBusinessGroupCatalog {
         .init(
             id: "commercial-metrics",
             titleKey: "Commercial metrics and pricing",
-            descriptionKey: "Hide the listed business metrics and pricing expressions, including public examples. This broad group does not determine whether information is confidential.",
+            descriptionKey: "Clean the listed business metrics and pricing expressions from text, including public examples. This broad group does not determine whether information is confidential.",
             terms: [
                 "маржа",
                 "маржинальность",
@@ -127,7 +127,7 @@ nonisolated enum SensitiveBusinessGroupCatalog {
         .init(
             id: "planned-transactions",
             titleKey: "Investments and corporate transactions",
-            descriptionKey: "Hide the listed investment and transaction expressions, including announced deals and educational examples. Confidentiality is a user choice.",
+            descriptionKey: "Clean the listed investment and transaction expressions from text, including announced deals and educational examples. Confidentiality is a user choice.",
             terms: [
                 "поднять раунд инвестиций",
                 "поднимать раунд инвестиций",
@@ -163,7 +163,7 @@ nonisolated enum SensitiveBusinessGroupCatalog {
         .init(
             id: "employee-compensation",
             titleKey: "Employee compensation",
-            descriptionKey: "Hide listed pay and employment-package expressions, including published salary ranges and general policy discussions. Ordinary offers and grades need context.",
+            descriptionKey: "Clean listed pay and employment-package expressions from text, including published salary ranges and general policy discussions. Ordinary offers and grades need context.",
             terms: [
                 "зарплата",
                 "заработная плата",
@@ -198,7 +198,7 @@ nonisolated enum SensitiveBusinessGroupCatalog {
         .init(
             id: "personal-health",
             titleKey: "Health and medical information",
-            descriptionKey: "Hide listed medical expressions, including denials and general medical discussions. This topic setting is separate from identifying a person's name.",
+            descriptionKey: "Clean the listed medical expressions from text, including denials and general medical discussions. This group is separate from identifying a person's name.",
             terms: [
                 "принимать таблетки",
                 "пить таблетки",

@@ -6,7 +6,7 @@ The mobile privacy settings expose dictionary entries and expression groups. A f
 
 - With no selected group and no recognized dictionary seed, semantic detection is inactive.
 - Selecting `illicit-remuneration`, `procurement-collusion` or `commercial-metrics` automatically selects that classifier topic.
-- A complete dictionary entry matching a catalog seed also selects its topic. For example, `взятка`, its recognized Russian forms, and the explicit dictionary seed `откат` select illicit remuneration. Matching respects the entry's existing exact or word-form mode.
+- A complete dictionary entry matching a catalog seed also selects its topic. For example, `взятка`, its recognized Russian forms, and the explicit dictionary seed `откат` select illicit remuneration. The application always uses Russian word forms. Existing stored exact entries retain their IDs and gain word-form behavior at admission; presentation reads do not rewrite private storage. Mutations persist word-form entries.
 - Partial catalog matches and ambiguous standalone words such as `ТЗ`, `компания` or `интерес` do not select a topic. Additional seeds are catalog metadata rather than model switches in meeting orchestration.
 - The other three groups and unknown custom words retain literal and Russian word-form masking. This fixed three-topic model does not learn a new topic from an arbitrary dictionary entry.
 - The enabled data-cleanup function remains the admission boundary. Changing dictionary/group choices applies to new attempts. Admitted snapshots retain their exact model hash, selected topics and fingerprint across later edits or account changes.
@@ -26,3 +26,9 @@ The service uses existing dictionary and profile settings operations. It adds no
 The settings test runs production profile stores, dictionary service, packaged model loader and classifier. It covers automatic group and declined-word selection, ambiguity and substring controls, immutable fingerprints, unsupported groups, missing/corrupt resources, stale profile mutations and group limits. Simulator UI checks verify dictionary/group controls in Russian and English, light and dark appearances, and absence of model import/navigation controls. Source, build, screenshot and upload receipts are kept in task-owned local release evidence.
 
 The [v2 evaluation](conversational-classifier-v2-evaluation.md) remains the independent quality/resource comparison for these exact weights. Its Mac measurements are not iPad memory, speed or battery measurements. Release availability and physical recording acceptance must be reported separately.
+
+## Inline dictionary editing
+
+As of 3 November 2026, the Add row becomes a focused text field in the same Form, presenting the keyboard without an extra tap. Return or the checkmark saves; the cancel action discards the draft. Existing entries edit in place and support native swipe deletion. There is no matching-mode picker or mode caption. The enclosing Form clears the draft synchronously at private-profile concealment and when leaving the page; each draft owns its bound settings operation. Profile source revision resets the dictionary view identity.
+
+Data-cleanup controls and explanations use the cleanup terminology in English and Russian. Visibility controls for accounts, windows and other unrelated UI retain their own meaning. Low-level exact comparison remains available to reproduce the historical evaluation; application settings expose only word-form behavior.

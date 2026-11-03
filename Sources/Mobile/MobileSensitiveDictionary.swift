@@ -1,16 +1,15 @@
 import SwiftUI
 
-/// A presentation request belongs to the stable Form, because Section distributes
-/// modifiers across its rows and cannot own one shared editor presentation.
+/// Each inline draft has its own focus and profile-bound mutation owner.
 struct MobileSensitiveDictionaryEdit: Identifiable {
     let id = UUID()
     let entry: SensitiveDataDictionaryEntry?
 }
 
-/// Entries remain in the existing local Settings namespace. Publication uses the shared
-/// privacy adapter, never a view-only replacement of transcript text.
+/// The enclosing privacy Form owns the draft and clears it at profile concealment.
 struct MobileSensitiveDictionarySettings: View {
-    let edit: (SensitiveDataDictionaryEntry?) -> Void
+    @Binding var edit: MobileSensitiveDictionaryEdit?
+    let revealDraft: (UUID) -> Void
     @ObservedObject private var settings = SettingsStore.shared
     @StateObject private var mutationSettings = SettingsStore.shared.boundToCurrentPrivateProfile()
     @Environment(\.theme) private var theme
@@ -33,116 +32,127 @@ struct MobileSensitiveDictionarySettings: View {
         } header: {
             Text(PichiLocalization.text("Expression groups"))
         } footer: {
-            MobileSettingsFooter(PichiLocalization.text("Choose the groups to hide. Supported groups also hide related sentences automatically on this device. Review the cleaned text before sharing."))
+            MobileSettingsFooter(PichiLocalization.text("Choose expression groups for text cleanup. Supported topics also clean related sentences on this device. Review before sharing."))
         }
-
     }
 
     private var dictionarySection: some View {
         Section {
             ForEach(settings.sensitiveDataDictionaryEntries) { entry in
-                Button { edit(entry) } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+                if let draft = edit, draft.entry?.id == entry.id {
+                    editor(draft)
+                } else {
+                    Button { error = nil; edit = .init(entry: entry) } label: {
+                        HStack {
                             Text(entry.phrase).foregroundStyle(theme.palette.primaryText)
-                            Text(PichiLocalization.text(entry.matchMode == .wordForms ? "Russian word forms" : "Exact wording"))
-                                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                            Spacer()
+                            Image(systemName: "pencil").foregroundStyle(theme.palette.secondaryText)
+                        }.frame(minHeight: 44).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityIdentifier("privacy.dictionary.entry.\(entry.id)")
+                        .swipeActions {
+                            Button(PichiLocalization.text("Delete"), role: .destructive) {
+                                do { try mutationSettings.removeSensitiveDataDictionaryPhrase(id: entry.id); settings.objectWillChange.send() }
+                                catch { self.error = PichiLocalization.text("Could not update the private dictionary.") }
+                            }.accessibilityIdentifier("privacy.dictionary.delete")
                         }
-                        Spacer()
-                        Image(systemName: "pencil").foregroundStyle(theme.palette.secondaryText)
-                    }.contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityIdentifier("privacy.dictionary.entry.\(entry.id)")
-                    .swipeActions {
-                        Button(PichiLocalization.text("Delete"), role: .destructive) {
-                            do { try mutationSettings.removeSensitiveDataDictionaryPhrase(id: entry.id); settings.objectWillChange.send() }
-                            catch { self.error = PichiLocalization.text("Could not update the private dictionary.") }
-                        }
-                    }
+                }
             }
-            Button { edit(nil) } label: {
-                Label(PichiLocalization.text("Add word or phrase"), systemImage: "plus")
-                    .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                    .foregroundStyle(theme.palette.accentText)
-            }.buttonStyle(.plain).accessibilityIdentifier("privacy.dictionary.add")
-            if let error { Text(error).font(theme.typography.caption).foregroundStyle(theme.palette.warning) }
+            if let draft = edit, draft.entry == nil {
+                editor(draft)
+            } else {
+                Button { error = nil; edit = .init(entry: nil) } label: {
+                    Label(PichiLocalization.text("Add word or phrase"), systemImage: "plus")
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                        .foregroundStyle(theme.palette.accentText)
+                }.buttonStyle(.plain).accessibilityIdentifier("privacy.dictionary.add")
+            }
+            if let error { Text(error).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
+                .accessibilityIdentifier("privacy.dictionary.error") }
         } header: {
-            Text(PichiLocalization.text("Words and phrases to hide"))
+            Text(PichiLocalization.text("Words and phrases for cleanup"))
         } footer: {
-            MobileSettingsFooter(PichiLocalization.text("Add words or phrases to hide when data cleanup is enabled. Recognized topic words also hide related sentences automatically. Everything runs on this device and applies to new recordings."))
+            MobileSettingsFooter(PichiLocalization.text("Words and their Russian forms are cleaned from new transcripts when data cleanup is enabled. Recognized topics also clean related sentences. Everything runs on this device."))
         }
+    }
+
+    private func editor(_ draft: MobileSensitiveDictionaryEdit) -> some View {
+        MobileSensitiveDictionaryInlineEditor(draft: draft, saved: {
+            settings.objectWillChange.send()
+            edit = nil
+        }, cancel: { edit = nil }, reveal: { revealDraft(draft.id) })
+            .id(draft.id)
     }
 }
 
-struct MobileSensitiveDictionaryEditor: View {
-    let entry: SensitiveDataDictionaryEntry?
-    @ObservedObject private var settings = SettingsStore.shared
-    @StateObject private var mutationSettings = SettingsStore.shared.boundToCurrentPrivateProfile()
+/// A local row reuses existing dictionary operations; keyboard focus belongs to this draft.
+private struct MobileSensitiveDictionaryInlineEditor: View {
+    let draft: MobileSensitiveDictionaryEdit
+    let saved: () -> Void
+    let cancel: () -> Void
+    let reveal: () -> Void
+    @StateObject private var settings = SettingsStore.shared.boundToCurrentPrivateProfile()
     @Environment(\.theme) private var theme
-    @Environment(\.dismiss) private var dismiss
     @State private var phrase: String
-    @State private var matchMode: SensitiveDictionaryMatchMode
     @State private var error: String?
+    @FocusState private var focused: Bool
 
-    init(entry: SensitiveDataDictionaryEntry?) {
-        self.entry = entry
-        _phrase = State(initialValue: entry?.phrase ?? "")
-        _matchMode = State(initialValue: entry?.matchMode ?? .wordForms)
+    init(draft: MobileSensitiveDictionaryEdit, saved: @escaping () -> Void, cancel: @escaping () -> Void, reveal: @escaping () -> Void) {
+        self.draft = draft; self.saved = saved; self.cancel = cancel; self.reveal = reveal
+        _phrase = State(initialValue: draft.entry?.phrase ?? "")
     }
 
+    private var canSave: Bool { !phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
     var body: some View {
-        NavigationStack {
-            Form {
-                TextField(PichiLocalization.text("Word or phrase"), text: $phrase, axis: .vertical)
+        VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+            if let error { Text(error).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
+                .accessibilityIdentifier("privacy.dictionary.error") }
+            HStack(spacing: theme.metrics.spacing.xs) {
+                TextField(PichiLocalization.text("Word or phrase"), text: $phrase)
+                    .font(theme.typography.body)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .focused($focused).submitLabel(.done)
+                    .onSubmit { save() }
+                    .frame(minHeight: 44)
                     .accessibilityIdentifier("privacy.dictionary.phrase")
-                Picker(PichiLocalization.text("Matching"), selection: $matchMode) {
-                    Text(PichiLocalization.text("Russian word forms")).tag(SensitiveDictionaryMatchMode.wordForms)
-                    Text(PichiLocalization.text("Exact wording")).tag(SensitiveDictionaryMatchMode.exact)
-                }.accessibilityIdentifier("privacy.dictionary.matchMode")
-                Text(PichiLocalization.text(matchMode == .wordForms
-                    ? "Recognized Russian words include case and number forms. Unknown words and other languages use exact wording; add any needed variants. Parts of other words are kept."
-                    : "Whole words and phrases are matched without case sensitivity. Parts of other words are kept."))
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                if let error { Text(error).foregroundStyle(theme.palette.warning) }
-                if let entry {
-                    Button(role: .destructive) {
-                        do { try mutationSettings.removeSensitiveDataDictionaryPhrase(id: entry.id); settings.objectWillChange.send(); dismiss() }
-                        catch { self.error = PichiLocalization.text("Could not update the private dictionary.") }
-                    } label: {
-                        Text(PichiLocalization.text("Delete"))
-                            .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityIdentifier("privacy.dictionary.delete")
-                }
-            }.navigationTitle(PichiLocalization.text(entry == nil ? "Add word or phrase" : "Edit word or phrase"))
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button { dismiss() } label: {
-                            Text(PichiLocalization.text("Cancel")).font(theme.typography.body)
-                                .fixedSize(horizontal: true, vertical: false)
-                        }.buttonStyle(.plain).accessibilityIdentifier("privacy.dictionary.cancel")
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button { save() } label: {
-                            Text(PichiLocalization.text("Save")).font(theme.typography.body)
-                                .fixedSize(horizontal: true, vertical: false)
-                        }.buttonStyle(.plain)
-                            .disabled(phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                            .accessibilityIdentifier("privacy.dictionary.save")
-                    }
-                }
-        }.presentationDetents([.medium, .large])
+                Button { save() } label: {
+                    Image(systemName: "checkmark.circle.fill").imageScale(.large)
+                        .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                }.buttonStyle(.plain).foregroundStyle(canSave ? theme.palette.accentText : theme.palette.secondaryText)
+                    .disabled(!canSave).accessibilityLabel(PichiLocalization.text("Save"))
+                    .accessibilityIdentifier("privacy.dictionary.save")
+                Button { focused = false; cancel() } label: {
+                    Image(systemName: "xmark.circle").imageScale(.large)
+                        .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                }.buttonStyle(.plain).foregroundStyle(theme.palette.secondaryText)
+                    .accessibilityLabel(PichiLocalization.text("Cancel"))
+                    .accessibilityIdentifier("privacy.dictionary.cancel")
+            }
+        }.accessibilityElement(children: .contain)
+            .onAppear { focused = true }
+            .onDisappear { focused = false }
+            .task(id: error) {
+                guard error != nil else { return }
+                // Reveal the expanded row after validation updates its layout.
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                reveal()
+            }
     }
 
     private func save() {
+        guard canSave else { return }
         do {
-            if let entry { try mutationSettings.updateSensitiveDataDictionaryPhrase(id: entry.id, phrase: phrase, matchMode: matchMode) }
-            else { try mutationSettings.addSensitiveDataDictionaryPhrase(phrase, matchMode: matchMode) }
-            settings.objectWillChange.send()
-            dismiss()
+            if let entry = draft.entry { try settings.updateSensitiveDataDictionaryPhrase(id: entry.id, phrase: phrase) }
+            else { try settings.addSensitiveDataDictionaryPhrase(phrase) }
+            focused = false
+            saved()
+        } catch SensitiveDataDictionaryError.duplicatePhrase {
+            self.error = PichiLocalization.text("Already in Dictionary")
+            focused = true
         } catch {
-            // No private phrase is copied into errors or logs.
             self.error = PichiLocalization.text("Use a unique phrase of up to 16 words and 256 characters. The dictionary can contain up to 128 entries.")
+            focused = true
         }
     }
 }
@@ -159,7 +169,7 @@ private struct MobileSensitiveBusinessGroupSettings: View {
     var body: some View {
         Form {
             Section {
-                Toggle(PichiLocalization.text("Hide this group"), isOn: Binding(
+                Toggle(PichiLocalization.text("Clean this group's expressions"), isOn: Binding(
                     get: { settings.sensitiveBusinessGroupIDs.contains(group.id) },
                     set: { enabled in
                         do { try mutationSettings.setSensitiveBusinessGroup(id: group.id, enabled: enabled); settings.objectWillChange.send(); self.error = nil }
@@ -179,16 +189,16 @@ private struct MobileSensitiveBusinessGroupSettings: View {
                     Text(term).textSelection(.enabled)
                 }
             } header: {
-                Text(PichiLocalization.text("Expressions to hide"))
+                Text(PichiLocalization.text("Expressions for cleanup"))
             } footer: {
-                MobileSettingsFooter(PichiLocalization.text("The listed expressions also match supported Russian word forms. They are hidden in quotations, denials and training examples too."))
+                MobileSettingsFooter(PichiLocalization.text("The listed expressions and their Russian forms are cleaned from text, including quotations, denials and training examples."))
             }
             Section {
                 ForEach(group.contextualExamples, id: \.self) { example in Text(example).textSelection(.enabled) }
             } header: {
                 Text(PichiLocalization.text("Examples that need context"))
             } footer: {
-                MobileSettingsFooter(PichiLocalization.text("These examples explain the context. Supported groups use built-in topic detection to hide related sentences automatically; other groups match the listed expressions and their word forms."))
+                MobileSettingsFooter(PichiLocalization.text("These examples explain the context. Supported groups clean related sentences automatically. Other groups clean the listed expressions and their word forms."))
             }
         }.mobileSettingsPage()
             .navigationTitle(PichiLocalization.text(group.titleKey))
@@ -223,7 +233,7 @@ private struct MobileSensitiveBusinessGroupEditor: View {
                         .font(theme.typography.body)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .frame(minHeight: 240)
-                        .accessibilityLabel(PichiLocalization.text("Expressions to hide"))
+                        .accessibilityLabel(PichiLocalization.text("Expressions for cleanup"))
                         .accessibilityIdentifier("privacy.groups.\(group.id).expressions")
                 } header: {
                     Text(PichiLocalization.text(group.titleKey))
