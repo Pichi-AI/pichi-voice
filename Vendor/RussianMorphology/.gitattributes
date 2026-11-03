@@ -1,0 +1,4 @@
+Sources/CRussianMorphology/Data/*.bin binary
+# Preserve pinned upstream formatting in the vendored runtime.
+Sources/CRussianMorphology/libmorph/** -whitespace
+Sources/CRussianMorphology/moonycode/** -whitespace

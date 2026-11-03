@@ -526,7 +526,7 @@ final class MeetingLivePrivacyPublication {
                     let selected: Page?
                     do {
                         guard let input = item.latestSnapshot?() ?? (item.latestSnapshot == nil ? item.snapshot : nil) else { return }
-                        selected = try await self.page(from: input)
+                        selected = try await self.page(from: input, using: item.redactor)
                     }
                     guard let page = selected else { current = nil; continue }
                     let hasStablePartial = try page.snapshot.partials.values.contains { partial in
@@ -745,7 +745,7 @@ final class MeetingLivePrivacyPublication {
         self.sourceOrder = source.order
     }
 
-    private func page(from input: MeetingLiveTranscriptSnapshot) async throws -> Page? {
+    private func page(from input: MeetingLiveTranscriptSnapshot, using redactor: any TranscriptTextRedacting) async throws -> Page? {
         let source = try await Self.source(from: input, maskProofs: self.maskProofs)
         self.reconcile(source)
         let first = source.order.firstIndex { !self.visited.contains($0) }
@@ -753,10 +753,50 @@ final class MeetingLivePrivacyPublication {
         // The carried right edge also needs its own left context. Always reserve
         // that context inside the same 100-row budget instead of approving its first
         // rows with a newly truncated preceding cue.
-        let start = first.map { max(0, $0 - Self.contextRows) }
+        var start = first.map { max(0, $0 - Self.contextRows) }
             ?? max(0, input.utterances.count - Self.pageRows)
+        var end = min(input.utterances.count, start + Self.pageRows)
+        if try redactor.durablePublicationLimit(in: "") != nil {
+            func sealed(_ row: MeetingLiveUtterance) throws -> Bool {
+                let text = row.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return try redactor.durablePublicationLimit(in: text) == text.utf16.count
+            }
+            // A new page cannot interpret a same-speaker suffix without the
+            // beginning of its required unit. Backtrack inside the existing cap.
+            var changed = true
+            while changed {
+                changed = false
+                for speaker: MeetingLiveSpeaker in [.you, .them] {
+                    if let previous = input.utterances[..<start].lastIndex(where: { $0.speaker == speaker }),
+                       try !sealed(input.utterances[previous]) {
+                        start = previous; changed = true
+                    }
+                }
+                guard (first ?? start) - start < Self.pageRows else {
+                    throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+                }
+            }
+            end = min(input.utterances.count, start + Self.pageRows)
+            if end < input.utterances.count {
+                // A truncated page ends only after complete units for both
+                // speakers. Otherwise a later cue could change a published prefix.
+                while end > start {
+                    var safe = true
+                    for speaker: MeetingLiveSpeaker in [.you, .them] {
+                        if let last = input.utterances[start..<end].lastIndex(where: { $0.speaker == speaker }),
+                           try !sealed(input.utterances[last]) {
+                            end = last; safe = false; break
+                        }
+                    }
+                    if safe { break }
+                }
+                let firstFresh = source.order.firstIndex {
+                    !self.visited.contains($0) && !self.contextPending.contains($0)
+                } ?? (first ?? start)
+                guard end > firstFresh else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+            }
+        }
         let contextOnlyIDs = Set(source.order[start..<(first ?? start)])
-        let end = min(input.utterances.count, start + Self.pageRows)
         var snapshot = input
         snapshot.utterances = Array(input.utterances[start..<end])
         let isTail = end == input.utterances.count
@@ -1015,6 +1055,30 @@ actor MeetingTranscriptPrivacyContext {
                 throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
             }
             if tokens >= Self.minimumPendingTokens { break }
+        }
+        // A contextual detector may need a complete unit, even when its beginning
+        // is older than the ordinary lexical tail. Snap durable publication back
+        // to its approved boundary, retaining original segment identities.
+        let firstHeld = combinedOrdered.count - heldCount
+        let candidatePrefix = combinedOrdered.prefix(firstHeld).map(\.text).joined(separator: " ")
+        if let limit = try redactor.durablePublicationLimit(in: candidatePrefix) {
+            guard limit >= 0, limit <= candidatePrefix.utf16.count,
+                  Range(NSRange(location: 0, length: limit), in: candidatePrefix) != nil else {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+            }
+            var offset = 0
+            var publicationCount = 0
+            for segment in combinedOrdered.prefix(firstHeld) {
+                let end = offset + segment.text.utf16.count
+                if end <= limit { publicationCount += 1 }
+                offset = end + 1
+            }
+            heldCount = combinedOrdered.count - publicationCount
+            let held = combinedOrdered.suffix(heldCount)
+            guard heldCount <= Self.maximumPendingSegments,
+                  held.reduce(0, { $0 + $1.text.utf16.count + 1 }) <= Self.maximumPendingUTF16 else {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+            }
         }
         let tail = Array(combinedOrdered.suffix(heldCount))
         let heldIDs = Set(tail.map(\.id))

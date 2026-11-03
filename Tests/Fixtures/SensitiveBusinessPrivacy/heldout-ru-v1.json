@@ -1,0 +1,1778 @@
+{
+  "schemaVersion": 1,
+  "id": "sensitive-business-heldout-ru-v1",
+  "createdDate": "2026-10-30",
+  "source": "Original synthetic examples written independently of the classifier training agent; no private conversations or recordings.",
+  "split": "heldout",
+  "policy": "topic-mention-v1",
+  "policyDefinition": "When the named topic is enabled, hide the complete sentence that discusses it, including denial, quote, education, public information and legitimate discussion. A topic match never establishes guilt or confidentiality. Preserve unrelated sentences and homonymous non-topic uses. Literal/morphological dictionary modes intentionally have different scope and may hide a homonym when the user explicitly entered that word.",
+  "evaluationNotes": [
+    "Do not tune model weights, thresholds or catalog rules on this set and then report its results as unseen.",
+    "Gold labels are authored hypotheses, not human-adjudicated truth; blinded judges may flag disputed cases.",
+    "Only compare classifier performance on topics actually supported by its frozen artifact; report unsupported topics separately.",
+    "Keep lexical-stage token masking metrics separate from topic-stage sentence masking metrics.",
+    "ASR examples are synthetic text perturbations; no microphone or acoustic inference was measured."
+  ],
+  "cases": [
+    {
+      "id": "illicit-remuneration-p01",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "О взятках на встрече не говорили.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "О взятках на встрече не говорили."
+      ],
+      "tags": [
+        "negation",
+        "inflection"
+      ],
+      "rationale": "Отрицание всё равно упоминает выбранную тему."
+    },
+    {
+      "id": "illicit-remuneration-p02",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "В учебном кейсе разобрали коммерческий подкуп.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "В учебном кейсе разобрали коммерческий подкуп."
+      ],
+      "tags": [
+        "training",
+        "literal"
+      ],
+      "rationale": "Учебное обсуждение не исключается из тематической защиты."
+    },
+    {
+      "id": "illicit-remuneration-p03",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "Взяток не было, проверка это подтвердила.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Взяток не было, проверка это подтвердила."
+      ],
+      "tags": [
+        "negation",
+        "irregular-inflection"
+      ],
+      "rationale": "Форма родительного множественного числа относится к теме."
+    },
+    {
+      "id": "illicit-remuneration-p04",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "В документе это названо взяткою.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "В документе это названо взяткою."
+      ],
+      "tags": [
+        "rare-inflection"
+      ],
+      "rationale": "Редкая словоформа остаётся формой ключевого слова."
+    },
+    {
+      "id": "illicit-remuneration-p05",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "Ему лично причитается пять процентов за подпись, через бухгалтерию это не проводим.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Ему лично причитается пять процентов за подпись, через бухгалтерию это не проводим."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Личная скрытая плата за решение выражена без слов из каталога."
+    },
+    {
+      "id": "illicit-remuneration-p06",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "Не фирме, а закупщику на личную карту переведут за выбор нашего предложения.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Не фирме, а закупщику на личную карту переведут за выбор нашего предложения."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Обсуждается личная оплата влияющему на выбор лицу."
+    },
+    {
+      "id": "illicit-remuneration-p07",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "В переписке написали: «Занести начальнику конверт за разрешение».",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "В переписке написали: «Занести начальнику конверт за разрешение»."
+      ],
+      "tags": [
+        "quote",
+        "euphemism",
+        "no-catalog-term"
+      ],
+      "rationale": "Цитата содержит предложение личного платежа за разрешение."
+    },
+    {
+      "id": "illicit-remuneration-p08",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "Это незаконное вознаграждение мы отклонили.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Это незаконное вознаграждение мы отклонили."
+      ],
+      "tags": [
+        "negation",
+        "inflection"
+      ],
+      "rationale": "Отказ не устраняет упоминание темы."
+    },
+    {
+      "id": "illicit-remuneration-p09",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "нужно отблагодарить согласующего деньгами отдельно от договора за нужную подпись",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "нужно отблагодарить согласующего деньгами отдельно от договора за нужную подпись"
+      ],
+      "tags": [
+        "asr-no-punctuation",
+        "euphemism",
+        "no-catalog-term"
+      ],
+      "rationale": "Связь личной выплаты и нужного решения выражена явно."
+    },
+    {
+      "id": "illicit-remuneration-p10",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "Проверь микрофон. В презентации обсуждается illegal kickback поставщику решения.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "В презентации обсуждается illegal kickback поставщику решения."
+      ],
+      "tags": [
+        "code-switch",
+        "mixed-sentences"
+      ],
+      "rationale": "Только второе предложение относится к выбранной теме."
+    },
+    {
+      "id": "illicit-remuneration-n01",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "После сбоя сделали откат обновления и снова запустили сервис.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy",
+        "technical-rollback"
+      ],
+      "rationale": "Техническое восстановление версии не является темой выплат."
+    },
+    {
+      "id": "illicit-remuneration-n02",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "Водитель заметил занос машины на мокром повороте.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Занос относится к движению автомобиля."
+    },
+    {
+      "id": "illicit-remuneration-n03",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "Передай команде благодарность за быстрый ответ.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "ambiguous-courtesy"
+      ],
+      "rationale": "Обычная благодарность без признаков личного платежа."
+    },
+    {
+      "id": "illicit-remuneration-n04",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "Агентское вознаграждение перечислим по опубликованному тарифу и подписанному договору.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "legitimate-business"
+      ],
+      "rationale": "Обычный договор агентирования не выражает подкуп."
+    },
+    {
+      "id": "illicit-remuneration-n05",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "Менеджеру начислили прозрачную комиссию за продажи согласно трудовому договору.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "legitimate-business"
+      ],
+      "rationale": "Официальная комиссия сотрудника не является личной платой за чужое решение."
+    },
+    {
+      "id": "illicit-remuneration-n06",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "Процент по депозиту изменился после продления.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Процент является банковской ставкой."
+    },
+    {
+      "id": "illicit-remuneration-n07",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "В лапу робота встроен датчик давления.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "word-boundary"
+      ],
+      "rationale": "Конструкция не содержит выражения о передаче денег."
+    },
+    {
+      "id": "illicit-remuneration-n08",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "Занеси документы в канцелярию и реши вопрос с копиями.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "ambiguous-phrase"
+      ],
+      "rationale": "Решение бытовой задачи не подтверждает скрытую плату."
+    },
+    {
+      "id": "illicit-remuneration-n09",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "Конверты для приглашений лежат рядом с принтером.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Обычные почтовые материалы."
+    },
+    {
+      "id": "illicit-remuneration-n10",
+      "enabledGroupIDs": [
+        "illicit-remuneration"
+      ],
+      "text": "В карточной партии он взял последнюю взятку.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy",
+        "literal-topic-conflict"
+      ],
+      "rationale": "Карточное значение слова. Тематический режим должен сохранить, явное пользовательское слово может скрыть."
+    },
+    {
+      "id": "procurement-collusion-p01",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Юрист объяснил, почему сговор на торгах недопустим.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Юрист объяснил, почему сговор на торгах недопустим."
+      ],
+      "tags": [
+        "training",
+        "literal"
+      ],
+      "rationale": "Обсуждение предотвращения выбранной темы тоже защищается."
+    },
+    {
+      "id": "procurement-collusion-p02",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Обвинения в картельном сговоре не подтвердились.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Обвинения в картельном сговоре не подтвердились."
+      ],
+      "tags": [
+        "negation",
+        "inflection"
+      ],
+      "rationale": "Отрицание обвинений не меняет тематическую принадлежность."
+    },
+    {
+      "id": "procurement-collusion-p03",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Эта прикрывающая заявка создаёт видимость конкуренции.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Эта прикрывающая заявка создаёт видимость конкуренции."
+      ],
+      "tags": [
+        "literal"
+      ],
+      "rationale": "Прямое обсуждение согласованного формального участия."
+    },
+    {
+      "id": "procurement-collusion-p04",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Они выставят цену выше нашей, чтобы мы победили, а в следующий раз уступим им.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Они выставят цену выше нашей, чтобы мы победили, а в следующий раз уступим им."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Заранее согласованная ротация победителей выражена без терминов каталога."
+    },
+    {
+      "id": "procurement-collusion-p05",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Две компании заранее решили не снижаться на одном аукционе.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Две компании заранее решили не снижаться на одном аукционе."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Координация конкурентов по отказу от конкуренции."
+    },
+    {
+      "id": "procurement-collusion-p06",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "В требованиях оставили уникальный параметр только под заранее выбранного поставщика.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "В требованиях оставили уникальный параметр только под заранее выбранного поставщика."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Обсуждается намеренная подгонка закупки под выбранного участника."
+    },
+    {
+      "id": "procurement-collusion-p07",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Записали в протоколе: «Пусть вторая фирма придёт для массовки и не выигрывает».",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Записали в протоколе: «Пусть вторая фирма придёт для массовки и не выигрывает»."
+      ],
+      "tags": [
+        "quote",
+        "euphemism",
+        "no-catalog-term"
+      ],
+      "rationale": "Цитата описывает формального участника без конкуренции."
+    },
+    {
+      "id": "procurement-collusion-p08",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "The compliance team нашла признаки bid rotation.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "The compliance team нашла признаки bid rotation."
+      ],
+      "tags": [
+        "code-switch",
+        "training"
+      ],
+      "rationale": "Смешанная речь прямо называет тему."
+    },
+    {
+      "id": "procurement-collusion-p09",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "первый лот вам второй нам конкурировать по цене не будем так заранее договорились",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "первый лот вам второй нам конкурировать по цене не будем так заранее договорились"
+      ],
+      "tags": [
+        "asr-no-punctuation",
+        "no-catalog-term"
+      ],
+      "rationale": "Явно согласованный раздел лотов между конкурентами."
+    },
+    {
+      "id": "procurement-collusion-p10",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Связь восстановлена. На обучении обсуждаем договорной тендер.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "На обучении обсуждаем договорной тендер."
+      ],
+      "tags": [
+        "mixed-sentences",
+        "training"
+      ],
+      "rationale": "Только второе предложение о выбранной теме."
+    },
+    {
+      "id": "procurement-collusion-n01",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Технический участник вебинара помогает настроить звук.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Участник технической поддержки не относится к торгам."
+    },
+    {
+      "id": "procurement-collusion-n02",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Поставщик обновил карманный справочник монтажника.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "word-boundary"
+      ],
+      "rationale": "Карманный относится к справочнику, а не зависимости поставщика."
+    },
+    {
+      "id": "procurement-collusion-n03",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Заточи карандаш перед тем, как чертить ТЗ.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Буквальное затачивание карандаша."
+    },
+    {
+      "id": "procurement-collusion-n04",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "На тендер поступили три независимые заявки с разными ценами.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "legitimate-procurement"
+      ],
+      "rationale": "Обычная конкуренция без согласованных действий."
+    },
+    {
+      "id": "procurement-collusion-n05",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Каждый поставщик самостоятельно определяет цену.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "legitimate-procurement"
+      ],
+      "rationale": "Подчёркивается независимость ценообразования."
+    },
+    {
+      "id": "procurement-collusion-n06",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Мы сняли заявку, потому что не успеваем доставить товар.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "benign-withdrawal"
+      ],
+      "rationale": "Односторонний отказ по срокам без договорённости с конкурентом."
+    },
+    {
+      "id": "procurement-collusion-n07",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Заказчик публикует одинаковые технические требования для всех.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "legitimate-procurement"
+      ],
+      "rationale": "Общие открытые требования не выражают сговор."
+    },
+    {
+      "id": "procurement-collusion-n08",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Заявку на отпуск подставили вместо командировочной по ошибке.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy",
+        "asr-like"
+      ],
+      "rationale": "Неудачная фраза про кадровые документы, без закупки."
+    },
+    {
+      "id": "procurement-collusion-n09",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "Спикеры выступают по очереди, первый сегодня, второй завтра.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "rotation-lookalike"
+      ],
+      "rationale": "Очередность выступлений не является ротацией победителей."
+    },
+    {
+      "id": "procurement-collusion-n10",
+      "enabledGroupIDs": [
+        "procurement-collusion"
+      ],
+      "text": "В cover letter опишите опыт работы с системой bidding.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "code-switch",
+        "token-separation"
+      ],
+      "rationale": "Раздельные слова не образуют понятия cover bidding."
+    },
+    {
+      "id": "commercial-metrics-p01",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Наш CAC вырос, а LTV остался прежним.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Наш CAC вырос, а LTV остался прежним."
+      ],
+      "tags": [
+        "abbreviation",
+        "code-switch"
+      ],
+      "rationale": "Явное обсуждение стоимости привлечения и ценности клиента."
+    },
+    {
+      "id": "commercial-metrics-p02",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Валовую маржу в этом квартале не раскрываем.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Валовую маржу в этом квартале не раскрываем."
+      ],
+      "tags": [
+        "negation",
+        "inflection"
+      ],
+      "rationale": "Неразглашение метрики всё равно является её обсуждением."
+    },
+    {
+      "id": "commercial-metrics-p03",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Это открытый урок по юнит-экономике.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Это открытый урок по юнит-экономике."
+      ],
+      "tags": [
+        "training",
+        "inflection"
+      ],
+      "rationale": "Выбранная широкая тема включает учебные материалы."
+    },
+    {
+      "id": "commercial-metrics-p04",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "После рекламы и доставки с каждой продажи остаётся четыреста рублей.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "После рекламы и доставки с каждой продажи остаётся четыреста рублей."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Маржинальный доход выражен без названия показателя."
+    },
+    {
+      "id": "commercial-metrics-p05",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Если новые деньги не придут, текущего остатка хватит на семь месяцев работы.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Если новые деньги не придут, текущего остатка хватит на семь месяцев работы."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Финансовый горизонт компании выражен без термина runway."
+    },
+    {
+      "id": "commercial-metrics-p06",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Покупателям этого сегмента разрешаем платить на пятнадцать процентов меньше прайса.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Покупателям этого сегмента разрешаем платить на пятнадцать процентов меньше прайса."
+      ],
+      "tags": [
+        "paraphrase",
+        "pricing",
+        "no-catalog-term"
+      ],
+      "rationale": "Обсуждается сегментная ценовая уступка."
+    },
+    {
+      "id": "commercial-metrics-p07",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "В отчёте сказано: «Себестоимость выросла вдвое».",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "В отчёте сказано: «Себестоимость выросла вдвое»."
+      ],
+      "tags": [
+        "quote",
+        "literal"
+      ],
+      "rationale": "Цитата содержит выбранный показатель."
+    },
+    {
+      "id": "commercial-metrics-p08",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "наш burn rate сейчас такой что надо урезать расходы",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "наш burn rate сейчас такой что надо урезать расходы"
+      ],
+      "tags": [
+        "asr-no-punctuation",
+        "code-switch"
+      ],
+      "rationale": "Смешанное название финансового показателя."
+    },
+    {
+      "id": "commercial-metrics-p09",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Никакого кассового разрыва у бизнеса нет.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Никакого кассового разрыва у бизнеса нет."
+      ],
+      "tags": [
+        "negation",
+        "inflection"
+      ],
+      "rationale": "Отрицание не исключает финансовую тему."
+    },
+    {
+      "id": "commercial-metrics-p10",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Доброе утро. Финансовая модель пока рассчитана на три года.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Финансовая модель пока рассчитана на три года."
+      ],
+      "tags": [
+        "mixed-sentences",
+        "literal"
+      ],
+      "rationale": "Только второе предложение о финансовом моделировании."
+    },
+    {
+      "id": "commercial-metrics-n01",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Самолёт вырулил на runway и приготовился к взлёту.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy",
+        "code-switch"
+      ],
+      "rationale": "Runway является взлётной полосой."
+    },
+    {
+      "id": "commercial-metrics-n02",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Пайплайн сборки запускает тесты после каждого коммита.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy",
+        "technical"
+      ],
+      "rationale": "Программная сборка не является воронкой продаж."
+    },
+    {
+      "id": "commercial-metrics-n03",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Через воронку налили воду в бутылку.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Бытовое значение воронки."
+    },
+    {
+      "id": "commercial-metrics-n04",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Модель самолёта поставили на полку.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Модель является физическим макетом."
+    },
+    {
+      "id": "commercial-metrics-n05",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Сделайте скидку на мой акцент, я ещё учу язык.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "idiom"
+      ],
+      "rationale": "Идиома не выражает цену товара."
+    },
+    {
+      "id": "commercial-metrics-n06",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "В документе CACertificate обозначает сертификат центра сертификации.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "word-boundary",
+        "technical"
+      ],
+      "rationale": "CAC внутри идентификатора не является бизнес-метрикой."
+    },
+    {
+      "id": "commercial-metrics-n07",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Проверь latvian.js и протокол LTVCodec в тестовом проекте.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "word-boundary",
+        "technical"
+      ],
+      "rationale": "LTV внутри имени кодека не является показателем."
+    },
+    {
+      "id": "commercial-metrics-n08",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Процент заряда батареи упал до десяти.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Заряд не относится к коммерческим показателям."
+    },
+    {
+      "id": "commercial-metrics-n09",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "На кассе закончилась бумага, замените рулон.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "lexical-lookalike"
+      ],
+      "rationale": "Кассовое оборудование без финансовых метрик."
+    },
+    {
+      "id": "commercial-metrics-n10",
+      "enabledGroupIDs": [
+        "commercial-metrics"
+      ],
+      "text": "Обсудим расписание демонстраций и порядок вопросов.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "neutral"
+      ],
+      "rationale": "Организационный разговор без выбранной темы."
+    },
+    {
+      "id": "planned-transactions-p01",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Term sheet подписывать пока рано.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Term sheet подписывать пока рано."
+      ],
+      "tags": [
+        "negation",
+        "code-switch"
+      ],
+      "rationale": "Обсуждается документ инвестиционной сделки."
+    },
+    {
+      "id": "planned-transactions-p02",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "На лекции объясняют разницу между pre-money и post-money.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "На лекции объясняют разницу между pre-money и post-money."
+      ],
+      "tags": [
+        "training",
+        "code-switch"
+      ],
+      "rationale": "Широкая выбранная тема включает образовательные примеры."
+    },
+    {
+      "id": "planned-transactions-p03",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Продажу доли основатель отрицает.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Продажу доли основатель отрицает."
+      ],
+      "tags": [
+        "negation",
+        "inflection"
+      ],
+      "rationale": "Отрицание не устраняет упоминание корпоративной сделки."
+    },
+    {
+      "id": "planned-transactions-p04",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Покупателю перейдёт контроль над компанией, основатели сохранят четверть капитала.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Покупателю перейдёт контроль над компанией, основатели сохранят четверть капитала."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Передача контроля и состава владельцев без каталожной фразы."
+    },
+    {
+      "id": "planned-transactions-p05",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Новый инвестор внесёт средства в обмен на пятую часть бизнеса.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Новый инвестор внесёт средства в обмен на пятую часть бизнеса."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Финансирование в обмен на участие в капитале."
+    },
+    {
+      "id": "planned-transactions-p06",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Мы согласуем, сколько бизнес стоит до входа нового партнёра.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Мы согласуем, сколько бизнес стоит до входа нового партнёра."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Оценка перед вложением средств выражена без термина."
+    },
+    {
+      "id": "planned-transactions-p07",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "В письме написано: «Due diligence завершён».",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "В письме написано: «Due diligence завершён»."
+      ],
+      "tags": [
+        "quote",
+        "code-switch"
+      ],
+      "rationale": "Цитата содержит проверку перед сделкой."
+    },
+    {
+      "id": "planned-transactions-p08",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "сейчас собираем cap table и условия опционного пула для инвестора",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "сейчас собираем cap table и условия опционного пула для инвестора"
+      ],
+      "tags": [
+        "asr-no-punctuation",
+        "code-switch"
+      ],
+      "rationale": "Термины структуры капитала и участия сотрудников."
+    },
+    {
+      "id": "planned-transactions-p09",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Закрытие сделки перенесли на конец месяца.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Закрытие сделки перенесли на конец месяца."
+      ],
+      "tags": [
+        "literal",
+        "inflection"
+      ],
+      "rationale": "Обсуждение завершения сделки."
+    },
+    {
+      "id": "planned-transactions-p10",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Звук нормальный. Готовим инвестиционный раунд.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Готовим инвестиционный раунд."
+      ],
+      "tags": [
+        "mixed-sentences",
+        "literal"
+      ],
+      "rationale": "Только второе предложение об инвестиции."
+    },
+    {
+      "id": "planned-transactions-n01",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Следующий раунд настольной игры начнётся через минуту.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Игровой раунд не инвестиционный."
+    },
+    {
+      "id": "planned-transactions-n02",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Моя доля пирога осталась на кухне.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Доля еды не доля компании."
+    },
+    {
+      "id": "planned-transactions-n03",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Проверь sheet в таблице и term в словаре переводчика.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "token-separation",
+        "code-switch"
+      ],
+      "rationale": "Раздельные слова не образуют term sheet."
+    },
+    {
+      "id": "planned-transactions-n04",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "У камеры закрытие диафрагмы занимает долю секунды.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Фотографические термины не относятся к сделке."
+    },
+    {
+      "id": "planned-transactions-n05",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Дата рождения хранится в room booking форме.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "token-separation",
+        "code-switch"
+      ],
+      "rationale": "Не образует понятие data room; PII имеет отдельную политику."
+    },
+    {
+      "id": "planned-transactions-n06",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Слияние веток Git прошло без конфликтов.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy",
+        "technical"
+      ],
+      "rationale": "Слияние исходного кода не компаний."
+    },
+    {
+      "id": "planned-transactions-n07",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Поглощение света измерили новым датчиком.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Физическое поглощение не приобретение компании."
+    },
+    {
+      "id": "planned-transactions-n08",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Контроль качества передали другой смене.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Передача операционного контроля не корпоративных прав."
+    },
+    {
+      "id": "planned-transactions-n09",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Объявили финальный раунд конкурса дизайнеров.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Конкурсный раунд без инвестиций."
+    },
+    {
+      "id": "planned-transactions-n10",
+      "enabledGroupIDs": [
+        "planned-transactions"
+      ],
+      "text": "Папка для договоров стоит у принтера.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "neutral-business"
+      ],
+      "rationale": "Упоминание папки не раскрывает содержание сделки."
+    },
+    {
+      "id": "employee-compensation-p01",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Обсудим зарплатную вилку для нового инженера.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Обсудим зарплатную вилку для нового инженера."
+      ],
+      "tags": [
+        "literal",
+        "inflection"
+      ],
+      "rationale": "Диапазон оплаты труда."
+    },
+    {
+      "id": "employee-compensation-p02",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Пересмотр зарплаты в этом году не планируется.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Пересмотр зарплаты в этом году не планируется."
+      ],
+      "tags": [
+        "negation"
+      ],
+      "rationale": "Отрицание изменения всё равно о зарплате."
+    },
+    {
+      "id": "employee-compensation-p03",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "На открытом вебинаре сравнивают компенсационные пакеты.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "На открытом вебинаре сравнивают компенсационные пакеты."
+      ],
+      "tags": [
+        "training",
+        "inflection"
+      ],
+      "rationale": "Широкая тема включает общедоступное обучение."
+    },
+    {
+      "id": "employee-compensation-p04",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "После повышения сотрудник будет получать на тридцать тысяч в месяц больше.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "После повышения сотрудник будет получать на тридцать тысяч в месяц больше."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Конкретная ежемесячная оплата сотрудника без каталожных слов."
+    },
+    {
+      "id": "employee-compensation-p05",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Кандидату обещали фиксированную сумму каждый месяц и ещё две таких суммы в декабре.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Кандидату обещали фиксированную сумму каждый месяц и ещё две таких суммы в декабре."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Структура оплаты и годовой выплаты."
+    },
+    {
+      "id": "employee-compensation-p06",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "При расставании с работником выплатят три его месячных суммы.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "При расставании с работником выплатят три его месячных суммы."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Условия выплаты при прекращении работы."
+    },
+    {
+      "id": "employee-compensation-p07",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Рекрутер процитировал: «Salary review будет в апреле».",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Рекрутер процитировал: «Salary review будет в апреле»."
+      ],
+      "tags": [
+        "quote",
+        "code-switch"
+      ],
+      "rationale": "Цитата о пересмотре оплаты."
+    },
+    {
+      "id": "employee-compensation-p08",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "retention bonus этому специалисту предложили чтобы он остался",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "retention bonus этому специалисту предложили чтобы он остался"
+      ],
+      "tags": [
+        "asr-no-punctuation",
+        "code-switch"
+      ],
+      "rationale": "Индивидуальная выплата за удержание сотрудника."
+    },
+    {
+      "id": "employee-compensation-p09",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Ни одному сотруднику заработную плату не задержали.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Ни одному сотруднику заработную плату не задержали."
+      ],
+      "tags": [
+        "negation",
+        "inflection"
+      ],
+      "rationale": "Утверждение об оплате труда."
+    },
+    {
+      "id": "employee-compensation-p10",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Дверь закрыта. Оклад сотрудника изменится после аттестации.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Оклад сотрудника изменится после аттестации."
+      ],
+      "tags": [
+        "mixed-sentences",
+        "literal"
+      ],
+      "rationale": "Только второе предложение об оплате."
+    },
+    {
+      "id": "employee-compensation-n01",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Оклад старинной иконы изготовлен из серебра.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy",
+        "literal-topic-conflict"
+      ],
+      "rationale": "Предмет искусства, а не оплата труда."
+    },
+    {
+      "id": "employee-compensation-n02",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Премия за лучший роман досталась дебютанту.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Литературная награда без трудовых условий."
+    },
+    {
+      "id": "employee-compensation-n03",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Бонусный уровень игры открывается после победы.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Игровой бонус."
+    },
+    {
+      "id": "employee-compensation-n04",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Покупателю начислили бонусы на карту лояльности.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy",
+        "customer-reward"
+      ],
+      "rationale": "Клиентская лояльность не оплата сотруднику."
+    },
+    {
+      "id": "employee-compensation-n05",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Оффер рекламной кампании покажем на главном баннере.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Маркетинговое предложение без найма."
+    },
+    {
+      "id": "employee-compensation-n06",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Грейд стали указан в технической спецификации.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Класс материала, а не уровень сотрудника."
+    },
+    {
+      "id": "employee-compensation-n07",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "В магазине действует компенсация за повреждённую упаковку.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Компенсация клиенту не трудовой пакет."
+    },
+    {
+      "id": "employee-compensation-n08",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Пособие по фотографии лежит на столе.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Учебная книга, а не денежная выплата."
+    },
+    {
+      "id": "employee-compensation-n09",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Индексация поисковой базы завершилась ночью.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy",
+        "technical"
+      ],
+      "rationale": "Индексация данных не зарплаты."
+    },
+    {
+      "id": "employee-compensation-n10",
+      "enabledGroupIDs": [
+        "employee-compensation"
+      ],
+      "text": "Новый сотрудник выбрал место у окна.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "neutral-workplace"
+      ],
+      "rationale": "Рабочий быт без оплаты."
+    },
+    {
+      "id": "personal-health-p01",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Медицинский диагноз сотрудника обсуждать без него не будем.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Медицинский диагноз сотрудника обсуждать без него не будем."
+      ],
+      "tags": [
+        "negation",
+        "literal"
+      ],
+      "rationale": "Отказ обсуждать всё равно содержит медицинскую тему."
+    },
+    {
+      "id": "personal-health-p02",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "В учебном примере разбирают историю болезни.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "В учебном примере разбирают историю болезни."
+      ],
+      "tags": [
+        "training",
+        "inflection"
+      ],
+      "rationale": "Выбранная широкая тема включает учебный пример."
+    },
+    {
+      "id": "personal-health-p03",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Сведения о здоровье не передавались партнёрам.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Сведения о здоровье не передавались партнёрам."
+      ],
+      "tags": [
+        "negation",
+        "literal"
+      ],
+      "rationale": "Отрицание передачи не устраняет тему."
+    },
+    {
+      "id": "personal-health-p04",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Врач назначил ему таблетки дважды в день на три недели.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Врач назначил ему таблетки дважды в день на три недели."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Индивидуальное лечение без каталожных фраз."
+    },
+    {
+      "id": "personal-health-p05",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "После обследования у сотрудника обнаружили заболевание сердца.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "После обследования у сотрудника обнаружили заболевание сердца."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Медицинские сведения о человеке."
+    },
+    {
+      "id": "personal-health-p06",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Коллега пропустит неделю из-за операции и восстановления.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Коллега пропустит неделю из-за операции и восстановления."
+      ],
+      "tags": [
+        "paraphrase",
+        "no-catalog-term"
+      ],
+      "rationale": "Сведения о медицинской причине отсутствия."
+    },
+    {
+      "id": "personal-health-p07",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "В письме сказано: «Больничный лист продлили».",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "В письме сказано: «Больничный лист продлили»."
+      ],
+      "tags": [
+        "quote",
+        "inflection"
+      ],
+      "rationale": "Цитата о временной нетрудоспособности."
+    },
+    {
+      "id": "personal-health-p08",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "он проходит курс лечения сейчас поэтому смены перенесли",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "он проходит курс лечения сейчас поэтому смены перенесли"
+      ],
+      "tags": [
+        "asr-no-punctuation",
+        "literal"
+      ],
+      "rationale": "Лечение человека в непунктуированном ASR."
+    },
+    {
+      "id": "personal-health-p09",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "На консультации врач изменил назначенный препарат.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "На консультации врач изменил назначенный препарат."
+      ],
+      "tags": [
+        "literal",
+        "inflection"
+      ],
+      "rationale": "Изменение индивидуального медицинского назначения."
+    },
+    {
+      "id": "personal-health-p10",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Переговорная свободна. Медицинское заключение передали самому сотруднику.",
+      "expectedTopicMatch": true,
+      "goldMaskSubstrings": [
+        "Медицинское заключение передали самому сотруднику."
+      ],
+      "tags": [
+        "mixed-sentences",
+        "literal"
+      ],
+      "rationale": "Только второе предложение медицинское."
+    },
+    {
+      "id": "personal-health-n01",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Диагноз проекту простой: нужно яснее сформулировать цель.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "metaphor"
+      ],
+      "rationale": "Метафорическая оценка проекта."
+    },
+    {
+      "id": "personal-health-n02",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Лечим зависший сервер перезапуском процесса.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "metaphor",
+        "technical"
+      ],
+      "rationale": "Техническое восстановление сервера."
+    },
+    {
+      "id": "personal-health-n03",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Анализ рынка показал спрос на новый формат.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Маркетинговый анализ не анализы человека."
+    },
+    {
+      "id": "personal-health-n04",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Историю болезни компьютера мы в шутку записали в журнал ошибок.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "metaphor",
+        "literal-topic-conflict"
+      ],
+      "rationale": "Явная техническая метафора; буквальная группа может дать лишнее скрытие."
+    },
+    {
+      "id": "personal-health-n05",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Здоровье кластера проверяют автоматические probes.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy",
+        "technical",
+        "code-switch"
+      ],
+      "rationale": "Состояние вычислительной системы."
+    },
+    {
+      "id": "personal-health-n06",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Операция сложения выполняется до сравнения.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy",
+        "technical"
+      ],
+      "rationale": "Математическая операция."
+    },
+    {
+      "id": "personal-health-n07",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Врач выступил на конференции о дизайне интерфейсов.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "profession-only"
+      ],
+      "rationale": "Профессия без медицинского содержания."
+    },
+    {
+      "id": "personal-health-n08",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Заключение эксперта касается прочности моста.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Инженерное заключение."
+    },
+    {
+      "id": "personal-health-n09",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Больничный корпус виден из окна гостиницы.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "building"
+      ],
+      "rationale": "Здание без медицинских сведений о людях."
+    },
+    {
+      "id": "personal-health-n10",
+      "enabledGroupIDs": [
+        "personal-health"
+      ],
+      "text": "Препарат для обработки мебели поставили на склад.",
+      "expectedTopicMatch": false,
+      "goldMaskSubstrings": [],
+      "tags": [
+        "polysemy"
+      ],
+      "rationale": "Средство для мебели, не лекарственное назначение."
+    }
+  ]
+}
