@@ -6,6 +6,7 @@ import SwiftUI
 
 @MainActor final class InlineFocusState: ObservableObject {
     @Published var begins = 0
+    @Published var fragments: [NSRange] = []
     var commits: [String] = []
 }
 
@@ -15,6 +16,7 @@ private struct InlineFocusHost: View {
         var view = DictionarySelectableTranscript(text: NSAttributedString(
             string: "Ёжик 🦔 Pech AI и Pech AI.", attributes: [.font: NSFont.systemFont(ofSize: 16)])) { _ in }
         view.inlineEditingEnabled = true
+        view.fragmentRanges = state.fragments
         view.interactionIdentity = "stable-source"
         view.onBeginEdit = { _ in state.begins += 1; return true }
         view.onEdit = { _, value in state.commits.append(value); return true }
@@ -55,6 +57,16 @@ private struct InlineFocusHost: View {
         guard let field = view.inlineEditor else { preconditionFailure("Editor survives SwiftUI state update") }
         precondition(window.firstResponder === field || window.firstResponder === field.currentEditor(),
                      "Inline field owns focus after the update")
+        precondition(view.string.contains("\u{fffc}") && view.inlineEdit?.sourceText == source,
+            "Only the display contains an attachment; the immutable source stays exact")
+        view.layoutManager!.ensureLayout(for: view.textContainer!)
+        let following = (view.string as NSString).range(of: "AI", options: .backwards)
+        let followingBox = view.layoutManager!.boundingRect(forGlyphRange: view.layoutManager!.glyphRange(
+            forCharacterRange: following, actualCharacterRange: nil), in: view.textContainer!)
+            .offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
+        let editorBox = field.superview!.frame
+        precondition(followingBox.minY >= editorBox.maxY - 1 || followingBox.minX >= editorBox.maxX - 0.5,
+            "TextKit reserves space for the field and both buttons instead of painting them over following text")
         // A late native end-edit notification must not close a currently focused editor.
         view.controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification, object: field))
         pump()
@@ -83,9 +95,40 @@ private struct InlineFocusHost: View {
             "Dragging across two fragments opens one whole-phrase editor after mouse release")
         view.inlineEditor!.stringValue = "Pichi AI"
         precondition(view.commitInlineEdit() && state.commits == ["Pichi", "Pichi AI"])
+        precondition(view.beginInlineEdit(range: phrase)); pump()
+        precondition(view.commitInlineEdit() && state.commits.last == "Pech AI" && state.commits.count == 3,
+            "Saving unchanged words still confirms a newly merged phrase")
         precondition(view.beginInlineEdit(range: last)); pump()
         view.cancelInlineEdit(); pump()
-        precondition(view.inlineEditor == nil && state.commits.count == 2, "Cancel must not save")
+        precondition(view.inlineEditor == nil && state.commits.count == 3, "Cancel must not save")
+        precondition(view.beginInlineEdit(range: last)); pump()
+        view.inlineEditor!.stringValue = "Must not save"
+        let outside = mouse(.leftMouseDown, view.convert(NSPoint(x: 1, y: 1), to: nil), 20)
+        view.mouseDown(with: outside)
+        pump()
+        precondition(view.inlineEditor == nil && state.commits.count == 3 && view.string == source,
+            "A paragraph click cancels the edit, restores text flow, and does not open another word")
+        state.fragments = [phrase]; pump()
+        let groupEnd = (source as NSString).range(of: "AI", options: .backwards)
+        let groupBox = view.layoutManager!.boundingRect(forGlyphRange: view.layoutManager!.glyphRange(
+            forCharacterRange: groupEnd, actualCharacterRange: nil), in: view.textContainer!)
+        let groupPoint = view.convert(NSPoint(x: groupBox.midX, y: groupBox.midY), to: nil)
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        NSApp.postEvent(mouse(.leftMouseUp, groupPoint, 22), atStart: true)
+        view.mouseDown(with: mouse(.leftMouseDown, groupPoint, 21)); pump()
+        precondition(view.inlineEdit?.range == phrase && view.inlineEditor?.stringValue == "Pech AI",
+            "Clicking the second word of a saved fragment edits its complete range, including the space")
+        view.cancelInlineEdit(); pump()
+        precondition(view.beginInlineEdit(range: last)); pump()
+        precondition(view.commitInlineEdit() && state.commits.count == 3,
+            "An already grouped unchanged phrase does not write a duplicate group")
+        precondition(view.beginInlineEdit(range: last)); pump()
+        view.inlineEditor!.stringValue = "Blank click must cancel"
+        NSApp.sendEvent(mouse(.leftMouseDown, NSPoint(x: 490, y: 79), 30))
+        NSApp.sendEvent(mouse(.leftMouseUp, NSPoint(x: 490, y: 79), 31))
+        pump()
+        precondition(view.inlineEditor == nil && state.commits.count == 3,
+            "A click in blank window space cancels through the scoped local monitor")
         precondition(view.beginInlineEdit(range: last)); pump()
         guard let losingField = view.inlineEditor else { preconditionFailure() }
         window.makeFirstResponder(view)
@@ -97,7 +140,23 @@ private struct InlineFocusHost: View {
                                     backgroundColor: .white, textColor: .black)
         pump()
         precondition(view.inlineEditor == nil && !view.commitInlineEdit(), "Stale entry cancels without saving")
+        let firstPhrase = (source as NSString).range(of: "Pech AI")
+        state.fragments = [firstPhrase]; pump()
+        view.setSelectedRange(firstPhrase)
+        let conjunctionContext = (source as NSString).range(of: " и ")
+        let conjunction = NSRange(location: conjunctionContext.location + 1, length: 1)
+        let firstBox = view.layoutManager!.boundingRect(forGlyphRange: view.layoutManager!.glyphRange(
+            forCharacterRange: NSRange(location: firstPhrase.location, length: 1), actualCharacterRange: nil), in: view.textContainer!)
+        let conjunctionBox = view.layoutManager!.boundingRect(forGlyphRange: view.layoutManager!.glyphRange(
+            forCharacterRange: conjunction, actualCharacterRange: nil), in: view.textContainer!)
+        let extendStart = view.convert(NSPoint(x: firstBox.minX + 0.1, y: firstBox.midY), to: nil)
+        let extendEnd = view.convert(NSPoint(x: conjunctionBox.maxX - 0.1, y: conjunctionBox.midY), to: nil)
+        NSApp.postEvent(mouse(.leftMouseUp, extendEnd, 42), atStart: true)
+        NSApp.postEvent(mouse(.leftMouseDragged, extendEnd, 41), atStart: true)
+        view.mouseDown(with: mouse(.leftMouseDown, extendStart, 40)); pump()
+        precondition(view.inlineEditor?.stringValue == "Pech AI и", "A drag can extend an already selected saved fragment")
+        view.cancelInlineEdit()
         window.close()
-        print("PASS: native multiword drag, left click and inline focus survive SwiftUI updates and late notifications; save, cancel, focus loss and stale identity")
+        print("PASS: reserved editor flow, outside cancellation, saved compound hit-testing, multiword drag and focus survive SwiftUI updates and late notifications; save, cancel, focus loss and stale identity")
     }
 }

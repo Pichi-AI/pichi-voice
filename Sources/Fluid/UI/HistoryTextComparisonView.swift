@@ -154,6 +154,7 @@ struct HistoryTextComparisonView: View {
                 entryID: self.entry.id, sourceText: content, range: range, isOriginal: isOriginal)
         }
         view.inlineEditingEnabled = isOriginal
+        view.fragmentRanges = isOriginal ? self.entry.sourceFragments.map(\.range) : []
         view.interactionIdentity = "\(self.entry.id):\(self.interactionEpoch)"
         view.accentColor = NSColor(self.theme.palette.accent)
         view.editorBackgroundColor = NSColor(self.theme.palette.cardBackground)
@@ -234,6 +235,14 @@ struct HistoryTextComparisonView: View {
                     offset += range.length
                 }
             }
+            if self.showChanges {
+                for fragment in self.entry.sourceFragments where fragment.isValid(in: content) {
+                    result.addAttributes([
+                        .foregroundColor: NSColor(self.theme.palette.accentText),
+                        .backgroundColor: NSColor(self.theme.palette.accent.opacity(0.16)),
+                    ], range: fragment.range)
+                }
+            }
             return result
         }
         guard self.showChanges, let comparison,
@@ -310,7 +319,8 @@ struct HistoryTextComparisonView: View {
 
     private func explicitInlineCandidate(context: InlineCorrection, replacement: String) -> AutomaticDictionaryCorrectionCandidate? {
         guard DictionaryCorrectionEditPolicy.isTerm(context.edit.heardText),
-              DictionaryCorrectionEditPolicy.isTerm(replacement), replacement != context.edit.heardText else { return nil }
+              DictionaryCorrectionEditPolicy.isTerm(replacement),
+              replacement != context.edit.heardText || DictionaryInlineTextEdit.wordRanges(in: replacement).count > 1 else { return nil }
         return AutomaticDictionaryCorrectionCandidate(
             heardText: context.edit.heardText, correctedText: replacement,
             sourceUTF16Range: context.edit.range

@@ -21,6 +21,24 @@ nonisolated struct AudioBudgetMeasurementGate: Equatable, Sendable {
 // MARK: - Transcription History Entry Model
 
 nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
+    /// One explicitly grouped source term, including any internal whitespace.
+    nonisolated struct SourceFragment: Codable, Equatable, Sendable {
+        let location: Int
+        let length: Int
+        let text: String
+        var range: NSRange { NSRange(location: location, length: length) }
+
+        func isValid(in source: String) -> Bool {
+            guard location >= 0, length > 0, length <= 320,
+                  location <= source.utf16.count, length <= source.utf16.count - location,
+                  let span = Range(range, in: source), source.indices.contains(span.lowerBound),
+                  span.upperBound == source.endIndex || source.indices.contains(span.upperBound),
+                  text.rangeOfCharacter(from: .alphanumerics) != nil,
+                  text.rangeOfCharacter(from: .newlines) == nil else { return false }
+            return String(source[span]) == text
+        }
+    }
+
     let id: UUID
     let timestamp: Date
     let rawText: String
@@ -30,6 +48,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
     let originalProcessedText: String?
     /// User-corrected source text; rawText remains the exact ASR output.
     let correctedRawText: String?
+    let sourceFragments: [SourceFragment]
     var sourceTranscriptText: String { self.correctedRawText ?? self.rawText }
     let appName: String
     let windowTitle: String
@@ -68,7 +87,8 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         isStarred: Bool = false,
         searchRevision: UInt64? = nil,
         originalProcessedText: String? = nil,
-        correctedRawText: String? = nil
+        correctedRawText: String? = nil,
+        sourceFragments: [SourceFragment] = []
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -76,6 +96,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         self.processedText = processedText
         self.originalProcessedText = originalProcessedText
         self.correctedRawText = correctedRawText
+        self.sourceFragments = Array(sourceFragments.filter { $0.isValid(in: correctedRawText ?? rawText) }.prefix(128))
         self.appName = appName
         self.windowTitle = windowTitle
         self.characterCount = processedText.count
@@ -110,7 +131,8 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         isStarred: Bool,
         searchRevision: UInt64?,
         originalProcessedText: String?,
-        correctedRawText: String?
+        correctedRawText: String?,
+        sourceFragments: [SourceFragment]
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -118,6 +140,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         self.processedText = processedText
         self.originalProcessedText = originalProcessedText
         self.correctedRawText = correctedRawText
+        self.sourceFragments = Array(sourceFragments.filter { $0.isValid(in: correctedRawText ?? rawText) }.prefix(128))
         self.appName = appName
         self.windowTitle = windowTitle
         self.characterCount = characterCount
@@ -141,6 +164,9 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         self.processedText = try container.decode(String.self, forKey: .processedText)
         self.originalProcessedText = try container.decodeIfPresent(String.self, forKey: .originalProcessedText)
         self.correctedRawText = try container.decodeIfPresent(String.self, forKey: .correctedRawText)
+        let fragmentSource = self.correctedRawText ?? self.rawText
+        self.sourceFragments = Array((try container.decodeIfPresent([SourceFragment].self, forKey: .sourceFragments) ?? [])
+            .filter { $0.isValid(in: fragmentSource) }.prefix(128))
         self.appName = try container.decode(String.self, forKey: .appName)
         self.windowTitle = try container.decode(String.self, forKey: .windowTitle)
         self.characterCount = try container.decode(Int.self, forKey: .characterCount)
@@ -166,7 +192,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, timestamp, rawText, processedText, originalProcessedText, correctedRawText, appName, windowTitle
+        case id, timestamp, rawText, processedText, originalProcessedText, correctedRawText, sourceFragments, appName, windowTitle
         case characterCount, wasAIProcessed, processingModel
         case transcriptionDurationMilliseconds, parakeetProcessingDurationMilliseconds, aiProcessingDurationMilliseconds
         case aiTokensPerSecond
@@ -241,7 +267,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             audio: audio,
             isStarred: self.isStarred,
             searchRevision: self.searchRevision,
-            originalProcessedText: self.originalProcessedText, correctedRawText: self.correctedRawText
+            originalProcessedText: self.originalProcessedText, correctedRawText: self.correctedRawText, sourceFragments: self.sourceFragments
         )
     }
 
@@ -257,15 +283,20 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             aiProcessingDurationMilliseconds: self.aiProcessingDurationMilliseconds,
             aiTokensPerSecond: self.aiTokensPerSecond, aiProcessingError: self.aiProcessingError,
             audio: self.audio, isStarred: self.isStarred, searchRevision: self.searchRevision,
-            originalProcessedText: self.originalProcessedText ?? self.processedText, correctedRawText: self.correctedRawText
+            originalProcessedText: self.originalProcessedText ?? self.processedText, correctedRawText: self.correctedRawText, sourceFragments: self.sourceFragments
         )
     }
 
     /// Every accumulated explicit source correction overrides the corresponding
     /// formatted span, while the exact ASR and first model output stay immutable.
-    func replacingSourceText(_ text: String) -> TranscriptionHistoryEntry {
+    func replacingSourceText(_ text: String, fragments: [SourceFragment]? = nil) -> TranscriptionHistoryEntry {
+        let groups = (fragments ?? self.sourceFragments).filter { $0.isValid(in: text) }
         let latest = SourceTranscriptCorrection.apply(original: self.sourceTranscriptText, corrected: text, to: self.processedText)
-        let final = SourceTranscriptCorrection.apply(original: self.rawText, corrected: text, to: latest)
+        var final = SourceTranscriptCorrection.apply(original: self.rawText, corrected: text, to: latest)
+        for group in groups.reversed() {
+            final = SourceTranscriptCorrection.applyGroup(source: text, final: final, range: group.range, text: group.text)
+        }
+        if final.utf16.count > 100_000 { final = text }
         return TranscriptionHistoryEntry(
             id: self.id, timestamp: self.timestamp, rawText: self.rawText,
             processedText: final,
@@ -277,13 +308,44 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             aiTokensPerSecond: self.aiTokensPerSecond, aiProcessingError: self.aiProcessingError,
             audio: self.audio, isStarred: self.isStarred, searchRevision: self.searchRevision,
             originalProcessedText: self.originalProcessedText ?? self.processedText,
-            correctedRawText: text
+            correctedRawText: text, sourceFragments: groups
         )
     }
 
+    /// Keep grouped terms attached to the same source occurrence across later edits.
+    func fragmentsAfterReplacing(_ range: NSRange, with replacement: String, in updatedText: String) -> [SourceFragment] {
+        let delta = replacement.utf16.count - range.length
+        var ranges: [NSRange] = []
+        var grouped = (self.sourceTranscriptText as NSString).substring(with: range).split(whereSeparator: \.isWhitespace).count > 1 ||
+            replacement.split(whereSeparator: \.isWhitespace).count > 1
+        for group in self.sourceFragments where group.isValid(in: self.sourceTranscriptText) {
+            if NSMaxRange(group.range) <= range.location { ranges.append(group.range) }
+            else if group.location >= NSMaxRange(range) { ranges.append(NSRange(location: group.location + delta, length: group.length)) }
+            else {
+                grouped = true
+                let start = min(group.location, range.location)
+                let end = max(NSMaxRange(group.range), NSMaxRange(range)) + delta
+                if end > start { ranges.append(NSRange(location: start, length: end - start)) }
+            }
+        }
+        if grouped, !replacement.isEmpty { ranges.append(NSRange(location: range.location, length: replacement.utf16.count)) }
+        var merged: [NSRange] = []
+        for item in ranges.sorted(by: { $0.location < $1.location }) {
+            if let last = merged.last, item.location <= NSMaxRange(last) {
+                merged[merged.count - 1] = NSUnionRange(last, item)
+            } else { merged.append(item) }
+        }
+        let text = updatedText as NSString
+        return merged.compactMap { span in
+            guard span.location >= 0, span.length > 0, span.location <= text.length, span.length <= text.length - span.location else { return nil }
+            let group = SourceFragment(location: span.location, length: span.length, text: text.substring(with: span))
+            return group.isValid(in: updatedText) ? group : nil
+        }.prefix(128).map { $0 }
+    }
+
     func reconcilingSourceCorrections() -> TranscriptionHistoryEntry {
-        guard let correctedRawText else { return self }
-        let updated = self.replacingSourceText(correctedRawText)
+        guard self.correctedRawText != nil || !self.sourceFragments.isEmpty else { return self }
+        let updated = self.replacingSourceText(self.sourceTranscriptText)
         return updated.processedText == self.processedText ? self : updated
     }
 
@@ -386,6 +448,10 @@ nonisolated enum SourceTranscriptCorrection {
             source = updated
         }
         return output.utf16.count <= 100_000 ? output : corrected
+    }
+
+    static func applyGroup(source: String, final: String, range: NSRange, text: String) -> String {
+        project(source: source, final: final, range: range, replacement: text) ?? source
     }
 
     private static func project(source: String, final: String, range: NSRange, replacement: String) -> String? {
@@ -876,9 +942,11 @@ final class TranscriptionHistoryStore: ObservableObject {
               !replacement.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
         else { return false }
         let final = expectedText.replacingCharacters(in: swiftRange, with: replacement)
-        guard final != expectedText, !final.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard !final.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               final.utf16.count <= 100_000 else { return false }
-        var entry = isOriginal ? self.entries[index].replacingSourceText(final) : self.entries[index].replacingFinalText(final)
+        let fragments = isOriginal ? self.entries[index].fragmentsAfterReplacing(range, with: replacement, in: final) : []
+        guard final != expectedText || (isOriginal && fragments != self.entries[index].sourceFragments) else { return false }
+        var entry = isOriginal ? self.entries[index].replacingSourceText(final, fragments: fragments) : self.entries[index].replacingFinalText(final)
         entry.markRestored(over: self.entries[index].searchRevision)
         self.entries[index] = entry
         // A reserved audio write may complete after this edit. Its retry capsule

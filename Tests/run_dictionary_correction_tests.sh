@@ -15,3 +15,10 @@ xcrun swiftc -D DICTIONARY_CORRECTION_STANDALONE -parse-as-library \
     "$task_repo_dir/Tests/Standalone/DictionaryCorrectionDetectorTests.swift" \
     -o "$task_test_dir/tests"
 "$task_test_dir/tests"
+xcrun swiftc -D DICTIONARY_TRAINING_REQUEST_STANDALONE -parse-as-library \
+    "$task_repo_dir/Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift" \
+    "$task_repo_dir/Sources/Fluid/Services/AutomaticDictionaryCorrectionDetector.swift" \
+    "$task_repo_dir/Sources/Fluid/Services/DictionaryWordTrainingRequest.swift" \
+    "$task_repo_dir/Tests/Standalone/DictionaryWordTrainingRequestTests.swift" \
+    -o "$task_test_dir/training-request-tests"
+"$task_test_dir/training-request-tests"

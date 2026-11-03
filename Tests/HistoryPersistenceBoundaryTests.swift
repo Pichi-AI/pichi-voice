@@ -366,7 +366,47 @@ final class DebugLogger {
         let stableStore = TranscriptionHistoryStore(writer: legacyWriter)
         try await stableStore.waitUntilLoaded()
         precondition(stableStore.entries[0] == repaired, "Reopening an already-repaired entry is a no-op")
-        print("PASS: source and final corrections, exact UTF16 occurrence, provenance, search, persistence, audio, backup and legacy decoding")
+        let groupedOriginal = TranscriptionHistoryEntry(rawText: "Ёжик 🦔 Pichi AI и Term.", processedText: "Ёжик 🦔 Peach I, и Term!",
+            appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: true, audio: audio)
+        store.restore(from: [groupedOriginal])
+        let compoundRange = (groupedOriginal.rawText as NSString).range(of: "Pichi AI")
+        precondition(store.applyWordCorrection(entryID: groupedOriginal.id, expectedText: groupedOriginal.rawText,
+            range: compoundRange, replacement: "Pichi AI", profile: profile, isOriginal: true),
+            "Saving an unchanged multiword selection confirms one persistent fragment")
+        let grouped = store.entries[0]
+        precondition(grouped.sourceFragments.count == 1 && grouped.sourceFragments[0].range == compoundRange &&
+            grouped.sourceFragments[0].text == "Pichi AI" && grouped.processedText == "Ёжик 🦔 Pichi AI, и Term!",
+            "The grouped range includes its space and overrides a divergent formatted compound")
+        precondition(!store.applyWordCorrection(entryID: grouped.id, expectedText: grouped.sourceTranscriptText,
+            range: compoundRange, replacement: "Pichi AI", profile: profile, isOriginal: true), "Repeated grouping is a no-op")
+        let prefixRange = (grouped.sourceTranscriptText as NSString).range(of: "Ёжик")
+        precondition(store.applyWordCorrection(entryID: grouped.id, expectedText: grouped.sourceTranscriptText,
+            range: prefixRange, replacement: "Большой Ёжик", profile: profile, isOriginal: true))
+        let shifted = store.entries[0]
+        precondition(shifted.sourceFragments.first { $0.text == "Pichi AI" }?.range == (shifted.sourceTranscriptText as NSString).range(of: "Pichi AI"),
+            "Editing before a group shifts its UTF16 range across a Unicode prefix")
+        let component = (shifted.sourceTranscriptText as NSString).range(of: "AI")
+        precondition(store.applyWordCorrection(entryID: grouped.id, expectedText: shifted.sourceTranscriptText,
+            range: component, replacement: "Enablement", profile: profile, isOriginal: true))
+        let changedGroup = store.entries[0]
+        precondition(changedGroup.sourceFragments.contains { $0.text == "Pichi Enablement" && $0.isValid(in: changedGroup.sourceTranscriptText) },
+            "Editing a component keeps the full group together")
+        store.attachAudio(laterAudioMetadata(), to: grouped.id)
+        await store.finishPendingWrites()
+        let groupReload = try await TranscriptionHistoryWriter(defaults: defaults, url: url).load()
+        precondition(groupReload == store.entries && groupReload[0].sourceFragments == changedGroup.sourceFragments,
+            "Grouped terms survive audio attachment and persistence")
+        let groupBackup = try JSONDecoder().decode([TranscriptionHistoryEntry].self, from: JSONEncoder().encode(store.makeBackupPayload()))
+        precondition(groupBackup == store.entries)
+        let entireGroup = (store.entries[0].sourceTranscriptText as NSString).range(of: "Pichi Enablement")
+        precondition(store.applyWordCorrection(entryID: grouped.id, expectedText: store.entries[0].sourceTranscriptText,
+            range: entireGroup, replacement: "", profile: profile, isOriginal: true))
+        precondition(!store.entries[0].sourceFragments.contains { $0.text.contains("Pichi") }, "Deleting a group removes its metadata")
+        let invalidGroup = TranscriptionHistoryEntry.SourceFragment(location: 0, length: 5, text: "wrong")
+        let sanitized = TranscriptionHistoryEntry(rawText: "hello", processedText: "hello", appName: "Synthetic", windowTitle: "Synthetic",
+            wasAIProcessed: false, sourceFragments: [invalidGroup])
+        precondition(sanitized.sourceFragments.isEmpty, "A stale fragment cannot highlight unrelated text")
+        print("PASS: grouped fragments, source and final corrections, exact UTF16 occurrence, provenance, search, persistence, audio, backup and legacy decoding")
     }
 
     static func laterAudioMetadata() -> DictationAudioMetadata {

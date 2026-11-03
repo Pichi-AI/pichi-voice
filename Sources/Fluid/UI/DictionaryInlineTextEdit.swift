@@ -55,4 +55,15 @@ nonisolated struct DictionaryInlineTextEdit: Equatable {
         guard let first = selected.first, let last = selected.last else { return nil }
         return NSRange(location: first.location, length: NSMaxRange(last) - first.location)
     }
+
+    static func editingRanges(in text: String, fragments: [NSRange]) -> [NSRange] {
+        var groups: [NSRange] = []
+        for range in fragments.sorted(by: { $0.location == $1.location ? $0.length > $1.length : $0.location < $1.location })
+        where DictionaryInlineTextEdit(sourceText: text, range: range) != nil {
+            if groups.last.map({ NSMaxRange($0) <= range.location }) ?? true { groups.append(range) }
+        }
+        return (wordRanges(in: text).filter { word in
+            !groups.contains { NSIntersectionRange(word, $0).length > 0 }
+        } + groups).sorted { $0.location < $1.location }
+    }
 }
