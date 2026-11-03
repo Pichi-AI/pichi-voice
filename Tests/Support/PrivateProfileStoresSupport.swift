@@ -42,10 +42,12 @@ nonisolated enum ParakeetSpeechModelCatalog {
 
 nonisolated enum DictionaryMatchPlaygroundError: Error { case unavailable(String) }
 
+#if !DICTIONARY_CORRECTION_REAL_CANDIDATE
 nonisolated struct AutomaticDictionaryCorrectionCandidate {
     let heardText: String
     let correctedText: String
 }
+#endif
 
 // No inference, model preparation or audio capture occurs in this probe.
 nonisolated struct MeetingAnalysisEpochID: Codable, Hashable, Sendable { let trackID: UUID; let ordinal: Int }

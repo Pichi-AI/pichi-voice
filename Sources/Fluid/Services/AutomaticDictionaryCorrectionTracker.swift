@@ -201,6 +201,7 @@ final class AutomaticDictionaryCorrectionTracker {
         let observesSelectionChanges: Bool
         let observesFocusChanges: Bool
         let learningRecording: DictionaryLearningRecording?
+        let knownCanonicalTerms: [String]
         var lastValue: String
         var insertedRange: NSRange
         var pendingCorrection: PendingCorrection?
@@ -239,6 +240,7 @@ final class AutomaticDictionaryCorrectionTracker {
             return
         }
 
+        let knownCanonicalTerms = SettingsStore.shared.customDictionaryEntries.map(\.replacement)
         self.verificationTask = Task { @MainActor [weak self] in
             for _ in 0..<Self.verificationAttempts {
                 // Give the paste time to land before probing, and keep the synchronous
@@ -252,7 +254,11 @@ final class AutomaticDictionaryCorrectionTracker {
                 )
                 guard !Task.isCancelled, let self else { return }
                 if let seed {
-                    self.installObserver(for: seed, learningRecording: DictionaryMatcherExperiment.sharedFeaturesEnabled ? learningRecording : nil)
+                    self.installObserver(
+                        for: seed,
+                        learningRecording: DictionaryMatcherExperiment.sharedFeaturesEnabled ? learningRecording : nil,
+                        knownCanonicalTerms: knownCanonicalTerms
+                    )
                     return
                 }
             }
@@ -446,7 +452,11 @@ final class AutomaticDictionaryCorrectionTracker {
         )
     }
 
-    private func installObserver(for seed: InsertionSeed, learningRecording: DictionaryLearningRecording?) {
+    private func installObserver(
+        for seed: InsertionSeed,
+        learningRecording: DictionaryLearningRecording?,
+        knownCanonicalTerms: [String]
+    ) {
         self.verificationTask = nil
         var createdObserver: AXObserver?
         let createResult = AXObserverCreate(seed.pid, automaticDictionaryAXObserverCallback, &createdObserver)
@@ -483,6 +493,7 @@ final class AutomaticDictionaryCorrectionTracker {
             observesSelectionChanges: selectionResult == .success,
             observesFocusChanges: focusResult == .success,
             learningRecording: learningRecording,
+            knownCanonicalTerms: knownCanonicalTerms,
             lastValue: seed.expectedValue,
             insertedRange: seed.insertedRange,
             pendingCorrection: nil
@@ -521,7 +532,8 @@ final class AutomaticDictionaryCorrectionTracker {
             before: pending.beforeValue,
             after: pending.afterValue,
             insertedRange: pending.insertedRange,
-            allowsInsertionAtEnd: true
+            allowsInsertionAtEnd: true,
+            knownCanonicalTerms: self.session?.knownCanonicalTerms ?? []
         )
         if let candidate {
             DictionaryVoiceSpellingLearner.shared.reject(editedText: candidate.heardText)

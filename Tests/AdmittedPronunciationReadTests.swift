@@ -78,6 +78,28 @@ import Darwin
             cut.featureFrames[0].frames.offset + Double(cut.featureFrames[0].frames.count) * 0.04 >= Double(cut.focalSampleRange.upperBound) / 16_000,
             "Outward frame rounding covers the whole selected acoustic occurrence")
 
+        let compoundText = "😀 I use Petch Voice."
+        let correctedCompoundText = "😀 I use Pichi Voice."
+        let compound = AutomaticDictionaryCorrectionDetector.candidate(
+            before: compoundText, after: correctedCompoundText,
+            insertedRange: NSRange(location: 0, length: (compoundText as NSString).length),
+            knownCanonicalTerms: ["Pichi Voice"]
+        )!
+        let compoundRecording = DictionaryLearningRecording(alignment: .init(modelKey: "synthetic-compound", words: [
+            .init(text: "I", start: 0.1, end: 0.2), .init(text: "use", start: 0.3, end: 0.5),
+            .init(text: "Petch", start: 1, end: 1.3), .init(text: "Voice", start: 1.4, end: 1.8),
+        ], featureFrames: [feature(count: 75)]), samples: [Float](repeating: 0.2, count: 48_000), now: now)!
+        let compoundEvidence = try DictionaryLearningAlignmentResolver.resolve(
+            recording: compoundRecording, deliveredTextBeforeEdit: compoundText,
+            selectedUTF16Range: compound.sourceUTF16Range!, observedText: compound.heardText, now: now
+        )
+        expect(compoundEvidence.observedText == "Petch Voice" && compoundEvidence.sourceWordRange == 2..<4 &&
+            compoundEvidence.focalSampleRange == 16_000..<28_800,
+            "A partial spelling edit preserves both words and their complete original PCM focal range")
+        expect(compoundEvidence.featureFrames.count == 1 && compoundEvidence.featureFrames[0].frames.count == 20 &&
+            compoundEvidence.featureFrames[0].frames.values.first == 25 && compoundEvidence.featureFrames[0].frames.values.last == 44,
+            "Compound correction evidence includes unchanged-word encoder frames without surrounding words")
+
         let legacy = try evidence(recording([feature(offset: 0.025, period: 0.08, count: 100, version: "synthetic-legacy-v1")]))
         expect(legacy.featureFrames[0].frames.count == 3 && legacy.featureFrames[0].frames.values.first == 62 &&
             abs(legacy.featureFrames[0].frames.offset - 2.025) < 1e-9,
