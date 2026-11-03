@@ -2709,7 +2709,11 @@ final class MeetingRecoveryTests: XCTestCase {
                 _ = try await read()
                 XCTFail("An unreadable catalog must not look like empty history")
             } catch {
-                XCTAssertTrue(error is DecodingError, "Preserve the underlying manifest error: \(error)")
+                if case MeetingSessionStoreError.historyUnavailable = error {
+                    XCTAssertEqual(error.localizedDescription, PichiLocalization.text("Meeting history could not be loaded."))
+                } else {
+                    XCTFail("An unreadable catalog must report the generic history-unavailable error")
+                }
             }
             XCTAssertEqual(try Data(contentsOf: manifest), corruptData)
         }
@@ -2727,12 +2731,13 @@ final class MeetingRecoveryTests: XCTestCase {
         let snapshot = MeetingHistorySnapshot { try await store.loadHistory() }
         await snapshot.refresh()
         XCTAssertEqual(snapshot.sessions.map(\.id), [session.id])
+        let retainedSnapshot = snapshot.sessions
 
         let corruptData = Data("{invalid session".utf8)
         try corruptData.write(to: manifest)
         await snapshot.refresh()
-        XCTAssertEqual(snapshot.sessions.map(\.id), [session.id])
-        XCTAssertNotNil(snapshot.errorMessage)
+        XCTAssertEqual(snapshot.sessions, retainedSnapshot, "A failed read must retain the entire last good snapshot")
+        XCTAssertEqual(snapshot.errorMessage, PichiLocalization.text("Meeting history could not be loaded."))
         XCTAssertTrue(snapshot.hasLoaded)
         XCTAssertEqual(try Data(contentsOf: manifest), corruptData)
 
@@ -4464,43 +4469,82 @@ final class MeetingRecoveryTests: XCTestCase {
 
     func testInterruptedLanguageRetryPreservesCompletedTranscriptAndFailure() async throws {
         let dir = self.makeTempDirectory()
-        defer { try? FileManager.default.removeItem(at: dir) }
+        // XCTest runs teardown blocks in reverse order, after every owned task has joined.
+        self.addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
         let session = try self.completedEnglishRetranscriptionFixture()
         try await store.create(session)
+        let directory = try await store.sessionDirectory(for: session.id)
+        let audio = directory.appendingPathComponent("tracks/microphone/chunk_0.caf")
+        try FileManager.default.createDirectory(at: audio.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let audioBytes = Data(repeating: 7, count: 128)
+        try audioBytes.write(to: audio)
         let processing = GatedProcessingController()
         processing.stageBeforeGate = .completed
-        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(), processing: processing, audioArbiter: StubArbiter())
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(), processing: processing, audioArbiter: arbiter)
         await coordinator.ensureRestored()
         let retry = Task { try await coordinator.retryProcessing(sessionID: session.id, languageCode: "nl") }
+        self.addTeardownBlock { @MainActor in
+            // The pause is deliberately uncancellable. Open it even after a failed wait/assertion.
+            processing.openGate()
+            await coordinator.shutdownForTermination()
+            _ = try? await retry.value
+        }
         for _ in 0..<1000 {
             if processing.didStart { break }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
         guard processing.didStart else {
-            processing.openGate()
-            _ = try? await retry.value
             return XCTFail("Processing never reached the controlled pause")
         }
-        await coordinator.shutdownForTermination()
+        var finishedShutdown = false
+        let shutdown = Task { @MainActor in
+            await coordinator.shutdownForTermination()
+            finishedShutdown = true
+        }
+        self.addTeardownBlock { @MainActor in
+            processing.openGate()
+            await shutdown.value
+        }
+        try await processing.waitForCancellation()
+        XCTAssertFalse(finishedShutdown, "Termination must join the paused retry before declaring shutdown complete")
+        XCTAssertEqual(arbiter.acquireCount, 1)
+        XCTAssertEqual(arbiter.releaseCount, 0, "The paused inference still owns its audio lease")
         processing.openGate()
-        _ = try? await retry.value
+        await shutdown.value
+        do {
+            _ = try await retry.value
+            XCTFail("Termination must cancel the abandoned language retry")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(finishedShutdown)
+        XCTAssertEqual(arbiter.acquireCount, arbiter.releaseCount)
         let interruptedSaved = try await store.load(id: session.id)
         let interrupted = try XCTUnwrap(interruptedSaved)
         XCTAssertEqual(interrupted.languageCode, "en", "Stored English text must keep its English label across restart")
         XCTAssertEqual(interrupted.state, .completed, "The previous usable transcript must remain available")
         XCTAssertEqual(interrupted.transcriptSegments.map(\.text), ["Existing English transcript"])
+        XCTAssertEqual(interrupted.title, session.title)
+        XCTAssertEqual(interrupted.audioTracks, session.audioTracks)
+        XCTAssertEqual(try Data(contentsOf: audio), audioBytes)
 
         let restarted = MeetingSessionCoordinator(store: store, capture: StubCaptureController(), processing: DiagnosticFailingProcessingController(error: ProcessingFailure()), audioArbiter: StubArbiter())
+        self.addTeardownBlock { @MainActor in await restarted.shutdownForTermination() }
         await restarted.ensureRestored()
         do {
             _ = try await restarted.retryProcessing(sessionID: session.id, languageCode: "nl")
             XCTFail("Expected processing failure")
-        } catch {}
+        } catch { XCTAssertTrue(error is ProcessingFailure) }
         let failureSaved = try await store.load(id: session.id)
         let afterFailure = try XCTUnwrap(failureSaved)
         XCTAssertNotNil(afterFailure.processingAttempts.last?.errorCode, "Failure after reopening must be persisted")
         XCTAssertFalse(afterFailure.failures.isEmpty, "The new failure must survive another restart")
+        XCTAssertEqual(afterFailure.languageCode, "en")
+        XCTAssertEqual(afterFailure.state, .completed)
+        XCTAssertEqual(afterFailure.transcriptSegments.map(\.text), ["Existing English transcript"])
+        XCTAssertEqual(afterFailure.title, session.title)
+        XCTAssertEqual(afterFailure.audioTracks, session.audioTracks)
+        XCTAssertEqual(try Data(contentsOf: audio), audioBytes)
         await restarted.shutdownForTermination()
     }
 
@@ -9317,6 +9361,24 @@ private final class GatedProcessingController: MeetingProcessingControlling {
     var stageBeforeGate: MeetingProcessingStage?
     private var isOpen = false
     private var continuation: CheckedContinuation<Void, Never>?
+    private let cancellation = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+
+    /// Observe actual owner cancellation, rather than guessing when a nested shutdown task ran.
+    func waitForCancellation() async throws {
+        let stream = self.cancellation.stream
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                for await _ in stream { return }
+                throw CancellationError()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                throw GateTimeoutError()
+            }
+            defer { group.cancelAll() }
+            _ = try await group.next()
+        }
+    }
 
     func openGate() {
         self.isOpen = true
@@ -9335,7 +9397,12 @@ private final class GatedProcessingController: MeetingProcessingControlling {
         // Mirrors the real pipeline's convention of reusing the still-open attempt's id.
         let attemptID = session.processingAttempts.last(where: { $0.completedAt == nil })?.id ?? UUID()
         if !self.isOpen {
-            await withCheckedContinuation { self.continuation = $0 }
+            let cancellation = self.cancellation.continuation
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { self.continuation = $0 }
+            } onCancel: {
+                cancellation.yield(())
+            }
         }
         return MeetingProcessingResult(
             speakers: [],
