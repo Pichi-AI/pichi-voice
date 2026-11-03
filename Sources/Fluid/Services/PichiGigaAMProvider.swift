@@ -717,6 +717,11 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             }
             capture?.observedText = result.text
         }
+        DebugLogger.shared.info(
+            "GigaAM voice enrollment requested=\(capturePronunciation) encoder=\(usesEncoder) " +
+                "windows=\(result.encoderWindows.count) samples=\(samples.count) captured=\(capture != nil)",
+            source: "PronunciationMatching"
+        )
         try Task.checkCancellation()
         guard self.lifecycleGeneration == generation, self.isReady else { throw CancellationError() }
         return ASRTranscriptionResult(text: result.text, confidence: result.confidence,
