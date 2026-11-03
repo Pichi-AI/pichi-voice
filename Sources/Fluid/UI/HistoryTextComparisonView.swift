@@ -113,60 +113,69 @@ struct HistoryTextComparisonView: View {
 
     private func section(title: String, content: String, isOriginal: Bool) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    self.sectionTitle(title)
-                    self.enhancementBadge(isOriginal: isOriginal)
-                    Spacer(minLength: 8)
-                    self.copyButton(content, isOriginal: isOriginal)
-                }
-                .fixedSize(horizontal: true, vertical: false)
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        self.sectionTitle(title)
-                        Spacer(minLength: 8)
-                        self.copyButton(content, isOriginal: isOriginal)
-                    }
-                    self.enhancementBadge(isOriginal: isOriginal)
-                }
-            }
-            DictionarySelectableTranscript(
-                text: self.attributedText(content, isOriginal: isOriginal),
-                inlineEditingEnabled: !isOriginal,
-                interactionIdentity: "\(self.entry.id):\(self.interactionEpoch)",
-                accentColor: NSColor(self.theme.palette.accent),
-                editorBackgroundColor: NSColor(self.theme.palette.cardBackground),
-                editorTextColor: NSColor(self.theme.palette.primaryText),
-                onBeginEdit: isOriginal ? nil : { range in self.beginInlineCorrection(range: range, source: content) },
-                onEndEdit: { self.activeInlineCorrection = nil },
-                onEdit: isOriginal ? nil : self.commitInlineCorrection,
-                onCorrect: { range in
-                    self.correctionSelection = DictionaryHistoryWordSelection(
-                        entryID: self.entry.id, sourceText: content, range: range, isOriginal: isOriginal
-                    )
-                }
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
-            if !isOriginal {
-                if let error = self.inlineError {
-                    Text(PichiLocalization.text(error)).font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
-                } else if self.savedInlineCorrection?.entryID == self.entry.id {
-                    HStack(spacing: 8) {
-                        Label(PichiLocalization.text(self.isPreparingPronunciation ? "Preparing pronunciation sample…" : "Correction saved"), systemImage: "checkmark.circle")
-                            .foregroundStyle(self.theme.palette.secondaryText)
-                        Spacer(minLength: 8)
-                        Button("Record pronunciation", action: self.openSavedInlinePronunciation)
-                            .buttonStyle(.borderless)
-                            .disabled(self.isPreparingPronunciation)
-                    }
-                    .font(self.theme.typography.caption)
-                }
-            }
+            self.sectionHeader(title: title, content: content, isOriginal: isOriginal)
+            self.transcript(content: content, isOriginal: isOriginal)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if !isOriginal { self.inlineStatus }
         }
         .padding(20)
         .background { RoundedRectangle(cornerRadius: 16).fill(self.theme.palette.cardBackground) }
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(self.theme.palette.cardBorder.opacity(0.5)))
+        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(self.theme.palette.cardBorder.opacity(0.5)) }
+    }
+
+    private func sectionHeader(title: String, content: String, isOriginal: Bool) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                self.sectionTitle(title)
+                self.enhancementBadge(isOriginal: isOriginal)
+                Spacer(minLength: 8)
+                self.copyButton(content, isOriginal: isOriginal)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    self.sectionTitle(title)
+                    Spacer(minLength: 8)
+                    self.copyButton(content, isOriginal: isOriginal)
+                }
+                self.enhancementBadge(isOriginal: isOriginal)
+            }
+        }
+    }
+
+    private func transcript(content: String, isOriginal: Bool) -> DictionarySelectableTranscript {
+        var view = DictionarySelectableTranscript(text: self.attributedText(content, isOriginal: isOriginal)) { range in
+            self.correctionSelection = DictionaryHistoryWordSelection(
+                entryID: self.entry.id, sourceText: content, range: range, isOriginal: isOriginal)
+        }
+        view.inlineEditingEnabled = !isOriginal
+        view.interactionIdentity = "\(self.entry.id):\(self.interactionEpoch)"
+        view.accentColor = NSColor(self.theme.palette.accent)
+        view.editorBackgroundColor = NSColor(self.theme.palette.cardBackground)
+        view.editorTextColor = NSColor(self.theme.palette.primaryText)
+        view.onEndEdit = { self.activeInlineCorrection = nil }
+        if !isOriginal {
+            view.onBeginEdit = { range in self.beginInlineCorrection(range: range, source: content) }
+            view.onEdit = { range, replacement in self.commitInlineCorrection(range: range, replacement: replacement) }
+        }
+        return view
+    }
+
+    @ViewBuilder private var inlineStatus: some View {
+        if let error = self.inlineError {
+            Text(PichiLocalization.text(error)).font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
+        } else if self.savedInlineCorrection?.entryID == self.entry.id {
+            HStack(spacing: 8) {
+                Label(PichiLocalization.text(self.isPreparingPronunciation ? "Preparing pronunciation sample…" : "Correction saved"), systemImage: "checkmark.circle")
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                Spacer(minLength: 8)
+                Button("Record pronunciation", action: self.openSavedInlinePronunciation)
+                    .buttonStyle(.borderless)
+                    .disabled(self.isPreparingPronunciation)
+            }
+            .font(self.theme.typography.caption)
+        }
     }
 
     private func sectionTitle(_ title: String) -> some View {
