@@ -79,11 +79,35 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
     ) async throws -> PronunciationEnrollmentCapture? {
         try Task.checkCancellation()
         guard self.validModelKey(modelKey), !samples.isEmpty, samples.count <= 240_000,
+              !featureFrames.isEmpty, featureFrames.count <= 256,
               samples.allSatisfy(\.isFinite), words.count <= 4_096,
               words.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.start < $0.end &&
                   $0.end <= Double(samples.count) / 16_000 + 0.08 }) else { return nil }
-        guard let range = focalRange ?? DictionaryPronunciationExperiment.trimmedRange(samples),
+        let timedWords = words.map { DictionaryAudioInspection.Word(text: $0.text, start: $0.start, end: $0.end) }
+        guard var range = focalRange ?? DictionaryPronunciationExperiment.wordRange(samples, words: timedWords)
+            ?? DictionaryPronunciationExperiment.trimmedRange(samples),
               !range.isEmpty, range.lowerBound >= 0, range.upperBound <= samples.count else { return nil }
+        if focalRange == nil {
+            // A live recording need not end on the encoder's 40 ms clock. Its
+            // final incomplete analysis frame can be absent while ASR succeeds.
+            // Only an implicit cut may omit that uncovered tail. Original PCM
+            // stays intact and explicit corrections retain their exact bounds.
+            let coveredEnd = featureFrames.compactMap { window -> Double? in
+                let frames = window.frames
+                guard frames.offset.isFinite, frames.frameDuration == GigaAMEncoderFeatures.frameDuration,
+                      frames.hiddenSize == GigaAMEncoderFeatures.dimension, frames.count > 0 else { return nil }
+                return frames.offset + Double(frames.count) * frames.frameDuration
+            }.max()
+            if let coveredEnd, coveredEnd.isFinite, coveredEnd >= 0,
+               coveredEnd < Double(samples.count) / 16_000 {
+                let coveredSamples = Int((coveredEnd * 16_000).rounded(.down))
+                let shortage = samples.count - coveredSamples
+                if (1...640).contains(shortage), range.upperBound > coveredSamples {
+                    guard range.lowerBound < coveredSamples else { return nil }
+                    range = range.lowerBound..<coveredSamples
+                }
+            }
+        }
         do {
             guard let cut = try self.focalFeatures(featureFrames, sampleCount: samples.count, range: range),
                   let mean = cut.features.meanL2 else { return nil }

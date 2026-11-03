@@ -68,7 +68,11 @@ nonisolated enum DictionaryNegativeExampleStore {
 
 @main @MainActor struct GigaAMEncoderDictionaryStorageTests {
     static var checks = 0
-    static func expect(_ value: Bool, _ message: String) { checks += 1; precondition(value, message) }
+    static func expect(_ value: Bool, _ message: String) {
+        checks += 1
+        if !value { FileHandle.standardError.write(Data(("FAILED: " + message + "\n").utf8)) }
+        precondition(value, message)
+    }
     static func window(offset: Double = 0, first: Int = 0, count: Int = 25,
                        recipe: String = GigaAMEncoderFeatures.extractorVersion) -> DictionaryLearningFeatureFrames {
         var values = [Float](repeating: 0, count: count * 768)
@@ -100,6 +104,33 @@ nonisolated enum DictionaryNegativeExampleStore {
             featureFrames: [window()], words: [])
         expect(trimmed?.pendingInspection?.samples == quiet && trimmed?.pendingInspection?.selectedStart == 0.18 &&
             trimmed?.pendingInspection?.selectedEnd == 0.72, "Manual enrollment uses existing quiet-edge selection without modifying PCM")
+        let partialTail = [Float](repeating: 0.2, count: 16_001)
+        let partial = try await GigaAMEncoderDictionaryStorage.enrollment(samples: partialTail, modelKey: key,
+            featureFrames: [window()], words: [])
+        expect(partial?.pendingInspection?.selectedEnd == 1 && partial?.pendingInspection?.samples == partialTail &&
+            partial?.pendingInspection?.recordedSampleCount == 16_001,
+            "An implicit manual cut may omit an uncovered partial final frame while preserving exact recorded PCM")
+        expect(try await GigaAMEncoderDictionaryStorage.enrollment(samples: partialTail, modelKey: key,
+            featureFrames: [window()], words: [], focalRange: 0..<16_001) == nil,
+            "An explicit correction range may not silently lose its uncovered final samples")
+        expect(try await GigaAMEncoderDictionaryStorage.enrollment(samples: [Float](repeating: 0.2, count: 16_641), modelKey: key,
+            featureFrames: [window()], words: []) == nil,
+            "A missing feature interval longer than one 40 ms frame is not a partial tail")
+        expect(try await GigaAMEncoderDictionaryStorage.enrollment(samples: partialTail, modelKey: key,
+            featureFrames: [window(count: 10), window(offset: 0.4, count: 15)], words: []) == nil,
+            "Partial-tail handling cannot stitch separate encoder windows")
+        expect(try await GigaAMEncoderDictionaryStorage.enrollment(samples: partialTail, modelKey: key,
+            featureFrames: [.init(extractorVersion: GigaAMEncoderFeatures.extractorVersion,
+                frames: .init(offset: 0, frameDuration: 0.08, hiddenSize: 768, values: window().frames.values))], words: []) == nil,
+            "An incompatible feature clock is not eligible for partial-tail handling")
+        var ambient = [Float](repeating: 0.004, count: 16_001)
+        for index in 4_800..<9_600 { ambient[index] = 0.2 }
+        let wordCut = try await GigaAMEncoderDictionaryStorage.enrollment(samples: ambient, modelKey: key,
+            featureFrames: [window()], words: [.init(text: "Alfa", start: 0.3, end: 0.6)])
+        expect(wordCut?.pendingInspection?.samples == ambient &&
+            (0.25...0.3).contains(wordCut?.pendingInspection?.selectedStart ?? -1) &&
+            (0.6...0.67).contains(wordCut?.pendingInspection?.selectedEnd ?? -1),
+            "CTC word bounds use the existing speech-edge policy instead of learning continuous room noise")
         expect(try await GigaAMEncoderDictionaryStorage.enrollment(samples: pcm, modelKey: key,
             featureFrames: [], words: words) == nil, "Missing learned features cannot trigger another inference")
         expect(try await GigaAMEncoderDictionaryStorage.enrollment(samples: pcm, modelKey: key,
