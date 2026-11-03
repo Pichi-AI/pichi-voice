@@ -130,34 +130,61 @@ final class MeetingApplicationAudioFilterTests: XCTestCase {
         }
     }
 
-    func testStaleOrReusedSavedPIDResolvesOnlyTheSelectedBundle() async throws {
+    func testStaleSavedPIDRequiresExplicitRelaunchRecovery() async throws {
         guard #available(macOS 15.2, *) else { throw XCTSkip("Filter inspection requires macOS 15.2") }
         let (content, application, display) = try await self.currentProcessContent()
-        let unrelated = content.applications.first(where: { $0.bundleIdentifier != application.bundleIdentifier })
+        let applications = content.applications.filter { $0.bundleIdentifier != application.bundleIdentifier } + [application]
         let selection = MeetingApplicationIdentity(
-            bundleIdentifier: application.bundleIdentifier, processID: unrelated?.processID ?? -1,
+            bundleIdentifier: application.bundleIdentifier, processID: -1,
             displayName: "Selected application", displayID: display.displayID, windowID: UInt32.max
         )
+        // Starting a recording cannot replace the process shown at confirmation.
+        XCTAssertThrowsError(try MeetingScreenCaptureAudioSettings.contentFilter(
+            for: .application(selection), applications: applications, displays: content.displays
+        ))
+        // An existing recording may recover one matching bundle after its original PID exits.
         let result = try MeetingScreenCaptureAudioSettings.contentFilter(
-            for: .application(selection), applications: content.applications, displays: content.displays
+            for: .application(selection), applications: applications, displays: content.displays,
+            allowApplicationRelaunch: true
         )
         XCTAssertEqual(result.filter.includedApplications.map(\.processID), [application.processID])
         XCTAssertEqual(result.filter.includedApplications.map(\.bundleIdentifier), [application.bundleIdentifier])
+        XCTAssertEqual(result.filter.includedDisplays.map(\.displayID), [display.displayID])
         XCTAssertNotEqual(result.filter.style, .window)
+        guard case .display = result.scope else { return XCTFail("recovery must retain selected-application scope") }
     }
 
-    func testUnavailableSelectedApplicationCannotCaptureAnUnrelatedProcessOrSystemAudio() async throws {
+    func testRelaunchRecoveryRejectsAmbiguousSelectedBundleCandidates() async throws {
+        let (_, application, display) = try await self.currentProcessContent()
+        let selection = MeetingApplicationIdentity(
+            bundleIdentifier: application.bundleIdentifier, processID: -1,
+            displayName: "Selected application", displayID: display.displayID
+        )
+        // Repeating the native candidate exercises the multiple-match guard deterministically,
+        // without launching another app process for this filter inspection.
+        XCTAssertThrowsError(try MeetingScreenCaptureAudioSettings.contentFilter(
+            for: .application(selection), applications: [application, application], displays: [display],
+            allowApplicationRelaunch: true
+        ))
+    }
+
+    func testUnavailableOrReusedPIDCannotCaptureAnUnrelatedProcessOrSystemAudio() async throws {
         let (content, application, display) = try await self.currentProcessContent()
         let selection = MeetingApplicationIdentity(
             bundleIdentifier: "example.invalid.missing-capture-target", processID: application.processID,
             displayName: "Missing application", displayID: display.displayID
         )
-        XCTAssertThrowsError(try MeetingScreenCaptureAudioSettings.contentFilter(
-            for: .application(selection), applications: content.applications, displays: content.displays
-        ))
-        XCTAssertThrowsError(try MeetingScreenCaptureAudioSettings.contentFilter(
-            for: .application(selection), applications: [], displays: content.displays
-        ))
+        for allowApplicationRelaunch in [false, true] {
+            // A live PID belonging to a different bundle cannot satisfy the selected identity.
+            XCTAssertThrowsError(try MeetingScreenCaptureAudioSettings.contentFilter(
+                for: .application(selection), applications: content.applications, displays: content.displays,
+                allowApplicationRelaunch: allowApplicationRelaunch
+            ))
+            XCTAssertThrowsError(try MeetingScreenCaptureAudioSettings.contentFilter(
+                for: .application(selection), applications: [], displays: content.displays,
+                allowApplicationRelaunch: allowApplicationRelaunch
+            ))
+        }
         // System capture is available only through its explicit source, independently of apps.
         let system = try MeetingScreenCaptureAudioSettings.contentFilter(
             for: .systemAudio, applications: [], displays: content.displays
