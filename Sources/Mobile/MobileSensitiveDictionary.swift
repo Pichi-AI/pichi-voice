@@ -126,7 +126,7 @@ private struct MobileSensitiveDictionaryInlineEditor: View {
             }
             if let error { Text(error).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
                 .accessibilityIdentifier("privacy.dictionary.error") }
-        }.accessibilityIdentifier("privacy.dictionary.inlineEditor")
+        }.accessibilityElement(children: .contain)
             .onAppear { focused = true }
             .onDisappear { focused = false }
     }

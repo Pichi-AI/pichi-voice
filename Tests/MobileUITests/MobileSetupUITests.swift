@@ -332,6 +332,15 @@ final class MobileSetupUITests: XCTestCase {
             let add = app.buttons["privacy.dictionary.add"]
             capture("dictionary-\(language)-\(appearance)-00-settings")
             add.tap()
+            // A fresh simulator can present the OS keyboard's one-time typing tip.
+            // This is fixture setup, independent of the app's automatic field focus.
+            for host in [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")] {
+                let tip = host.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Speed up your typing")).firstMatch
+                if tip.waitForExistence(timeout: 1) {
+                    capture("dictionary-\(language)-\(appearance)-keyboard-welcome")
+                    host.buttons["Continue"].tap()
+                }
+            }
             let input = app.textFields["privacy.dictionary.phrase"]
             XCTAssertTrue(input.waitForExistence(timeout: 5))
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Keyboard must appear without tapping the input")
