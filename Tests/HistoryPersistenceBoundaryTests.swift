@@ -289,8 +289,8 @@ final class DebugLogger {
         let sourceEdited = store.entries[0]
         precondition(sourceEdited.sourceTranscriptText == "Ёжик 🦔 Pech и Pichi." && sourceEdited.rawText == sourceOriginal.rawText,
             "Source edits preserve exact immutable ASR bytes and the selected repeated occurrence")
-        precondition(sourceEdited.processedText == sourceOriginal.processedText && sourceEdited.originalProcessedText == nil,
-            "A source correction does not overwrite independently formatted AI text")
+        precondition(sourceEdited.processedText.contains("Pichi") && sourceEdited.originalProcessedText == sourceOriginal.processedText,
+            "Explicit source corrections override divergent AI output and preserve its original bytes")
         precondition(store.search(query: "Pichi").map(\.id) == [sourceOriginal.id] && sourceEdited.searchRecord.text.contains("Pichi"))
         precondition(!store.applyWordCorrection(entryID: sourceOriginal.id, expectedText: sourceOriginal.rawText,
             range: sourceRange, replacement: "Stale", profile: profile, isOriginal: true))
@@ -310,6 +310,55 @@ final class DebugLogger {
             store.entries[0].clipboardText == "Приложение Pichi AI." && store.entries[0].rawText == identical.rawText &&
             store.entries[0].originalProcessedText == identical.processedText,
             "Identical source/final text shares the exact user correction while preserving both model outputs")
+        let correctionCases:[(String,String,String,String)] = [
+   ("Итак, проверим Peachi AI, Newo и Asprity.", "Итак, проверим Pichi AI, Newo и Asprity.", "Итак, проверим Peach I, Newa и aspirity.", "Итак, проверим Pichi AI, Newa и aspirity."),
+   ("Проверь Peachi AI, потом Asprity и Arcody.","Проверь Pichi AI, потом Aspirity и Aircody.","Проверь Peach I,\nпотом aspirity и Arcodi!","Проверь Pichi AI,\nпотом Aspirity и Aircody!"),
+   ("Сначала Pech AI, потом Pech AI.","Сначала Pech AI, потом Pichi AI.","Сначала Peach I,\nпотом Peach I.","Сначала Peach I,\nпотом Pichi AI."),
+   ("Тут Pech.","Тут Pichi AI.","Тут Peach!","Тут Pichi AI!"),
+   ("Тут старый термин.","Тут термин.","Тут старый, термин!","Тут термин!"),
+   ("Hello world","Hello friend","Hello,\nworld!","Hello,\nfriend!"),
+   ("Ёжик 🦔 Pech AI.","Ёжик 🦔 Pichi AI.","Ёжик 🦔 Peach I!","Ёжик 🦔 Pichi AI!"),
+   ("Тут модель.","Тут Pichi AI модель.","Тут модель!","Тут Pichi AI модель!"),
+   ("тут Pech.","тут Pichi.","Тут Pichi!","Тут Pichi!"),
+   ("Слово.","Термин.","","Термин.")
+  ]
+        for (raw, corrected, formatted, expected) in correctionCases {
+            let result = SourceTranscriptCorrection.apply(original: raw, corrected: corrected, to: formatted)
+            precondition(result == expected, "Source correction must reach the selected final span: \(result)")
+            precondition(SourceTranscriptCorrection.apply(original: raw, corrected: corrected, to: result) == result,
+                "Repeated reconciliation cannot duplicate an inserted compound")
+        }
+        let reverted = TranscriptionHistoryEntry(rawText: "Тут Pech AI.", processedText: "Тут Pichi AI!",
+            appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: true,
+            originalProcessedText: "Тут Peach I!", correctedRawText: "Тут Pichi AI.").replacingSourceText("Тут Pech AI.")
+        precondition(reverted.processedText == "Тут Pech AI!", "Reverting a source correction also changes its final occurrence")
+        let large = String(repeating: "one two ", count: 3000)
+        precondition(SourceTranscriptCorrection.apply(original: large, corrected: large + "Pichi AI", to: "AI rewrite") == large + "Pichi AI",
+            "Oversized alignment falls back to authoritative corrected source within a bounded token budget")
+        let legacyCorrected = TranscriptionHistoryEntry(rawText: "Тут Peachi AI.", processedText: "Тут Peach I!",
+            appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: true, audio: audio,
+            correctedRawText: "Тут Pichi AI.")
+        let legacyURL = root.appendingPathComponent("source-reconciliation.sqlite3")
+        let legacyWriter = TranscriptionHistoryWriter(defaults: defaults, url: legacyURL)
+        let legacyStore = TranscriptionHistoryStore(writer: legacyWriter)
+        try await legacyStore.waitUntilLoaded()
+        legacyStore.restore(from: [legacyCorrected])
+        await legacyStore.finishPendingWrites()
+        precondition(legacyStore.entries[0].processedText == "Тут Pichi AI!")
+        // Seed a genuinely old, mismatched row directly through the real writer.
+        legacyWriter.write(upserts: [legacyCorrected], deletes: [], replacing: true) { _ in }
+        let migrationWriteError = await legacyWriter.drain()
+        precondition(migrationWriteError == nil)
+        let repairedStore = TranscriptionHistoryStore(writer: legacyWriter)
+        try await repairedStore.waitUntilLoaded()
+        await repairedStore.finishPendingWrites()
+        let repaired = repairedStore.entries[0]
+        precondition(repaired.processedText == "Тут Pichi AI!" && repaired.rawText == legacyCorrected.rawText &&
+            repaired.audio == legacyCorrected.audio && repaired.originalProcessedText == legacyCorrected.processedText &&
+            repaired.searchRevision != nil, "Existing manual source edits reconcile on load without changing provenance")
+        let stableStore = TranscriptionHistoryStore(writer: legacyWriter)
+        try await stableStore.waitUntilLoaded()
+        precondition(stableStore.entries[0] == repaired, "Reopening an already-repaired entry is a no-op")
         print("PASS: source and final corrections, exact UTF16 occurrence, provenance, search, persistence, audio, backup and legacy decoding")
     }
 

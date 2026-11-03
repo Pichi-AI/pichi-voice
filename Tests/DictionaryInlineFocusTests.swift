@@ -13,7 +13,7 @@ private struct InlineFocusHost: View {
     @ObservedObject var state: InlineFocusState
     var body: some View {
         var view = DictionarySelectableTranscript(text: NSAttributedString(
-            string: "Ёжик 🦔 Pech и Pech.", attributes: [.font: NSFont.systemFont(ofSize: 16)])) { _ in }
+            string: "Ёжик 🦔 Pech AI и Pech AI.", attributes: [.font: NSFont.systemFont(ofSize: 16)])) { _ in }
         view.inlineEditingEnabled = true
         view.interactionIdentity = "stable-source"
         view.onBeginEdit = { _ in state.begins += 1; return true }
@@ -62,9 +62,30 @@ private struct InlineFocusHost: View {
         field.stringValue = "Pichi"
         precondition(view.commitInlineEdit() && state.commits == ["Pichi"])
         precondition(view.inlineEditor == nil)
+        let phrase = (source as NSString).range(of: "Pech AI", options: .backwards)
+        let firstGlyphs = view.layoutManager!.glyphRange(forCharacterRange: NSRange(location: phrase.location, length: 1), actualCharacterRange: nil)
+        let lastGlyphs = view.layoutManager!.glyphRange(forCharacterRange: NSRange(location: NSMaxRange(phrase) - 1, length: 1), actualCharacterRange: nil)
+        let startBox = view.layoutManager!.boundingRect(forGlyphRange: firstGlyphs, in: view.textContainer!)
+        let endBox = view.layoutManager!.boundingRect(forGlyphRange: lastGlyphs, in: view.textContainer!)
+        let dragStart = view.convert(NSPoint(x: startBox.minX + 0.1, y: startBox.midY), to: nil)
+        let dragEnd = view.convert(NSPoint(x: endBox.maxX - 0.1, y: endBox.midY), to: nil)
+        func mouse(_ type: NSEvent.EventType, _ point: NSPoint, _ number: Int) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 2 + Double(number) / 100,
+                windowNumber: window.windowNumber, context: nil, eventNumber: number, clickCount: 1,
+                pressure: type == .leftMouseUp ? 0 : 1)!
+        }
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        NSApp.postEvent(mouse(.leftMouseUp, dragEnd, 12), atStart: true)
+        NSApp.postEvent(mouse(.leftMouseDragged, dragEnd, 11), atStart: true)
+        view.mouseDown(with: mouse(.leftMouseDown, dragStart, 10))
+        pump()
+        precondition(view.inlineEdit?.range == phrase && view.inlineEditor?.stringValue == "Pech AI",
+            "Dragging across two fragments opens one whole-phrase editor after mouse release")
+        view.inlineEditor!.stringValue = "Pichi AI"
+        precondition(view.commitInlineEdit() && state.commits == ["Pichi", "Pichi AI"])
         precondition(view.beginInlineEdit(range: last)); pump()
         view.cancelInlineEdit(); pump()
-        precondition(view.inlineEditor == nil && state.commits.count == 1, "Cancel must not save")
+        precondition(view.inlineEditor == nil && state.commits.count == 2, "Cancel must not save")
         precondition(view.beginInlineEdit(range: last)); pump()
         guard let losingField = view.inlineEditor else { preconditionFailure() }
         window.makeFirstResponder(view)
@@ -77,6 +98,6 @@ private struct InlineFocusHost: View {
         pump()
         precondition(view.inlineEditor == nil && !view.commitInlineEdit(), "Stale entry cancels without saving")
         window.close()
-        print("PASS: native left click and inline focus survive SwiftUI updates and late notifications; save, cancel, focus loss and stale identity")
+        print("PASS: native multiword drag, left click and inline focus survive SwiftUI updates and late notifications; save, cancel, focus loss and stale identity")
     }
 }

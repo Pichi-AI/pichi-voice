@@ -7,6 +7,7 @@ struct HistoryTextComparisonView: View {
     let copy: (String) -> Void
     @State private var showChanges = true
     @State private var comparison: HistoryTextDiff?
+    @State private var sourceCorrections: HistoryTextDiff?
     @State private var comparisonMessage: String?
     @State private var comparedInput: ComparisonInput?
     @State private var correctionSelection: DictionaryHistoryWordSelection?
@@ -20,6 +21,7 @@ struct HistoryTextComparisonView: View {
     private struct ComparisonInput: Equatable {
         let entryID: UUID
         let rawText: String
+        let originalRawText: String
         let finalText: String
         let showChanges: Bool
         let manuallyEdited: Bool
@@ -42,6 +44,7 @@ struct HistoryTextComparisonView: View {
 
     private var comparisonInput: ComparisonInput {
         ComparisonInput(entryID: self.entry.id, rawText: self.entry.sourceTranscriptText,
+                        originalRawText: self.entry.rawText,
                         finalText: self.entry.clipboardText ?? "", showChanges: self.showChanges,
                         manuallyEdited: self.entry.originalProcessedText != nil)
     }
@@ -72,15 +75,19 @@ struct HistoryTextComparisonView: View {
             let input = self.comparisonInput
             guard self.hasComparisonSource, self.showChanges else {
                 self.comparison = nil
+                self.sourceCorrections = nil
+                self.comparedInput = nil
                 self.comparisonMessage = nil
                 return
             }
             guard self.comparedInput != input else { return }
-            let result = await Task.detached(priority: .utility) {
-                HistoryTextDiff.compare(original: input.rawText, final: input.finalText)
+            let (result, sourceEdits) = await Task.detached(priority: .utility) {
+                (HistoryTextDiff.compare(original: input.rawText, final: input.finalText),
+                 HistoryTextDiff.compare(original: input.originalRawText, final: input.rawText))
             }.value
             guard !Task.isCancelled, self.comparisonInput == input else { return }
             self.comparison = result
+            self.sourceCorrections = sourceEdits
             self.comparedInput = input
             self.comparisonMessage = result == nil
                 ? "This entry is too long for inline comparison. Both texts remain available below."
@@ -209,6 +216,26 @@ struct HistoryTextComparisonView: View {
             .foregroundColor: NSColor(isOriginal ? self.theme.palette.secondaryText : self.theme.palette.primaryText),
             .paragraphStyle: paragraph,
         ]
+        if isOriginal {
+            let result = NSMutableAttributedString(string: content, attributes: attributes)
+            // A corrected source contains current words, not deleted words. Give
+            // explicit user corrections positive emphasis instead of AI deletion markup.
+            if self.showChanges, let edits = self.sourceCorrections,
+               edits.final.map(\.text).joined() == content {
+                var offset = 0
+                for run in edits.final {
+                    let range = NSRange(location: offset, length: run.text.utf16.count)
+                    if run.changed {
+                        result.addAttributes([
+                            .foregroundColor: NSColor(self.theme.palette.accentText),
+                            .backgroundColor: NSColor(self.theme.palette.accent.opacity(0.16)),
+                        ], range: range)
+                    }
+                    offset += range.length
+                }
+            }
+            return result
+        }
         guard self.showChanges, let comparison,
               (isOriginal ? comparison.original : comparison.final).map(\.text).joined() == content
         else { return NSAttributedString(string: content, attributes: attributes) }
@@ -216,8 +243,8 @@ struct HistoryTextComparisonView: View {
         for run in isOriginal ? comparison.original : comparison.final {
             var runAttributes = attributes
             if run.changed {
-                runAttributes[.foregroundColor] = NSColor(self.theme.palette.readableText(isOriginal ? .red : .green))
-                runAttributes[isOriginal ? .strikethroughStyle : .underlineStyle] = NSUnderlineStyle.single.rawValue
+                runAttributes[.foregroundColor] = NSColor(self.theme.palette.readableText(.green))
+                runAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
             }
             result.append(NSAttributedString(string: run.text, attributes: runAttributes))
         }
@@ -263,11 +290,17 @@ struct HistoryTextComparisonView: View {
         self.inlineError = nil
         // Explicitly edited text can be a new term. Existing compounds retain all
         // unchanged components through the same detector used by fresh dictation.
-        let candidate = AutomaticDictionaryCorrectionDetector.candidate(
+        let detected = AutomaticDictionaryCorrectionDetector.candidate(
             before: context.edit.sourceText, after: updatedText,
             insertedRange: NSRange(location: 0, length: (context.edit.sourceText as NSString).length),
             knownCanonicalTerms: context.canonicalTerms
-        ) ?? self.explicitInlineCandidate(context: context, replacement: replacement)
+        )
+        let explicit = self.explicitInlineCandidate(context: context, replacement: replacement)
+        let selectedPhrase = DictionaryInlineTextEdit.wordRanges(in: context.edit.heardText).count > 1 ||
+            DictionaryInlineTextEdit.wordRanges(in: replacement).count > 1
+        // A user-selected compound is one dictionary value, including unchanged
+        // components. Single-word edits may still expand a known compound.
+        let candidate = selectedPhrase ? explicit : (detected ?? explicit)
         self.savedInlineCorrection = candidate.map {
             SavedInlineCorrection(entryID: context.entryID, expectedText: updatedText, sourceText: context.edit.sourceText,
                                   profile: context.profile, candidate: $0)

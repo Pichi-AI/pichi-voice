@@ -261,13 +261,14 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         )
     }
 
-    /// An explicit source correction stays separate from immutable ASR bytes.
-    /// Mirror it into the final text only when both displayed texts were identical.
+    /// Every accumulated explicit source correction overrides the corresponding
+    /// formatted span, while the exact ASR and first model output stay immutable.
     func replacingSourceText(_ text: String) -> TranscriptionHistoryEntry {
-        let mirrorsFinal = self.clipboardText == self.sourceTranscriptText
+        let latest = SourceTranscriptCorrection.apply(original: self.sourceTranscriptText, corrected: text, to: self.processedText)
+        let final = SourceTranscriptCorrection.apply(original: self.rawText, corrected: text, to: latest)
         return TranscriptionHistoryEntry(
             id: self.id, timestamp: self.timestamp, rawText: self.rawText,
-            processedText: mirrorsFinal ? text : self.processedText,
+            processedText: final,
             appName: self.appName, windowTitle: self.windowTitle,
             wasAIProcessed: self.wasAIProcessed, processingModel: self.processingModel,
             transcriptionDurationMilliseconds: self.transcriptionDurationMilliseconds,
@@ -275,9 +276,15 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             aiProcessingDurationMilliseconds: self.aiProcessingDurationMilliseconds,
             aiTokensPerSecond: self.aiTokensPerSecond, aiProcessingError: self.aiProcessingError,
             audio: self.audio, isStarred: self.isStarred, searchRevision: self.searchRevision,
-            originalProcessedText: mirrorsFinal ? (self.originalProcessedText ?? self.processedText) : self.originalProcessedText,
+            originalProcessedText: self.originalProcessedText ?? self.processedText,
             correctedRawText: text
         )
+    }
+
+    func reconcilingSourceCorrections() -> TranscriptionHistoryEntry {
+        guard let correctedRawText else { return self }
+        let updated = self.replacingSourceText(correctedRawText)
+        return updated.processedText == self.processedText ? self : updated
     }
 
     /// A restore can hand an existing id different text, and the search index only
@@ -288,6 +295,153 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         let now = UInt64(max(1, date.timeIntervalSince1970 * 1000))
         let base = max(now, self.searchRevision ?? 1, indexed ?? 1)
         self.searchRevision = base == .max ? .max : base + 1
+    }
+}
+
+/// Projects explicit source edits through the formatter's token alignment. Original
+/// ASR bytes stay immutable; only user-edited spans override the formatted output.
+nonisolated enum SourceTranscriptCorrection {
+    private struct Token {
+        var text: String
+        var range: NSRange
+        let kind: Int // word, whitespace, punctuation/grapheme
+        var key: String { text.folding(options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX")) }
+    }
+
+    private static func tokens(_ text: String, includingWhitespace: Bool) -> [Token] {
+        var result: [Token] = []
+        var offset = 0
+        for character in text {
+            let value = String(character)
+            let length = value.utf16.count
+            let kind = character.isWhitespace ? 1 : (character.unicodeScalars.allSatisfy {
+                CharacterSet.alphanumerics.contains($0) || CharacterSet.nonBaseCharacters.contains($0) || $0 == "_"
+            } ? 0 : 2)
+            defer { offset += length }
+            guard includingWhitespace || kind != 1 else { continue }
+            if kind != 2, let last = result.last, last.kind == kind, NSMaxRange(last.range) == offset {
+                result[result.count - 1].range.length += length
+            } else {
+                result.append(Token(text: "", range: NSRange(location: offset, length: length), kind: kind))
+            }
+        }
+        let string = text as NSString
+        return result.map { Token(text: string.substring(with: $0.range), range: $0.range, kind: $0.kind) }
+    }
+
+    private static func matches(_ before: [String], _ after: [String]) -> [(Int, Int)] {
+        var removed = Set<Int>(), added = Set<Int>()
+        for change in after.difference(from: before) {
+            switch change {
+            case let .remove(offset, _, _): removed.insert(offset)
+            case let .insert(offset, _, _): added.insert(offset)
+            }
+        }
+        var source = 0, target = 0
+        var result: [(Int, Int)] = []
+        while source < before.count, target < after.count {
+            if removed.contains(source) { source += 1 }
+            else if added.contains(target) { target += 1 }
+            else { result.append((source, target)); source += 1; target += 1 }
+        }
+        return result
+    }
+
+    static func apply(original: String, corrected: String, to final: String) -> String {
+        guard original != corrected else { return final }
+        let before = tokens(original, includingWhitespace: true)
+        let after = tokens(corrected, includingWhitespace: true)
+        guard before.count + after.count <= 2048 else { return corrected }
+        let pairs = matches(before.map(\.text), after.map(\.text)) + [(before.count, after.count)]
+        var edits: [(NSRange, String)] = []
+        var sourceStart = 0, targetStart = 0
+        for (sourceEnd, targetEnd) in pairs {
+            if sourceStart != sourceEnd || targetStart != targetEnd {
+                let start = sourceStart < before.count ? before[sourceStart].range.location : original.utf16.count
+                let end = sourceEnd < before.count ? before[sourceEnd].range.location : original.utf16.count
+                edits.append((NSRange(location: start, length: end - start), after[targetStart..<targetEnd].map(\.text).joined()))
+            }
+            sourceStart = sourceEnd + 1
+            targetStart = targetEnd + 1
+        }
+        guard edits.count <= 32 else { return corrected }
+        var source = original, output = final
+        // Later edits cannot shift the UTF-16 positions of earlier source edits.
+        for (range, replacement) in edits.reversed() {
+            let updated = (source as NSString).replacingCharacters(in: range, with: replacement)
+            output = project(source: source, final: output, range: range, replacement: replacement) ?? updated
+            source = updated
+        }
+        return output.utf16.count <= 100_000 ? output : corrected
+    }
+
+    private static func project(source: String, final: String, range: NSRange, replacement: String) -> String? {
+        if source == final { return (source as NSString).replacingCharacters(in: range, with: replacement) }
+        let before = tokens(source, includingWhitespace: false), after = tokens(final, includingWhitespace: false)
+        guard !before.isEmpty, !after.isEmpty, before.count + after.count <= 2048 else { return nil }
+        let selected: [Int]
+        if range.length == 0 {
+            let word = before.indices.first { before[$0].kind == 0 && before[$0].range.location <= range.location && NSMaxRange(before[$0].range) >= range.location }
+            selected = word.map { [$0] } ?? before.indices.filter { before[$0].range.location == range.location }
+        } else {
+            selected = before.indices.filter { NSIntersectionRange(before[$0].range, range).length > 0 }
+        }
+        let first = selected.first ?? before.lastIndex { NSMaxRange($0.range) <= range.location } ?? 0
+        let last = selected.last ?? before.firstIndex { $0.range.location >= NSMaxRange(range) } ?? (before.count - 1)
+        guard first <= last else { return nil }
+        let pairs = matches(before.map(\.key), after.map(\.key))
+        let left = pairs.last { $0.0 < first }, right = pairs.first { $0.0 > last }
+        let firstMatch = pairs.first { $0.0 == first }, lastMatch = pairs.first { $0.0 == last }
+        if range.length == 0 {
+            let inserted = tokens(replacement, includingWhitespace: false).map(\.text)
+            if !inserted.isEmpty {
+                if range.location <= before[first].range.location, let target = firstMatch?.1, target >= inserted.count,
+                   after[(target - inserted.count)..<target].map(\.text) == inserted { return final }
+                if range.location >= NSMaxRange(before[last].range), let target = lastMatch.map({ $0.1 + 1 }), target + inserted.count <= after.count,
+                   after[target..<(target + inserted.count)].map(\.text) == inserted { return final }
+            }
+        }
+        var sourceFirst = firstMatch == nil ? (left.map { $0.0 + 1 } ?? 0) : first
+        var sourceEnd = lastMatch == nil ? (right?.0 ?? before.count) : last + 1
+        while sourceFirst < first, before[sourceFirst].kind == 2 { sourceFirst += 1 }
+        while sourceEnd > last + 1, before[sourceEnd - 1].kind == 2 { sourceEnd -= 1 }
+        let sourceRange = NSUnionRange(range, NSRange(location: before[sourceFirst].range.location,
+            length: NSMaxRange(before[sourceEnd - 1].range) - before[sourceFirst].range.location))
+        let chunk = ((source as NSString).substring(with: sourceRange) as NSString).replacingCharacters(
+            in: NSRange(location: range.location - sourceRange.location, length: range.length), with: replacement)
+        var targetFirst = firstMatch?.1 ?? left.map { $0.1 + 1 } ?? 0
+        var targetEnd = lastMatch.map { $0.1 + 1 } ?? right?.1 ?? after.count
+        let untrimmedFirst = targetFirst
+        if chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            while targetEnd < (right?.1 ?? after.count), after[targetEnd].kind == 2 { targetEnd += 1 }
+        }
+        // Keep punctuation added by the formatter outside a corrected word span.
+        if !chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, before[sourceFirst].kind == 0 {
+            while targetFirst < targetEnd, after[targetFirst].kind == 2 { targetFirst += 1 }
+        }
+        if !chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, before[sourceEnd - 1].kind == 0 {
+            while targetFirst < targetEnd, after[targetEnd - 1].kind == 2 { targetEnd -= 1 }
+        }
+        if targetFirst < targetEnd {
+            var targetRange = NSRange(location: after[targetFirst].range.location,
+                length: NSMaxRange(after[targetEnd - 1].range) - after[targetFirst].range.location)
+            if chunk.isEmpty, targetRange.location > 0, NSMaxRange(targetRange) < final.utf16.count,
+               (final as NSString).substring(with: NSRange(location: targetRange.location - 1, length: 1)) == " ",
+               (final as NSString).substring(with: NSRange(location: NSMaxRange(targetRange), length: 1)) == " " {
+                targetRange.length += 1
+            }
+            return (final as NSString).replacingCharacters(in: targetRange, with: chunk)
+        }
+        let insertion = right?.1 ?? untrimmedFirst
+        let location = insertion < after.count ? after[insertion].range.location : final.utf16.count
+        guard let position = Range(NSRange(location: location, length: 0), in: final) else { return nil }
+        var inserted = chunk
+        func word(_ character: Character?) -> Bool {
+            character?.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) == true
+        }
+        if word(final[..<position.lowerBound].last), word(inserted.first) { inserted = " " + inserted }
+        if word(inserted.last), word(final[position.lowerBound...].first) { inserted += " " }
+        return (final as NSString).replacingCharacters(in: NSRange(location: location, length: 0), with: inserted)
     }
 }
 
@@ -850,7 +1004,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         let indexed = Dictionary(self.entries.map { ($0.id, $0.searchRevision ?? 1) }) { first, _ in first }
         self.entries = payload
             .map { entry in
-                var entry = entry
+                var entry = entry.reconcilingSourceCorrections()
                 entry.markRestored(over: indexed[entry.id])
                 return entry
             }
@@ -1003,12 +1157,28 @@ final class TranscriptionHistoryStore: ObservableObject {
                 }
                 var merged = self.pendingReplacement ? [] : loaded.filter { !self.pendingDeletes.contains($0.id) && upserts[$0.id] == nil }
                 merged.append(contentsOf: upserts.values)
+                // Repair source corrections saved by versions that only updated
+                // identical source/final pairs. Ordinary scoped persistence owns
+                // this one-time change, including pending audio retry capsules.
+                var corrected = self.pendingUpserts
+                if self.canAccess, PrivateProfileStorage.acceptsNewWork {
+                    merged = merged.map { entry in
+                        var updated = entry.reconcilingSourceCorrections()
+                        guard updated != entry else { return entry }
+                        updated.markRestored(over: entry.searchRevision)
+                        corrected[updated.id] = updated
+                        if let admission = self.recordingWrites[updated.id], !admission.finished, !admission.revoked {
+                            admission.entry = updated
+                        }
+                        return updated
+                    }
+                }
                 self.entries = merged.sorted { $0.timestamp > $1.timestamp }
                 if self.canAccess { self.refreshTodaySummary() }
                 self.hasLoaded = true
                 self.persistenceError = nil
-                if self.pendingReplacement || !self.pendingUpserts.isEmpty || !self.pendingDeletes.isEmpty {
-                    self.persist(upserts: Array(self.pendingUpserts.values), deletes: Array(self.pendingDeletes), replacing: self.pendingReplacement)
+                if self.pendingReplacement || !corrected.isEmpty || !self.pendingDeletes.isEmpty {
+                    self.persist(upserts: Array(corrected.values), deletes: Array(self.pendingDeletes), replacing: self.pendingReplacement)
                 }
                 self.pendingUpserts.removeAll()
                 self.pendingDeletes.removeAll()

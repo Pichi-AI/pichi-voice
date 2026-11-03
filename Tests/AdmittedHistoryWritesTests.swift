@@ -150,7 +150,7 @@ import SQLite3
         await history.finishPendingWrites()
         let corrected = try await writer.load()[0]
         expect(corrected.sourceTranscriptText == "exact speech bytes", "Late audio retains the corrected source")
-        expect(corrected.processedText == "Ёжик 🦔 Pichi Voice" && corrected.originalProcessedText == initial && corrected.rawText == "exact ASR bytes",
+        expect(corrected.processedText == "exact speech bytes" && corrected.originalProcessedText == initial && corrected.rawText == "exact ASR bytes",
             "Audio attachment and recording finish do not revert the corrected final or first source bytes")
         expect(corrected.audio == metadata && audioStore.audioFileExists(fileName: metadata.fileName),
             "Manual correction does not revoke or replace the original audio admission")

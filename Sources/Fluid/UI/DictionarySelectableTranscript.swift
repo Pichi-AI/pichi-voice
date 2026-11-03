@@ -168,13 +168,16 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
         let previousSelection = self.selectedRange()
         super.mouseDown(with: event) // Native text dragging and multiword selection stay intact.
         guard self.inlineEditingEnabled, event.clickCount == 1, !event.modifierFlags.contains(.shift),
-              self.selectedRange().length == 0,
               let clicked else { return }
-        // Native tracking already distinguishes a selection drag above. Do not
-        // compare against a global pointer position that may belong to a later
-        // event or a different input device.
-        let range = previousSelection.length > 0 && NSIntersectionRange(previousSelection, clicked).length > 0
-            ? previousSelection : clicked
+        let selection = self.selectedRange()
+        let range: NSRange
+        if selection.length > 0 {
+            guard let phrase = DictionaryInlineTextEdit.phraseRange(for: selection, in: self.wordRanges) else { return }
+            range = phrase
+        } else {
+            range = previousSelection.length > 0 && NSIntersectionRange(previousSelection, clicked).length > 0
+                ? previousSelection : clicked
+        }
         // Finish NSTextView's native mouse tracking before handing focus to a
         // field editor. Otherwise the same click can take that focus back.
         let source = self.string

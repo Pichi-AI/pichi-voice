@@ -45,4 +45,14 @@ nonisolated struct DictionaryInlineTextEdit: Equatable {
         }
         return nil
     }
+
+    /// Dragging across part of several words selects their complete contiguous
+    /// phrase, so a compound term reaches the editor and dictionary as one value.
+    static func phraseRange(for selection: NSRange, in ranges: [NSRange]) -> NSRange? {
+        guard selection.location != NSNotFound, selection.location >= 0, selection.length > 0,
+              selection.length <= Int.max - selection.location else { return nil }
+        let selected = ranges.filter { NSIntersectionRange($0, selection).length > 0 }
+        guard let first = selected.first, let last = selected.last else { return nil }
+        return NSRange(location: first.location, length: NSMaxRange(last) - first.location)
+    }
 }
