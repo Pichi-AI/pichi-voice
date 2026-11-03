@@ -165,7 +165,7 @@ struct HistoryTextComparisonView: View {
             }
         }
         .padding(20)
-        .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 16))
+        .background { RoundedRectangle(cornerRadius: 16).fill(self.theme.palette.cardBackground) }
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(self.theme.palette.cardBorder.opacity(0.5)))
     }
 

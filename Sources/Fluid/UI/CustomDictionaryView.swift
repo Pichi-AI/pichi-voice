@@ -1278,14 +1278,21 @@ struct CustomDictionaryView: View {
     private var entriesListView: some View {
         VStack(spacing: self.theme.metrics.spacing.sm) {
             ForEach(self.entries) { entry in
-                DictionaryEntryRow(
-                    entry: entry,
-                    onEdit: {
-                        self.closeYourDictionary()
-                        self.editingEntry = entry
-                    },
-                    onDelete: { self.deleteEntry(entry) }
-                )
+                VStack(alignment: .leading, spacing: 4) {
+                    DictionaryEntryRow(
+                        entry: entry,
+                        onEdit: {
+                            self.closeYourDictionary()
+                            self.editingEntry = entry
+                        },
+                        onDelete: { self.deleteEntry(entry) }
+                    )
+                    if let count = self.savedVoiceCounts[entry.id] {
+                        Text(PichiLocalization.format("Saved pronunciation samples: %lld", count))
+                            .font(self.theme.typography.caption)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                    }
+                }
             }
         }
         .frame(maxWidth: 760)
