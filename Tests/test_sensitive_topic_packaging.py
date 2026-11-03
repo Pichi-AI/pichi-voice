@@ -24,7 +24,7 @@ class PackagingTests(unittest.TestCase):
             original = (output.read_bytes(), output.stat().st_mtime_ns)
             subprocess.run(command, check=True, capture_output=True)
             self.assertEqual((output.read_bytes(), output.stat().st_mtime_ns), original)
-            self.assertEqual(list((output.parent / '.build/topic-resource/.build').iterdir()), [])
+            self.assertFalse((output.parent / '.build').exists())
 
     def test_tampered_artifact_and_symlink_output_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -36,7 +36,7 @@ class PackagingTests(unittest.TestCase):
             link = root / 'link.json'
             link.symlink_to(file)
             with self.assertRaises(ValueError):
-                PACKAGING.stage(link, root / 'work')
+                PACKAGING.stage(link)
             self.assertEqual(file.read_bytes(), b'tampered')
             self.assertFalse((root / 'work').exists())
 

@@ -175,6 +175,17 @@ def train(cases, digest, dimensions=16384, initial_artifact=None, epochs=100, le
     return dict(formatVersion=1, featureIdentity=FEATURE_ID, dimensions=dimensions, trainingDigest=digest, topics=topics)
 
 
+def training_identity(raw, initial_sha256=None, epochs=100, learning_rate=0.7):
+    """One protocol identity shared by training CLI and signed-resource generation."""
+    digest = hashlib.sha256(raw).hexdigest()
+    protocol = dict(inputSHA256=digest, initialArtifactSHA256=initial_sha256,
+                    epochs=epochs, learningRate=learning_rate, seed=20261030,
+                    thresholdObjective="3FN+FP, then fewer FP, then higher threshold",
+                    trainingScope="train only; thresholds selected on development only")
+    training_digest = hashlib.sha256(json.dumps(protocol, sort_keys=True, separators=(",", ":")).encode()).hexdigest() if initial_sha256 else digest
+    return digest, protocol, training_digest
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, required=True)
@@ -198,13 +209,8 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     raw, cases = load_cases(args.cases)
     start = time.perf_counter()
-    digest = hashlib.sha256(raw).hexdigest()
     initial = load_initial_artifact(args.initial_artifact, args.initial_sha256) if args.initial_artifact else None
-    protocol = dict(inputSHA256=digest, initialArtifactSHA256=args.initial_sha256,
-                    epochs=args.epochs, learningRate=args.learning_rate, seed=20261030,
-                    thresholdObjective="3FN+FP, then fewer FP, then higher threshold",
-                    trainingScope="train only; thresholds selected on development only")
-    training_digest = hashlib.sha256(json.dumps(protocol, sort_keys=True, separators=(",", ":")).encode()).hexdigest() if initial else digest
+    digest, protocol, training_digest = training_identity(raw, args.initial_sha256, args.epochs, args.learning_rate)
     artifact = json.loads(args.artifact.read_text()) if args.artifact else train(
         cases, training_digest, initial_artifact=initial, epochs=args.epochs, learning_rate=args.learning_rate)
     training_seconds = time.perf_counter() - start
