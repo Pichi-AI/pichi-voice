@@ -24,12 +24,6 @@ nonisolated enum AccountPublicationConfiguration: Codable, Equatable, Sendable {
     }
     var apiBaseURL: URL { switch self { case .oidc(let c): c.apiBaseURL; case .legacy(let c): c.apiBaseURL } }
     var bundleIdentifier: String { switch self { case .oidc(let c): c.bundleIdentifier; case .legacy(let c): c.bundleIdentifier } }
-    var scopeIdentifier: String {
-        switch self {
-        case .oidc(let c): [c.bundleIdentifier, c.issuer.absoluteString, c.clientID, c.apiAudience, c.apiBaseURL.absoluteString].joined(separator: "|")
-        case .legacy(let c): [c.bundleIdentifier, "legacy-session", c.apiBaseURL.absoluteString].joined(separator: "|")
-        }
-    }
     func validate() throws { switch self { case .oidc(let c): try c.validate(); case .legacy(let c): try c.validate() } }
     func matches(_ identity: AccountIdentity) -> Bool {
         switch self {

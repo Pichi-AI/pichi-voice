@@ -2039,9 +2039,7 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Reuses finalized Parakeet windows so long recordings only process their remaining tail at stop.
-    /// Experimental and enabled by default; users can fall back to full-buffer finalization.
-
+    /// Opt in to restoring the field captured at recording start.
     var returnDictationToStartingField: Bool {
         get { self.defaults.bool(forKey: Keys.returnDictationToStartingField) }
         set {
@@ -3373,7 +3371,7 @@ final class SettingsStore: ObservableObject {
     /// Whether the model rejects the `temperature` parameter.
     /// Order: reasoning models, then support learned from `/models` metadata or a past
     /// HTTP 400 (`ModelTemperatureSupport`), then a version check for Anthropic models that
-    /// have deprecated temperature (Opus 4.7+, every Claude 5 model, Fable/Mythos - Sonnet 4.6
+    /// have deprecated temperature (Opus 4.7+, every Claude 5 model, Fable/Mythos — Sonnet 4.6
     /// and older still accept it).
     func isTemperatureUnsupported(_ model: String, baseURL: String, support: ModelTemperatureSupport = .shared) -> Bool {
         if self.isReasoningModel(model) { return true }
