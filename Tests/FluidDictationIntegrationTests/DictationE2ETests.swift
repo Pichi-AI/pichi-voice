@@ -3679,6 +3679,80 @@ extension DictationE2ETests {
         XCTAssertEqual(service.pendingCount, 0)
     }
 
+    func testForegroundAdmissionJoinsHistoryRetirementBeforeGrantAndRetriesAfterRelease() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["flued"], replacement: "Fluid")
+        let started = expectation(description: "history decode holds lease")
+        let retiring = expectation(description: "cancelled decode is retiring")
+        var unblock: CheckedContinuation<Void, Never>?
+        var leaseHeld = false
+        var foregroundHeld = false
+        var calls = 0
+        let service = DictionaryAudioLearningService(store: store, canProcess: { !foregroundHeld },
+            canProcessHistory: { !foregroundHeld }, isCurrent: { $0 == entry })
+        service.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }) {
+            calls += 1
+            XCTAssertFalse(foregroundHeld)
+            XCTAssertFalse(leaseHeld)
+            leaseHeld = true
+            if calls == 1 {
+                started.fulfill()
+                do { try await Task.sleep(for: .seconds(30)) } catch {
+                    retiring.fulfill()
+                    await withCheckedContinuation { unblock = $0 }
+                    leaseHeld = false
+                    throw error
+                }
+            }
+            leaseHeld = false
+            return nil
+        }
+        await fulfillment(of: [started], timeout: 2)
+        let admission = Task { @MainActor in
+            await service.pauseForForegroundAdmission()
+            XCTAssertFalse(leaseHeld, "foreground must wait for provider retirement")
+            foregroundHeld = true
+            service.resumeAfterForegroundAdmission()
+        }
+        await fulfillment(of: [retiring], timeout: 2)
+        XCTAssertFalse(foregroundHeld)
+        XCTAssertTrue(leaseHeld)
+        unblock?.resume()
+        await admission.value
+        XCTAssertTrue(foregroundHeld)
+        XCTAssertEqual(calls, 1)
+        foregroundHeld = false
+        service.activityDidEnd()
+        for _ in 0..<200 where service.pendingCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(service.pendingCount, 0)
+        await service.prepareForPrivateProfileTransition()
+    }
+
+    func testExplicitHistoryPassesIneligibleAutomaticQueueHead() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["flued"], replacement: "Fluid")
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3",
+            observedText: "flued", sourceWordRange: 0..<1, sourceSampleRange: 0..<1,
+            focalSampleRange: 0..<1, samples: [0])
+        var historyEligible = false
+        let processed = expectation(description: "explicit history processed")
+        let service = DictionaryAudioLearningService(store: store, canProcess: { false },
+            canProcessHistory: { historyEligible }, isCurrent: { $0 == entry })
+        service.learn(entry: entry, evidenceID: UUID(), evidence: evidence)
+        service.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }) { processed.fulfill(); return nil }
+        historyEligible = true
+        service.activityDidEnd()
+        await fulfillment(of: [processed], timeout: 2)
+        for _ in 0..<200 where service.pendingCount > 1 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(service.pendingCount, 1)
+        await service.prepareForPrivateProfileTransition()
+    }
+
     func testDictionaryLearningQueueIsBoundedAndExpiresWithoutSaving() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

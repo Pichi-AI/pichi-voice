@@ -29,11 +29,19 @@ protocol MeetingAudioActivityArbitrating: AnyObject {
 @MainActor
 protocol ASRActivityLeasing: AnyObject {
     func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease
+    func acquireForegroundActivity(_ activity: ASRExclusiveActivity) async throws -> ASRActivityLease
     func releaseExclusiveActivity(_ lease: ASRActivityLease)
     func prepareMeetingAudioHandoff(_ lease: ASRActivityLease) async throws
     func completeMeetingAudioHandback(_ lease: ASRActivityLease) async
 }
 
+
+extension ASRActivityLeasing {
+    func acquireForegroundActivity(_ activity: ASRExclusiveActivity) async throws -> ASRActivityLease {
+        try Task.checkCancellation()
+        return try self.acquireExclusiveActivity(activity)
+    }
+}
 
 @MainActor
 final class AudioActivityArbiter: MeetingAudioActivityArbitrating {
@@ -51,7 +59,7 @@ final class AudioActivityArbiter: MeetingAudioActivityArbitrating {
     func acquireMeetingCapture() async throws -> MeetingAudioActivityLease {
         guard self.meetingLease == nil else { throw MeetingCoordinatorError.recordingAlreadyActive }
         let asrService = try self.asrServiceProvider()
-        let sharedLease = try asrService.acquireExclusiveActivity(.meeting)
+        let sharedLease = try await asrService.acquireForegroundActivity(.meeting)
         let lease = MeetingAudioActivityLease(id: UUID())
         self.activeASRService = asrService
         self.sharedActivityLease = sharedLease

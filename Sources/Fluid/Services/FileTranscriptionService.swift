@@ -546,7 +546,7 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
 
         let activityLease: ASRActivityLease
         do {
-            activityLease = try self.asrService.acquireExclusiveActivity(.fileTranscription)
+            activityLease = try await self.asrService.acquireForegroundActivity(.fileTranscription)
         } catch {
             let wrappedError = TranscriptionError.activityInProgress(error.localizedDescription)
             self.error = wrappedError.localizedDescription

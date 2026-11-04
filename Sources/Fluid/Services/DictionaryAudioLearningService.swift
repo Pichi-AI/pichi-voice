@@ -31,6 +31,8 @@ final class DictionaryAudioLearningService {
     private var task: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
     private var retired = false
+    private var foregroundAdmissions = 0
+    private var activeEvidenceID: UUID?
     private let profile = PrivateProfileStorage.current
     var pendingCount: Int { self.queue.count }
 
@@ -61,6 +63,20 @@ final class DictionaryAudioLearningService {
     /// Cancel encoder work immediately when audio activity starts. Retry the same bounded request when it ends.
     func cancelForRecording() { self.task?.cancel() }
     func activityDidEnd() { self.drain() }
+
+    /// Block restarts before cancelling, then join the worker including provider retirement.
+    func pauseForForegroundAdmission() async {
+        self.foregroundAdmissions += 1
+        let work = self.task
+        work?.cancel()
+        await work?.value
+    }
+
+    func resumeAfterForegroundAdmission() {
+        precondition(self.foregroundAdmissions > 0)
+        self.foregroundAdmissions -= 1
+        self.drain()
+    }
 
     func prepareForPrivateProfileTransition() async {
         retired = true
@@ -113,15 +129,16 @@ final class DictionaryAudioLearningService {
 
     private func drain() {
         self.pruneExpired()
-        guard !retired, PrivateProfileStorage.isReadable(profile), self.task == nil,
-              let request = self.queue.first,
-              (request.explicitHistory ? self.canProcessHistory() : self.canProcess()) else { return }
+        guard !retired, self.foregroundAdmissions == 0, PrivateProfileStorage.isReadable(profile), self.task == nil,
+              let request = self.queue.first(where: { $0.explicitHistory ? self.canProcessHistory() : self.canProcess() }) else { return }
+        self.activeEvidenceID = request.evidenceID
         self.task = Task(priority: .utility) { [weak self] in
             guard let self else { return }
             var retry = false
             defer {
                 if !retry { self.queue.removeAll { $0.evidenceID == request.evidenceID } }
                 self.task = nil
+                self.activeEvidenceID = nil
                 self.drain()
                 self.scheduleExpiry()
             }
@@ -165,7 +182,7 @@ final class DictionaryAudioLearningService {
     }
 
     private func pruneExpired() {
-        if let first = self.queue.first, first.expiresAt <= Date() { self.task?.cancel() }
+        if self.queue.contains(where: { $0.evidenceID == self.activeEvidenceID && $0.expiresAt <= Date() }) { self.task?.cancel() }
         self.queue.removeAll { $0.expiresAt <= Date() }
     }
 

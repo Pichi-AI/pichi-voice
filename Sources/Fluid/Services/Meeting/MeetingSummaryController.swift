@@ -85,7 +85,7 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
         }
         try Task.checkCancellation()
         guard self.processing.isEmpty else { throw MeetingModelResidencyError.busy }
-        let lease = try activity.acquireExclusiveActivity(.meeting)
+        let lease = try await activity.acquireForegroundActivity(.meeting)
         do {
             try await activity.prepareMeetingAudioHandoff(lease)
             try Task.checkCancellation()

@@ -686,6 +686,14 @@ final class ASRService: ObservableObject {
         try self.acquireExclusiveActivity(activity, cancelDictionaryLearning: true)
     }
 
+    func acquireForegroundActivity(_ activity: ASRExclusiveActivity) async throws -> ASRActivityLease {
+        let learning = DictionaryAudioLearningService.shared
+        await learning.pauseForForegroundAdmission()
+        defer { learning.resumeAfterForegroundAdmission() }
+        try Task.checkCancellation()
+        return try self.acquireExclusiveActivity(activity)
+    }
+
     private func acquireExclusiveActivity(_ activity: ASRExclusiveActivity, cancelDictionaryLearning: Bool) throws -> ASRActivityLease {
         guard PrivateProfileStorage.acceptsNewWork || activity == .settingsRestore
             || (privateProfileResetInProgress && activity == .modelMaintenance) else {
@@ -3166,7 +3174,7 @@ final class ASRService: ObservableObject {
         }
         let captureLease: ASRActivityLease
         do {
-            captureLease = try self.acquireExclusiveActivity(.dictation)
+            captureLease = try await self.acquireForegroundActivity(.dictation)
             self.dictationActivityLease = captureLease
             do {
                 try self.admitDictationTranscription(captureLease)
@@ -4348,7 +4356,7 @@ final class ASRService: ObservableObject {
     }
 
     func transcribeSamplesForAPI(_ inputSamples: [Float]) async throws -> ASRTranscriptionResult {
-        let lease = try self.acquireExclusiveActivity(.localAPI)
+        let lease = try await self.acquireForegroundActivity(.localAPI)
         defer { self.releaseExclusiveActivity(lease) }
         do {
             _ = try self.beginAdmittedTranscription(lease: lease)
@@ -4409,7 +4417,7 @@ final class ASRService: ObservableObject {
     }
 
     func transcribeFileForAPI(_ fileURL: URL) async throws -> (result: ASRTranscriptionResult, sampleCount: Int) {
-        let lease = try self.acquireExclusiveActivity(.localAPI)
+        let lease = try await self.acquireForegroundActivity(.localAPI)
         defer { self.releaseExclusiveActivity(lease) }
         do {
             _ = try self.beginAdmittedTranscription(lease: lease)
