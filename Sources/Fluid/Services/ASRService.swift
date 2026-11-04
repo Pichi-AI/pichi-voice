@@ -2618,7 +2618,8 @@ final class ASRService: ObservableObject {
             forName: .parakeetVocabularyDidChange,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] notification in
+            guard DictionaryEntriesChangeNotice.requiresVocabularyReload(notification) else { return }
             Task { @MainActor [weak self] in
                 self?.handleParakeetVocabularyDidChange()
             }

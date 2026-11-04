@@ -70,7 +70,7 @@ final class HistoryDictionaryAudioLearningService {
         return DictionaryAudioLearningService.shared.enqueue(entry: dictionaryEntry, evidenceID: evidenceID, isValid: isValid,
             isCurrentBeforePreparation: isValid, publishTarget: publishTarget, didPublishTarget: {
                 ASRService.invalidateDictionaryCache()
-                NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
+                DictionaryEntriesChangeNotice.post()
             }) {
             guard isValid() else { return nil }
             let recording = try await AppServices.shared.asr.historyDictionaryRecording(

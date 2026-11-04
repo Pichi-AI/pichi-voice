@@ -3735,6 +3735,51 @@ extension DictationE2ETests {
         await worker.prepareForPrivateProfileTransition()
     }
 
+    func testDictionaryEntriesNoticeDoesNotResetOrCancelNextQueuedLearning() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Fluid")
+        let secondRecording = UUID()
+        func evidence(_ recording: UUID) -> DictionaryLearningAudioEvidence {
+            DictionaryLearningAudioEvidence(recordingID: recording, modelKey: "parakeet-v3", observedText: "flued",
+                sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
+        }
+        let first = evidence(UUID()), second = evidence(secondRecording)
+        let observed = expectation(description: "deferred vocabulary observer ran")
+        let secondStarted = expectation(description: "second learning job started")
+        var idle = false
+        var active = false
+        let worker = DictionaryAudioLearningService(store: store, extract: { item in
+            if item.recordingID == secondRecording {
+                secondStarted.fulfill()
+                try await Task.sleep(for: .milliseconds(150))
+            }
+            return PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "parakeet-v3")
+        }, canProcess: { idle }, canProcessHistory: { idle }, isCurrent: { _ in active })
+        let observer = NotificationCenter.default.addObserver(forName: .parakeetVocabularyDidChange, object: nil, queue: .main) { notification in
+            let reload = DictionaryEntriesChangeNotice.requiresVocabularyReload(notification)
+            Task { @MainActor in
+                if reload { worker.cancelForRecording() }
+                observed.fulfill()
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        XCTAssertTrue(DictionaryEntriesChangeNotice.requiresVocabularyReload(Notification(name: .parakeetVocabularyDidChange)))
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, isCurrentBeforePreparation: { true },
+            publishTarget: { active = true; return .created }, didPublishTarget: { DictionaryEntriesChangeNotice.post() }, prepare: { first }))
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, isCurrentBeforePreparation: { true },
+            publishTarget: { .unchanged }, prepare: { second }))
+        idle = true
+        worker.activityDidEnd()
+        await fulfillment(of: [observed, secondStarted], timeout: 2)
+        for _ in 0..<200 where worker.pendingCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(worker.pendingCount, 0)
+        let profiles = await store.allProfiles()
+        XCTAssertEqual(profiles.first?.enrollments.count, 2)
+        await worker.prepareForPrivateProfileTransition()
+    }
+
     func testHistoryNewTargetFailuresDoNotPublishOrLeaveAudio() async throws {
         for failure in ["extract", "save", "publication"] {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
