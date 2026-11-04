@@ -209,7 +209,7 @@ struct HistoryTextComparisonView: View {
                 } else {
                     Menu("Use original audio") {
                         ForEach(indices, id: \.self) { index in
-                            Button(self.entry.sourceFragments[index].text) { self.learnSavedAudio(fragmentIndex: index) }
+                            Button(String(index + 1) + ". " + self.entry.sourceFragments[index].text) { self.learnSavedAudio(fragmentIndex: index) }
                         }
                     }.menuStyle(.borderlessButton).fixedSize()
                 }
