@@ -436,7 +436,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         let entryIDs = Set(entries.map(\.id))
         let useEncoderReferences = self.dictionaryUsesEncoderFeatures
         let pronunciation = dictionaryEnabled && !entryIDs.isEmpty
-            ? try self.pronunciationStore.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs,
+            ? try self.pronunciationStore.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs, maximumReferencesPerProfile: useEncoderReferences ? 10 : 3,
                 referenceSelection: { profile in
                     useEncoderReferences ? GigaAMEncoderDictionaryStorage.retainedCaptures(profile.enrollments)
                         : GigaAMDictionaryAcoustics.activeCaptures(profile.enrollments) }) : nil

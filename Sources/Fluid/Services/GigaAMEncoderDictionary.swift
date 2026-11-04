@@ -323,7 +323,12 @@ nonisolated enum GigaAMEncoderDictionary {
                 let heard = source[range].map(\.text).joined(separator: " ")
                 guard let lexical = GigaAMDictionaryLexicalEvidence.compare(
                     heard: heard, canonical: term.label, observedVariants: term.observedVariants
-                ), !lexical.protectsContent else { diagnostics.append(.init(.protectedContent, term.entryID)); continue }
+                ) else { diagnostics.append(.init(.protectedContent, term.entryID)); continue }
+                let terminalLetter = lexical.protectsContent && GigaAMDictionaryLexicalEvidence.recordedTerminalLetterI(
+                    heard: heard, canonical: term.label, observedVariants: term.observedVariants)
+                guard !lexical.protectsContent || terminalLetter else {
+                    diagnostics.append(.init(.protectedContent, term.entryID)); continue
+                }
                 guard hit.frames.lowerBound >= 0, hit.frames.upperBound <= features.frameCount, !hit.frames.isEmpty else {
                     diagnostics.append(.init(.invalidWordSpan, term.entryID)); continue
                 }
@@ -346,7 +351,7 @@ nonisolated enum GigaAMEncoderDictionary {
                         if best == nil || ordinary.distance / cohort.calibration.acceptanceDistance < best!.match.distance / best!.limit {
                             best = (ordinary, cohort.calibration.acceptanceDistance, false)
                         }
-                    } else if GigaAMDictionaryLexicalEvidence.observedStemSupport(
+                    } else if !terminalLetter && GigaAMDictionaryLexicalEvidence.observedStemSupport(
                         heard: heard, canonical: term.label, observedVariants: term.observedVariants
                     ), let limit = cohort.calibration.corroboratedAcceptanceDistance,
                        let corroborated = try GigaAMAcousticMatcher.matchEncoderCorroborated(

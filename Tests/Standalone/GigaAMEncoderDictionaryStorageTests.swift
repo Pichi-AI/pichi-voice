@@ -41,7 +41,7 @@ actor PronunciationDictionaryStore {
              pinned: [String: [PronunciationEnrollmentCapture]]? = nil) {
             self.profiles = profiles; self.inspections = inspections
             self.pinned = pinned ?? Dictionary(uniqueKeysWithValues: profiles.map {
-                ($0.id, GigaAMDictionaryAcoustics.activeCaptures($0.enrollments))
+                ($0.id, GigaAMEncoderDictionaryStorage.retainedCaptures($0.enrollments))
             })
         }
         func matchingEnrollments(for profile: PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] { pinned[profile.id] ?? [] }
@@ -181,9 +181,9 @@ nonisolated enum DictionaryNegativeExampleStore {
         let read = PronunciationDictionaryStore.CaptureRead(profiles: [profile], inspections: inspections)
         let snapshot = GigaAMDictionaryAcoustics.Snapshot(modelKey: key, generation: "frozen", enabled: true, entries: entries, pronunciation: read, negatives: nil)
         let prepared = try await GigaAMEncoderDictionaryStorage.preparedWords(snapshot)
-        expect(prepared.words.count == 1 && prepared.words[0].term.references.count == 3, "Pinned original and two isolated samples prepare one native term")
+        expect(prepared.words.count == 1 && prepared.words[0].term.references.count == 4, "Pinned original and three isolated samples prepare one native term")
         expect(prepared.words[0].term.observedVariants == ["Alfa0", "Alfa1", "Alfa2", "Alfo"], "All retained observed variants survive active-reference selection")
-        expect(read.readCount == 3, "Preparation uses only the pinned capture reader")
+        expect(read.readCount == 4, "Preparation uses only the pinned capture reader")
         let wrongPins = PronunciationDictionaryStore.CaptureRead(profiles: [profile], inspections: inspections, pinned: [profile.id: Array(saved.prefix(3))])
         let unpinned = try await GigaAMEncoderDictionaryStorage.preparedWords(.init(modelKey: key, generation: "frozen", enabled: true,
             entries: entries, pronunciation: wrongPins, negatives: nil))

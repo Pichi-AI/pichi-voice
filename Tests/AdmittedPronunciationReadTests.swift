@@ -358,6 +358,34 @@ import Darwin
             profileKey: "selected", modelKey: "synthetic", sourceWordRange: 0..<1, frames: negativeFrames),
             correctedText: "synthetic", expiresAt: Date().addingTimeInterval(60))
         try await negativeStore.save(correction, expectedRevision: negativeStore.revision())
+        let multiLease = UUID()
+        rejects("Default capture admission rejects more than three references") {
+            _ = try store.admitCaptureRead(leaseID: multiLease, modelKey: "synthetic", entryIDs: [entry],
+                referenceSelection: { $0.enrollments })
+        }
+        let multiRead = try store.admitCaptureRead(leaseID: multiLease, modelKey: "synthetic", entryIDs: [entry],
+            maximumReferencesPerProfile: 10, referenceSelection: { $0.enrollments })
+        expect(multiRead.matchingEnrollments(for: profiles[0]) == captures, "Opt-in admission pins all retained references")
+        expect(try multiRead.inspection(for: ids[0]) == inspection, "Expanded reference is pinned and readable")
+        multiRead.close(leaseID: multiLease)
+        rejects("An unbounded per-profile selection is invalid") {
+            _ = try store.admitCaptureRead(leaseID: multiLease, modelKey: "synthetic", entryIDs: [entry],
+                maximumReferencesPerProfile: 11, referenceSelection: { $0.enrollments })
+        }
+        let tenCaptures = (0..<10).map { _ in
+            PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "synthetic", inspectionID: UUID())
+        }
+        for capture in tenCaptures {
+            try encoder.encode(inspection).write(to: inspectionDirectory.appendingPathComponent("\(capture.inspectionID!).plist"))
+        }
+        let tenProfile = PronunciationDictionaryProfile(dictionaryEntryID: UUID(), label: "Ten", modelKey: "synthetic",
+            hiddenSize: 2, enrollments: tenCaptures)
+        let tenStore = PronunciationDictionaryStore(fileURL: a.rootDirectory.appendingPathComponent("ten-profile.json"), profile: a)
+        try await tenStore.replaceAllProfiles([tenProfile])
+        let tenRead = try tenStore.admitCaptureRead(leaseID: multiLease, modelKey: "synthetic", entryIDs: [tenProfile.dictionaryEntryID],
+            maximumReferencesPerProfile: 10, referenceSelection: { $0.enrollments })
+        expect(tenRead.matchingEnrollments(for: tenProfile).count == 10, "Opt-in permits exactly ten references")
+        tenRead.close(leaseID: multiLease)
         let familyURL = a.rootDirectory.appendingPathComponent("synthetic-family-profiles.json")
         let familyStore = PronunciationDictionaryStore(fileURL: familyURL, profile: a)
         let familyEntry = UUID(), unselectedEntry = UUID()
@@ -456,6 +484,22 @@ import Darwin
         }
         voiceRead.close(leaseID: capacityLease)
         expect(try descriptorCount() == handlesBeforeCapacity, "Closing the bounded expanded snapshot releases every file")
+        let retained = voicePairs.flatMap(\.enrollments).map {
+            PronunciationEnrollmentCapture(values: $0.values, sourceFrameCount: $0.sourceFrameCount,
+                modelKey: "synthetic-family-b", inspectionID: $0.inspectionID)
+        }
+        let expanded = (0..<39).map { index in
+            PronunciationDictionaryProfile(dictionaryEntryID: UUID(), label: "Expanded", modelKey: "synthetic-family-b",
+                hiddenSize: 2, enrollments: Array(retained[(index * 10)..<(index * 10 + 10)]))
+        }
+        try await capacityStore.replaceAllProfiles(expanded)
+        let beforeExpanded = try descriptorCount()
+        rejects("Expanded mandatory references cannot exceed 384 pinned files") {
+            _ = try capacityStore.admitCaptureRead(leaseID: capacityLease, modelKey: "synthetic-family-b",
+                entryIDs: Set(expanded.map(\.dictionaryEntryID)), maximumReferencesPerProfile: 10,
+                referenceSelection: { $0.enrollments })
+        }
+        expect(try descriptorCount() == beforeExpanded, "Rejected expanded admission releases its descriptors")
         struct CapacityDocument: Encodable { let version = 1; let profiles: [PronunciationDictionaryProfile] }
         var malformedOptional = sharedFamily; malformedOptional.enrollments[0] = .init(values: [1], sourceFrameCount: 1, modelKey: malformedOptional.modelKey)
         try JSONEncoder().encode(CapacityDocument(profiles: [malformedOptional, exactDifferentWidth])).write(to: capacityURL, options: .atomic)

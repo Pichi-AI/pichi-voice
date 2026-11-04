@@ -76,7 +76,7 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
     /// Keep the latest manual set as fallback, followed by recent distinct
     /// contextual recordings. A recording cannot vote twice in one profile.
     static func retainedCaptures(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] {
-        let manual = Array(captures.filter { $0.originalAudioID == nil }.suffix(3))
+        let manual = Array(captures.filter { $0.originalAudioID == nil && $0.sourceRecordingID == nil }.suffix(3))
         var seen = Set<UUID>()
         let contextual = captures.reversed().filter { capture in
             guard let id = capture.sourceRecordingID, capture.observedText?.isEmpty == false else { return false }

@@ -193,9 +193,12 @@ actor PronunciationDictionaryStore {
     /// excess optional candidates are omitted before the immutable snapshot is created. One
     /// fallback per otherwise unrepresented word precedes extra variants for an admitted word.
     nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>,
-                                     includingSharedFamilies: Bool = false,
+                                     includingSharedFamilies: Bool = false, maximumReferencesPerProfile: Int = 3,
                                      referenceSelection: @Sendable (PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] = { $0.matchingEnrollments }) throws -> CaptureRead {
         try Task.checkCancellation()
+        guard (3...10).contains(maximumReferencesPerProfile) else {
+            throw PronunciationDictionaryStoreError.inconsistentEnrollment
+        }
         guard let profile = self.profile, PrivateProfileStorage.isReadable(profile),
               PrivateProfileStorage.acceptsNewWork else { throw PronunciationDictionaryStoreError.staleEvidence }
         var exact: [PronunciationDictionaryProfile] = []
@@ -252,7 +255,7 @@ actor PronunciationDictionaryStore {
         func pinReferences(_ selected: PronunciationDictionaryProfile, optional: Bool) throws -> Bool {
             try Task.checkCancellation()
             let captures = referenceSelection(selected)
-            guard captures.count <= 3, captures.allSatisfy({ selected.enrollments.contains($0) }) else {
+            guard captures.count <= maximumReferencesPerProfile, captures.allSatisfy({ selected.enrollments.contains($0) }) else {
                 if optional { return false }
                 throw PronunciationDictionaryStoreError.inconsistentEnrollment
             }

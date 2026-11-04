@@ -30,6 +30,20 @@ extension PichiGigaAMIntegrationTests {
             references: contextual.references, calibration: contextual.calibration)).accepted)
     }
 
+    func testRecordedTerminalLetterKeepsOtherRoleAndNumberGuards() {
+        let check = GigaAMDictionaryLexicalEvidence.recordedTerminalLetterI
+        XCTAssertTrue(check("PC I", "Pichi AI", ["PC I"]))
+        XCTAssertFalse(check("PC I", "Pichi AI", []))
+        XCTAssertFalse(check("not PC I", "Pichi AI", ["not PC I"]))
+        XCTAssertFalse(check("PC 2 I", "Pichi AI", ["PC 2 I"]))
+        XCTAssertFalse(check("PC I", "Pichi Voice", ["PC I"]))
+        XCTAssertFalse(check("PC i", "Pichi AI", ["PC i"]))
+        XCTAssertTrue(check("Pici и I", "Pichi AI", ["Pici и I"]))
+        XCTAssertFalse(check("Pici и I", "Pichi AI", []))
+        XCTAssertFalse(check("и Pici и I", "Pichi AI", ["и Pici и I"]))
+        XCTAssertFalse(check("не Pici и I", "Pichi AI", ["не Pici и I"]))
+    }
+
     func testEncoderRecordedSubrangePreservesAdjacentWordsAndRoleGuards() throws {
         let row = [Float(1)] + [Float](repeating: 0, count: GigaAMEncoderFeatures.dimension - 1)
         let feature = try GigaAMEncoderFeatures(values: Array(repeating: row, count: 20).flatMap { $0 })

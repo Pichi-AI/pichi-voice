@@ -55,6 +55,28 @@ nonisolated enum GigaAMDictionaryLexicalEvidence {
         )
     }
 
+    /// An exact enrolled spelling may render the final letter of an uppercase
+    /// acronym as the standalone ASCII letter I. Recheck every other role and
+    /// number marker after substituting the actual terminal acronym component.
+    /// This only removes an independent veto; the caller still requires the
+    /// ordinary (not corroborated) calibrated two-reference acoustic match.
+    static func recordedTerminalLetterI(heard: String, canonical: String, observedVariants: [String]) -> Bool {
+        guard let original = self.compare(heard: heard, canonical: canonical, observedVariants: observedVariants),
+              original.protectsContent, original.matchesObservedVariant,
+              let component = canonical.split(whereSeparator: \.isWhitespace).last,
+              (2...5).contains(component.count), component.last == "I",
+              component.unicodeScalars.allSatisfy({ (65...90).contains($0.value) }),
+              let finalLetter = heard.range(of: #"(?<![\p{L}\p{N}])I(?=[^\p{L}\p{N}]*$)"#, options: .regularExpression) else { return false }
+        // A recorded spelling may include the Russian homophonic connector
+        // immediately before the final letter. Only that terminal pair is
+        // considered; every other connector, role and number remains guarded.
+        let terminalPair = heard.range(of: #"(?<![\p{L}\p{N}])и\s+I(?=[^\p{L}\p{N}]*$)"#, options: .regularExpression)
+        var adjusted = heard
+        adjusted.replaceSubrange(terminalPair ?? finalLetter, with: component)
+        guard let comparison = self.compare(heard: adjusted, canonical: canonical, observedVariants: []) else { return false }
+        return !comparison.protectsContent
+    }
+
     @MainActor static func assess(heard: String, canonical: String, observedVariants: [String], requiredLanguages: [String]) -> Assessment {
         guard !Task.isCancelled, let comparison = self.compare(heard: heard, canonical: canonical, observedVariants: observedVariants) else {
             return Assessment(comparison: nil, reason: .invalidTerm)
