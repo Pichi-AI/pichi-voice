@@ -63,10 +63,10 @@ final class HistoryDictionaryAudioLearningService {
         let publishTarget: (@MainActor () -> DictionaryAudioLearningService.TargetPublication)?
         if wasNew {
             publishTarget = {
-            guard isValid() else { return .rejected }
-            if SettingsStore.shared.customDictionaryEntries.contains(dictionaryEntry) { return .unchanged }
-            guard Self.entryStillEligible(dictionaryEntry, entries: SettingsStore.shared.customDictionaryEntries, allowMissing: true) else { return .rejected }
-            SettingsStore.shared.customDictionaryEntries.append(dictionaryEntry)
+                guard isValid() else { return .rejected }
+                if SettingsStore.shared.customDictionaryEntries.contains(dictionaryEntry) { return .unchanged }
+                guard Self.entryStillEligible(dictionaryEntry, entries: SettingsStore.shared.customDictionaryEntries, allowMissing: true) else { return .rejected }
+                SettingsStore.shared.customDictionaryEntries.append(dictionaryEntry)
                 return .created
             }
         } else {
