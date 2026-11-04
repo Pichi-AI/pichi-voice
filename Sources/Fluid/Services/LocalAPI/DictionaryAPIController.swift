@@ -1,6 +1,8 @@
 import Foundation
 
 struct DictionaryAPIController: LocalAPIRouteHandler {
+    struct LearnHistoryRequest: Decodable { let historyID: UUID }
+    struct LearnHistoryResponse: Encodable { let queued: Int }
     struct ReplacementEntry: Codable {
         let id: UUID?
         let triggers: [String]
@@ -108,6 +110,14 @@ struct DictionaryAPIController: LocalAPIRouteHandler {
 
     func handle(_ request: LocalAPI.Request) async -> LocalAPI.Response {
         switch (request.method, request.path) {
+        case ("POST", "/v1/dictionary/learn-history"):
+            do {
+                let payload = try LocalAPI.decoder.decode(LearnHistoryRequest.self, from: request.body)
+                let queued = HistoryDictionaryAudioLearningService.shared.enqueueSavedCorrections(entryID: payload.historyID)
+                return LocalAPI.json(LearnHistoryResponse(queued: queued))
+            } catch {
+                return LocalAPI.error("Invalid history correction request.", status: 400)
+            }
         case ("GET", "/v1/dictionary/replacements"):
             return self.getReplacements()
         case ("POST", "/v1/dictionary/replacements"):

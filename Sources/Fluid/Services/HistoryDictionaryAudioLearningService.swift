@@ -36,14 +36,15 @@ final class HistoryDictionaryAudioLearningService {
 
     /// An inline save is explicit approval for this occurrence only. Preparation and
     /// persistence are owned by the shared worker and retired with the private profile.
-    func enqueueInline(candidate: AutomaticDictionaryCorrectionCandidate, selection: DictionaryHistoryWordSelection, expectedText: String) {
+    @discardableResult
+    func enqueueInline(candidate: AutomaticDictionaryCorrectionCandidate, selection: DictionaryHistoryWordSelection, expectedText: String) -> Bool {
         let matches = SettingsStore.shared.customDictionaryEntries.filter {
             $0.replacement.caseInsensitiveCompare(candidate.correctedText.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
         }
         guard matches.count == 1, let dictionaryEntry = matches.first,
               let history = self.currentEntry(selection: selection, candidate: candidate),
               history.sourceTranscriptText == expectedText, let audio = history.audio,
-              let url = DictationAudioHistoryStore.scoped(to: selection.profile).audioFileURL(for: history) else { return }
+              let url = DictationAudioHistoryStore.scoped(to: selection.profile).audioFileURL(for: history) else { return false }
         let source = selection.sourceText
         let identity = "\(selection.entryID.uuidString):\(audio.fileName):\(selection.range.location):\(selection.range.length):\(dictionaryEntry.id.uuidString):\(source)"
         let evidenceID = Self.stableID(identity)
@@ -56,7 +57,7 @@ final class HistoryDictionaryAudioLearningService {
             return current.sourceTranscriptText == expectedText && current.rawText == history.rawText && current.audio == audio &&
                 DictationAudioHistoryStore.scoped(to: selection.profile).audioFileURL(for: current) == url
         }
-        DictionaryAudioLearningService.shared.enqueue(entry: dictionaryEntry, evidenceID: evidenceID, isValid: isValid) {
+        return DictionaryAudioLearningService.shared.enqueue(entry: dictionaryEntry, evidenceID: evidenceID, isValid: isValid) {
             guard isValid() else { return nil }
             let recording = try await AppServices.shared.asr.historyDictionaryRecording(
                 fileURL: url, recordingID: Self.recordingID(entryID: history.id, fileName: audio.fileName), profile: selection.profile, ownedByLearningWorker: true
@@ -77,6 +78,25 @@ final class HistoryDictionaryAudioLearningService {
                 sourceSampleRange: evidence.sourceSampleRange, focalSampleRange: evidence.focalSampleRange,
                 samples: evidence.samples, featureFrames: evidence.featureFrames)
         }
+    }
+
+    /// Explicit replay of persisted user-confirmed groups, through the same worker
+    /// as inline Save. A caller cannot supply new spellings, intervals or audio paths.
+    func enqueueSavedCorrections(entryID: UUID) -> Int {
+        let profile = PrivateProfileStorage.current
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              let entry = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == entryID }),
+              entry.correctedRawText != nil, entry.audio != nil else { return 0 }
+        var queued = 0
+        for fragment in entry.sourceFragments.prefix(128) {
+            guard fragment.isValid(in: entry.sourceTranscriptText),
+                  let selection = DictionaryHistoryWordSelection(entryID: entry.id, sourceText: entry.sourceTranscriptText,
+                      range: fragment.range, isOriginal: true) else { continue }
+            let candidate = AutomaticDictionaryCorrectionCandidate(heardText: fragment.text, correctedText: fragment.text,
+                sourceUTF16Range: fragment.range)
+            if self.enqueueInline(candidate: candidate, selection: selection, expectedText: entry.sourceTranscriptText) { queued += 1 }
+        }
+        return queued
     }
 
     nonisolated private static func stableID(_ text: String) -> UUID {

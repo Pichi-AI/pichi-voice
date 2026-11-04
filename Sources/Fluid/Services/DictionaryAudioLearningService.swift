@@ -97,14 +97,15 @@ final class DictionaryAudioLearningService {
     }
 
     /// History preparation shares the same bounded, joined, profile-owned worker as enrollment.
+    @discardableResult
     func enqueue(
         entry: SettingsStore.CustomDictionaryEntry, evidenceID: UUID, explicitHistory: Bool = true,
         isValid: @escaping @MainActor () -> Bool,
         prepare: @escaping @MainActor () async throws -> DictionaryLearningAudioEvidence?
-    ) {
+    ) -> Bool {
         guard !retired, PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
-              DictionaryMatcherExperiment.sharedFeaturesEnabled, isValid() else { return }
-        guard !self.queue.contains(where: { $0.evidenceID == evidenceID }) else { return }
+              DictionaryMatcherExperiment.sharedFeaturesEnabled, isValid() else { return false }
+        guard !self.queue.contains(where: { $0.evidenceID == evidenceID }) else { return false }
         self.pruneExpired()
         // Four short clips bound queued PCM to less than 4 MB. The text correction is already independent.
         guard self.queue.count < 4 else {
@@ -112,7 +113,7 @@ final class DictionaryAudioLearningService {
                 "Audio learning queue full; text correction retained",
                 source: "DictionaryLearning"
             )
-            return
+            return false
         }
         self.queue.append(Request(
             entry: entry,
@@ -125,6 +126,7 @@ final class DictionaryAudioLearningService {
         ))
         self.drain()
         self.scheduleExpiry()
+        return true
     }
 
     private func drain() {
