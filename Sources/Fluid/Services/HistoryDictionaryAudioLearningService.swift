@@ -60,13 +60,18 @@ final class HistoryDictionaryAudioLearningService {
             return current.sourceTranscriptText == expectedText && current.rawText == history.rawText && current.audio == audio &&
                 DictationAudioHistoryStore.scoped(to: selection.profile).audioFileURL(for: current) == url
         }
-        let publishTarget: (@MainActor () -> DictionaryAudioLearningService.TargetPublication)? = wasNew ? {
+        let publishTarget: (@MainActor () -> DictionaryAudioLearningService.TargetPublication)?
+        if wasNew {
+            publishTarget = {
             guard isValid() else { return .rejected }
             if SettingsStore.shared.customDictionaryEntries.contains(dictionaryEntry) { return .unchanged }
             guard Self.entryStillEligible(dictionaryEntry, entries: SettingsStore.shared.customDictionaryEntries, allowMissing: true) else { return .rejected }
             SettingsStore.shared.customDictionaryEntries.append(dictionaryEntry)
-            return .created
-        } : nil
+                return .created
+            }
+        } else {
+            publishTarget = nil
+        }
         return DictionaryAudioLearningService.shared.enqueue(entry: dictionaryEntry, evidenceID: evidenceID, isValid: isValid,
             isCurrentBeforePreparation: isValid, publishTarget: publishTarget, didPublishTarget: {
                 ASRService.invalidateDictionaryCache()
