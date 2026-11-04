@@ -18,6 +18,23 @@ enrollment = pronunciation[pronunciation.index("nonisolated struct Pronunciation
 native = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMCoreMLInference.swift").read_text()
 runtime_status = native[native.index("public struct GigaAMExecutionStatus:"):native.index("/// The shipped Core ML graph")]
 
+def method(source, signature):
+    start = source.index(signature)
+    opening = source.index("{", start)
+    depth = 1
+    for index in range(opening + 1, len(source)):
+        depth += (source[index] == "{") - (source[index] == "}")
+        if depth == 0:
+            return source[start:index + 1]
+    raise ValueError(signature)
+
+
+neighbors = (repo / "Tests/Support/GigaAMArtifactDictionaryNeighbors.swift").read_text()
+acoustics = (repo / "Sources/Fluid/Services/GigaAMDictionaryAcoustics.swift").read_text()
+encoder = (repo / "Sources/Fluid/Services/GigaAMEncoderDictionaryStorage.swift").read_text()
+neighbors = neighbors.replace("// ACTUAL_LEGACY_MODEL_KEY", method(acoustics, "    static func modelKey("))
+neighbors = neighbors.replace("// ACTUAL_ENCODER_MODEL_KEY", method(encoder, "    private static var keyPrefix:") + "\n" + method(encoder, "    static func modelKey("))
+
 with tempfile.TemporaryDirectory(prefix="pichi-gigaam-artifact-ownership-") as temporary:
     temporary = Path(temporary)
     runtime = temporary / "Runtime.swift"
@@ -30,10 +47,13 @@ with tempfile.TemporaryDirectory(prefix="pichi-gigaam-artifact-ownership-") as t
         str(catalog), str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMResourcePolicy.swift"),
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMFrontend.swift"),
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMAcousticFeatures.swift"),
+        str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMEncoderFeatures.swift"),
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMAcousticMatcher.swift"), str(runtime), "-o", str(library),
     ], check=True, cwd=repo)
     progress_source = temporary / "PreparationProgress.swift"
     progress_source.write_text("import Foundation\n" + progress + "\n" + execution_status + "\n" + result_values + "\n" + enrollment)
+    neighbor_source = temporary / "DictionaryNeighbors.swift"
+    neighbor_source.write_text(neighbors)
     for isolation in ([], ["-default-isolation", "MainActor"]):
         executable = temporary / ("tests-main-actor" if isolation else "tests-default")
         subprocess.run([
@@ -43,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix="pichi-gigaam-artifact-ownership-") as t
             str(provider), str(progress_source),
             str(repo / "Sources/Fluid/Services/DictionaryAudioInspection.swift"),
             str(repo / "Sources/Fluid/Services/DictionaryLearningEvidence.swift"),
-            str(repo / "Tests/Support/GigaAMArtifactDictionaryNeighbors.swift"),
+            str(neighbor_source),
             str(repo / "Tests/GigaAMArtifactOwnershipTests.swift"),
             "-o", str(executable),
         ], check=True, cwd=repo)

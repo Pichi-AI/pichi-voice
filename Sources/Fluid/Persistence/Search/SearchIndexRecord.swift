@@ -39,9 +39,8 @@ nonisolated struct SearchIndexRecord: Sendable, Equatable {
 }
 
 extension TranscriptionHistoryEntry {
-    /// What was pasted, plus where. Raw text is left out: the user remembers what
-    /// landed in the document, and `processedText` is that text whether or not AI
-    /// cleanup ran.
+    /// What was pasted, plus an explicitly corrected source and where. Immutable
+    /// raw ASR is left out. Identical corrected source/final text is indexed once.
     ///
     /// An entry is immutable, so its revision only moves when a restore replaces the
     /// id with different text; everything else stays at the revision it was indexed at.
@@ -50,7 +49,11 @@ extension TranscriptionHistoryEntry {
             id: self.id,
             revision: self.searchRevision ?? 1,
             timestamp: self.timestamp,
-            text: SearchIndexRecord.joined([self.processedText, self.appName, self.windowTitle])
+            text: SearchIndexRecord.joined([
+                self.processedText,
+                self.correctedRawText == self.processedText ? "" : (self.correctedRawText ?? ""),
+                self.appName, self.windowTitle,
+            ])
         )
     }
 }

@@ -21,10 +21,35 @@ nonisolated struct AudioBudgetMeasurementGate: Equatable, Sendable {
 // MARK: - Transcription History Entry Model
 
 nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
+    /// One explicitly grouped source term, including any internal whitespace.
+    nonisolated struct SourceFragment: Codable, Equatable, Sendable {
+        let location: Int
+        let length: Int
+        let text: String
+        var range: NSRange { NSRange(location: location, length: length) }
+
+        func isValid(in source: String) -> Bool {
+            guard location >= 0, length > 0, length <= 320,
+                  location <= source.utf16.count, length <= source.utf16.count - location,
+                  let span = Range(range, in: source), source.indices.contains(span.lowerBound),
+                  span.upperBound == source.endIndex || source.indices.contains(span.upperBound),
+                  text.rangeOfCharacter(from: .alphanumerics) != nil,
+                  text.rangeOfCharacter(from: .newlines) == nil else { return false }
+            return String(source[span]) == text
+        }
+    }
+
     let id: UUID
     let timestamp: Date
     let rawText: String
     let processedText: String
+    /// The exact model/formatter output before the first explicit user correction.
+    /// Nil for older entries and entries that have never been manually edited.
+    let originalProcessedText: String?
+    /// User-corrected source text; rawText remains the exact ASR output.
+    let correctedRawText: String?
+    let sourceFragments: [SourceFragment]
+    var sourceTranscriptText: String { self.correctedRawText ?? self.rawText }
     let appName: String
     let windowTitle: String
     let characterCount: Int
@@ -40,8 +65,8 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
     let aiProcessingError: String?
     let audio: DictationAudioMetadata?
     var isStarred: Bool
-    /// Rises when a restore gives this id different text. Nil on entries written
-    /// before the field existed, and on entries that were never restored.
+    /// Rises when a restore or explicit correction changes this id's text.
+    /// Nil on legacy entries and entries whose final text has never changed.
     var searchRevision: UInt64?
 
     init(
@@ -60,12 +85,18 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         aiProcessingError: String? = nil,
         audio: DictationAudioMetadata? = nil,
         isStarred: Bool = false,
-        searchRevision: UInt64? = nil
+        searchRevision: UInt64? = nil,
+        originalProcessedText: String? = nil,
+        correctedRawText: String? = nil,
+        sourceFragments: [SourceFragment] = []
     ) {
         self.id = id
         self.timestamp = timestamp
         self.rawText = rawText
         self.processedText = processedText
+        self.originalProcessedText = originalProcessedText
+        self.correctedRawText = correctedRawText
+        self.sourceFragments = Array(sourceFragments.filter { $0.isValid(in: correctedRawText ?? rawText) }.prefix(128))
         self.appName = appName
         self.windowTitle = windowTitle
         self.characterCount = processedText.count
@@ -98,12 +129,18 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         aiProcessingError: String?,
         audio: DictationAudioMetadata?,
         isStarred: Bool,
-        searchRevision: UInt64?
+        searchRevision: UInt64?,
+        originalProcessedText: String?,
+        correctedRawText: String?,
+        sourceFragments: [SourceFragment]
     ) {
         self.id = id
         self.timestamp = timestamp
         self.rawText = rawText
         self.processedText = processedText
+        self.originalProcessedText = originalProcessedText
+        self.correctedRawText = correctedRawText
+        self.sourceFragments = Array(sourceFragments.filter { $0.isValid(in: correctedRawText ?? rawText) }.prefix(128))
         self.appName = appName
         self.windowTitle = windowTitle
         self.characterCount = characterCount
@@ -125,6 +162,11 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         self.timestamp = try container.decode(Date.self, forKey: .timestamp)
         self.rawText = try container.decode(String.self, forKey: .rawText)
         self.processedText = try container.decode(String.self, forKey: .processedText)
+        self.originalProcessedText = try container.decodeIfPresent(String.self, forKey: .originalProcessedText)
+        self.correctedRawText = try container.decodeIfPresent(String.self, forKey: .correctedRawText)
+        let fragmentSource = self.correctedRawText ?? self.rawText
+        self.sourceFragments = Array((try container.decodeIfPresent([SourceFragment].self, forKey: .sourceFragments) ?? [])
+            .filter { $0.isValid(in: fragmentSource) }.prefix(128))
         self.appName = try container.decode(String.self, forKey: .appName)
         self.windowTitle = try container.decode(String.self, forKey: .windowTitle)
         self.characterCount = try container.decode(Int.self, forKey: .characterCount)
@@ -150,7 +192,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, timestamp, rawText, processedText, appName, windowTitle
+        case id, timestamp, rawText, processedText, originalProcessedText, correctedRawText, sourceFragments, appName, windowTitle
         case characterCount, wasAIProcessed, processingModel
         case transcriptionDurationMilliseconds, parakeetProcessingDurationMilliseconds, aiProcessingDurationMilliseconds
         case aiTokensPerSecond
@@ -224,8 +266,87 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             aiProcessingError: self.aiProcessingError,
             audio: audio,
             isStarred: self.isStarred,
-            searchRevision: self.searchRevision
+            searchRevision: self.searchRevision,
+            originalProcessedText: self.originalProcessedText, correctedRawText: self.correctedRawText, sourceFragments: self.sourceFragments
         )
+    }
+
+    /// Correct only the displayed final text. Original ASR and first model output
+    /// stay available, and all recording/model metadata keep their original values.
+    func replacingFinalText(_ text: String) -> TranscriptionHistoryEntry {
+        TranscriptionHistoryEntry(
+            id: self.id, timestamp: self.timestamp, rawText: self.rawText,
+            processedText: text, appName: self.appName, windowTitle: self.windowTitle,
+            wasAIProcessed: self.wasAIProcessed, processingModel: self.processingModel,
+            transcriptionDurationMilliseconds: self.transcriptionDurationMilliseconds,
+            parakeetProcessingDurationMilliseconds: self.parakeetProcessingDurationMilliseconds,
+            aiProcessingDurationMilliseconds: self.aiProcessingDurationMilliseconds,
+            aiTokensPerSecond: self.aiTokensPerSecond, aiProcessingError: self.aiProcessingError,
+            audio: self.audio, isStarred: self.isStarred, searchRevision: self.searchRevision,
+            originalProcessedText: self.originalProcessedText ?? self.processedText, correctedRawText: self.correctedRawText, sourceFragments: self.sourceFragments
+        )
+    }
+
+    /// Every accumulated explicit source correction overrides the corresponding
+    /// formatted span, while the exact ASR and first model output stay immutable.
+    func replacingSourceText(_ text: String, fragments: [SourceFragment]? = nil) -> TranscriptionHistoryEntry {
+        let groups = (fragments ?? self.sourceFragments).filter { $0.isValid(in: text) }
+        let latest = SourceTranscriptCorrection.apply(original: self.sourceTranscriptText, corrected: text, to: self.processedText)
+        var final = SourceTranscriptCorrection.apply(original: self.rawText, corrected: text, to: latest)
+        for group in groups.reversed() {
+            final = SourceTranscriptCorrection.applyGroup(source: text, final: final, range: group.range, text: group.text)
+        }
+        if final.utf16.count > 100_000 { final = text }
+        return TranscriptionHistoryEntry(
+            id: self.id, timestamp: self.timestamp, rawText: self.rawText,
+            processedText: final,
+            appName: self.appName, windowTitle: self.windowTitle,
+            wasAIProcessed: self.wasAIProcessed, processingModel: self.processingModel,
+            transcriptionDurationMilliseconds: self.transcriptionDurationMilliseconds,
+            parakeetProcessingDurationMilliseconds: self.parakeetProcessingDurationMilliseconds,
+            aiProcessingDurationMilliseconds: self.aiProcessingDurationMilliseconds,
+            aiTokensPerSecond: self.aiTokensPerSecond, aiProcessingError: self.aiProcessingError,
+            audio: self.audio, isStarred: self.isStarred, searchRevision: self.searchRevision,
+            originalProcessedText: self.originalProcessedText ?? self.processedText,
+            correctedRawText: text, sourceFragments: groups
+        )
+    }
+
+    /// Keep grouped terms attached to the same source occurrence across later edits.
+    func fragmentsAfterReplacing(_ range: NSRange, with replacement: String, in updatedText: String) -> [SourceFragment] {
+        let delta = replacement.utf16.count - range.length
+        var ranges: [NSRange] = []
+        var grouped = (self.sourceTranscriptText as NSString).substring(with: range).split(whereSeparator: \.isWhitespace).count > 1 ||
+            replacement.split(whereSeparator: \.isWhitespace).count > 1
+        for group in self.sourceFragments where group.isValid(in: self.sourceTranscriptText) {
+            if NSMaxRange(group.range) <= range.location { ranges.append(group.range) }
+            else if group.location >= NSMaxRange(range) { ranges.append(NSRange(location: group.location + delta, length: group.length)) }
+            else {
+                grouped = true
+                let start = min(group.location, range.location)
+                let end = max(NSMaxRange(group.range), NSMaxRange(range)) + delta
+                if end > start { ranges.append(NSRange(location: start, length: end - start)) }
+            }
+        }
+        if grouped, !replacement.isEmpty { ranges.append(NSRange(location: range.location, length: replacement.utf16.count)) }
+        var merged: [NSRange] = []
+        for item in ranges.sorted(by: { $0.location < $1.location }) {
+            if let last = merged.last, item.location <= NSMaxRange(last) {
+                merged[merged.count - 1] = NSUnionRange(last, item)
+            } else { merged.append(item) }
+        }
+        let text = updatedText as NSString
+        return merged.compactMap { span in
+            guard span.location >= 0, span.length > 0, span.location <= text.length, span.length <= text.length - span.location else { return nil }
+            let group = SourceFragment(location: span.location, length: span.length, text: text.substring(with: span))
+            return group.isValid(in: updatedText) ? group : nil
+        }.prefix(128).map { $0 }
+    }
+
+    func reconcilingSourceCorrections() -> TranscriptionHistoryEntry {
+        guard self.correctedRawText != nil || !self.sourceFragments.isEmpty else { return self }
+        let updated = self.replacingSourceText(self.sourceTranscriptText)
+        return updated.processedText == self.processedText ? self : updated
     }
 
     /// A restore can hand an existing id different text, and the search index only
@@ -236,6 +357,170 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         let now = UInt64(max(1, date.timeIntervalSince1970 * 1000))
         let base = max(now, self.searchRevision ?? 1, indexed ?? 1)
         self.searchRevision = base == .max ? .max : base + 1
+    }
+}
+
+/// Projects explicit source edits through the formatter's token alignment. Original
+/// ASR bytes stay immutable; only user-edited spans override the formatted output.
+nonisolated enum SourceTranscriptCorrection {
+    private struct Token {
+        var text: String
+        var range: NSRange
+        let kind: Int // word, whitespace, punctuation/grapheme
+        var key: String { text.folding(options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX")) }
+    }
+
+    private static func tokens(_ text: String, includingWhitespace: Bool) -> [Token] {
+        var result: [Token] = []
+        var offset = 0
+        for character in text {
+            let value = String(character)
+            let length = value.utf16.count
+            let kind = character.isWhitespace ? 1 : (character.unicodeScalars.allSatisfy {
+                CharacterSet.alphanumerics.contains($0) || CharacterSet.nonBaseCharacters.contains($0) || $0 == "_"
+            } ? 0 : 2)
+            defer { offset += length }
+            guard includingWhitespace || kind != 1 else { continue }
+            if kind != 2, let last = result.last, last.kind == kind, NSMaxRange(last.range) == offset {
+                result[result.count - 1].range.length += length
+            } else {
+                result.append(Token(text: "", range: NSRange(location: offset, length: length), kind: kind))
+            }
+        }
+        let string = text as NSString
+        return result.map { Token(text: string.substring(with: $0.range), range: $0.range, kind: $0.kind) }
+    }
+
+    private static func matches(_ before: [String], _ after: [String]) -> [(Int, Int)] {
+        var removed = Set<Int>(), added = Set<Int>()
+        for change in after.difference(from: before) {
+            switch change {
+            case let .remove(offset, _, _): removed.insert(offset)
+            case let .insert(offset, _, _): added.insert(offset)
+            }
+        }
+        var source = 0, target = 0
+        var result: [(Int, Int)] = []
+        while source < before.count, target < after.count {
+            if removed.contains(source) { source += 1 }
+            else if added.contains(target) { target += 1 }
+            else { result.append((source, target)); source += 1; target += 1 }
+        }
+        return result
+    }
+
+    static func apply(original: String, corrected: String, to final: String) -> String {
+        guard original != corrected, final != corrected else { return final }
+        var current = final
+        // Repeated punctuation can give equally short alignments. Settle the
+        // projection before persisting so later loads never shift its result.
+        for _ in 0..<3 {
+            let next = applyOnce(original: original, corrected: corrected, to: current)
+            if next == current || next == corrected { return next }
+            current = next
+        }
+        return corrected
+    }
+
+    private static func applyOnce(original: String, corrected: String, to final: String) -> String {
+        guard original != corrected else { return final }
+        let before = tokens(original, includingWhitespace: true)
+        let after = tokens(corrected, includingWhitespace: true)
+        guard before.count + after.count <= 2048 else { return corrected }
+        let pairs = matches(before.map(\.text), after.map(\.text)) + [(before.count, after.count)]
+        var edits: [(NSRange, String)] = []
+        var sourceStart = 0, targetStart = 0
+        for (sourceEnd, targetEnd) in pairs {
+            if sourceStart != sourceEnd || targetStart != targetEnd {
+                let start = sourceStart < before.count ? before[sourceStart].range.location : original.utf16.count
+                let end = sourceEnd < before.count ? before[sourceEnd].range.location : original.utf16.count
+                edits.append((NSRange(location: start, length: end - start), after[targetStart..<targetEnd].map(\.text).joined()))
+            }
+            sourceStart = sourceEnd + 1
+            targetStart = targetEnd + 1
+        }
+        guard edits.count <= 32 else { return corrected }
+        var source = original, output = final
+        // Later edits cannot shift the UTF-16 positions of earlier source edits.
+        for (range, replacement) in edits.reversed() {
+            let updated = (source as NSString).replacingCharacters(in: range, with: replacement)
+            output = project(source: source, final: output, range: range, replacement: replacement) ?? updated
+            source = updated
+        }
+        return output.utf16.count <= 100_000 ? output : corrected
+    }
+
+    static func applyGroup(source: String, final: String, range: NSRange, text: String) -> String {
+        project(source: source, final: final, range: range, replacement: text) ?? source
+    }
+
+    private static func project(source: String, final: String, range: NSRange, replacement: String) -> String? {
+        if source == final { return (source as NSString).replacingCharacters(in: range, with: replacement) }
+        let before = tokens(source, includingWhitespace: false), after = tokens(final, includingWhitespace: false)
+        guard !before.isEmpty, !after.isEmpty, before.count + after.count <= 2048 else { return nil }
+        let selected: [Int]
+        if range.length == 0 {
+            let word = before.indices.first { before[$0].kind == 0 && before[$0].range.location <= range.location && NSMaxRange(before[$0].range) >= range.location }
+            selected = word.map { [$0] } ?? before.indices.filter { before[$0].range.location == range.location }
+        } else {
+            selected = before.indices.filter { NSIntersectionRange(before[$0].range, range).length > 0 }
+        }
+        let first = selected.first ?? before.lastIndex { NSMaxRange($0.range) <= range.location } ?? 0
+        let last = selected.last ?? before.firstIndex { $0.range.location >= NSMaxRange(range) } ?? (before.count - 1)
+        guard first <= last else { return nil }
+        let pairs = matches(before.map(\.key), after.map(\.key))
+        let left = pairs.last { $0.0 < first }, right = pairs.first { $0.0 > last }
+        let firstMatch = pairs.first { $0.0 == first }, lastMatch = pairs.first { $0.0 == last }
+        if range.length == 0 {
+            let inserted = tokens(replacement, includingWhitespace: false).map(\.text)
+            if !inserted.isEmpty {
+                if range.location <= before[first].range.location, let target = firstMatch?.1, target >= inserted.count,
+                   after[(target - inserted.count)..<target].map(\.text) == inserted { return final }
+                if range.location >= NSMaxRange(before[last].range), let target = lastMatch.map({ $0.1 + 1 }), target + inserted.count <= after.count,
+                   after[target..<(target + inserted.count)].map(\.text) == inserted { return final }
+            }
+        }
+        var sourceFirst = firstMatch == nil ? (left.map { $0.0 + 1 } ?? 0) : first
+        var sourceEnd = lastMatch == nil ? (right?.0 ?? before.count) : last + 1
+        while sourceFirst < first, before[sourceFirst].kind == 2 { sourceFirst += 1 }
+        while sourceEnd > last + 1, before[sourceEnd - 1].kind == 2 { sourceEnd -= 1 }
+        let sourceRange = NSUnionRange(range, NSRange(location: before[sourceFirst].range.location,
+            length: NSMaxRange(before[sourceEnd - 1].range) - before[sourceFirst].range.location))
+        let chunk = ((source as NSString).substring(with: sourceRange) as NSString).replacingCharacters(
+            in: NSRange(location: range.location - sourceRange.location, length: range.length), with: replacement)
+        var targetFirst = firstMatch?.1 ?? left.map { $0.1 + 1 } ?? 0
+        var targetEnd = lastMatch.map { $0.1 + 1 } ?? right?.1 ?? after.count
+        let untrimmedFirst = targetFirst
+        if chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            while targetEnd < (right?.1 ?? after.count), after[targetEnd].kind == 2 { targetEnd += 1 }
+        }
+        // Keep punctuation added by the formatter outside a corrected word span.
+        if !chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, before[sourceFirst].kind == 0 {
+            while targetFirst < targetEnd, after[targetFirst].kind == 2 { targetFirst += 1 }
+        }
+        if !chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, before[sourceEnd - 1].kind == 0 {
+            while targetFirst < targetEnd, after[targetEnd - 1].kind == 2 { targetEnd -= 1 }
+        }
+        if targetFirst < targetEnd {
+            var targetRange = NSRange(location: after[targetFirst].range.location,
+                length: NSMaxRange(after[targetEnd - 1].range) - after[targetFirst].range.location)
+            if chunk.isEmpty, targetRange.location > 0, NSMaxRange(targetRange) < final.utf16.count,
+               (final as NSString).substring(with: NSRange(location: targetRange.location - 1, length: 1)) == " ",
+               (final as NSString).substring(with: NSRange(location: NSMaxRange(targetRange), length: 1)) == " " {
+                targetRange.length += 1
+            }
+            return (final as NSString).replacingCharacters(in: targetRange, with: chunk)
+        }
+        let insertion = right?.1 ?? untrimmedFirst
+        let location = insertion < after.count ? after[insertion].range.location : final.utf16.count
+        guard let position = Range(NSRange(location: location, length: 0), in: final) else { return nil }
+        var inserted = chunk
+        func word(_ character: Character?) -> Bool {
+            character?.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) == true
+        }
+        if word(final[..<position.lowerBound].last), word(inserted.first) { inserted = " " + inserted }
+        if word(inserted.last), word(final[position.lowerBound...].first) { inserted += " " }
+        return (final as NSString).replacingCharacters(in: NSRange(location: location, length: 0), with: inserted)
     }
 }
 
@@ -631,6 +916,49 @@ final class TranscriptionHistoryStore: ObservableObject {
         DebugLogger.shared.debug("Added transcription to history (total: \(self.entries.count))", source: "TranscriptionHistoryStore")
     }
 
+    /// Applies one explicit edit to the exact visible source or final snapshot. The
+    /// existing writer owns persistence, errors and any pending audio attachment.
+    @discardableResult
+    func applyWordCorrection(
+        entryID: UUID,
+        expectedText: String,
+        range: NSRange,
+        replacement: String,
+        profile: PrivateProfileSnapshot,
+        isOriginal: Bool = false
+    ) -> Bool {
+        guard self.canAccess, PrivateProfileStorage.acceptsNewWork,
+              PrivateProfileStorage.isReadable(profile),
+              self.profile.map({ $0.id == profile.id && $0.generation == profile.generation }) != false,
+              let index = self.entries.firstIndex(where: { $0.id == entryID }),
+              (isOriginal ? self.entries[index].sourceTranscriptText : self.entries[index].clipboardText) == expectedText,
+              range.location != NSNotFound, range.location >= 0, range.length > 0,
+              range.location <= expectedText.utf16.count,
+              range.length <= expectedText.utf16.count - range.location,
+              let swiftRange = Range(range, in: expectedText),
+              expectedText.indices.contains(swiftRange.lowerBound),
+              swiftRange.upperBound == expectedText.endIndex || expectedText.indices.contains(swiftRange.upperBound),
+              replacement.utf16.count <= 100_000,
+              !replacement.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+        else { return false }
+        let final = expectedText.replacingCharacters(in: swiftRange, with: replacement)
+        guard !final.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              final.utf16.count <= 100_000 else { return false }
+        let fragments = isOriginal ? self.entries[index].fragmentsAfterReplacing(range, with: replacement, in: final) : []
+        guard final != expectedText || (isOriginal && fragments != self.entries[index].sourceFragments) else { return false }
+        var entry = isOriginal ? self.entries[index].replacingSourceText(final, fragments: fragments) : self.entries[index].replacingFinalText(final)
+        entry.markRestored(over: self.entries[index].searchRevision)
+        self.entries[index] = entry
+        // A reserved audio write may complete after this edit. Its retry capsule
+        // must carry the newest final text rather than restoring an older result.
+        if let admission = self.recordingWrites[entryID], !admission.finished, !admission.revoked {
+            admission.entry = entry
+        }
+        self.refreshTodaySummary()
+        self.persist(upserts: [entry])
+        return true
+    }
+
     func toggleStar(id: UUID) {
         guard self.canAccess else { return }
         guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
@@ -717,7 +1045,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         } else {
             let lowercased = query.lowercased()
             matches = entries.filter { entry in
-                entry.rawText.lowercased().contains(lowercased) ||
+                entry.sourceTranscriptText.lowercased().contains(lowercased) ||
                     entry.processedText.lowercased().contains(lowercased) ||
                     entry.appName.lowercased().contains(lowercased) ||
                     entry.windowTitle.lowercased().contains(lowercased)
@@ -757,7 +1085,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         let indexed = Dictionary(self.entries.map { ($0.id, $0.searchRevision ?? 1) }) { first, _ in first }
         self.entries = payload
             .map { entry in
-                var entry = entry
+                var entry = entry.reconcilingSourceCorrections()
                 entry.markRestored(over: indexed[entry.id])
                 return entry
             }
@@ -910,12 +1238,28 @@ final class TranscriptionHistoryStore: ObservableObject {
                 }
                 var merged = self.pendingReplacement ? [] : loaded.filter { !self.pendingDeletes.contains($0.id) && upserts[$0.id] == nil }
                 merged.append(contentsOf: upserts.values)
+                // Repair source corrections saved by versions that only updated
+                // identical source/final pairs. Ordinary scoped persistence owns
+                // this one-time change, including pending audio retry capsules.
+                var corrected = self.pendingUpserts
+                if self.canAccess, PrivateProfileStorage.acceptsNewWork {
+                    merged = merged.map { entry in
+                        var updated = entry.reconcilingSourceCorrections()
+                        guard updated != entry else { return entry }
+                        updated.markRestored(over: entry.searchRevision)
+                        corrected[updated.id] = updated
+                        if let admission = self.recordingWrites[updated.id], !admission.finished, !admission.revoked {
+                            admission.entry = updated
+                        }
+                        return updated
+                    }
+                }
                 self.entries = merged.sorted { $0.timestamp > $1.timestamp }
                 if self.canAccess { self.refreshTodaySummary() }
                 self.hasLoaded = true
                 self.persistenceError = nil
-                if self.pendingReplacement || !self.pendingUpserts.isEmpty || !self.pendingDeletes.isEmpty {
-                    self.persist(upserts: Array(self.pendingUpserts.values), deletes: Array(self.pendingDeletes), replacing: self.pendingReplacement)
+                if self.pendingReplacement || !corrected.isEmpty || !self.pendingDeletes.isEmpty {
+                    self.persist(upserts: Array(corrected.values), deletes: Array(self.pendingDeletes), replacing: self.pendingReplacement)
                 }
                 self.pendingUpserts.removeAll()
                 self.pendingDeletes.removeAll()

@@ -10,6 +10,7 @@ final class GigaAMGGUFInference {
     private var session: Session?
     private(set) var usesGPU = false
     var isLoaded: Bool { self.session != nil }
+    var supportsEncoderFeatures: Bool { self.session?.supportsEncoderFeatureSnapshots == true }
 
     init(modelURL: URL, modelSHA256: String) {
         self.modelURL = modelURL
@@ -55,12 +56,19 @@ final class GigaAMGGUFInference {
         }
     }
 
+    struct Output { let words: [GigaAMWordTiming]; let encoderFeatures: EncoderFeatureSnapshot? }
+
     func predict(_ samples: [Float], cancellationToken: CancellationToken? = nil) throws -> [GigaAMWordTiming] {
+        try self.predictDetailed(samples, cancellationToken: cancellationToken).words
+    }
+
+    func predictDetailed(_ samples: [Float], cancellationToken: CancellationToken? = nil,
+                         captureEncoderFeatures: Bool = false) throws -> Output {
         try autoreleasepool {
             try Task.checkCancellation()
             guard let session = self.session else { throw GigaAMError.notPrepared }
             guard samples.count <= 22 * 16_000, samples.allSatisfy(\.isFinite) else { throw GigaAMError.invalidAudio }
-            guard !samples.isEmpty else { return [] }
+            guard !samples.isEmpty else { return Output(words: [], encoderFeatures: nil) }
             if cancellationToken?.isCancelled == true { throw CancellationError() }
             // The native SDK requires a complete first analysis window, as the
             // legacy frontend does. Keep the unpadded duration for word bounds.
@@ -70,8 +78,16 @@ final class GigaAMGGUFInference {
             if let cancellationToken { session.setCancellationToken(cancellationToken) }
             defer { if cancellationToken != nil { session.clearCancellationToken() } }
             let result: Transcript
+            var encoderFeatures: EncoderFeatureSnapshot?
             do {
-                result = try session.run(pcm, options: .init(timestamps: .token, language: "ru"))
+                if captureEncoderFeatures {
+                    let snapshot = try session.runWithOptionalEncoderFeatures(pcm,
+                        options: .init(timestamps: .token, language: "ru"))
+                    result = snapshot.transcript
+                    encoderFeatures = snapshot.encoderFeatures
+                } else {
+                    result = try session.run(pcm, options: .init(timestamps: .token, language: "ru"))
+                }
             } catch TranscribeError.aborted {
                 // Native partial output must not escape cancellation as a result.
                 throw CancellationError()
@@ -88,8 +104,9 @@ final class GigaAMGGUFInference {
                 return GigaAMCTCEmission(piece: token.text, start: Double(token.t0Ms) / 1_000,
                                          end: Double(token.t1Ms) / 1_000, confidence: token.p)
             }
-            return try GigaAMCTC.words(emissions: emissions, subword: true,
-                                       audioDuration: Double(samples.count) / 16_000)
+            let words = try GigaAMCTC.words(emissions: emissions, subword: true,
+                                           audioDuration: Double(samples.count) / 16_000)
+            return Output(words: words, encoderFeatures: encoderFeatures)
         }
     }
 }

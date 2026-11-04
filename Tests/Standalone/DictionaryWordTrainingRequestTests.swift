@@ -17,6 +17,7 @@ struct TranscriptionHistoryEntry {
     let rawText: String
     let processedText: String
     var clipboardText: String? { processedText }
+    var sourceTranscriptText: String { rawText }
 }
 
 @main struct DictionaryWordTrainingRequestTests {
@@ -27,6 +28,8 @@ struct TranscriptionHistoryEntry {
         precondition(request.isCurrent)
         precondition(DictionaryWordTrainingRequest(candidate: candidate, now: Date().addingTimeInterval(-121))?.isCurrent == false)
         precondition(DictionaryWordTrainingRequest(candidate: .init(heardText: "same", correctedText: "same")) == nil)
+        precondition(DictionaryWordTrainingRequest(candidate: .init(heardText: "Pichi AI", correctedText: "Pichi AI")) != nil,
+            "An explicitly confirmed multiword fragment can open pronunciation training without changing its spelling")
         precondition(DictionaryWordTrainingRequest(candidate: .init(heardText: "word", correctedText: "five words in this sentence")) == nil)
         var oversized = candidate
         oversized.audioEvidence = .init(samples: [Float](repeating: 0, count: 238_081))

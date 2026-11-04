@@ -1,0 +1,86 @@
+{
+  "source_url": "https://github.com/handy-computer/transcribe.cpp.git",
+  "source_commit": "33d5c383e43e6acbd572845866ea75b8c7959fa5",
+  "source_tag": "v0.1.2",
+  "patch_sha256": "9e3f042faa92e251baa02515710f2081f7986e3bce1a8a9ecc3fac86145b6d30",
+  "official_archive_sha256": "4092276cd295860ae9637a2913cf2d8747f39d454bb7fb3c79d6af9f858a4bb8",
+  "cmake_options": [
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DCMAKE_OSX_SYSROOT=macosx",
+    "-DCMAKE_OSX_ARCHITECTURES=arm64",
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0",
+    "-DTRANSCRIBE_BUILD_SHARED=OFF",
+    "-DTRANSCRIBE_BUILD_TESTS=ON",
+    "-DTRANSCRIBE_BUILD_EXAMPLES=OFF",
+    "-DTRANSCRIBE_BUILD_TOOLS=OFF",
+    "-DTRANSCRIBE_INSTALL=OFF",
+    "-DTRANSCRIBE_USE_OPENMP=OFF",
+    "-DGGML_OPENMP=OFF",
+    "-DGGML_NATIVE=OFF",
+    "-DTRANSCRIBE_METAL=ON",
+    "-DGGML_METAL=ON",
+    "-DGGML_METAL_EMBED_LIBRARY=ON",
+    "-DTRANSCRIBE_ENABLE_VALIDATION_HOOKS=OFF"
+  ],
+  "cmake_version": "cmake version 3.31.10\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+  "xcode_version": "Xcode 27.0\nBuild version 27A266a",
+  "native_tests": "transcribe_api_smoke and transcribe_encoder_features_unit passed",
+  "new_feature_platform": "macOS arm64; CPU and Metal compiled; embedded shaders",
+  "legacy_platforms": "macOS x86_64 and original iOS/simulator code retained",
+  "legacy_intel_unsigned_sha256": "5a1acef0e8bd0f5a295dace3cec6ab88aefa92d3060dbba02a736523e8500d11",
+  "legacy_ios_files": {
+    "ios-arm64_x86_64-simulator": {
+      "ios-arm64_x86_64-simulator/CTranscribe.framework/CTranscribe": "81719d934d47a560a00aee8cf8b22114154d8a5e45f73423e399dc65197a2f7e",
+      "ios-arm64_x86_64-simulator/CTranscribe.framework/Headers/extensions.h": "bcf31fe33c369fac978677d053cf3b0a73150e4244b1b8864f4cba3b00f94eb5",
+      "ios-arm64_x86_64-simulator/CTranscribe.framework/Headers/moonshine_streaming.h": "fe67db1635f2c15059d88f54095f6c14c6ae315e09f9a1d447d0f075f5de5e20",
+      "ios-arm64_x86_64-simulator/CTranscribe.framework/Headers/parakeet.h": "969a8d124ae837cdff3038f22a1a6037f5a68d5f906a4cf731154cb756b3b132",
+      "ios-arm64_x86_64-simulator/CTranscribe.framework/Headers/transcribe.h": "ffb753050d6d28ce4127dd226ce18d26fdc7356bb4b1687f3d5c6849f476b245",
+      "ios-arm64_x86_64-simulator/CTranscribe.framework/Headers/voxtral_realtime.h": "4ebc4a2278de261528efcc78def78526d3d1d449c1189417321c38e69b7e0fb6",
+      "ios-arm64_x86_64-simulator/CTranscribe.framework/Headers/whisper.h": "1edaab9c696f534eaa2b84c32d2f897795e10061b81f04d70a00301d23e9ede5",
+      "ios-arm64_x86_64-simulator/CTranscribe.framework/Info.plist": "107d63c682e87bed48416f28c7e285c057b9450de3814bd0001f020ea3f74d7a",
+      "ios-arm64_x86_64-simulator/CTranscribe.framework/Modules/module.modulemap": "d738d17e347c1efa780141f2dc3dead61aa53624d4378df10f123bcfbedfbd31",
+      "ios-arm64_x86_64-simulator/CTranscribe.framework/_CodeSignature/CodeResources": "a54eb7ebd0505fc6cb6cfe7003e97f3348f440647b92bc591a963bc13ae8188d"
+    },
+    "ios-arm64": {
+      "ios-arm64/CTranscribe.framework/CTranscribe": "39dbd45e6eb9217a1c6d8d26df1256425dd8edfbe800097982379fd6693628f3",
+      "ios-arm64/CTranscribe.framework/Headers/extensions.h": "bcf31fe33c369fac978677d053cf3b0a73150e4244b1b8864f4cba3b00f94eb5",
+      "ios-arm64/CTranscribe.framework/Headers/moonshine_streaming.h": "fe67db1635f2c15059d88f54095f6c14c6ae315e09f9a1d447d0f075f5de5e20",
+      "ios-arm64/CTranscribe.framework/Headers/parakeet.h": "969a8d124ae837cdff3038f22a1a6037f5a68d5f906a4cf731154cb756b3b132",
+      "ios-arm64/CTranscribe.framework/Headers/transcribe.h": "ffb753050d6d28ce4127dd226ce18d26fdc7356bb4b1687f3d5c6849f476b245",
+      "ios-arm64/CTranscribe.framework/Headers/voxtral_realtime.h": "4ebc4a2278de261528efcc78def78526d3d1d449c1189417321c38e69b7e0fb6",
+      "ios-arm64/CTranscribe.framework/Headers/whisper.h": "1edaab9c696f534eaa2b84c32d2f897795e10061b81f04d70a00301d23e9ede5",
+      "ios-arm64/CTranscribe.framework/Info.plist": "54aed51ab584f0f89987564ea34fd5d7a7ce23abb3215fa2a27dea719c92c8b2",
+      "ios-arm64/CTranscribe.framework/Modules/module.modulemap": "d738d17e347c1efa780141f2dc3dead61aa53624d4378df10f123bcfbedfbd31",
+      "ios-arm64/CTranscribe.framework/_CodeSignature/CodeResources": "b28aedcc2da75d4144178a7fad52df21f93484592548dedb4fe0ad86a29ffcf2"
+    }
+  },
+  "macos_framework_sha256": "5c7e102a19d4e8690add492402181d88e462bb5e191fbe7cdd5cc048829a8b10",
+  "self_contained_dependencies": [
+    "@rpath/CTranscribe.framework/Versions/Current/CTranscribe",
+    "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+    "/System/Library/Frameworks/Metal.framework/Versions/A/Metal",
+    "/System/Library/Frameworks/MetalKit.framework/Versions/A/MetalKit",
+    "/System/Library/Frameworks/Accelerate.framework/Versions/A/Accelerate",
+    "/usr/lib/libc++.1.dylib",
+    "/usr/lib/libSystem.B.dylib",
+    "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+    "/usr/lib/libobjc.A.dylib"
+  ],
+  "optional_encoder_api_version": 1,
+  "new_exports": [
+    "transcribe_encoder_features_api_version",
+    "transcribe_encoder_features_supported",
+    "transcribe_clear_encoder_features",
+    "transcribe_get_encoder_features"
+  ],
+  "sdk_version": "0.1.2-pichi.encoder1",
+  "artifact": "TranscribeCpp.xcframework.zip",
+  "artifact_sha256": "9ab97635ea0ac6b537966a0ff825337bb5e8f583381890f860b9ae840a2d24e9",
+  "actual_model_probes": "macOS arm64 CPU and Metal passed; 1s synthetic audio,25framesx768,40ms; owned copy/generation/clear validated",
+  "license_files": [
+    "LICENSE",
+    "LICENSE.ggml",
+    "LICENSE.miniz"
+  ],
+  "distribution": "Local SwiftPM binary archive. No remote release credentials or DYLD overrides."
+}

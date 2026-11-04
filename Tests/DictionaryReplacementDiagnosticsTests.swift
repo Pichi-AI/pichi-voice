@@ -3,6 +3,19 @@ import Foundation
 @main
 struct DictionaryReplacementDiagnosticsTests {
     static func main() throws {
+        let dash = "\u{2014}"
+        let punctuationInput = "🙂 Before \(dash) alfax, after."
+        precondition(DictionaryTranscriptReplacement.apply(to: punctuationInput,
+            wordTexts: ["Before", dash, "alfax,", "after."],
+            replacements: [.init(wordRange: 2...2, label: "Alpha")]) == "🙂 Before \(dash) Alpha, after.")
+        precondition(DictionaryTranscriptReplacement.apply(to: "word \(dash) word.",
+            wordTexts: ["word", dash, "word."],
+            replacements: [.init(wordRange: 2...2, label: "Alpha")]) == "word \(dash) Alpha.")
+        precondition(DictionaryTranscriptReplacement.apply(to: punctuationInput,
+            wordTexts: ["Before", dash, "alfax,", "after."], replacements: []) == punctuationInput)
+        precondition(DictionaryTranscriptReplacement.apply(to: "Before alfax.",
+            wordTexts: ["Before", dash, "alfax."],
+            replacements: [.init(wordRange: 2...2, label: "Alpha")]) == "Before alfax.")
         let regex = try NSRegularExpression(pattern: "\\bbut\\b", options: .caseInsensitive)
         let input = "🙂 But wait, but don't change butter."
         var events: [(NSRange, String, String)] = []

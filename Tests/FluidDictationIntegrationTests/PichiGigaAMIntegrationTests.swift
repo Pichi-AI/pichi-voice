@@ -7,6 +7,69 @@ import AppKit
 #endif
 
 extension PichiGigaAMIntegrationTests {
+    func testEncoderCohortsKeepCompatibleManualAndContextReferences() throws {
+        func feature(_ frames: Int, axis: Int = 0) throws -> GigaAMEncoderFeatures {
+            var row = [Float](repeating: 0, count: GigaAMEncoderFeatures.dimension)
+            row[axis] = 1
+            return try GigaAMEncoderFeatures(values: Array(repeating: row, count: frames).flatMap { $0 })
+        }
+        let slow = try feature(60), quick = try feature(20), other = try feature(20, axis: 1)
+        let entry = UUID(), key = "cohort-test"
+        let term = GigaAMEncoderDictionary.Term(entryID: entry, label: "Example", modelKey: key,
+            references: [slow, slow, slow, quick, quick, quick], observedVariants: [])
+        let prepared = try GigaAMEncoderDictionary.prepare(terms: [term], modelKey: key)
+        let word = try XCTUnwrap(prepared.words.first)
+        XCTAssertEqual(prepared.words.count, 1)
+        XCTAssertTrue(word.cohorts.contains { $0.references.allSatisfy { $0.frameCount == 60 } })
+        let contextual = try XCTUnwrap(word.cohorts.first { $0.references.allSatisfy { $0.frameCount == 20 } })
+        XCTAssertTrue(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoder(query: quick,
+            references: contextual.references, calibration: contextual.calibration)).accepted)
+        XCTAssertFalse(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoder(query: quick,
+            references: contextual.references, calibration: contextual.calibration, negativeReferences: [quick])).accepted)
+        XCTAssertFalse(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoder(query: other,
+            references: contextual.references, calibration: contextual.calibration)).accepted)
+    }
+
+    func testRecordedTerminalLetterKeepsOtherRoleAndNumberGuards() {
+        let check = GigaAMDictionaryLexicalEvidence.recordedTerminalLetterI
+        XCTAssertTrue(check("PC I", "Pichi AI", ["PC I"]))
+        XCTAssertFalse(check("PC I", "Pichi AI", []))
+        XCTAssertFalse(check("not PC I", "Pichi AI", ["not PC I"]))
+        XCTAssertFalse(check("PC 2 I", "Pichi AI", ["PC 2 I"]))
+        XCTAssertFalse(check("PC I", "Pichi Voice", ["PC I"]))
+        XCTAssertFalse(check("PC i", "Pichi AI", ["PC i"]))
+        XCTAssertTrue(check("Pici и I", "Pichi AI", ["Pici и I"]))
+        XCTAssertFalse(check("Pici и I", "Pichi AI", []))
+        XCTAssertFalse(check("и Pici и I", "Pichi AI", ["и Pici и I"]))
+        XCTAssertFalse(check("не Pici и I", "Pichi AI", ["не Pici и I"]))
+    }
+
+    func testEncoderRecordedSubrangePreservesAdjacentWordsAndRoleGuards() throws {
+        let row = [Float(1)] + [Float](repeating: 0, count: GigaAMEncoderFeatures.dimension - 1)
+        let feature = try GigaAMEncoderFeatures(values: Array(repeating: row, count: 20).flatMap { $0 })
+        let term = GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Example", modelKey: "test",
+            references: [feature, feature, feature], observedVariants: ["Eksample"])
+        let words = [GigaAMWordTiming(text: "Eksample", start: 0, end: 0.5, confidence: 0.4),
+                     GigaAMWordTiming(text: "then", start: 0.5, end: 0.8, confidence: 0.4)]
+        XCTAssertEqual(GigaAMEncoderDictionary.recordedSubrange(0...1, words: words, term: term), 0...0)
+        let role = GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Example", modelKey: "test",
+            references: [feature, feature, feature], observedVariants: ["I"])
+        let protected = [GigaAMWordTiming(text: "I", start: 0, end: 0.3, confidence: 0.4), words[1]]
+        XCTAssertNil(GigaAMEncoderDictionary.recordedSubrange(0...1, words: protected, term: role))
+        let acronym = GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Nova AI", modelKey: "test",
+            references: [feature, feature, feature], observedVariants: ["Nova и I"])
+        let span = [GigaAMWordTiming(text: "Nova", start: 0, end: 0.3, confidence: 0.4),
+                    GigaAMWordTiming(text: "и", start: 0.3, end: 0.4, confidence: 0.4),
+                    GigaAMWordTiming(text: "I", start: 0.4, end: 0.5, confidence: 0.4),
+                    GigaAMWordTiming(text: "тогда", start: 0.5, end: 0.8, confidence: 0.4)]
+        XCTAssertEqual(GigaAMEncoderDictionary.recordedSubrange(0...3, words: span, term: acronym), 0...2)
+        let calibration = try XCTUnwrap(GigaAMAcousticMatcher.calibrateEncoder(references: acronym.references))
+        XCTAssertTrue(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoder(query: feature,
+            references: acronym.references, calibration: calibration)).accepted)
+        XCTAssertFalse(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoder(query: feature,
+            references: acronym.references, calibration: calibration, negativeReferences: [feature])).accepted)
+    }
+
     /// Exercise the complete saved-template path with generated signals, independent
     /// from model weights, user preferences, microphones and network services.
     @MainActor
@@ -166,17 +229,22 @@ extension PichiGigaAMIntegrationTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("gigaam-readiness-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let fingerprint = GigaAMModelCatalog.downloadableModel.fingerprint
-        let key = GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint)
-        let provider = PichiGigaAMProvider(modelStore: PichiGigaAMModelStore(directory: root), expectedModelFingerprint: fingerprint)
+        let modelStore = PichiGigaAMModelStore(directory: root)
+        let encoder = modelStore.encoderDictionarySupported(fingerprint: fingerprint)
+        let key = encoder ? GigaAMEncoderDictionaryStorage.modelKey(fingerprint: fingerprint)
+            : GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint)
+        let dimension = encoder ? GigaAMEncoderFeatures.dimension : GigaAMAcousticFeatures.dimension
+        let recipe = encoder ? GigaAMEncoderFeatures.extractorVersion : GigaAMAcousticFeatures.extractorVersion
+        let provider = PichiGigaAMProvider(modelStore: modelStore, expectedModelFingerprint: fingerprint)
         let samples = Self.acousticTone(440, duration: 0.48)
         func capture(coordinate: Int) -> PronunciationEnrollmentCapture {
-            let row = (0..<40).map { Float($0 == coordinate ? 1 : 0) }
+            let row = (0..<dimension).map { Float($0 == coordinate ? 1 : 0) }
             let inspection = DictionaryAudioInspection(samples: samples, recordedSampleCount: samples.count,
-                frames: [.init(offset: 0, frameDuration: 0.04, hiddenSize: 40,
+                frames: [.init(offset: 0, frameDuration: 0.04, hiddenSize: dimension,
                                values: Array(repeating: row, count: 12).flatMap { $0 })],
                 words: [], selectedStart: 0, selectedEnd: 0.48)
             return .init(values: row, sourceFrameCount: 12, modelKey: key,
-                extractorVersion: GigaAMAcousticFeatures.extractorVersion, pendingInspection: inspection)
+                extractorVersion: recipe, pendingInspection: inspection)
         }
         let consistent = try await provider.validateDictionaryPronunciations([capture(coordinate: 0), capture(coordinate: 0), capture(coordinate: 0)])
         let inconsistent = try await provider.validateDictionaryPronunciations([capture(coordinate: 0), capture(coordinate: 1), capture(coordinate: 2)])

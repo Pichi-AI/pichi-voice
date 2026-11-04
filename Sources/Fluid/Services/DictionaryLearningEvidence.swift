@@ -1,5 +1,12 @@
 import Foundation
 
+/// One already-computed feature window. Offsets describe the original recording until resolved.
+/// The provider owns the extractor recipe; shared evidence transport never interprets its model.
+nonisolated struct DictionaryLearningFeatureFrames: Equatable, Sendable {
+    let extractorVersion: String
+    let frames: DictionaryAudioInspection.Frames
+}
+
 /// Alignment always describes the original ASR output, before dictionary rules or AI rewriting.
 nonisolated struct DictionaryLearningAlignment: Sendable {
     let modelKey: String
@@ -8,6 +15,7 @@ nonisolated struct DictionaryLearningAlignment: Sendable {
     var acousticEvidence: [DictionaryAcousticEvidence] = []
     /// New spellings that voice matching replaced in this dictation, learned unless the user undoes them.
     var voiceSpellings: [DictionaryVoiceSpelling] = []
+    var featureFrames: [DictionaryLearningFeatureFrames] = []
 }
 
 nonisolated struct DictionaryVoiceSpelling: Equatable, Sendable {
@@ -21,6 +29,8 @@ nonisolated struct DictionaryLearningRecording: Sendable {
     static let sampleRate = 16_000
     static let maximumSamples = sampleRate * 60 * 15
     static let lifetime: TimeInterval = 120
+    static let maximumFeatureBytes = 128 * 1024 * 1024
+    static let maximumFeatureChunks = 256
 
     let id: UUID
     let expiresAt: Date
@@ -39,9 +49,46 @@ nonisolated struct DictionaryLearningRecording: Sendable {
         else { return nil }
         self.id = id
         self.expiresAt = now.addingTimeInterval(Self.lifetime)
-        self.alignment = alignment
+        var retainedAlignment = alignment
+        retainedAlignment.featureFrames = retainAudio
+            ? Self.retainedFeatureFrames(alignment.featureFrames, sampleCount: samples.count)
+            : []
+        self.alignment = retainedAlignment
         // Negative confirmation needs only accepted-word features, not the full recording PCM.
         self.samples = retainAudio ? samples : []
+    }
+
+    /// Invalid optional features never discard a valid correction recording or its negative evidence.
+    /// Check the full byte budget before inspecting values, so oversized inputs fail cheaply.
+    private static func retainedFeatureFrames(_ features: [DictionaryLearningFeatureFrames], sampleCount: Int) -> [DictionaryLearningFeatureFrames] {
+        guard !features.isEmpty, features.count <= Self.maximumFeatureChunks,
+              let first = features.first,
+              !first.extractorVersion.isEmpty, first.extractorVersion.utf8.count <= 128,
+              first.extractorVersion.unicodeScalars.allSatisfy({
+                  $0.isASCII && !CharacterSet.whitespacesAndNewlines.contains($0) && !CharacterSet.controlCharacters.contains($0)
+              }), (1...2048).contains(first.frames.hiddenSize),
+              DictionaryAudioInspection.Frames.maximumCount(frameDuration: first.frames.frameDuration) != nil
+        else { return [] }
+        let duration = Double(sampleCount) / Double(Self.sampleRate)
+        var remainingBytes = Self.maximumFeatureBytes
+        var previousOffset = 0.0
+        for feature in features {
+            let frames = feature.frames
+            guard feature.extractorVersion == first.extractorVersion,
+                  frames.hiddenSize == first.frames.hiddenSize, frames.frameDuration == first.frames.frameDuration,
+                  frames.offset.isFinite, frames.offset >= 0, frames.offset >= previousOffset,
+                  frames.offset < duration, !frames.values.isEmpty,
+                  frames.values.count % frames.hiddenSize == 0,
+                  frames.values.count <= remainingBytes / MemoryLayout<Float>.size
+            else { return [] }
+            // An encoder may emit one final partial frame, but not features for arbitrary padding.
+            let lastFrameStart = frames.offset + Double(frames.count - 1) * frames.frameDuration
+            guard lastFrameStart < duration + 1e-9 else { return [] }
+            remainingBytes -= frames.values.count * MemoryLayout<Float>.size
+            previousOffset = frames.offset
+        }
+        guard features.allSatisfy({ $0.frames.values.allSatisfy(\.isFinite) }) else { return [] }
+        return features
     }
 }
 
@@ -61,6 +108,8 @@ nonisolated struct DictionaryLearningAudioEvidence: Sendable {
     let sourceSampleRange: Range<Int>
     let focalSampleRange: Range<Int>
     let samples: [Float]
+    /// At most one bounded feature window; its offset is relative to `samples`, not the recording.
+    var featureFrames: [DictionaryLearningFeatureFrames] = []
 }
 
 nonisolated enum DictionaryLearningAlignmentError: Error, Equatable {
@@ -149,11 +198,10 @@ nonisolated enum DictionaryLearningAlignmentResolver {
         // Unchanged lexical content gives an exact ordinal mapping, including repeated words.
         if raw == delivered { return selected }
         let target = Array(delivered[selected])
-        guard raw.count >= target.count else { throw DictionaryLearningAlignmentError.ambiguousSource }
         var best: Range<Int>?
         var bestScore = 0
         var tied = false
-        for start in 0...(raw.count - target.count) {
+        for start in 0..<(max(0, raw.count - target.count + 1)) {
             let range = start..<(start + target.count)
             guard raw[range].elementsEqual(target) else { continue }
             let left = self.contextMatches(
@@ -183,8 +231,31 @@ nonisolated enum DictionaryLearningAlignmentResolver {
                 tied = true
             }
         }
-        guard let best, !tied else { throw DictionaryLearningAlignmentError.ambiguousSource }
-        return best
+        guard !tied else { throw DictionaryLearningAlignmentError.ambiguousSource }
+        // A new decode can change the selected words. Only use the interval
+        // between matching context anchors (or a real utterance boundary). Every
+        // qualifying interval must identify the same occurrence; never infer time
+        // from text offsets or pick the highest scoring ambiguous interval.
+        // Exact spelling is not precedence: another occurrence may have changed
+        // spelling during re-decoding while keeping the selected context anchors.
+        var anchored: Range<Int>? = best
+        guard !raw.isEmpty else { throw DictionaryLearningAlignmentError.ambiguousSource }
+        for start in raw.indices {
+            let left = self.contextMatches(raw: raw, delivered: delivered, rawPosition: start - 1,
+                                           deliveredPosition: selected.lowerBound - 1, direction: -1)
+            guard left > 0 || (selected.lowerBound == 0 && start == 0) else { continue }
+            for end in (start + 1)...min(raw.count, start + contextTokenLimit) {
+                let right = self.contextMatches(raw: raw, delivered: delivered, rawPosition: end,
+                                                deliveredPosition: selected.upperBound, direction: 1)
+                guard right > 0 || (selected.upperBound == delivered.count && end == raw.count),
+                      left + right >= 2 else { continue }
+                let candidate = start..<end
+                if let anchored, anchored != candidate { throw DictionaryLearningAlignmentError.ambiguousSource }
+                anchored = candidate
+            }
+        }
+        guard let anchored else { throw DictionaryLearningAlignmentError.ambiguousSource }
+        return anchored
     }
 
     private static func contextMatches(
@@ -223,7 +294,7 @@ nonisolated enum DictionaryLearningAlignmentResolver {
         let start = Int((first.start * Double(DictionaryLearningRecording.sampleRate)).rounded(.down))
         let end = min(recording.samples.count, Int((last.end * Double(DictionaryLearningRecording.sampleRate)).rounded(.up)))
         guard end > start else { throw DictionaryLearningAlignmentError.invalidTiming }
-        // Keep two seconds before the word, aligned to the existing encoder's 80 ms frames.
+        // Preserve the legacy 80 ms PCM context grid; each feature window keeps its own origin.
         let contextStart = max(0, start - 2 * DictionaryLearningRecording.sampleRate) / 1280 * 1280
         let contextEnd = min(recording.samples.count, contextStart + Self.maximumContextSamples)
         guard end <= contextEnd else { throw DictionaryLearningAlignmentError.invalidTiming }
@@ -234,7 +305,52 @@ nonisolated enum DictionaryLearningAlignmentResolver {
             sourceWordRange: wordRange,
             sourceSampleRange: contextStart..<contextEnd,
             focalSampleRange: (start - contextStart)..<(end - contextStart),
-            samples: Array(recording.samples[contextStart..<contextEnd])
+            samples: Array(recording.samples[contextStart..<contextEnd]),
+            featureFrames: self.featureFrames(
+                recording: recording, focalSamples: start..<end, contextSamples: contextStart..<contextEnd
+            )
         )
+    }
+
+    private static func featureFrames(
+        recording: DictionaryLearningRecording,
+        focalSamples: Range<Int>,
+        contextSamples: Range<Int>
+    ) -> [DictionaryLearningFeatureFrames] {
+        let sampleRate = Double(DictionaryLearningRecording.sampleRate)
+        let focalStart = Double(focalSamples.lowerBound) / sampleRate
+        let focalEnd = Double(focalSamples.upperBound) / sampleRate
+        let contextStart = Double(contextSamples.lowerBound) / sampleRate
+        let contextEnd = Double(contextSamples.upperBound) / sampleRate
+        var best: (feature: DictionaryLearningFeatureFrames, balanced: Double, total: Double)?
+        for feature in recording.alignment.featureFrames {
+            let frames = feature.frames
+            let end = frames.offset + Double(frames.count) * frames.frameDuration
+            // Never stitch separately encoded windows or substitute another occurrence by spelling.
+            guard frames.offset <= focalStart + 1e-9, end >= focalEnd - 1e-9 else { continue }
+            let left = max(0, focalStart - max(frames.offset, contextStart))
+            let right = max(0, min(end, contextEnd) - focalEnd)
+            let balanced = min(left, right), total = left + right
+            if let prior = best {
+                if balanced < prior.balanced - 1e-9 { continue }
+                if abs(balanced - prior.balanced) <= 1e-9 && total <= prior.total + 1e-9 { continue }
+            }
+            best = (feature, balanced, total)
+        }
+        guard let best else { return [] }
+        let source = best.feature.frames
+        let lower = max(0, Int(floor((focalStart - source.offset) / source.frameDuration + 1e-8)))
+        let upper = min(source.count, Int(ceil((focalEnd - source.offset) / source.frameDuration - 1e-8)))
+        let offset = source.offset + Double(lower) * source.frameDuration - contextStart
+        guard lower < upper, offset >= -1e-9,
+              let maximumCount = DictionaryAudioInspection.Frames.maximumCount(frameDuration: source.frameDuration),
+              upper - lower <= maximumCount,
+              upper - lower <= DictionaryAudioInspection.Frames.maximumValues / source.hiddenSize
+        else { return [] }
+        return [.init(
+            extractorVersion: best.feature.extractorVersion,
+            frames: .init(offset: max(0, offset), frameDuration: source.frameDuration, hiddenSize: source.hiddenSize,
+                          values: Array(source.values[(lower * source.hiddenSize)..<(upper * source.hiddenSize)]))
+        )]
     }
 }

@@ -550,7 +550,7 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
 
         let activityLease: ASRActivityLease
         do {
-            activityLease = try self.asrService.acquireExclusiveActivity(.fileTranscription)
+            activityLease = try await self.asrService.acquireForegroundActivity(.fileTranscription)
         } catch {
             let wrappedError = TranscriptionError.activityInProgress(error.localizedDescription)
             self.error = wrappedError.localizedDescription
@@ -558,6 +558,8 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
         }
 
         defer { self.asrService.releaseExclusiveActivity(activityLease) }
+        try self.requireCurrentOperation()
+        guard !callerCancellation.isCanceled else { throw CancellationError() }
         let profile = PrivateProfileStorage.current
         let output = try self.historyStore.admitWrite()
         defer { output.finish() }

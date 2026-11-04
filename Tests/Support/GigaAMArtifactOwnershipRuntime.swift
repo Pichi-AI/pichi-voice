@@ -2,6 +2,18 @@ import Foundation
 
 // Inert replacement for the package inference runtime. The runner compiles the
 // real catalog beside this gate; no model, frontend, audio or network is used.
+public enum GigaAMArtifactTestCapabilities {
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var encoderFeatureAPIAvailable = false
+    }
+    private static let state = State()
+    public static var encoderFeatureAPIAvailable: Bool {
+        get { state.lock.withLock { state.encoderFeatureAPIAvailable } }
+        set { state.lock.withLock { state.encoderFeatureAPIAvailable = newValue } }
+    }
+}
+
 public actor GigaAMArtifactTestGate {
     public static let shared = GigaAMArtifactTestGate()
     public private(set) var loadedDirectory: URL?
@@ -52,6 +64,7 @@ public actor GigaAMArtifactTestGate {
 }
 
 public actor GigaAMRuntime {
+    public nonisolated static var encoderFeatureAPIAvailable: Bool { GigaAMArtifactTestCapabilities.encoderFeatureAPIAvailable }
     public init() throws {}
     public var executionStatus: GigaAMExecutionStatus? { nil }
     public var isReady: Bool { false }
@@ -60,7 +73,7 @@ public actor GigaAMRuntime {
         try await GigaAMArtifactTestGate.shared.load(descriptor: descriptor, directory: directory)
     }
     public func unload() async {}
-    public func transcribe(_ samples: [Float]) async throws -> GigaAMTranscript {
+    public func transcribe(_ samples: [Float], captureEncoderFeatures: Bool = false) async throws -> GigaAMTranscript {
         preconditionFailure("Artifact ownership tests must never perform inference")
     }
 }
@@ -70,6 +83,7 @@ public struct GigaAMTranscript: Sendable {
     public let confidence: Float
     public let endOfUtteranceProbability: Float?
     public let words: [GigaAMTestWord]
+    public let encoderWindows: [GigaAMEncoderWindow] = []
 }
 public struct GigaAMTestWord: Sendable {
     public let text: String

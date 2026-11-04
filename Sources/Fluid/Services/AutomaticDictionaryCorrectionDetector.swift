@@ -87,7 +87,8 @@ enum AutomaticDictionaryCorrectionDetector {
         before: String,
         after: String,
         insertedRange: NSRange,
-        allowsInsertionAtEnd: Bool = false
+        allowsInsertionAtEnd: Bool = false,
+        knownCanonicalTerms: [String] = []
     ) -> AutomaticDictionaryCorrectionCandidate? {
         guard let change = self.textChange(before: before, after: after),
               self.isChangeInsideInsertedRange(
@@ -107,8 +108,9 @@ enum AutomaticDictionaryCorrectionDetector {
             return nil
         }
 
-        let heard = self.cleanedCandidate((before as NSString).substring(with: oldTokenRange))
-        let corrected = self.cleanedCandidate((after as NSString).substring(with: newTokenRange))
+        var sourceRange = oldTokenRange
+        var heard = self.cleanedCandidate((before as NSString).substring(with: oldTokenRange))
+        var corrected = self.cleanedCandidate((after as NSString).substring(with: newTokenRange))
         guard self.isValidCandidate(heard),
               self.isValidCandidate(corrected),
               self.isMeaningfulCorrection(heard: heard, corrected: corrected),
@@ -119,11 +121,80 @@ enum AutomaticDictionaryCorrectionDetector {
             return nil
         }
 
+        // A spelling repair may leave part of a saved compound term unchanged.
+        // Keep that exact occurrence together, including its original audio range.
+        let knownRanges = self.canonicalTermRanges(
+            in: after, change: change, insertedRange: insertedRange, terms: knownCanonicalTerms
+        )
+        guard knownRanges.count <= 1 else { return nil }
+        if let range = knownRanges.first {
+            let originalRange = NSRange(
+                location: range.location,
+                length: range.length - change.newRange.length + change.oldRange.length
+            )
+            guard originalRange.location >= insertedRange.location,
+                  NSMaxRange(originalRange) <= NSMaxRange(insertedRange),
+                  originalRange.location <= change.oldRange.location,
+                  NSMaxRange(originalRange) >= NSMaxRange(change.oldRange)
+            else { return nil }
+            heard = (before as NSString).substring(with: originalRange)
+            corrected = (after as NSString).substring(with: range)
+            guard self.isValidCandidate(heard), self.isValidCandidate(corrected),
+                  self.isMeaningfulCorrection(heard: heard, corrected: corrected),
+                  DictionaryCorrectionEditPolicy.allows(heard: heard, corrected: corrected),
+                  heard.count + corrected.count <= self.maxCombinedLength
+            else { return nil }
+            sourceRange = originalRange
+        }
+
         return AutomaticDictionaryCorrectionCandidate(
             heardText: heard,
             correctedText: corrected,
-            sourceUTF16Range: NSRange(location: oldTokenRange.location - insertedRange.location, length: oldTokenRange.length)
+            sourceUTF16Range: NSRange(location: sourceRange.location - insertedRange.location, length: sourceRange.length)
         )
+    }
+
+    private static func canonicalTermRanges(
+        in text: String,
+        change: AutomaticDictionaryTextChange,
+        insertedRange: NSRange,
+        terms: [String]
+    ) -> [NSRange] {
+        let text = text as NSString
+        let newInsertedEnd = NSMaxRange(insertedRange) + change.newRange.length - change.oldRange.length
+        guard insertedRange.location >= 0, newInsertedEnd >= insertedRange.location,
+              newInsertedEnd <= text.length else { return [] }
+        var ranges: [NSRange] = []
+        for term in Set(terms) where self.isValidCandidate(term) {
+            // Only occurrences touching the edit can qualify. Keep this main-actor
+            // work bounded even when a large editor field repeats a saved name.
+            let contextLength = (term as NSString).length
+            let searchStart = max(insertedRange.location, change.newRange.location - contextLength)
+            let searchEnd = min(newInsertedEnd, NSMaxRange(change.newRange) + contextLength)
+            var searchRange = NSRange(location: searchStart, length: searchEnd - searchStart)
+            while searchRange.length > 0 {
+                let range = text.range(of: term, options: .caseInsensitive, range: searchRange)
+                guard range.location != NSNotFound else { break }
+                let end = NSMaxRange(range)
+                if range.location <= change.newRange.location, end >= NSMaxRange(change.newRange),
+                   (range.location == 0 || !self.isTermCharacter(text.character(at: range.location - 1))),
+                   (end == text.length || !self.isTermCharacter(text.character(at: end))),
+                   !ranges.contains(range)
+                {
+                    ranges.append(range)
+                    if ranges.count > 1 { return ranges }
+                }
+                let next = range.location + 1
+                searchRange = NSRange(location: next, length: searchEnd - next)
+            }
+        }
+        return ranges
+    }
+
+    private static func isTermCharacter(_ character: unichar) -> Bool {
+        guard let scalar = Unicode.Scalar(character) else { return true }
+        return CharacterSet.alphanumerics.contains(scalar) || CharacterSet.nonBaseCharacters.contains(scalar)
+            || CharacterSet(charactersIn: "'-’").contains(scalar)
     }
 
     static func isWordContinuationAtInsertedRangeEnd(

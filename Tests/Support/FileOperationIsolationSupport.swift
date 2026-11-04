@@ -66,6 +66,10 @@ nonisolated final class DebugLogger: Sendable {
         activeLease = lease
         return lease
     }
+    func acquireForegroundActivity(_ activity: ASRExclusiveActivity) async throws -> ASRActivityLease {
+        try Task.checkCancellation()
+        return try acquireExclusiveActivity(activity)
+    }
     func releaseExclusiveActivity(_ lease: ASRActivityLease) {
         precondition(activeLease == lease && admittedProvider == nil)
         activeLease = nil; releases += 1

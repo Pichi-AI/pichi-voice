@@ -261,6 +261,7 @@ builds/
 !/docs/development/localization.md
 !/docs/development/analytics.md
 !/docs/development/local-russian-text-models.md
+!/docs/development/gigaam-dictionary.md
 !/docs/development/meeting-summary-strategy.md
 !/docs/development/meeting-speaker-attribution.md
 !/docs/development/owner-verification-diagnostics.md
@@ -284,6 +285,7 @@ builds/
 /scripts/dev/*
 !/scripts/dev/*.sh
 !/scripts/dev/check-localization.py
+!/scripts/dev/check-transcribe-sdk.py
 !/scripts/dev/check-diarization-repeatability.py
 !/scripts/dev/check-xcode-build-settings.py
 !/scripts/dev/mobile-framework-metadata.py

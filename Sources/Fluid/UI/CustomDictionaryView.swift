@@ -47,6 +47,12 @@ struct CustomDictionaryView: View {
     @State private var entries: [SettingsStore.CustomDictionaryEntry] = SettingsStore.shared.customDictionaryEntries
     @State private var boostTerms: [ParakeetVocabularyStore.VocabularyConfig.Term] = []
     @State private var editingEntry: SettingsStore.CustomDictionaryEntry?
+    @State private var savedVoiceSummaries: [UUID: DictionarySavedAudioSummary] = [:]
+    @State private var savedVoiceRevision: UInt64 = 0
+
+    private var voiceCountRequest: String {
+        self.profile.generation.uuidString + String(self.savedVoiceRevision) + self.entries.map { "\($0.id):\($0.replacement)" }.joined(separator: "|")
+    }
 
     @State private var boostStatusMessage = "Add custom words for better Parakeet recognition."
     @State private var boostHasError = false
@@ -364,6 +370,24 @@ struct CustomDictionaryView: View {
         .task(id: self.trainingRequest?.id) {
             await self.consumeTrainingRequest()
         }
+        .task(id: self.voiceCountRequest) {
+            guard self.isProfileVisible else { self.savedVoiceSummaries = [:]; return }
+            let request = self.voiceCountRequest
+            let profiles = await PronunciationDictionaryStore.shared.allProfiles()
+            guard !Task.isCancelled, self.isProfileVisible, self.voiceCountRequest == request else { return }
+            self.savedVoiceSummaries = Dictionary(uniqueKeysWithValues: self.entries.map { entry in
+                let captures = profiles.filter {
+                    $0.dictionaryEntryID == entry.id && $0.label.caseInsensitiveCompare(entry.replacement) == .orderedSame
+                }.flatMap(\.enrollments)
+                return (entry.id, DictionarySavedAudioSummary.from(captures))
+            })
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PronunciationDictionaryStore.didChangeNotification).receive(on: RunLoop.main)) { _ in
+            self.savedVoiceRevision &+= 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)) { _ in
+            self.savedVoiceSummaries = [:]
+        }
         .task(id: self.pronunciationRevisionNoticeRequest) {
             self.pronunciationRevisionNotice = nil
             guard !self.formattingOnly,
@@ -572,6 +596,7 @@ struct CustomDictionaryView: View {
                     ForEach(self.drawerEntries) { entry in
                         DictionaryDrawerEntryRow(
                             entry: entry,
+                            audioSummary: self.savedVoiceSummaries[entry.id],
                             isTestDisabled: self.asr.isRunning || self.isManualEntryBlocked,
                             onTest: {
                                 guard !self.asr.isRunning, !self.isManualEntryBlocked else { return }
@@ -1254,14 +1279,19 @@ struct CustomDictionaryView: View {
     private var entriesListView: some View {
         VStack(spacing: self.theme.metrics.spacing.sm) {
             ForEach(self.entries) { entry in
-                DictionaryEntryRow(
-                    entry: entry,
-                    onEdit: {
-                        self.closeYourDictionary()
-                        self.editingEntry = entry
-                    },
-                    onDelete: { self.deleteEntry(entry) }
-                )
+                VStack(alignment: .leading, spacing: 4) {
+                    DictionaryEntryRow(
+                        entry: entry,
+                        onEdit: {
+                            self.closeYourDictionary()
+                            self.editingEntry = entry
+                        },
+                        onDelete: { self.deleteEntry(entry) }
+                    )
+                    if let summary = self.savedVoiceSummaries[entry.id] {
+                        DictionarySavedAudioSummaryView(summary: summary)
+                    }
+                }
             }
         }
         .frame(maxWidth: 760)

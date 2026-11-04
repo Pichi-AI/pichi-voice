@@ -213,6 +213,10 @@ protocol TranscriptionProvider {
     /// Whether models are downloaded and ready
     var isReady: Bool { get }
 
+    /// Non-nil only for a prepared, on-device pronunciation encoder.
+    /// History learning must not send retained recordings to an unsupported service.
+    var pronunciationProfileModelKey: String? { get }
+
     /// Current prepared execution policy, or nil when the provider does not report it.
     var executionStatus: TranscriptionExecutionStatus? { get }
 
@@ -290,6 +294,7 @@ protocol TranscriptionProvider {
 
 // Default implementation for optional methods
 extension TranscriptionProvider {
+    var pronunciationProfileModelKey: String? { nil }
     var executionStatus: TranscriptionExecutionStatus? { nil }
     @MainActor func beginAdmittedTranscription(leaseID: UUID) throws {}
     @MainActor func endAdmittedTranscription(leaseID: UUID) async {}
