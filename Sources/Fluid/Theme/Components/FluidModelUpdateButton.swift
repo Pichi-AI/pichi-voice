@@ -2,7 +2,6 @@ import SwiftUI
 
 /// Reserved space prevents the neighbouring menu moving during the hover transition.
 struct FluidModelUpdateButton: View {
-    @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
     let action: () -> Void
@@ -16,9 +15,9 @@ struct FluidModelUpdateButton: View {
                 Text("Update").font(.fluidSystem(size: 12, weight: .semibold))
                     .opacity(self.hovered ? 1 : 0)
             }
-            .foregroundStyle(self.theme.palette.foreground(on: self.theme.palette.warning))
+            .foregroundStyle(.black)
             .frame(width: self.hovered ? 76 : 34, height: 34)
-            .background(self.theme.palette.warning, in: Capsule())
+            .background(Color(red: 0.84, green: 0.50, blue: 0.24), in: Capsule())
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)

@@ -15,7 +15,6 @@ struct PichiBrandMark: View {
     private static var imageCache: [String: NSImage] = [:]
     private static var unavailableImages: Set<String> = []
     private static var imageRevision = -1
-    static var customImage: NSImage? { self.image(BrandPackageStore.shared.snapshot(), role: .primary) }
 
     static var packagedIcon: NSImage {
         AppBrand.distribution.appIconAsset.flatMap { NSImage(named: $0) }
@@ -86,7 +85,6 @@ struct PichiBrandMark: View {
         self.imageCache[key] = image
         return image
     }
-    static var customImage: UIImage? { self.image(BrandPackageStore.shared.snapshot(), role: .primary) }
 
     static var appIcon: UIImage {
         let snapshot = BrandPackageStore.shared.snapshot()

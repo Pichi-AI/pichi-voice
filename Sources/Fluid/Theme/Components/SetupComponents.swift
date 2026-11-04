@@ -11,7 +11,6 @@ import SwiftUI
 // MARK: - Setup Step View
 
 struct SetupStepView: View {
-    @Environment(\.locale) private var locale
     @Environment(\.theme) private var theme
     let step: Int
     let title: String
@@ -59,13 +58,13 @@ struct SetupStepView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(PichiLocalization.text(self.title, locale: self.locale))
+                    Text(self.title)
                         .font(.fluidSystem(.body).weight(.medium))
-                        .foregroundStyle(self.theme.palette.primaryText)
+                        .foregroundStyle(.primary)
 
-                    Text(PichiLocalization.text(self.description, locale: self.locale))
+                    Text(self.description)
                         .font(.fluidSystem(.caption))
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
 
@@ -75,18 +74,18 @@ struct SetupStepView: View {
                 if self.status == .completed {
                     Label("Done", systemImage: "checkmark")
                         .font(.fluidSystem(.caption).weight(.semibold))
-                        .foregroundStyle(self.theme.palette.accentForeground)
+                        .foregroundStyle(.white)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(self.theme.palette.accent, in: Capsule())
+                        .background(Color.fluidGreen, in: Capsule())
                 } else if self.showActionButton {
                     HStack(spacing: 3) {
-                        Text(PichiLocalization.text(self.actionButtonTitle, locale: self.locale))
+                        Text(self.actionButtonTitle)
                             .font(.fluidSystem(.caption).weight(.medium))
                         Image(systemName: "arrow.right")
                             .font(.fluidSystem(.caption2).weight(.bold))
                     }
-                    .foregroundStyle(self.theme.palette.primaryText)
+                    .foregroundStyle(self.theme.palette.accent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(self.theme.palette.accent.opacity(0.12), in: Capsule())
@@ -126,7 +125,6 @@ struct SetupStepView: View {
 // MARK: - Instruction Step
 
 struct InstructionStep: View {
-    @Environment(\.locale) private var locale
     @Environment(\.theme) private var theme
     let number: Int
     let title: String
@@ -141,16 +139,16 @@ struct InstructionStep: View {
 
                 Text("\(self.number)")
                     .font(.fluidSystem(.caption).weight(.semibold))
-                    .foregroundStyle(self.theme.palette.primaryText)
+                    .foregroundStyle(self.theme.palette.accent)
             }
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(PichiLocalization.text(self.title, locale: self.locale))
+                Text(self.title)
                     .font(.fluidSystem(.subheadline).weight(.medium))
 
-                Text(PichiLocalization.text(self.description, locale: self.locale))
+                Text(self.description)
                     .font(.fluidSystem(.caption))
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
         }
