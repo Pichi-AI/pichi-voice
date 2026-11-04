@@ -32,7 +32,6 @@ Sources/Fluid/Persistence/SettingsStore+NemotronLanguage.swift
 Sources/Fluid/Persistence/SettingsStore.swift
 Sources/Fluid/Persistence/SettingsStoreKeys.swift
 Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift
-Sources/Fluid/Persistence/SettingsStoreSpeechModels.swift
 Sources/Fluid/Persistence/VoiceEngineLanguageCatalog.swift
 Sources/Fluid/Services/ASRActivityLease.swift
 Sources/Fluid/Services/ASRService+iOS.swift

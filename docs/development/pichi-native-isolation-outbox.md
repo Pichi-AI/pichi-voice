@@ -126,7 +126,7 @@ All unclassified user-authored text, endpoints, imported paths, prompts, diction
 | `Sources/Fluid/Services/OnboardingAISetupController+Live.swift:39` | Scope private setup choices and join an admitted public-artifact operation before transition |
 | `Sources/Fluid/Services/TypingService.swift:89` | Scope text-sensitive diagnostic consent; admitted writes retain their original log owner |
 | `Sources/Fluid/Services/RewriteModeService.swift:38` | Scope diagnostics/prompt-trace consent and retained private prompt context |
-| `Sources/Fluid/Persistence/SettingsStoreSpeechModels.swift:942` | Imported artifact directories and arbitrary local paths remain private; do not copy them as public model metadata |
+| `Sources/Fluid/Persistence/SettingsStore.swift:6302` | Imported artifact directories and arbitrary local paths remain private; do not copy them as public model metadata |
 | `Sources/Mobile/MobileSetupModels.swift:5` | Preserve existing guest setup/privacy choices without inheriting them into the next account |
 
 Proposed initial shared device preference allowlist, pending concrete implementation review:
