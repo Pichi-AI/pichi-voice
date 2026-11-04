@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 nonisolated enum S1MiniError: LocalizedError {
@@ -135,7 +134,7 @@ nonisolated struct S1MiniModelStore: Sendable {
         try Task.checkCancellation()
         guard Self.hasExpectedFileSize(url, bytes: self.model.artifact.byteCount),
               let hash = self.model.artifact.sha256,
-              try Self.sha256(url) == hash
+              try ParakeetArchiveInstaller.sha256(of: url) == hash
         else { throw S1MiniError.integrity }
         try Task.checkCancellation()
     }
@@ -151,18 +150,6 @@ nonisolated struct S1MiniModelStore: Sendable {
     static func isRegularFile(_ url: URL) -> Bool {
         guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else { return false }
         return values.isRegularFile == true && values.isSymbolicLink != true
-    }
-
-    static func sha256(_ url: URL) throws -> String {
-        let file = try FileHandle(forReadingFrom: url)
-        defer { try? file.close() }
-        var hash = SHA256()
-        while true {
-            try Task.checkCancellation()
-            guard let chunk = try file.read(upToCount: 1_048_576), !chunk.isEmpty else { break }
-            hash.update(data: chunk)
-        }
-        return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     private var expectedReceipt: Receipt? {

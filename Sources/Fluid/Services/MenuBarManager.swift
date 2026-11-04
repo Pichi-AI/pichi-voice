@@ -115,7 +115,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
                         self.dictionaryWordTrainingRequestID = nil
                         self.dictionaryWordTrainingExpiry = nil
                     }
-                    self.revealDictionary()
+                    self.openCustomDictionary()
                 }
             }
             .store(in: &self.cancellables)
@@ -1548,10 +1548,6 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     @objc private func openCustomDictionary() {
-        self.openNavigationDestination(.customDictionary)
-    }
-
-    func revealDictionary() {
         self.openNavigationDestination(.customDictionary)
     }
 

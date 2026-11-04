@@ -202,8 +202,7 @@ final class AppSearchService: ObservableObject {
     }
 
     private var acceptsProfile: Bool {
-        let current = PrivateProfileStorage.current
-        return !self.stopped && current.isReadable && current.id == profile.id && current.generation == profile.generation
+        !self.stopped && PrivateProfileStorage.isReadable(self.profile)
     }
 
     private func schedule() {

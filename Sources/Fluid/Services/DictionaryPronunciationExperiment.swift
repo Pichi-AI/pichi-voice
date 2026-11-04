@@ -132,8 +132,7 @@ actor DictionaryPronunciationDebugArchive {
     /// Actor barrier after learning admission is closed by the composition owner.
     func join() {}
     private var captureEnabled: Bool {
-        let current = PrivateProfileStorage.current
-        return current.isReadable && current.id == self.profile.id && current.generation == self.profile.generation
+        PrivateProfileStorage.isReadable(self.profile)
             && self.defaults.bool(forKey: "DictionarySharedFeatureMatcherEnabled")
             && self.defaults.bool(forKey: "DictionaryPronunciationDebugCapture")
     }
