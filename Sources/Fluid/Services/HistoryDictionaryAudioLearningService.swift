@@ -60,8 +60,18 @@ final class HistoryDictionaryAudioLearningService {
             return current.sourceTranscriptText == expectedText && current.rawText == history.rawText && current.audio == audio &&
                 DictationAudioHistoryStore.scoped(to: selection.profile).audioFileURL(for: current) == url
         }
+        let publishTarget: (@MainActor () -> DictionaryAudioLearningService.TargetPublication)? = wasNew ? {
+            guard isValid() else { return .rejected }
+            if SettingsStore.shared.customDictionaryEntries.contains(dictionaryEntry) { return .unchanged }
+            guard Self.entryStillEligible(dictionaryEntry, entries: SettingsStore.shared.customDictionaryEntries, allowMissing: true) else { return .rejected }
+            SettingsStore.shared.customDictionaryEntries.append(dictionaryEntry)
+            return .created
+        } : nil
         return DictionaryAudioLearningService.shared.enqueue(entry: dictionaryEntry, evidenceID: evidenceID, isValid: isValid,
-            isCurrentBeforePreparation: isValid) {
+            isCurrentBeforePreparation: isValid, publishTarget: publishTarget, didPublishTarget: {
+                ASRService.invalidateDictionaryCache()
+                NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
+            }) {
             guard isValid() else { return nil }
             let recording = try await AppServices.shared.asr.historyDictionaryRecording(
                 fileURL: url, recordingID: Self.recordingID(entryID: history.id, fileName: audio.fileName), profile: selection.profile, ownedByLearningWorker: true
@@ -77,13 +87,6 @@ final class HistoryDictionaryAudioLearningService {
             // rather than teaching the matcher that the canonical label failed.
             let rawObserved = recording.alignment.words[evidence.sourceWordRange].map(\.text).joined(separator: " ")
             guard let observed = DictionaryCorrectionEditPolicy.acousticSpelling(rawObserved), isValid() else { return nil }
-            if wasNew && !SettingsStore.shared.customDictionaryEntries.contains(dictionaryEntry) {
-                // Main-actor admission makes the duplicate check and settings update atomic.
-                guard Self.entryStillEligible(dictionaryEntry, entries: SettingsStore.shared.customDictionaryEntries, allowMissing: true) else { return nil }
-                SettingsStore.shared.customDictionaryEntries.append(dictionaryEntry)
-                ASRService.invalidateDictionaryCache()
-                NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
-            }
             return DictionaryLearningAudioEvidence(recordingID: evidence.recordingID, modelKey: evidence.modelKey,
                 observedText: observed, sourceWordRange: evidence.sourceWordRange,
                 sourceSampleRange: evidence.sourceSampleRange, focalSampleRange: evidence.focalSampleRange,

@@ -3709,23 +3709,111 @@ extension DictationE2ETests {
         var active = false
         var valid = true
         var idle = false
-        let worker = DictionaryAudioLearningService(store: store,
+        var worker: DictionaryAudioLearningService!
+        var notifications = 0
+        worker = DictionaryAudioLearningService(store: store,
             extract: { _ in PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "parakeet-v3") },
             canProcess: { idle }, canProcessHistory: { idle }, isCurrent: { $0 == entry && active })
         let id = UUID()
-        let prepare: @MainActor () async throws -> DictionaryLearningAudioEvidence? = { active = true; return evidence }
-        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: id, isValid: { valid }, isCurrentBeforePreparation: { valid }, prepare: prepare))
-        XCTAssertFalse(worker.enqueue(entry: entry, evidenceID: id, isValid: { valid }, isCurrentBeforePreparation: { valid }, prepare: prepare))
+        let prepare: @MainActor () async throws -> DictionaryLearningAudioEvidence? = { evidence }
+        let publish: @MainActor () -> DictionaryAudioLearningService.TargetPublication = { active = true; return .created }
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: id, isValid: { valid }, isCurrentBeforePreparation: { valid },
+            publishTarget: publish, didPublishTarget: { notifications += 1; worker.cancelForRecording() }, prepare: prepare))
+        XCTAssertFalse(worker.enqueue(entry: entry, evidenceID: id, isValid: { valid }, isCurrentBeforePreparation: { valid },
+            publishTarget: publish, prepare: prepare))
         XCTAssertFalse(active)
         idle = true
         worker.activityDidEnd()
         for _ in 0..<200 where worker.pendingCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertEqual(worker.pendingCount, 0)
         XCTAssertTrue(active)
+        XCTAssertEqual(notifications, 1)
         let profiles = await store.allProfiles()
         XCTAssertEqual(profiles.first?.enrollments.count, 1)
         valid = false
         XCTAssertFalse(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { valid }, isCurrentBeforePreparation: { valid }, prepare: prepare))
+        await worker.prepareForPrivateProfileTransition()
+    }
+
+    func testHistoryNewTargetFailuresDoNotPublishOrLeaveAudio() async throws {
+        for failure in ["extract", "save", "publication"] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+            let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Fluid")
+            let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: "flued",
+                sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
+            var published = false
+            let worker = DictionaryAudioLearningService(store: store, extract: { _ in
+                if failure == "extract" { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+                return PronunciationEnrollmentCapture(values: failure == "save" ? [.nan] : [1], sourceFrameCount: 1, modelKey: "parakeet-v3")
+            }, canProcess: { true }, canProcessHistory: { true }, isCurrent: { _ in published })
+            XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, isCurrentBeforePreparation: { true },
+                publishTarget: { if failure == "publication" { return .rejected }; published = true; return .created },
+                prepare: { evidence }))
+            for _ in 0..<200 where worker.pendingCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertEqual(worker.pendingCount, 0, failure)
+            XCTAssertFalse(published, failure)
+            let profiles = await store.allProfiles()
+            XCTAssertTrue(profiles.allSatisfy { $0.enrollments.isEmpty }, failure)
+            await worker.prepareForPrivateProfileTransition()
+        }
+    }
+
+    func testHistoryNewTargetProfileInvalidationDuringExtractionDiscardsEvidence() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Fluid")
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: "flued",
+            sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
+        let started = expectation(description: "new target extraction started")
+        let cancelled = expectation(description: "new target extraction cancelled")
+        let extractor = DictionaryLearningTestExtractor(started: started, cancelled: cancelled)
+        var valid = true
+        var published = false
+        let worker = DictionaryAudioLearningService(store: store, extract: { try await extractor.extract($0) },
+            canProcess: { true }, canProcessHistory: { true }, isCurrent: { _ in published })
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { valid }, isCurrentBeforePreparation: { valid },
+            publishTarget: { published = true; return .created }, prepare: { evidence }))
+        await fulfillment(of: [started], timeout: 2)
+        valid = false
+        await worker.prepareForPrivateProfileTransition()
+        await fulfillment(of: [cancelled], timeout: 2)
+        XCTAssertFalse(published)
+        let profiles = await store.allProfiles()
+        XCTAssertTrue(profiles.isEmpty)
+    }
+
+    func testHistoryNewTargetForegroundPreemptionKeepsEntryUnpublished() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Fluid")
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: "flued",
+            sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
+        let started = expectation(description: "new target extraction started before foreground")
+        let cancelled = expectation(description: "foreground cancelled new target")
+        let extractor = DictionaryLearningTestExtractor(started: started, cancelled: cancelled)
+        var valid = true
+        var published = false
+        let worker = DictionaryAudioLearningService(store: store, extract: { try await extractor.extract($0) },
+            canProcess: { true }, canProcessHistory: { true }, isCurrent: { _ in published })
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { valid }, isCurrentBeforePreparation: { valid },
+            publishTarget: { published = true; return .created }, prepare: { evidence }))
+        await fulfillment(of: [started], timeout: 2)
+        await worker.pauseForForegroundAdmission()
+        await fulfillment(of: [cancelled], timeout: 2)
+        XCTAssertFalse(published)
+        let before = await store.allProfiles()
+        XCTAssertTrue(before.isEmpty)
+        valid = false
+        worker.resumeAfterForegroundAdmission()
+        for _ in 0..<200 where worker.pendingCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(worker.pendingCount, 0)
+        XCTAssertFalse(published)
+        let after = await store.allProfiles()
+        XCTAssertTrue(after.isEmpty)
         await worker.prepareForPrivateProfileTransition()
     }
 

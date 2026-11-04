@@ -9,6 +9,7 @@ final class DictionaryAudioLearningService {
     static var shared: DictionaryAudioLearningService {
         PrivateProfileObjectCache.value(key: "DictionaryAudioLearningService") { DictionaryAudioLearningService() }
     }
+    enum TargetPublication { case rejected, unchanged, created }
     typealias Extractor = @Sendable (DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture
 
     private struct Request {
@@ -17,6 +18,8 @@ final class DictionaryAudioLearningService {
         let prepare: @MainActor () async throws -> DictionaryLearningAudioEvidence?
         let isValid: @MainActor () -> Bool
         let isCurrentBeforePreparation: @MainActor () -> Bool
+        let publishTarget: (@MainActor () -> TargetPublication)?
+        let didPublishTarget: (@MainActor () -> Void)?
         let explicitHistory: Bool
         let expiresAt: Date
         let pronunciationGeneration: String
@@ -103,6 +106,8 @@ final class DictionaryAudioLearningService {
         entry: SettingsStore.CustomDictionaryEntry, evidenceID: UUID, explicitHistory: Bool = true,
         isValid: @escaping @MainActor () -> Bool,
         isCurrentBeforePreparation: (@MainActor () -> Bool)? = nil,
+        publishTarget: (@MainActor () -> TargetPublication)? = nil,
+        didPublishTarget: (@MainActor () -> Void)? = nil,
         prepare: @escaping @MainActor () async throws -> DictionaryLearningAudioEvidence?
     ) -> Bool {
         guard !retired, PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
@@ -123,6 +128,8 @@ final class DictionaryAudioLearningService {
             prepare: prepare,
             isValid: isValid,
             isCurrentBeforePreparation: isCurrentBeforePreparation ?? { [isCurrent] in isCurrent(entry) },
+            publishTarget: publishTarget,
+            didPublishTarget: didPublishTarget,
             explicitHistory: explicitHistory,
             expiresAt: Date().addingTimeInterval(self.lifetime),
             pronunciationGeneration: DictionaryMatcherExperiment.generation
@@ -140,10 +147,12 @@ final class DictionaryAudioLearningService {
         self.task = Task(priority: .utility) { [weak self] in
             guard let self else { return }
             var retry = false
+            var notifyPublication = false
             defer {
                 if !retry { self.queue.removeAll { $0.evidenceID == request.evidenceID } }
                 self.task = nil
                 self.activeEvidenceID = nil
+                if notifyPublication { request.didPublishTarget?() }
                 self.drain()
                 self.scheduleExpiry()
             }
@@ -151,11 +160,11 @@ final class DictionaryAudioLearningService {
             do {
                 guard let evidence = try await request.prepare(), !evidence.samples.isEmpty, evidence.samples.count <= 238_080 else { return }
                 try Task.checkCancellation()
-                guard request.expiresAt > Date(), self.isCurrent(request.entry), request.isValid(), request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
+                guard request.expiresAt > Date(), (request.publishTarget == nil ? self.isCurrent(request.entry) : request.isCurrentBeforePreparation()), request.isValid(), request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
                 let revision = await self.store.revision(for: request.entry.id)
                 let capture = try await self.extract(evidence)
                 try Task.checkCancellation()
-                guard request.expiresAt > Date(), self.isCurrent(request.entry), request.isValid() else { return }
+                guard request.expiresAt > Date(), (request.publishTarget == nil ? self.isCurrent(request.entry) : request.isCurrentBeforePreparation()), request.isValid(), request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
                 let inserted = try await self.store.learnOriginalAudio(
                     entryID: request.entry.id,
                     label: request.entry.replacement,
@@ -166,10 +175,21 @@ final class DictionaryAudioLearningService {
                     canPersist: { DictionaryMatcherExperiment.sharedFeaturesEnabled && request.pronunciationGeneration == DictionaryMatcherExperiment.generation }
                 )
                 // An edit can happen while awaiting the store actor. Roll back only this event.
-                if Task.isCancelled || !self.isCurrent(request.entry) || !request.isValid() {
+                if Task.isCancelled || request.expiresAt <= Date() || !request.isValid() ||
+                    request.pronunciationGeneration != DictionaryMatcherExperiment.generation ||
+                    !(request.publishTarget == nil ? self.isCurrent(request.entry) : request.isCurrentBeforePreparation()) {
                     if inserted { try await self.store.removeOriginalAudio(evidenceID: request.evidenceID) }
                     retry = Task.isCancelled && request.expiresAt > Date()
                     return
+                }
+                if let publish = request.publishTarget {
+                    switch publish() {
+                    case .rejected:
+                        if inserted { try await self.store.removeOriginalAudio(evidenceID: request.evidenceID) }
+                        return
+                    case .unchanged: break
+                    case .created: notifyPublication = true
+                    }
                 }
                 DebugLogger.shared.info(
                     inserted ? "Original pronunciation evidence saved" : "Original pronunciation evidence already present",
