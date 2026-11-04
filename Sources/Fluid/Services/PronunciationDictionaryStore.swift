@@ -531,8 +531,21 @@ actor PronunciationDictionaryStore {
 
     static func retainedEnrollments(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] {
         let protected = Set(captures.indices.filter { captures[$0].originalAudioID == nil }.suffix(3))
-        let remaining = captures.indices.filter { !protected.contains($0) }.suffix(10 - protected.count)
-        let selected = protected.union(remaining)
+        let candidates = captures.indices.filter { !protected.contains($0) }.reversed()
+        var seen = Set<String>(), distinct: [Int] = [], repeated: [Int] = []
+        for index in candidates {
+            let observed = captures[index].observedText ?? ""
+            let text = observed.count <= 80 ? observed : ""
+            let latin = text.applyingTransform(.toLatin, reverse: false) ?? text
+            let key = (latin.applyingTransform(.stripCombiningMarks, reverse: false) ?? latin)
+                .lowercased().filter { $0.isLetter || $0.isNumber }
+            if captures[index].originalAudioID != nil && !key.isEmpty && seen.insert(key).inserted {
+                distinct.append(index)
+            } else { repeated.append(index) }
+        }
+        // Retain the newest representative of each observed spelling first;
+        // use remaining slots for the newest repeats or legacy references.
+        let selected = protected.union((distinct + repeated).prefix(10 - protected.count))
         // Manual references first so the matcher can keep its existing calibration.
         return selected.sorted { lhs, rhs in
             let leftManual = captures[lhs].originalAudioID == nil

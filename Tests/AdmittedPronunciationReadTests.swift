@@ -402,6 +402,21 @@ import Darwin
         expect(try corruptRead.inspection(for: tenCaptures[0].inspectionID!) == inspection, "A manual reference remains readable")
         corruptRead.close(leaseID: multiLease)
         rejects("Closed lease remains a stale evidence error for optional reads") { _ = try corruptRead.optionalInspection(for: corruptID) }
+        let trained = (0..<3).map { _ in
+            PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "synthetic", inspectionID: UUID())
+        }
+        let spellings = ["Xq I", "ABEI", "AbEI", "ABC", "ABC", "Xq и Ай", "AbEI", "ZedI"]
+        let learned = spellings.map { spelling in
+            PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "synthetic",
+                originalAudioID: UUID(), observedText: spelling, sourceRecordingID: UUID())
+        }
+        let beforeNew = PronunciationDictionaryStore.retainedEnrollments(trained + Array(learned.dropLast()))
+        let afterNew = PronunciationDictionaryStore.retainedEnrollments(beforeNew + [learned.last!])
+        expect(Array(afterNew.prefix(3)) == trained && afterNew.count == 10, "A new correction keeps three manual references and the ten-reference cap")
+        expect(afterNew.contains(learned[0]) && afterNew.contains(learned[5]) && afterNew.contains(learned[7]),
+            "A new spelling does not evict an older distinct spelling while duplicates can be discarded")
+        expect(!afterNew.contains(learned[1]), "A newer normalized spelling is preferred to its older duplicate")
+        expect(PronunciationDictionaryStore.matchingEnrollments(afterNew) == trained, "Default legacy matching still selects its original manual baseline")
         let familyURL = a.rootDirectory.appendingPathComponent("synthetic-family-profiles.json")
         let familyStore = PronunciationDictionaryStore(fileURL: familyURL, profile: a)
         let familyEntry = UUID(), unselectedEntry = UUID()

@@ -236,19 +236,15 @@ nonisolated enum GigaAMEncoderDictionary {
             contrasts += term.negatives
             contrasts += others.flatMap { Array($0.references.dropFirst()) }
             if contrasts.count > 128 { diagnostics.append(.init(.contrastBudget, term.entryID)) }
-            // Select several bounded, duration-compatible triples. Every triple
-            // still passes the unchanged leave-one-out and contrast calibration.
-            // The first three retain the manual fallback; each other reference
-            // gets its two closest-duration neighbours as a possible cohort.
-            var indices: [[Int]] = [Array(0..<3)]
-            for index in term.references.indices {
-                let neighbours = term.references.indices.filter { $0 != index }.sorted {
-                    let left = abs(term.references[$0].frameCount - term.references[index].frameCount)
-                    let right = abs(term.references[$1].frameCount - term.references[index].frameCount)
-                    return left == right ? $0 < $1 : left < right
+            // Every possible three-reference cohort is bounded by the ten
+            // retained references (at most 120). Each is independently subject
+            // to the existing leave-one-out and training-contrast calibration.
+            // The baseline manual cohort is included without special thresholds.
+            var indices: [[Int]] = []
+            for i in 0..<(term.references.count - 2) {
+                for j in (i + 1)..<(term.references.count - 1) {
+                    for k in (j + 1)..<term.references.count { indices.append([i, j, k]) }
                 }
-                let cohort = ([index] + neighbours.prefix(2)).sorted()
-                if !indices.contains(cohort) { indices.append(cohort) }
             }
             var cohorts: [Cohort] = []
             for cohort in indices {

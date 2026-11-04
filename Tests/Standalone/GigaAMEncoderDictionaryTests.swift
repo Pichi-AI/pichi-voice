@@ -58,6 +58,27 @@ struct DictionaryMatchFrames: Sendable {
         let vetoResult = try await GigaAMEncoderDictionary.correct(transcript: acronymSource,
             features: acronymAudio, modelKey: model, words: [vetoPrepared], entries: [])
         precondition(vetoResult.text == acronymSource.text, "A matching negative still vetoes a recorded acronym")
+        let slow = try self.features(Array(repeating: 50, count: 18))
+        let distractor = try self.features(Array(repeating: 100, count: 6))
+        let before = GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Stable", modelKey: model,
+            references: [slow, slow, slow, reference, reference, reference], observedVariants: [])
+        let beforePrepared = try GigaAMEncoderDictionary.prepare(terms: [before], modelKey: model)
+        precondition(beforePrepared.words.first?.cohorts.contains { $0.references == [reference, reference, reference] } == true)
+        let after = GigaAMEncoderDictionary.Term(entryID: before.entryID, label: before.label, modelKey: model,
+            references: [slow, slow, slow, distractor, reference, reference, reference], observedVariants: [])
+        let afterPrepared = try GigaAMEncoderDictionary.prepare(terms: [after], modelKey: model)
+        let stable = afterPrepared.words.first?.cohorts.first { $0.references == [reference, reference, reference] }
+        precondition(stable != nil, "A newly retained reference cannot displace an unchanged compatible triple")
+        let stabilitySource = self.transcript("Sable", [("Sable", 0, 0.24)])
+        let priorResult = try await GigaAMEncoderDictionary.correct(transcript: stabilitySource,
+            features: reference, modelKey: model, words: beforePrepared.words, entries: [])
+        let laterResult = try await GigaAMEncoderDictionary.correct(transcript: stabilitySource,
+            features: reference, modelKey: model, words: afterPrepared.words, entries: [])
+        precondition(priorResult.text == "Stable" && laterResult.text == "Stable",
+            "A new unrelated reference cannot regress an existing valid acoustic correction")
+        let safeMatch = try GigaAMAcousticMatcher.matchEncoder(query: reference, references: stable!.references,
+            calibration: stable!.calibration, negativeReferences: [reference])
+        precondition(safeMatch?.accepted == false, "Stable cohorts still obey the negative veto")
         let prefixOnlyAudio = try self.features([0, 1, 2, 3, 4, 5, 20, 21, 22, 23])
         let truncatedSource = try await GigaAMEncoderDictionary.correct(
             transcript: self.transcript("🙂 Alfadesk!", [("Alfadesk!", 0, 0.4)]),
