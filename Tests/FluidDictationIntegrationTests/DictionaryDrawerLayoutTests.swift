@@ -117,8 +117,12 @@ final class DictionaryDrawerLayoutTests: XCTestCase {
                             }
                             let expectedTitle = try XCTUnwrap(referenceFrames[.replacement], context)
                             let expectedAliases = try XCTUnwrap(referenceFrames[.aliases], context)
-                            XCTAssertEqual(title.width, expectedTitle.width, accuracy: 0.5, context)
-                            XCTAssertEqual(triggerFrame.width, expectedAliases.width, accuracy: 0.5, context)
+                            // Each native edge may round independently. Comparing
+                            // the summed width would double-count that rounding.
+                            XCTAssertEqual(title.minX, expectedTitle.minX, accuracy: 0.5, context)
+                            XCTAssertEqual(title.maxX, expectedTitle.maxX, accuracy: 0.5, context)
+                            XCTAssertEqual(triggerFrame.minX, expectedAliases.minX, accuracy: 0.5, context)
+                            XCTAssertEqual(triggerFrame.maxX, expectedAliases.maxX, accuracy: 0.5, context)
                             XCTAssertEqual(title.height, expectedTitle.height, accuracy: 0.5, context)
                             let rowBounds = CGRect(x: 0, y: 0, width: contentWidth, height: size.height)
                             for part in DictionaryDrawerEntryRow.Part.allCases {
