@@ -82,21 +82,19 @@ final class HistoryDictionaryAudioLearningService {
 
     /// Explicit replay of persisted user-confirmed groups, through the same worker
     /// as inline Save. A caller cannot supply new spellings, intervals or audio paths.
-    func enqueueSavedCorrections(entryID: UUID) -> Int {
+    func enqueueSavedCorrection(entryID: UUID, fragmentIndex: Int = 0) -> Int {
         let profile = PrivateProfileStorage.current
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
               let entry = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == entryID }),
-              entry.correctedRawText != nil, entry.audio != nil else { return 0 }
-        var queued = 0
-        for fragment in entry.sourceFragments.prefix(128) {
-            guard fragment.isValid(in: entry.sourceTranscriptText),
-                  let selection = DictionaryHistoryWordSelection(entryID: entry.id, sourceText: entry.sourceTranscriptText,
-                      range: fragment.range, isOriginal: true) else { continue }
-            let candidate = AutomaticDictionaryCorrectionCandidate(heardText: fragment.text, correctedText: fragment.text,
-                sourceUTF16Range: fragment.range)
-            if self.enqueueInline(candidate: candidate, selection: selection, expectedText: entry.sourceTranscriptText) { queued += 1 }
-        }
-        return queued
+              entry.correctedRawText != nil, entry.audio != nil,
+              (0..<128).contains(fragmentIndex), entry.sourceFragments.indices.contains(fragmentIndex) else { return 0 }
+        let fragment = entry.sourceFragments[fragmentIndex]
+        guard fragment.isValid(in: entry.sourceTranscriptText),
+              let selection = DictionaryHistoryWordSelection(entryID: entry.id, sourceText: entry.sourceTranscriptText,
+                  range: fragment.range, isOriginal: true) else { return 0 }
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: fragment.text, correctedText: fragment.text,
+            sourceUTF16Range: fragment.range)
+        return self.enqueueInline(candidate: candidate, selection: selection, expectedText: entry.sourceTranscriptText) ? 1 : 0
     }
 
     nonisolated private static func stableID(_ text: String) -> UUID {
