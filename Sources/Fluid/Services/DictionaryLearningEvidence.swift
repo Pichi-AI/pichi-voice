@@ -231,12 +231,14 @@ nonisolated enum DictionaryLearningAlignmentResolver {
                 tied = true
             }
         }
-        if let best, !tied { return best }
+        guard !tied else { throw DictionaryLearningAlignmentError.ambiguousSource }
         // A new decode can change the selected words. Only use the interval
         // between matching context anchors (or a real utterance boundary). Every
         // qualifying interval must identify the same occurrence; never infer time
         // from text offsets or pick the highest scoring ambiguous interval.
-        var anchored: Range<Int>?
+        // Exact spelling is not precedence: another occurrence may have changed
+        // spelling during re-decoding while keeping the selected context anchors.
+        var anchored: Range<Int>? = best
         guard !raw.isEmpty else { throw DictionaryLearningAlignmentError.ambiguousSource }
         for start in raw.indices {
             let left = self.contextMatches(raw: raw, delivered: delivered, rawPosition: start - 1,

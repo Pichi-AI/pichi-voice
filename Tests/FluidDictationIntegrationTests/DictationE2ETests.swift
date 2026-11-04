@@ -3402,6 +3402,10 @@ extension DictationE2ETests {
         XCTAssertEqual(try resolve("please open flued voice", "please open fluid voice", "flued voice"), 2..<4)
         XCTAssertThrowsError(try resolve("open flued voice now thanks", "open fluid voice now thanks open fluid voice now thanks", "flued voice"))
         XCTAssertThrowsError(try resolve("flued voice", "fluid voice", "flued voice"))
+        XCTAssertThrowsError(try resolve(
+            "please open flued voice now thanks and open flued voice now",
+            "please open fluid voice now thanks and open flued voice now thanks", "flued voice"
+        ), "An exact match at another occurrence must not override the changed selected occurrence")
     }
 
     func testDictionaryLearningRejectsExpiredAndInvalidEvidence() throws {
