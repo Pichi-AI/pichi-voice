@@ -229,17 +229,22 @@ extension PichiGigaAMIntegrationTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("gigaam-readiness-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let fingerprint = GigaAMModelCatalog.downloadableModel.fingerprint
-        let key = GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint)
-        let provider = PichiGigaAMProvider(modelStore: PichiGigaAMModelStore(directory: root), expectedModelFingerprint: fingerprint)
+        let modelStore = PichiGigaAMModelStore(directory: root)
+        let encoder = modelStore.encoderDictionarySupported(fingerprint: fingerprint)
+        let key = encoder ? GigaAMEncoderDictionaryStorage.modelKey(fingerprint: fingerprint)
+            : GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint)
+        let dimension = encoder ? GigaAMEncoderFeatures.dimension : GigaAMAcousticFeatures.dimension
+        let recipe = encoder ? GigaAMEncoderFeatures.extractorVersion : GigaAMAcousticFeatures.extractorVersion
+        let provider = PichiGigaAMProvider(modelStore: modelStore, expectedModelFingerprint: fingerprint)
         let samples = Self.acousticTone(440, duration: 0.48)
         func capture(coordinate: Int) -> PronunciationEnrollmentCapture {
-            let row = (0..<40).map { Float($0 == coordinate ? 1 : 0) }
+            let row = (0..<dimension).map { Float($0 == coordinate ? 1 : 0) }
             let inspection = DictionaryAudioInspection(samples: samples, recordedSampleCount: samples.count,
-                frames: [.init(offset: 0, frameDuration: 0.04, hiddenSize: 40,
+                frames: [.init(offset: 0, frameDuration: 0.04, hiddenSize: dimension,
                                values: Array(repeating: row, count: 12).flatMap { $0 })],
                 words: [], selectedStart: 0, selectedEnd: 0.48)
             return .init(values: row, sourceFrameCount: 12, modelKey: key,
-                extractorVersion: GigaAMAcousticFeatures.extractorVersion, pendingInspection: inspection)
+                extractorVersion: recipe, pendingInspection: inspection)
         }
         let consistent = try await provider.validateDictionaryPronunciations([capture(coordinate: 0), capture(coordinate: 0), capture(coordinate: 0)])
         let inconsistent = try await provider.validateDictionaryPronunciations([capture(coordinate: 0), capture(coordinate: 1), capture(coordinate: 2)])
