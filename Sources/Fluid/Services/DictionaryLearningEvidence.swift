@@ -198,11 +198,10 @@ nonisolated enum DictionaryLearningAlignmentResolver {
         // Unchanged lexical content gives an exact ordinal mapping, including repeated words.
         if raw == delivered { return selected }
         let target = Array(delivered[selected])
-        guard raw.count >= target.count else { throw DictionaryLearningAlignmentError.ambiguousSource }
         var best: Range<Int>?
         var bestScore = 0
         var tied = false
-        for start in 0...(raw.count - target.count) {
+        for start in 0..<(max(0, raw.count - target.count + 1)) {
             let range = start..<(start + target.count)
             guard raw[range].elementsEqual(target) else { continue }
             let left = self.contextMatches(
@@ -232,8 +231,29 @@ nonisolated enum DictionaryLearningAlignmentResolver {
                 tied = true
             }
         }
-        guard let best, !tied else { throw DictionaryLearningAlignmentError.ambiguousSource }
-        return best
+        if let best, !tied { return best }
+        // A new decode can change the selected words. Only use the interval
+        // between matching context anchors (or a real utterance boundary). Every
+        // qualifying interval must identify the same occurrence; never infer time
+        // from text offsets or pick the highest scoring ambiguous interval.
+        var anchored: Range<Int>?
+        guard !raw.isEmpty else { throw DictionaryLearningAlignmentError.ambiguousSource }
+        for start in raw.indices {
+            let left = self.contextMatches(raw: raw, delivered: delivered, rawPosition: start - 1,
+                                           deliveredPosition: selected.lowerBound - 1, direction: -1)
+            guard left > 0 || (selected.lowerBound == 0 && start == 0) else { continue }
+            for end in (start + 1)...min(raw.count, start + contextTokenLimit) {
+                let right = self.contextMatches(raw: raw, delivered: delivered, rawPosition: end,
+                                                deliveredPosition: selected.upperBound, direction: 1)
+                guard right > 0 || (selected.upperBound == delivered.count && end == raw.count),
+                      left + right >= 2 else { continue }
+                let candidate = start..<end
+                if let anchored, anchored != candidate { throw DictionaryLearningAlignmentError.ambiguousSource }
+                anchored = candidate
+            }
+        }
+        guard let anchored else { throw DictionaryLearningAlignmentError.ambiguousSource }
+        return anchored
     }
 
     private static func contextMatches(

@@ -310,6 +310,10 @@ struct HistoryTextComparisonView: View {
         // A user-selected compound is one dictionary value, including unchanged
         // components. Single-word edits may still expand a known compound.
         let candidate = selectedPhrase ? explicit : (detected ?? explicit)
+        if let candidate, let range = candidate.sourceUTF16Range,
+           let selection = DictionaryHistoryWordSelection(entryID: context.entryID, sourceText: context.edit.sourceText, range: range, isOriginal: true) {
+            HistoryDictionaryAudioLearningService.shared.enqueueInline(candidate: candidate, selection: selection, expectedText: updatedText)
+        }
         self.savedInlineCorrection = candidate.map {
             SavedInlineCorrection(entryID: context.entryID, expectedText: updatedText, sourceText: context.edit.sourceText,
                                   profile: context.profile, candidate: $0)

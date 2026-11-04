@@ -682,13 +682,13 @@ final class ASRService: ObservableObject {
             && !self.recordingBufferHandoffGate.isActive && !self.recordingBufferHandoffGate.isRecovering
     }
 
-    func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
+    func acquireExclusiveActivity(_ activity: ASRExclusiveActivity, cancelDictionaryLearning: Bool = true) throws -> ASRActivityLease {
         guard PrivateProfileStorage.acceptsNewWork || activity == .settingsRestore
             || (privateProfileResetInProgress && activity == .modelMaintenance) else {
             throw ASRActivityError.settingsRestoreUnavailable
         }
         guard let activeActivityLease = self.activeActivityLease else {
-            DictionaryAudioLearningService.shared.cancelForRecording()
+            if cancelDictionaryLearning { DictionaryAudioLearningService.shared.cancelForRecording() }
             let lease = ASRActivityLease(id: UUID(), activity: activity)
             self.activeActivityLease = lease
             self.activeExclusiveActivity = activity
@@ -2390,14 +2390,14 @@ final class ASRService: ObservableObject {
 
     /// Explicit history learning reuses the resident local provider and its admitted
     /// file lease. It never dispatches dictation text or prepares a cloud provider.
-    func historyDictionaryRecording(fileURL: URL, recordingID: UUID, profile: PrivateProfileSnapshot) async throws -> DictionaryLearningRecording {
+    func historyDictionaryRecording(fileURL: URL, recordingID: UUID, profile: PrivateProfileSnapshot, ownedByLearningWorker: Bool = false) async throws -> DictionaryLearningRecording {
         try Task.checkCancellation()
         guard fileURL.isFileURL, DictionaryMatcherExperiment.sharedFeaturesEnabled,
               PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
               self.transcriptionProvider.isReady,
               self.transcriptionProvider.pronunciationProfileModelKey != nil else { throw CancellationError() }
         let model = SettingsStore.shared.selectedSpeechModel
-        let lease = try self.acquireExclusiveActivity(.fileTranscription)
+        let lease = try self.acquireExclusiveActivity(.fileTranscription, cancelDictionaryLearning: !ownedByLearningWorker)
         defer { self.releaseExclusiveActivity(lease) }
         do {
             let provider = try self.beginAdmittedTranscription(lease: lease)

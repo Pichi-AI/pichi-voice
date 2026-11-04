@@ -3382,6 +3382,28 @@ extension DictationE2ETests {
         )) { XCTAssertEqual($0 as? DictionaryLearningAlignmentError, .ambiguousSource) }
     }
 
+    func testHistoryLearningAlignsChangedDecodeOnlyBetweenUniqueAnchors() throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        func resolve(_ original: String, _ decoded: String, _ selected: String) throws -> Range<Int> {
+            let words = decoded.split(separator: " ").enumerated().map { index, text in
+                ASRWordTiming(text: String(text), start: Double(index), end: Double(index) + 0.5)
+            }
+            let recording = try XCTUnwrap(DictionaryLearningRecording(
+                alignment: .init(modelKey: "parakeet-v3", words: words),
+                samples: [Float](repeating: 0, count: 16_000 * 20), now: now
+            ))
+            return try DictionaryLearningAlignmentResolver.resolve(
+                recording: recording, deliveredTextBeforeEdit: original,
+                selectedUTF16Range: (original as NSString).range(of: selected), observedText: selected, now: now
+            ).sourceWordRange
+        }
+        XCTAssertEqual(try resolve("flued voice opens now", "fluid voice opens now", "flued voice"), 0..<2)
+        XCTAssertEqual(try resolve("please open flued voice now thanks", "please open fluid voice now thanks", "flued voice"), 2..<4)
+        XCTAssertEqual(try resolve("please open flued voice", "please open fluid voice", "flued voice"), 2..<4)
+        XCTAssertThrowsError(try resolve("open flued voice now thanks", "open fluid voice now thanks open fluid voice now thanks", "flued voice"))
+        XCTAssertThrowsError(try resolve("flued voice", "fluid voice", "flued voice"))
+    }
+
     func testDictionaryLearningRejectsExpiredAndInvalidEvidence() throws {
         let now = Date(timeIntervalSince1970: 1000)
         let words = [ASRWordTiming(text: "hello", start: 0.1, end: 0.5)]
@@ -3624,6 +3646,33 @@ extension DictationE2ETests {
         XCTAssertEqual(profiles.first?.enrollments.count, 1)
         let calls = await extractor.calls
         XCTAssertEqual(calls, 2)
+    }
+
+    func testHistoryLearningPreparationRetiresWithProfileAndDeduplicates() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["flued"], replacement: "Fluid")
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3",
+            observedText: "flued", sourceWordRange: 0..<1, sourceSampleRange: 0..<1,
+            focalSampleRange: 0..<1, samples: [0])
+        let started = self.expectation(description: "History preparation started")
+        let cancelled = self.expectation(description: "History preparation cancelled")
+        let extractor = DictionaryLearningTestExtractor(started: started, cancelled: cancelled)
+        let service = DictionaryAudioLearningService(store: store, extract: { try await extractor.extract($0) },
+            canProcess: { true }, canProcessHistory: { true }, isCurrent: { $0 == entry })
+        let eventID = UUID()
+        service.enqueue(entry: entry, evidenceID: eventID, isValid: { true }, prepare: { evidence })
+        service.enqueue(entry: entry, evidenceID: eventID, isValid: { true }, prepare: { evidence })
+        await self.fulfillment(of: [started], timeout: 2)
+        XCTAssertEqual(service.pendingCount, 1)
+        await service.prepareForPrivateProfileTransition()
+        await self.fulfillment(of: [cancelled], timeout: 2)
+        XCTAssertEqual(service.pendingCount, 0)
+        let profiles = await store.allProfiles()
+        XCTAssertTrue(profiles.isEmpty)
+        service.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, prepare: { evidence })
+        XCTAssertEqual(service.pendingCount, 0)
     }
 
     func testDictionaryLearningQueueIsBoundedAndExpiresWithoutSaving() async throws {
