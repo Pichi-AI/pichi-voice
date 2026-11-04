@@ -1,0 +1,279 @@
+#if GIGAAM_ENCODER_DICTIONARY_STANDALONE
+import Foundation
+import PichiGigaAM
+
+enum SettingsStore {
+    struct CustomDictionaryEntry: Sendable {
+        let id: UUID
+        let triggers: [String]
+        let replacement: String
+    }
+}
+struct DictionaryMatchFrames: Sendable {
+    let hiddenSize: Int
+    let values: [Float]
+    var count: Int { values.count / max(1, hiddenSize) }
+}
+
+@main struct GigaAMEncoderDictionaryTests {
+    static func features(_ indices: [Int]) throws -> GigaAMEncoderFeatures {
+        var values = [Float](repeating: 0, count: indices.count * GigaAMEncoderFeatures.dimension)
+        for (row, index) in indices.enumerated() { values[row * GigaAMEncoderFeatures.dimension + index] = 1 }
+        return try GigaAMEncoderFeatures(values: values)
+    }
+
+    static func transcript(_ text: String, _ words: [(String, Double, Double)], confidence: Float = 0) -> GigaAMTranscript {
+        GigaAMTranscript(text: text, confidence: confidence,
+            words: words.map { GigaAMWordTiming(text: $0.0, start: $0.1, end: $0.2, confidence: confidence) },
+            endOfUtteranceProbability: nil, processingDuration: 0)
+    }
+
+    static func main() async throws {
+        let reference = try self.features([0, 1, 2, 3, 4, 5])
+        let model = "synthetic-encoder-checkpoint-v1"
+        let term = GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Alpha", modelKey: model,
+            references: [reference, reference, reference], observedVariants: ["Alfa"])
+        let prepared = try GigaAMEncoderDictionary.prepare(terms: [term], modelKey: model)
+        precondition(prepared.words.count == 1)
+        let result = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("🙂 Alfa!", [("Alfa!", 0, 0.24)]),
+            features: reference, modelKey: model, words: prepared.words, entries: [])
+        precondition(result.text == "🙂 Alpha!" && result.accepted.count == 1, "Actual native encoder search and UTF16 replacement")
+        let acronym = GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Nova AI", modelKey: model,
+            references: [reference, reference, reference], observedVariants: ["Nova и Ай"])
+        let acronymPrepared = try GigaAMEncoderDictionary.prepare(terms: [acronym], modelKey: model)
+        let acronymAudio = try self.features([0, 1, 2, 3, 4, 5, 20, 21, 22])
+        let acronymSource = self.transcript("Nova и Ай есть", [("Nova", 0, 0.08), ("и", 0.08, 0.16),
+            ("Ай", 0.16, 0.24), ("есть", 0.24, 0.36)])
+        let acronymResult = try await GigaAMEncoderDictionary.correct(transcript: acronymSource,
+            features: acronymAudio, modelKey: model, words: acronymPrepared.words, entries: [])
+        precondition(acronymResult.text == "Nova AI есть", "Recorded acronym and strong audio preserve the following word")
+        let unrecorded = GigaAMEncoderDictionary.Term(entryID: acronym.entryID, label: acronym.label, modelKey: model,
+            references: acronym.references, observedVariants: [])
+        let noEvidence = try GigaAMEncoderDictionary.prepare(terms: [unrecorded], modelKey: model)
+        let protectedAcronym = try await GigaAMEncoderDictionary.correct(transcript: acronymSource,
+            features: acronymAudio, modelKey: model, words: noEvidence.words, entries: [])
+        precondition(protectedAcronym.text == acronymSource.text, "Audio without the recorded spelling cannot remove a conjunction")
+        var vetoTerm = acronym; vetoTerm.negatives = [reference]
+        let vetoPrepared = GigaAMEncoderDictionary.PreparedTerm(term: vetoTerm, cohorts: acronymPrepared.words[0].cohorts)
+        let vetoResult = try await GigaAMEncoderDictionary.correct(transcript: acronymSource,
+            features: acronymAudio, modelKey: model, words: [vetoPrepared], entries: [])
+        precondition(vetoResult.text == acronymSource.text, "A matching negative still vetoes a recorded acronym")
+        let slow = try self.features(Array(repeating: 50, count: 18))
+        let distractor = try self.features(Array(repeating: 100, count: 6))
+        let before = GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Stable", modelKey: model,
+            references: [slow, slow, slow, reference, reference, reference], observedVariants: [])
+        let beforePrepared = try GigaAMEncoderDictionary.prepare(terms: [before], modelKey: model)
+        precondition(beforePrepared.words.first?.cohorts.contains { $0.references == [reference, reference, reference] } == true)
+        let after = GigaAMEncoderDictionary.Term(entryID: before.entryID, label: before.label, modelKey: model,
+            references: [slow, slow, slow, distractor, reference, reference, reference], observedVariants: [])
+        let afterPrepared = try GigaAMEncoderDictionary.prepare(terms: [after], modelKey: model)
+        let stable = afterPrepared.words.first?.cohorts.first { $0.references == [reference, reference, reference] }
+        precondition(stable != nil, "A newly retained reference cannot displace an unchanged compatible triple")
+        let stabilitySource = self.transcript("Sable", [("Sable", 0, 0.24)])
+        let priorResult = try await GigaAMEncoderDictionary.correct(transcript: stabilitySource,
+            features: reference, modelKey: model, words: beforePrepared.words, entries: [])
+        let laterResult = try await GigaAMEncoderDictionary.correct(transcript: stabilitySource,
+            features: reference, modelKey: model, words: afterPrepared.words, entries: [])
+        precondition(priorResult.text == "Stable" && laterResult.text == "Stable",
+            "A new unrelated reference cannot regress an existing valid acoustic correction")
+        let safeMatch = try GigaAMAcousticMatcher.matchEncoder(query: reference, references: stable!.references,
+            calibration: stable!.calibration, negativeReferences: [reference])
+        precondition(safeMatch?.accepted == false, "Stable cohorts still obey the negative veto")
+        let prefixOnlyAudio = try self.features([0, 1, 2, 3, 4, 5, 20, 21, 22, 23])
+        let truncatedSource = try await GigaAMEncoderDictionary.correct(
+            transcript: self.transcript("🙂 Alfadesk!", [("Alfadesk!", 0, 0.4)]),
+            features: prefixOnlyAudio, modelKey: model, words: prepared.words, entries: [])
+        precondition(truncatedSource.text == "🙂 Alfadesk!" && truncatedSource.accepted.isEmpty &&
+            truncatedSource.diagnostics.contains { $0.reason == .sourceTruncation },
+            "A perfect sound prefix must not erase the material remainder of a whole CTC word")
+        let protected = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("Alfa", [("Alfa", 0, 0.24)]),
+            features: reference, modelKey: model, words: prepared.words,
+            entries: [.init(id: UUID(), triggers: ["Alfa"], replacement: "UserChoice")])
+        precondition(protected.text == "Alfa" && protected.accepted.isEmpty)
+        let confident = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("Alfa", [("Alfa", 0, 0.24)], confidence: 0.9),
+            features: reference, modelKey: model, words: prepared.words, entries: [])
+        precondition(confident.accepted.isEmpty)
+        let wrong = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("Alfa", [("Alfa", 0, 0.24)]),
+            features: reference, modelKey: "other", words: prepared.words, entries: [])
+        precondition(wrong.accepted.isEmpty && wrong.diagnostics.contains { $0.reason == .wrongModel })
+        var negative = term; negative.negatives = [reference]
+        let rejected = try GigaAMEncoderDictionary.prepare(terms: [negative], modelKey: model)
+        precondition(rejected.words.isEmpty, "Contradictory enrolled negatives cannot produce a calibrated model")
+        var recipe = term; recipe.extractorVersion = "different-recipe"
+        let wrongRecipe = try GigaAMEncoderDictionary.prepare(terms: [recipe], modelKey: model)
+        precondition(wrongRecipe.words.isEmpty)
+        let duplicate = try GigaAMEncoderDictionary.prepare(terms: [term, term], modelKey: model)
+        precondition(duplicate.diagnostics.contains { $0.reason == .duplicateEntryID })
+        let excessCount = try GigaAMEncoderDictionary.prepare(terms: Array(repeating: term, count: 129), modelKey: model)
+        precondition(excessCount.words.isEmpty && excessCount.diagnostics.contains { $0.reason == .capacityExceeded })
+        let long = try self.features(Array(repeating: 0, count: 375))
+        let excessBytes = try GigaAMEncoderDictionary.prepare(terms: (0..<3).map {
+            GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Synthetic\($0)", modelKey: model,
+                references: Array(repeating: long, count: 10), observedVariants: [])
+        }, modelKey: model)
+        precondition(excessBytes.words.isEmpty && excessBytes.diagnostics.contains { $0.reason == .capacityExceeded })
+        let compoundTerm = GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Alpha Desktop", modelKey: model,
+            references: [reference, reference, reference], observedVariants: ["Alfa Desk"])
+        let compoundPrepared = try GigaAMEncoderDictionary.prepare(terms: [compoundTerm], modelKey: model)
+        let splitSpelling = try await GigaAMEncoderDictionary.correct(
+            transcript: self.transcript("Alfa DeskTop!", [("Alfa", 0, 0.08), ("DeskTop!", 0.08, 0.24)]),
+            features: reference, modelKey: model, words: compoundPrepared.words, entries: [])
+        precondition(splitSpelling.text == "Alpha Desktop!" && splitSpelling.accepted.count == 1,
+            "A fully covered CamelCase ASR component does not count as a material extra component")
+        let sentence = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("Alfa. Desk", [("Alfa.", 0, 0.12), ("Desk", 0.12, 0.24)]),
+            features: reference, modelKey: model, words: compoundPrepared.words, entries: [])
+        precondition(sentence.accepted.isEmpty && sentence.text == "Alfa. Desk", "Never join a compound across sentence punctuation")
+        let role = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("to Alfa", [("to", 0, 0.04), ("Alfa", 0.04, 0.24)]),
+            features: reference, modelKey: model, words: prepared.words, entries: [])
+        precondition(role.accepted.isEmpty && role.text == "to Alfa", "Do not consume an adjacent preposition")
+        let prefixID = UUID(), fullID = UUID()
+        let prefix = GigaAMEncoderDictionary.AcceptedSpan(entryID: prefixID, label: "Alpha", wordRange: 0...0,
+            frameRange: 0..<6, distance: 0.146, acceptanceDistance: 0.3, spellingSupport: 1)
+        let full = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 0...0,
+            frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 0.8, canonicalSupport: 1, additionalComponentSupport: true)
+        let compound = GigaAMEncoderDictionary.arbitrate([prefix, full])
+        precondition(compound.accepted.count == 1 && compound.accepted[0].entryID == fullID,
+            "Complete accepted compound defeats prefix even when prefix quality is slightly better")
+        let scalarPrefix = GigaAMEncoderDictionary.AcceptedSpan(entryID: UUID(), label: "Alphabet", wordRange: 0...0,
+            frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1, additionalComponentSupport: true)
+        precondition(GigaAMEncoderDictionary.arbitrate([prefix, scalarPrefix]).accepted.isEmpty,
+            "A scalar spelling prefix does not authorize compound dominance")
+        let truncated = GigaAMDictionaryLexicalEvidence.compare(heard: "Alpha", canonical: "Alpha Desktop", observedVariants: ["Alpha"])!
+        precondition(truncated.phoneticSimilarity == 1 && truncated.canonicalSimilarity < 0.8)
+        let aliasExpansion = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 0...0,
+            frameRange: 0..<10, distance: 0.001, acceptanceDistance: 0.3, spellingSupport: truncated.phoneticSimilarity,
+            canonicalSupport: truncated.canonicalSimilarity)
+        precondition(GigaAMEncoderDictionary.arbitrate([prefix, aliasExpansion]).accepted.map(\.entryID) == [prefixID],
+            "A truncated observed alias and lower distance cannot authorize an extra component")
+        var destructivePrefix = prefix
+        destructivePrefix.sourceTruncation = true
+        let blockedFallback = GigaAMEncoderDictionary.arbitrate([destructivePrefix, aliasExpansion])
+        precondition(blockedFallback.accepted.isEmpty &&
+            blockedFallback.diagnostics.contains { $0.reason == .sourceTruncation } &&
+            blockedFallback.diagnostics.contains { $0.reason == .unconfirmedCompound },
+            "A failed full compound cannot fall back to erasing its suffix, or gain admission when the prefix is vetoed")
+        precondition(GigaAMEncoderDictionary.arbitrate([destructivePrefix, full]).accepted.map(\.entryID) == [fullID],
+            "A proven full compound remains eligible when the destructive short candidate is retained as evidence")
+        let incompleteFull = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 0...2,
+            frameRange: 0..<14, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1,
+            additionalComponentSupport: true, sourceTruncation: true)
+        precondition(GigaAMEncoderDictionary.arbitrate([prefix, incompleteFull]).accepted.map(\.entryID) == [prefixID],
+            "A full candidate erasing Pro from Alfa Desktop Pro cannot remove a clean short candidate before its own veto")
+        for base in ["Alpha", "Claude"] {
+            let expanded = base + " AI"
+            let spelling = GigaAMDictionaryLexicalEvidence.compare(heard: base, canonical: expanded, observedVariants: [base])!
+            precondition(spelling.canonicalSimilarity == 1, "Reproduce the unsafe consonant-only score")
+            let componentProof = GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: base, canonical: expanded)
+            precondition(!componentProof, "A vowel-only component still needs actual source text")
+            let shortID = UUID()
+            let short = GigaAMEncoderDictionary.AcceptedSpan(entryID: shortID, label: base, wordRange: 0...0,
+                frameRange: 0..<6, distance: 0.146, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1)
+            let unsupported = GigaAMEncoderDictionary.AcceptedSpan(entryID: UUID(), label: expanded, wordRange: 0...0,
+                frameRange: 0..<7, distance: 0.001, acceptanceDistance: 0.3, spellingSupport: 1,
+                canonicalSupport: spelling.canonicalSimilarity, additionalComponentSupport: componentProof)
+            precondition(GigaAMEncoderDictionary.arbitrate([short, unsupported]).accepted.map(\.entryID) == [shortID],
+                "One extra frame and a better distance cannot invent an unspoken AI suffix")
+            let actualProof = GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: expanded, canonical: expanded)
+            precondition(actualProof)
+            let supportedID = UUID()
+            let supported = GigaAMEncoderDictionary.AcceptedSpan(entryID: supportedID, label: expanded, wordRange: 0...1,
+                frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1,
+                additionalComponentSupport: actualProof)
+            precondition(GigaAMEncoderDictionary.arbitrate([short, supported]).accepted.map(\.entryID) == [supportedID])
+        }
+        precondition(GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: "клодкот", canonical: "Claude Code"))
+        precondition(GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: "Clд-кода", canonical: "Claude Code"))
+        precondition(!GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: "Claude A", canonical: "Claude AI"))
+        precondition(!GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: "Claude I", canonical: "Claude AI"))
+        precondition(!GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: "Alpha AI", canonical: "Alpha AI Desktop"))
+        precondition(GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: "Alpha AI Desktop", canonical: "Alpha AI Desktop"))
+        let noExtraAudio = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 0...0,
+            frameRange: 0..<6, distance: 0.001, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1)
+        precondition(GigaAMEncoderDictionary.arbitrate([prefix, noExtraAudio]).accepted.map(\.entryID) == [prefixID],
+            "An extra component needs an extra matched word or trailing audio")
+        let twoWordPrefix = GigaAMEncoderDictionary.AcceptedSpan(entryID: prefixID, label: "Alpha", wordRange: 0...1,
+            frameRange: 0..<10, distance: 0.146, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 0.5)
+        let twoWordFull = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 0...1,
+            frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1, additionalComponentSupport: true)
+        precondition(GigaAMEncoderDictionary.arbitrate([twoWordPrefix, twoWordFull]).accepted.map(\.entryID) == [fullID],
+            "Two actual matched words can prove the complete compound even if the prefix hit consumed both")
+        let other = GigaAMEncoderDictionary.AcceptedSpan(entryID: UUID(), label: "Beta", wordRange: 0...0,
+            frameRange: 0..<6, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1)
+        precondition(GigaAMEncoderDictionary.arbitrate([prefix, other]).accepted.isEmpty, "Unrelated near-equal labels stay ambiguous")
+        let disjoint = GigaAMEncoderDictionary.AcceptedSpan(entryID: UUID(), label: "Beta", wordRange: 0...0,
+            frameRange: 10..<16, distance: 0.01, acceptanceDistance: 0.3, spellingSupport: 1)
+        precondition(GigaAMEncoderDictionary.arbitrate([prefix, disjoint]).accepted.isEmpty,
+            "One merged ASR word cannot be overwritten by one of two disjoint spoken dictionary terms")
+        precondition(GigaAMDictionaryLexicalEvidence.compare(heard: "в Alfa", canonical: "Alpha", observedVariants: [])!.protectsContent)
+        precondition(GigaAMDictionaryLexicalEvidence.compare(heard: "Alfa to", canonical: "Alpha", observedVariants: [])!.protectsContent)
+        let laterWindow = try GigaAMEncoderWindow(offset: 20, ownership: 20..<20.24, features: reference)
+        let repeated = try await GigaAMEncoderDictionary.correct(
+            transcript: self.transcript("Alfa Alfa", [("Alfa", 0, 0.24), ("Alfa", 20, 20.24)]),
+            windows: [laterWindow], modelKey: model, words: prepared.words, entries: [])
+        precondition(repeated.text == "Alfa Alpha" && repeated.accepted.count == 1 && repeated.accepted[0].wordRange == 1...1)
+        precondition(repeated.accepted[0].frameOffset == 500 && repeated.accepted[0].absoluteFrameRange.lowerBound >= 500)
+        precondition(repeated.accepted[0].canonicalSupport > 0, "Current-source canonical evidence survives window mapping")
+        precondition(repeated.accepted[0].additionalComponentSupport, "Direct component proof survives window mapping")
+        let claimedAcrossWindow = try await GigaAMEncoderDictionary.correct(
+            transcript: self.transcript("Do Alfa", [("Do", 19.8, 19.96), ("Alfa", 20, 20.24)]),
+            windows: [laterWindow], modelKey: model, words: prepared.words,
+            entries: [.init(id: UUID(), triggers: ["Do Alfa"], replacement: "UserChoice")])
+        precondition(claimedAcrossWindow.text == "Do Alfa" && claimedAcrossWindow.accepted.isEmpty,
+            "Global text rules protect phrases partially outside a feature window")
+        let ownershipWindows = try [
+            GigaAMEncoderWindow(offset: 0, ownership: 0..<0.12, features: reference),
+            GigaAMEncoderWindow(offset: 0, ownership: 0.12..<0.24, features: reference),
+        ]
+        let deduplicated = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("Alfa", [("Alfa", 0, 0.24)]),
+            windows: ownershipWindows, modelKey: model, words: prepared.words, entries: [])
+        precondition(deduplicated.text == "Alpha" && deduplicated.accepted.count == 1, "Half-open ownership assigns boundary occurrence once")
+        let window0 = try GigaAMEncoderWindow(offset: 0, ownership: 0..<0.24, features: reference)
+        let same = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("🙂 Alfa!", [("Alfa!", 0, 0.24)]),
+            windows: [window0], modelKey: model, words: prepared.words, entries: [])
+        precondition(same.text == result.text && same.accepted.count == result.accepted.count && same.accepted[0].distance == result.accepted[0].distance)
+        let crossPrefix = GigaAMEncoderDictionary.AcceptedSpan(entryID: prefixID, label: "Alpha", wordRange: 5...5,
+            frameRange: 250..<260, distance: 0.146, acceptanceDistance: 0.3, spellingSupport: 1)
+        let crossFull = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 5...5,
+            frameRange: 0..<20, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 0.8, frameOffset: 250, canonicalSupport: 1, additionalComponentSupport: true)
+        precondition(GigaAMEncoderDictionary.arbitrate([crossPrefix, crossFull]).accepted.first?.entryID == fullID,
+            "Cross-window compounds compare absolute audio frames")
+        let misaligned = try GigaAMEncoderWindow(offset: 0.01, ownership: 0.01..<0.25, features: reference)
+        let invalidWindow = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("Alfa", [("Alfa", 0, 0.24)]),
+            windows: [misaligned], modelKey: model, words: prepared.words, entries: [])
+        precondition(invalidWindow.accepted.isEmpty && invalidWindow.diagnostics.contains { $0.reason == .invalidWindows })
+        let unsorted = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("Alfa", [("Alfa", 0, 0.24)]),
+            windows: [laterWindow, window0], modelKey: model, words: prepared.words, entries: [])
+        precondition(unsorted.accepted.isEmpty && unsorted.diagnostics.contains { $0.reason == .invalidWindows })
+        let budgetWindows = try (0..<117).map { i in
+            try GigaAMEncoderWindow(offset: 0, ownership: (Double(i) * 15 / 117)..<(Double(i + 1) * 15 / 117), features: long)
+        }
+        let overBudget = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("Alfa", [("Alfa", 0, 0.24)]),
+            windows: budgetWindows, modelKey: model, words: prepared.words, entries: [])
+        precondition(overBudget.accepted.isEmpty && overBudget.diagnostics.contains { $0.reason == .capacityExceeded })
+        var overflow = crossPrefix; overflow.frameOffset = Int.max
+        precondition(GigaAMEncoderDictionary.arbitrate([overflow]).accepted.isEmpty)
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await GigaAMEncoderDictionary.correct(transcript: self.transcript("Alfa", [("Alfa", 0, 0.24)]),
+                windows: [window0], modelKey: model, words: prepared.words, entries: [])
+        }
+        do { _ = try await cancelled.value; preconditionFailure("Cancelled window work must not return accepted output") }
+        catch is CancellationError {}
+        for mark in [".", ",", "?"] {
+            let separated = try await GigaAMEncoderDictionary.correct(
+                transcript: self.transcript("🙂 , Alfa" + mark, [(",", 0, 0.04), ("Alfa", 0.04, 0.20), (mark, 0.20, 0.24)]),
+                features: reference, modelKey: model, words: prepared.words, entries: [])
+            precondition(separated.text == "🙂 , Alpha" + mark && separated.accepted.first?.wordRange == 1...1,
+                "Separate leading/trailing punctuation must survive lexical replacement")
+        }
+        let punctuationOnly = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("?", [("?", 0, 0.24)]),
+            features: reference, modelKey: model, words: prepared.words, entries: [])
+        precondition(punctuationOnly.accepted.isEmpty && punctuationOnly.text == "?")
+        let compoundPunctuation = try await GigaAMEncoderDictionary.correct(
+            transcript: self.transcript("Alfa Desk?", [("Alfa", 0, 0.08), ("Desk", 0.08, 0.20), ("?", 0.20, 0.24)]),
+            features: reference, modelKey: model, words: compoundPrepared.words, entries: [])
+        precondition(compoundPunctuation.text == "Alpha Desktop?" && compoundPunctuation.accepted.first?.wordRange == 0...1)
+        print("PASS: native encoder matching, protected UTF16 edits, compounds, repeated-word window ordinals, ownership deduplication, absolute frames, global rules, budgets and joined cancellation")
+    }
+}
+#endif

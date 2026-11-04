@@ -7,6 +7,17 @@ import AppKit
 /// is never eligible for the acoustic matcher's weaker unknown-term path.
 @MainActor
 enum DictionaryLexicalEvidence {
+    static func hasRequiredLexicons(_ requiredLanguages: [String]) -> Bool {
+        #if os(macOS)
+        guard !Task.isCancelled, !requiredLanguages.isEmpty else { return false }
+        let bases = Set(NSSpellChecker.shared.availableLanguages.compactMap(self.languageBase))
+        let required = requiredLanguages.compactMap(self.languageBase)
+        return required.count == requiredLanguages.count && required.allSatisfy(bases.contains)
+        #else
+        return false
+        #endif
+    }
+
     static func isUnknownTerm(_ text: String, requiredLanguages: [String]) -> Bool {
         #if os(macOS)
         guard !Task.isCancelled, !text.isEmpty, text.count <= 80, text.rangeOfCharacter(from: .newlines) == nil,

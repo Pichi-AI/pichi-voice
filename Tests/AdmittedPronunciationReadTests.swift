@@ -38,6 +38,159 @@ import Darwin
         let pcmFloat32: Data
     }
 
+    static func featureEvidenceTransportContracts() throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        let text = "alpha term beta term omega"
+        let words = [ASRWordTiming(text: "alpha", start: 0.2, end: 0.5),
+                     ASRWordTiming(text: "term", start: 1.01, end: 1.21),
+                     ASRWordTiming(text: "beta", start: 1.5, end: 1.8),
+                     ASRWordTiming(text: "term", start: 5.03, end: 5.21),
+                     ASRWordTiming(text: "omega", start: 5.5, end: 5.8)]
+        let samples = [Float](repeating: 0.2, count: 16_000 * 8)
+        func feature(offset: Double = 0, period: Double = 0.04, hidden: Int = 2, count: Int = 200,
+                     base: Float = 0, version: String = "synthetic-encoder-v1") -> DictionaryLearningFeatureFrames {
+            .init(extractorVersion: version, frames: .init(offset: offset, frameDuration: period, hiddenSize: hidden,
+                values: (0..<count).flatMap { row in [Float](repeating: base + Float(row), count: hidden) }))
+        }
+        func recording(_ features: [DictionaryLearningFeatureFrames], retainAudio: Bool = true) -> DictionaryLearningRecording {
+            DictionaryLearningRecording(alignment: .init(modelKey: "synthetic-artifact-hash", words: words,
+                featureFrames: features), samples: samples, retainAudio: retainAudio, now: now)!
+        }
+        func evidence(_ recording: DictionaryLearningRecording) throws -> DictionaryLearningAudioEvidence {
+            try DictionaryLearningAlignmentResolver.resolve(recording: recording, deliveredTextBeforeEdit: text,
+                selectedUTF16Range: (text as NSString).range(of: "term", options: .backwards), observedText: "term", now: now)
+        }
+        let native = feature(offset: 0.015, hidden: 768)
+        let retained = recording([native])
+        expect(retained.alignment.featureFrames == [native], "Valid 40 ms encoder windows retain exact values and origin")
+        let cut = try evidence(retained)
+        expect(cut.sourceWordRange == 3..<4, "Repeated spelling resolves only the selected second occurrence")
+        expect(cut.modelKey == "synthetic-artifact-hash" && cut.featureFrames[0].extractorVersion == native.extractorVersion,
+            "Feature transport preserves the source artifact key and extractor version")
+        expect(cut.sourceSampleRange.lowerBound == 47_360 && cut.focalSampleRange == 33_120..<36_000,
+            "Existing source PCM and focal alignment remain exact")
+        expect(cut.featureFrames.count == 1 && cut.featureFrames[0].frames.hiddenSize == 768 &&
+            cut.featureFrames[0].frames.count == 5 && cut.featureFrames[0].frames.values.first == 125,
+            "Only focal encoder frames from the selected occurrence are copied")
+        expect(abs(cut.featureFrames[0].frames.offset - 2.055) < 1e-9,
+            "A non-grid encoder origin becomes relative to evidence PCM without losing its offset")
+        expect(cut.featureFrames[0].frames.offset <= Double(cut.focalSampleRange.lowerBound) / 16_000 &&
+            cut.featureFrames[0].frames.offset + Double(cut.featureFrames[0].frames.count) * 0.04 >= Double(cut.focalSampleRange.upperBound) / 16_000,
+            "Outward frame rounding covers the whole selected acoustic occurrence")
+
+        let compoundText = "😀 I use Petch Voice."
+        let correctedCompoundText = "😀 I use Pichi Voice."
+        let compound = AutomaticDictionaryCorrectionDetector.candidate(
+            before: compoundText, after: correctedCompoundText,
+            insertedRange: NSRange(location: 0, length: (compoundText as NSString).length),
+            knownCanonicalTerms: ["Pichi Voice"]
+        )!
+        let compoundRecording = DictionaryLearningRecording(alignment: .init(modelKey: "synthetic-compound", words: [
+            .init(text: "I", start: 0.1, end: 0.2), .init(text: "use", start: 0.3, end: 0.5),
+            .init(text: "Petch", start: 1, end: 1.3), .init(text: "Voice", start: 1.4, end: 1.8),
+        ], featureFrames: [feature(count: 75)]), samples: [Float](repeating: 0.2, count: 48_000), now: now)!
+        let compoundEvidence = try DictionaryLearningAlignmentResolver.resolve(
+            recording: compoundRecording, deliveredTextBeforeEdit: compoundText,
+            selectedUTF16Range: compound.sourceUTF16Range!, observedText: compound.heardText, now: now
+        )
+        expect(compoundEvidence.observedText == "Petch Voice" && compoundEvidence.sourceWordRange == 2..<4 &&
+            compoundEvidence.focalSampleRange == 16_000..<28_800,
+            "A partial spelling edit preserves both words and their complete original PCM focal range")
+        expect(compoundEvidence.featureFrames.count == 1 && compoundEvidence.featureFrames[0].frames.count == 20 &&
+            compoundEvidence.featureFrames[0].frames.values.first == 25 && compoundEvidence.featureFrames[0].frames.values.last == 44,
+            "Compound correction evidence includes unchanged-word encoder frames without surrounding words")
+        let delayedCompoundEvidence = try DictionaryLearningAlignmentResolver.resolve(
+            recording: compoundRecording, deliveredTextBeforeEdit: compoundText,
+            selectedUTF16Range: compound.sourceUTF16Range!, observedText: compound.heardText,
+            now: now.addingTimeInterval(70)
+        )
+        expect(delayedCompoundEvidence.focalSampleRange == compoundEvidence.focalSampleRange &&
+            delayedCompoundEvidence.sourceWordRange == compoundEvidence.sourceWordRange,
+            "An edit after 30 seconds still resolves the same original audio while evidence is fresh")
+        do {
+            _ = try DictionaryLearningAlignmentResolver.resolve(
+                recording: compoundRecording, deliveredTextBeforeEdit: compoundText,
+                selectedUTF16Range: compound.sourceUTF16Range!, observedText: compound.heardText,
+                now: now.addingTimeInterval(DictionaryLearningRecording.lifetime)
+            )
+            preconditionFailure("Observation must not extend the original audio evidence lifetime")
+        } catch DictionaryLearningAlignmentError.expired { checks += 1 }
+
+        let legacy = try evidence(recording([feature(offset: 0.025, period: 0.08, count: 100, version: "synthetic-legacy-v1")]))
+        expect(legacy.featureFrames[0].frames.count == 3 && legacy.featureFrames[0].frames.values.first == 62 &&
+            abs(legacy.featureFrames[0].frames.offset - 2.025) < 1e-9,
+            "Legacy 80 ms feature windows preserve their own origin and frame period")
+        let overlapping = recording([feature(count: 135, base: 1000), feature(offset: 3.6, count: 70, base: 2000)])
+        let best = try evidence(overlapping)
+        expect(best.featureFrames.count == 1 && best.featureFrames[0].frames.values.first == 2035 &&
+            best.featureFrames[0].frames.count == 6, "Overlapping windows choose the one with safer context around the whole focal range")
+        expect(abs(best.featureFrames[0].frames.offset - 2.04) < 1e-9, "Chosen window retains its recording-relative frame origin")
+        let tied = try evidence(recording([feature(base: 3000), feature(base: 4000)]))
+        expect(tied.featureFrames[0].frames.values.first == 3125, "Equal-context windows choose the first source window deterministically")
+        let wrongOccurrence = try evidence(recording([feature(offset: 0.96, count: 12, base: 5000)]))
+        expect(wrongOccurrence.featureFrames.isEmpty && wrongOccurrence.sourceWordRange == 3..<4,
+            "Features covering only the earlier repeated word cannot supply the selected occurrence")
+
+        let crossing = DictionaryLearningRecording(alignment: .init(modelKey: "synthetic", words: [
+            .init(text: "term", start: 3.16, end: 3.24)], featureFrames: [feature(count: 80), feature(offset: 3.2, count: 80)]),
+            samples: samples, now: now)!
+        let crossingEvidence = try DictionaryLearningAlignmentResolver.resolve(recording: crossing, deliveredTextBeforeEdit: "term",
+            selectedUTF16Range: NSRange(location: 0, length: 4), observedText: "term", now: now)
+        expect(crossingEvidence.featureFrames.isEmpty && !crossingEvidence.samples.isEmpty,
+            "A focal occurrence crossing separate encoder windows keeps PCM but never stitches feature windows")
+        let aligned = DictionaryLearningRecording(alignment: .init(modelKey: "synthetic", words: [
+            .init(text: "term", start: 0.04, end: 0.08)], featureFrames: [feature(count: 200)]), samples: samples, now: now)!
+        let alignedEvidence = try DictionaryLearningAlignmentResolver.resolve(recording: aligned, deliveredTextBeforeEdit: "term",
+            selectedUTF16Range: NSRange(location: 0, length: 4), observedText: "term", now: now)
+        expect(alignedEvidence.featureFrames[0].frames.count == 1 && alignedEvidence.featureFrames[0].frames.values.first == 1,
+            "Exact frame-boundary selections do not include a neighboring occurrence")
+        let noFeatures = try evidence(recording([]))
+        expect(noFeatures.featureFrames.isEmpty && noFeatures.sourceWordRange == 3..<4,
+            "Legacy initializers and evidence resolution remain unchanged without auxiliary features")
+        let longWindow = feature(hidden: 768, count: 550)
+        let longRecording = DictionaryLearningRecording(alignment: .init(modelKey: "synthetic-long-window", words: words,
+            featureFrames: [longWindow]), samples: [Float](repeating: 0.2, count: 16_000 * 22), now: now)!
+        expect(longRecording.alignment.featureFrames.count == 1 && !longWindow.frames.isValid,
+            "Raw recording transport accepts a bounded full inference window beyond the shorter persisted-inspection limit")
+        let longEvidence = try evidence(longRecording)
+        expect(longEvidence.featureFrames.count == 1 && longEvidence.featureFrames[0].frames.isValid,
+            "A full inference window is reduced to a bounded persistable focal feature cut")
+
+        var nonfinite = native.frames.values
+        nonfinite[0] = .nan
+        let invalid: [[DictionaryLearningFeatureFrames]] = [
+            [feature(version: "")], [feature(version: "bad recipe")], [feature(offset: -.infinity)],
+            [feature(offset: -0.04)], [feature(period: 0.03)], [feature(offset: 9, count: 1)],
+            [feature(offset: 0.015, count: 201)],
+            [.init(extractorVersion: "synthetic", frames: .init(offset: 0, frameDuration: 0.04, hiddenSize: 768, values: [1]))],
+            [.init(extractorVersion: native.extractorVersion, frames: .init(offset: 0, frameDuration: 0.04, hiddenSize: 768, values: nonfinite))],
+            [feature(), feature(version: "different-recipe")],
+            [feature(), feature(hidden: 3)], [feature(), feature(period: 0.08, count: 100)],
+            [feature(offset: 4, count: 20), feature(count: 20)],
+            Array(repeating: feature(count: 1), count: DictionaryLearningRecording.maximumFeatureChunks + 1),
+        ]
+        for frames in invalid {
+            let value = recording(frames)
+            expect(value.alignment.featureFrames.isEmpty && value.samples == samples,
+                "Invalid optional feature metadata or values are dropped without discarding source PCM")
+        }
+        // Share one synthetic 16 MiB array across windows: retention still accounts for every
+        // window's logical payload, without allocating a large model or dataset for the probe.
+        let sixteenMiB = [Float](repeating: 0.2, count: 4_194_304)
+        let budgetWindow = DictionaryLearningFeatureFrames(extractorVersion: "synthetic-large-v1",
+            frames: .init(offset: 0, frameDuration: 0.04, hiddenSize: 2048, values: sixteenMiB))
+        let budgetRecording = DictionaryLearningRecording(alignment: .init(modelKey: "synthetic", words: words,
+            featureFrames: Array(repeating: budgetWindow, count: 9)), samples: [Float](repeating: 0.2, count: 16_000 * 82), now: now)!
+        expect(DictionaryLearningRecording.maximumFeatureBytes == 128 * 1024 * 1024 && budgetRecording.alignment.featureFrames.isEmpty &&
+            !budgetRecording.samples.isEmpty, "A payload above the explicit 128 MiB budget drops only auxiliary features")
+        let negative = DictionaryAcousticEvidence(id: UUID(), entryID: UUID(), label: "Synthetic", profileKey: "synthetic-profile",
+            modelKey: "synthetic", sourceWordRange: 0..<1, frames: .init(hiddenSize: 2, values: [1, 0]))
+        let negativeOnly = DictionaryLearningRecording(alignment: .init(modelKey: "synthetic", words: words,
+            acousticEvidence: [negative], featureFrames: [native]), samples: samples, retainAudio: false, now: now)!
+        expect(negativeOnly.samples.isEmpty && negativeOnly.alignment.featureFrames.isEmpty &&
+            negativeOnly.alignment.acousticEvidence.count == 1, "Negative-only retention strips raw PCM and raw feature windows but preserves accepted negative evidence")
+    }
+
     static func featureFormatContracts(in root: URL) async throws {
         let directory = root.appendingPathComponent("synthetic-feature-formats")
         let file = directory.appendingPathComponent("pronunciation-dictionary-v1.json")
@@ -122,9 +275,28 @@ import Darwin
         var mixed = profile
         mixed.enrollments.append(inconsistent)
         expect(!mixed.isEligibleForMatching, "Mixed feature recipes fail common eligibility")
+        var duplicate = source
+        duplicate.originalAudioID = nil
+        duplicate.inspectionID = nil
+        duplicate.pendingInspection = inspection
+        let beforeDuplicate = try Data(contentsOf: file)
+        try await reopened.upsert(dictionaryEntryID: entry, label: profile.label, modelKey: key,
+            enrollments: [duplicate, duplicate])
+        expect(await reopened.allProfiles() == profiles, "Reusing one selected history occurrence cannot create extra voice examples")
+        expect(try Data(contentsOf: file) == beforeDuplicate, "Duplicate-only history enrollment does not rewrite saved data")
+        duplicate.sourceFocalRange = 4800..<8000
+        try await reopened.upsert(dictionaryEntryID: entry, label: profile.label, modelKey: key,
+            enrollments: [duplicate, duplicate])
+        expect(await reopened.allProfiles().first?.enrollments.count == 4,
+            "Another occurrence in the same recording is retained once")
     }
 
     static func main() async throws {
+        if CommandLine.arguments.contains("--feature-evidence-only") {
+            try featureEvidenceTransportContracts()
+            print("Feature evidence transport: \(checks) assertions passed")
+            return
+        }
         let initial = PrivateProfileStorage.current
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-pronunciation-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -132,6 +304,7 @@ import Darwin
             PrivateProfileStorage.select(initial)
             try? FileManager.default.removeItem(at: root)
         }
+        try featureEvidenceTransportContracts()
         try await featureFormatContracts(in: root)
         func account(_ subject: String, generation: UUID = UUID()) throws -> PrivateProfileSnapshot {
             let context = AccountContext(identity: .init(issuer: "https://synthetic.invalid", subject: subject,
@@ -185,6 +358,65 @@ import Darwin
             profileKey: "selected", modelKey: "synthetic", sourceWordRange: 0..<1, frames: negativeFrames),
             correctedText: "synthetic", expiresAt: Date().addingTimeInterval(60))
         try await negativeStore.save(correction, expectedRevision: negativeStore.revision())
+        let multiLease = UUID()
+        rejects("Default capture admission rejects more than three references") {
+            _ = try store.admitCaptureRead(leaseID: multiLease, modelKey: "synthetic", entryIDs: [entry],
+                referenceSelection: { $0.enrollments })
+        }
+        let multiRead = try store.admitCaptureRead(leaseID: multiLease, modelKey: "synthetic", entryIDs: [entry],
+            maximumReferencesPerProfile: 10, referenceSelection: { $0.enrollments })
+        expect(multiRead.matchingEnrollments(for: profiles[0]) == captures, "Opt-in admission pins all retained references")
+        expect(try multiRead.inspection(for: ids[0]) == inspection, "Expanded reference is pinned and readable")
+        multiRead.close(leaseID: multiLease)
+        rejects("An unbounded per-profile selection is invalid") {
+            _ = try store.admitCaptureRead(leaseID: multiLease, modelKey: "synthetic", entryIDs: [entry],
+                maximumReferencesPerProfile: 11, referenceSelection: { $0.enrollments })
+        }
+        let tenCaptures = (0..<10).map { _ in
+            PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "synthetic", inspectionID: UUID())
+        }
+        for capture in tenCaptures {
+            try encoder.encode(inspection).write(to: inspectionDirectory.appendingPathComponent("\(capture.inspectionID!).plist"))
+        }
+        let tenProfile = PronunciationDictionaryProfile(dictionaryEntryID: UUID(), label: "Ten", modelKey: "synthetic",
+            hiddenSize: 2, enrollments: tenCaptures)
+        let tenStore = PronunciationDictionaryStore(fileURL: a.rootDirectory.appendingPathComponent("ten-profile.json"), profile: a)
+        try await tenStore.replaceAllProfiles([tenProfile])
+        let tenRead = try tenStore.admitCaptureRead(leaseID: multiLease, modelKey: "synthetic", entryIDs: [tenProfile.dictionaryEntryID],
+            maximumReferencesPerProfile: 10, referenceSelection: { $0.enrollments })
+        expect(tenRead.matchingEnrollments(for: tenProfile).count == 10, "Opt-in permits exactly ten references")
+        tenRead.close(leaseID: multiLease)
+        try FileManager.default.removeItem(at: inspectionDirectory.appendingPathComponent("\(tenCaptures[4].inspectionID!).plist"))
+        let missingOptional = try tenStore.admitCaptureRead(leaseID: multiLease, modelKey: "synthetic", entryIDs: [tenProfile.dictionaryEntryID],
+            maximumReferencesPerProfile: 10, referenceSelection: { $0.enrollments })
+        let available = missingOptional.matchingEnrollments(for: tenProfile)
+        expect(available.count == 9 && available.starts(with: tenCaptures.prefix(3)), "Missing optional file retains baseline and other extras")
+        missingOptional.close(leaseID: multiLease)
+        let corruptID = tenCaptures[5].inspectionID!
+        try Data("not a property list".utf8).write(to: inspectionDirectory.appendingPathComponent("\(corruptID).plist"))
+        let corruptRead = try tenStore.admitCaptureRead(leaseID: multiLease, modelKey: "synthetic", entryIDs: [tenProfile.dictionaryEntryID],
+            maximumReferencesPerProfile: 10, referenceSelection: { $0.enrollments })
+        expect(corruptRead.matchingEnrollments(for: tenProfile).starts(with: tenCaptures.prefix(3)),
+            "Corrupt optional bytes do not remove mandatory pins")
+        expect(try corruptRead.optionalInspection(for: corruptID) == nil, "Corrupt optional inspection is a bounded miss")
+        expect(try corruptRead.inspection(for: tenCaptures[0].inspectionID!) == inspection, "A manual reference remains readable")
+        corruptRead.close(leaseID: multiLease)
+        rejects("Closed lease remains a stale evidence error for optional reads") { _ = try corruptRead.optionalInspection(for: corruptID) }
+        let trained = (0..<3).map { _ in
+            PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "synthetic", inspectionID: UUID())
+        }
+        let spellings = ["Xq I", "ABEI", "AbEI", "ABC", "ABC", "Xq и Ай", "AbEI", "ZedI"]
+        let learned = spellings.map { spelling in
+            PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "synthetic",
+                originalAudioID: UUID(), observedText: spelling, sourceRecordingID: UUID())
+        }
+        let beforeNew = PronunciationDictionaryStore.retainedEnrollments(trained + Array(learned.dropLast()))
+        let afterNew = PronunciationDictionaryStore.retainedEnrollments(beforeNew + [learned.last!])
+        expect(Array(afterNew.prefix(3)) == trained && afterNew.count == 10, "A new correction keeps three manual references and the ten-reference cap")
+        expect(afterNew.contains(learned[0]) && afterNew.contains(learned[5]) && afterNew.contains(learned[7]),
+            "A new spelling does not evict an older distinct spelling while duplicates can be discarded")
+        expect(!afterNew.contains(learned[1]), "A newer normalized spelling is preferred to its older duplicate")
+        expect(PronunciationDictionaryStore.matchingEnrollments(afterNew) == trained, "Default legacy matching still selects its original manual baseline")
         let familyURL = a.rootDirectory.appendingPathComponent("synthetic-family-profiles.json")
         let familyStore = PronunciationDictionaryStore(fileURL: familyURL, profile: a)
         let familyEntry = UUID(), unselectedEntry = UUID()
@@ -283,6 +515,27 @@ import Darwin
         }
         voiceRead.close(leaseID: capacityLease)
         expect(try descriptorCount() == handlesBeforeCapacity, "Closing the bounded expanded snapshot releases every file")
+        let retained = voicePairs.flatMap(\.enrollments).map {
+            PronunciationEnrollmentCapture(values: $0.values, sourceFrameCount: $0.sourceFrameCount,
+                modelKey: "synthetic-family-b", inspectionID: $0.inspectionID)
+        }
+        let expanded = (0..<39).map { index in
+            PronunciationDictionaryProfile(dictionaryEntryID: UUID(), label: "Expanded", modelKey: "synthetic-family-b",
+                hiddenSize: 2, enrollments: Array(retained[(index * 10)..<(index * 10 + 10)]))
+        }
+        try await capacityStore.replaceAllProfiles(expanded)
+        let beforeExpanded = try descriptorCount()
+        let expandedRead = try capacityStore.admitCaptureRead(leaseID: capacityLease, modelKey: "synthetic-family-b",
+            entryIDs: Set(expanded.map(\.dictionaryEntryID)), maximumReferencesPerProfile: 10,
+            referenceSelection: { $0.enrollments })
+        expect(expandedRead.profiles.count == 39, "All 39 profiles remain admitted above expanded file budget")
+        expect(expanded.allSatisfy { expandedRead.matchingEnrollments(for: $0).starts(with: $0.enrollments.prefix(3)) },
+            "Every exact profile retains its three baseline references before any extras")
+        expect(expanded.reduce(0) { $0 + expandedRead.matchingEnrollments(for: $1).count } == 384,
+            "Extras fill but never exceed the 384-file budget")
+        expect(try descriptorCount() == beforeExpanded + 384, "Expanded admission retains only bounded descriptors")
+        expandedRead.close(leaseID: capacityLease)
+        expect(try descriptorCount() == beforeExpanded, "Expanded admission releases all descriptors")
         struct CapacityDocument: Encodable { let version = 1; let profiles: [PronunciationDictionaryProfile] }
         var malformedOptional = sharedFamily; malformedOptional.enrollments[0] = .init(values: [1], sourceFrameCount: 1, modelKey: malformedOptional.modelKey)
         try JSONEncoder().encode(CapacityDocument(profiles: [malformedOptional, exactDifferentWidth])).write(to: capacityURL, options: .atomic)

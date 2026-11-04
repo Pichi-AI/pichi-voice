@@ -64170,6 +64170,207 @@
         }
       }
     },
+    "Edit selected word": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit selected word"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменить выделенное слово"
+          }
+        }
+      }
+    },
+    "Press Return to save or Escape to cancel.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press Return to save or Escape to cancel."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter: сохранить. Escape: отменить."
+          }
+        }
+      }
+    },
+    "Correction saved": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Correction saved"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исправление сохранено"
+          }
+        }
+      }
+    },
+    "Edited by you": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edited by you"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исправлено вами"
+          }
+        }
+      }
+    },
+    "No linked audio samples": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No linked audio samples"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет связанных аудиообразцов"
+          }
+        }
+      }
+    },
+    "Linked audio samples: %lld (up to 10 per model)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Linked audio samples: %lld (up to 10 per model)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Связано аудиообразцов: %lld (до 10 для каждой модели)"
+          }
+        }
+      }
+    },
+    "Latest sample added: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Latest sample added: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Последний образец добавлен: %@"
+          }
+        }
+      }
+    },
+    "Saved pronunciation samples: %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved pronunciation samples: %lld"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранено аудиообразцов: %lld"
+          }
+        }
+      }
+    },
+    "Preparing pronunciation sample…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing pronunciation sample…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готовим пример произношения…"
+          }
+        }
+      }
+    },
+    "Use original audio": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use original audio"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать исходное аудио"
+          }
+        }
+      }
+    },
+    "Pronunciation sample queued": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pronunciation sample queued"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиопример добавлен в очередь"
+          }
+        }
+      }
+    },
+    "Pronunciation sample unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pronunciation sample unavailable"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиопример недоступен"
+          }
+        }
+      }
+    },
     "AI Settings": {
       "localizations": {
         "ru": {

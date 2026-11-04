@@ -245,7 +245,7 @@ SHELL_PROBES = (
     "command_archive_search", "command_cancellation", "command_markdown",
     "credential_startup", "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
     "dictation_accessibility_preparation", "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
-    "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_error_localization", "file_export", "file_operation_isolation",
+    "dictionary_matcher_experiment", "dictionary_inline_focus", "factory_brand_vocabulary", "file_error_localization", "file_export", "file_operation_isolation",
     "file_history_publisher", "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
     "fluid_serve", "fluid_typography", "history_decode_recovery", "history_persistence", "hotkey_initialization",
     "local_text_model_catalog", "meeting_capture_pcm", "meeting_capture_activity", "meeting_microphone_capture_contracts", "meeting_pending_speech", "native_window_appearance",
@@ -255,7 +255,7 @@ SHELL_PROBES = (
     "stats_snapshot", "terminal_service_lifecycle", "voice_edit_cancellation",
 )
 PYTHON_PROBES = (
-    "delivery_failure_copy", "dictation_context_profile", "diarization_repeatability", "dictionary_training_save", "dictation_capture_admission", "fluid_audio_capture_options", "gigaam_artifact_ownership", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
+    "delivery_failure_copy", "dictation_context_profile", "diarization_repeatability", "dictionary_training_save", "dictation_capture_admission", "fluid_audio_capture_options", "gigaam_artifact_ownership", "gigaam_encoder_dictionary_storage", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
     "meeting_speaker_attribution", "mobile_recording_activity_lifecycle",
     "private_capture_feedback", "private_profile_activation_summary", "private_panel_concealment", "settings_backup_concurrency",
 )

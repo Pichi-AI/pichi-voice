@@ -364,6 +364,21 @@ extension Notification.Name {
     static let parakeetVocabularyDidChange = Notification.Name("ParakeetVocabularyDidChange")
 }
 
+/// Dictionary-only additions do not modify the separate explicit boost vocabulary.
+/// All observers still receive the change; ASR need not reset its resident provider.
+nonisolated enum DictionaryEntriesChangeNotice {
+    private static let entriesOnlyKey = "CustomDictionaryEntriesOnly"
+
+    static func post() {
+        NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil,
+            userInfo: [entriesOnlyKey: true])
+    }
+
+    static func requiresVocabularyReload(_ notification: Notification) -> Bool {
+        notification.userInfo?[entriesOnlyKey] as? Bool != true
+    }
+}
+
 #if arch(arm64)
 extension ParakeetVocabularyStore {
     /// Creates tokenized vocabulary + CTC models for FluidAudio vocabulary boosting.

@@ -1,15 +1,51 @@
 import SwiftUI
 
+struct DictionarySavedAudioSummary {
+    let count: Int
+    let latestCapture: Date?
+
+    /// Counts links in committed metadata. A legacy feature-only reference is
+    /// not an audio sample; the links do not verify that their files are readable.
+    static func from(_ captures: [PronunciationEnrollmentCapture]) -> Self {
+        let linked = captures.filter { $0.inspectionID != nil || $0.originalAudioID != nil }
+        return Self(count: linked.count, latestCapture: linked.compactMap(\.capturedAt).max())
+    }
+}
+
+struct DictionarySavedAudioSummaryView: View {
+    let summary: DictionarySavedAudioSummary
+    @Environment(\.theme) private var theme
+    @Environment(\.locale) private var locale
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if self.summary.count == 0 {
+                Text("No linked audio samples")
+            } else {
+                Text(PichiLocalization.format("Linked audio samples: %lld (up to 10 per model)", self.summary.count))
+                if let latest = self.summary.latestCapture {
+                    Text(PichiLocalization.format("Latest sample added: %@", latest.formatted(Date.FormatStyle(date: .abbreviated, time: .standard).locale(self.locale))))
+                }
+            }
+        }
+        .font(self.theme.typography.caption)
+        .foregroundStyle(self.theme.palette.secondaryText)
+        .lineLimit(nil)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 /// Presentation only. Persistence, training and deletion remain owned by the drawer.
 struct DictionaryDrawerEntryRow: View {
     let entry: SettingsStore.CustomDictionaryEntry
+    var audioSummary: DictionarySavedAudioSummary? = nil
     let isTestDisabled: Bool
     let onTest: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
     @Environment(\.theme) private var theme
 
-    enum Part: CaseIterable, Hashable { case replacement, aliases, test, edit, delete }
+    enum Part: CaseIterable, Hashable { case replacement, aliases, samples, test, edit, delete }
     #if DEBUG
     /// Measures the actual production row without creating the dictionary service UI.
     var onLayout: ((Part, CGRect) -> Void)? = nil
@@ -34,6 +70,9 @@ struct DictionaryDrawerEntryRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading),
                 part: .aliases
             )
+            if let summary = self.audioSummary {
+                self.measured(DictionarySavedAudioSummaryView(summary: summary), part: .samples)
+            }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
                     self.testButton

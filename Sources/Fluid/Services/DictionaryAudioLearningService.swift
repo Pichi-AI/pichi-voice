@@ -9,12 +9,18 @@ final class DictionaryAudioLearningService {
     static var shared: DictionaryAudioLearningService {
         PrivateProfileObjectCache.value(key: "DictionaryAudioLearningService") { DictionaryAudioLearningService() }
     }
+    enum TargetPublication { case rejected, unchanged, created }
     typealias Extractor = @Sendable (DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture
 
     private struct Request {
         let entry: SettingsStore.CustomDictionaryEntry
         let evidenceID: UUID
-        let evidence: DictionaryLearningAudioEvidence
+        let prepare: @MainActor () async throws -> DictionaryLearningAudioEvidence?
+        let isValid: @MainActor () -> Bool
+        let isCurrentBeforePreparation: @MainActor () -> Bool
+        let publishTarget: (@MainActor () -> TargetPublication)?
+        let didPublishTarget: (@MainActor () -> Void)?
+        let explicitHistory: Bool
         let expiresAt: Date
         let pronunciationGeneration: String
     }
@@ -23,11 +29,14 @@ final class DictionaryAudioLearningService {
     private let extract: Extractor
     private let lifetime: TimeInterval
     private let canProcess: @MainActor () -> Bool
+    private let canProcessHistory: @MainActor () -> Bool
     private let isCurrent: @MainActor (SettingsStore.CustomDictionaryEntry) -> Bool
     private var queue: [Request] = []
     private var task: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
     private var retired = false
+    private var foregroundAdmissions = 0
+    private var activeEvidenceID: UUID?
     private let profile = PrivateProfileStorage.current
     var pendingCount: Int { self.queue.count }
 
@@ -40,6 +49,9 @@ final class DictionaryAudioLearningService {
         canProcess: @escaping @MainActor () -> Bool = {
             DictionaryMatcherExperiment.sharedFeaturesEnabled && SettingsStore.shared.automaticDictionaryLearningEnabled && AppServices.shared.asr.activeExclusiveActivity == nil
         },
+        canProcessHistory: @escaping @MainActor () -> Bool = {
+            DictionaryMatcherExperiment.sharedFeaturesEnabled && AppServices.shared.asr.activeExclusiveActivity == nil
+        },
         isCurrent: @escaping @MainActor (SettingsStore.CustomDictionaryEntry) -> Bool = {
             DictionaryMatcherExperiment.sharedFeaturesEnabled && SettingsStore.shared.customDictionaryEntries.contains($0)
         }
@@ -48,12 +60,27 @@ final class DictionaryAudioLearningService {
         self.lifetime = min(120, max(0, lifetime))
         self.extract = extract
         self.canProcess = canProcess
+        self.canProcessHistory = canProcessHistory
         self.isCurrent = isCurrent
     }
 
     /// Cancel encoder work immediately when audio activity starts. Retry the same bounded request when it ends.
     func cancelForRecording() { self.task?.cancel() }
     func activityDidEnd() { self.drain() }
+
+    /// Block restarts before cancelling, then join the worker including provider retirement.
+    func pauseForForegroundAdmission() async {
+        self.foregroundAdmissions += 1
+        let work = self.task
+        work?.cancel()
+        await work?.value
+    }
+
+    func resumeAfterForegroundAdmission() {
+        precondition(self.foregroundAdmissions > 0)
+        self.foregroundAdmissions -= 1
+        self.drain()
+    }
 
     func prepareForPrivateProfileTransition() async {
         retired = true
@@ -69,10 +96,23 @@ final class DictionaryAudioLearningService {
         evidenceID: UUID,
         evidence: DictionaryLearningAudioEvidence
     ) {
-        guard !retired, PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
-              DictionaryMatcherExperiment.sharedFeaturesEnabled else { return }
         guard !evidence.samples.isEmpty, evidence.samples.count <= 238_080 else { return }
-        guard !self.queue.contains(where: { $0.evidenceID == evidenceID }) else { return }
+        self.enqueue(entry: entry, evidenceID: evidenceID, explicitHistory: false, isValid: { true }, prepare: { evidence })
+    }
+
+    /// History preparation shares the same bounded, joined, profile-owned worker as enrollment.
+    @discardableResult
+    func enqueue(
+        entry: SettingsStore.CustomDictionaryEntry, evidenceID: UUID, explicitHistory: Bool = true,
+        isValid: @escaping @MainActor () -> Bool,
+        isCurrentBeforePreparation: (@MainActor () -> Bool)? = nil,
+        publishTarget: (@MainActor () -> TargetPublication)? = nil,
+        didPublishTarget: (@MainActor () -> Void)? = nil,
+        prepare: @escaping @MainActor () async throws -> DictionaryLearningAudioEvidence?
+    ) -> Bool {
+        guard !retired, PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              DictionaryMatcherExperiment.sharedFeaturesEnabled, isValid() else { return false }
+        guard !self.queue.contains(where: { $0.evidenceID == evidenceID }) else { return false }
         self.pruneExpired()
         // Four short clips bound queued PCM to less than 4 MB. The text correction is already independent.
         guard self.queue.count < 4 else {
@@ -80,59 +120,83 @@ final class DictionaryAudioLearningService {
                 "Audio learning queue full; text correction retained",
                 source: "DictionaryLearning"
             )
-            return
+            return false
         }
         self.queue.append(Request(
             entry: entry,
             evidenceID: evidenceID,
-            evidence: evidence,
+            prepare: prepare,
+            isValid: isValid,
+            isCurrentBeforePreparation: isCurrentBeforePreparation ?? { [isCurrent] in isCurrent(entry) },
+            publishTarget: publishTarget,
+            didPublishTarget: didPublishTarget,
+            explicitHistory: explicitHistory,
             expiresAt: Date().addingTimeInterval(self.lifetime),
             pronunciationGeneration: DictionaryMatcherExperiment.generation
         ))
         self.drain()
         self.scheduleExpiry()
+        return true
     }
 
     private func drain() {
         self.pruneExpired()
-        guard !retired, PrivateProfileStorage.isReadable(profile), self.task == nil,
-              self.canProcess(), let request = self.queue.first else { return }
+        guard !retired, self.foregroundAdmissions == 0, PrivateProfileStorage.isReadable(profile), self.task == nil,
+              let request = self.queue.first(where: { $0.explicitHistory ? self.canProcessHistory() : self.canProcess() }) else { return }
+        self.activeEvidenceID = request.evidenceID
         self.task = Task(priority: .utility) { [weak self] in
             guard let self else { return }
             var retry = false
+            var notifyPublication = false
             defer {
                 if !retry { self.queue.removeAll { $0.evidenceID == request.evidenceID } }
                 self.task = nil
+                self.activeEvidenceID = nil
+                if notifyPublication { request.didPublishTarget?() }
                 self.drain()
                 self.scheduleExpiry()
             }
-            guard self.isCurrent(request.entry), request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
+            guard request.isCurrentBeforePreparation(), request.isValid(), request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
             do {
-                let revision = await self.store.revision(for: request.entry.id)
-                let capture = try await self.extract(request.evidence)
+                guard let evidence = try await request.prepare(), !evidence.samples.isEmpty, evidence.samples.count <= 238_080 else { return }
                 try Task.checkCancellation()
-                guard request.expiresAt > Date(), self.isCurrent(request.entry) else { return }
+                guard request.expiresAt > Date(), (request.publishTarget == nil ? self.isCurrent(request.entry) : request.isCurrentBeforePreparation()), request.isValid(), request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
+                let revision = await self.store.revision(for: request.entry.id)
+                let capture = try await self.extract(evidence)
+                try Task.checkCancellation()
+                guard request.expiresAt > Date(), (request.publishTarget == nil ? self.isCurrent(request.entry) : request.isCurrentBeforePreparation()), request.isValid(), request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
                 let inserted = try await self.store.learnOriginalAudio(
                     entryID: request.entry.id,
                     label: request.entry.replacement,
                     evidenceID: request.evidenceID,
-                    evidence: request.evidence,
+                    evidence: evidence,
                     capture: capture,
                     expectedRevision: revision,
                     canPersist: { DictionaryMatcherExperiment.sharedFeaturesEnabled && request.pronunciationGeneration == DictionaryMatcherExperiment.generation }
                 )
                 // An edit can happen while awaiting the store actor. Roll back only this event.
-                if Task.isCancelled || !self.isCurrent(request.entry) {
+                if Task.isCancelled || request.expiresAt <= Date() || !request.isValid() ||
+                    request.pronunciationGeneration != DictionaryMatcherExperiment.generation ||
+                    !(request.publishTarget == nil ? self.isCurrent(request.entry) : request.isCurrentBeforePreparation()) {
                     if inserted { try await self.store.removeOriginalAudio(evidenceID: request.evidenceID) }
                     retry = Task.isCancelled && request.expiresAt > Date()
                     return
                 }
+                if let publish = request.publishTarget {
+                    switch publish() {
+                    case .rejected:
+                        if inserted { try await self.store.removeOriginalAudio(evidenceID: request.evidenceID) }
+                        return
+                    case .unchanged: break
+                    case .created: notifyPublication = true
+                    }
+                }
                 DebugLogger.shared.info(
-                    "Original pronunciation evidence saved",
+                    inserted ? "Original pronunciation evidence saved" : "Original pronunciation evidence already present",
                     source: "DictionaryLearning"
                 )
             } catch is CancellationError {
-                retry = request.expiresAt > Date()
+                retry = Task.isCancelled && request.expiresAt > Date()
             } catch {
                 DebugLogger.shared.warning(
                     "Original pronunciation evidence was not saved: \(error.localizedDescription)",
@@ -143,7 +207,7 @@ final class DictionaryAudioLearningService {
     }
 
     private func pruneExpired() {
-        if let first = self.queue.first, first.expiresAt <= Date() { self.task?.cancel() }
+        if self.queue.contains(where: { $0.evidenceID == self.activeEvidenceID && $0.expiresAt <= Date() }) { self.task?.cancel() }
         self.queue.removeAll { $0.expiresAt <= Date() }
     }
 

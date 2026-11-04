@@ -207,6 +207,211 @@ final class DebugLogger {
         print("PASS: restore during loading replaces both memory and disk")
         try await self.testTodaySummary(root: root, defaults: defaults, audio: audio)
         try await self.testStars(root: root, defaults: defaults, audio: audio)
+        try await self.testWordCorrections(root: root, defaults: defaults, audio: audio)
+    }
+
+    @MainActor static func testWordCorrections(root: URL, defaults: UserDefaults, audio: DictationAudioMetadata) async throws {
+        let url = root.appendingPathComponent("word-corrections.sqlite3")
+        let writer = TranscriptionHistoryWriter(defaults: defaults, url: url)
+        let store = TranscriptionHistoryStore(writer: writer)
+        try await store.waitUntilLoaded()
+        let profile = PrivateProfileStorage.current
+        let original = TranscriptionHistoryEntry(timestamp: Date(timeIntervalSince1970: 500),
+            rawText: "Model ASR bytes", processedText: "Ёжик 🦔 Pech Voice и Pech Voice.",
+            appName: "Synthetic", windowTitle: "Synthetic window", wasAIProcessed: true,
+            processingModel: "synthetic-ai", transcriptionDurationMilliseconds: 37,
+            parakeetProcessingDurationMilliseconds: 25, aiProcessingDurationMilliseconds: 40,
+            aiTokensPerSecond: 120, aiProcessingError: "retained diagnostic", audio: audio,
+            isStarred: true)
+        store.restore(from: [original])
+        let before = store.entries[0]
+        let displayed = before.clipboardText!
+        let lastWord = (displayed as NSString).range(of: "Pech", options: .backwards)
+        precondition(store.applyWordCorrection(entryID: original.id, expectedText: displayed,
+            range: lastWord, replacement: "Pichi", profile: profile))
+        let first = store.entries[0]
+        precondition(first.processedText == "Ёжик 🦔 Pech Voice и Pichi Voice.", "Only the selected repeated occurrence changes")
+        precondition(first.rawText == original.rawText && first.originalProcessedText == original.processedText,
+            "Original ASR and model output remain exact")
+        precondition(first.id == original.id && first.timestamp == original.timestamp && first.audio == original.audio && first.isStarred,
+            "Manual edits retain identity, chronology, audio and star")
+        precondition(first.processingModel == original.processingModel && first.wasAIProcessed == original.wasAIProcessed &&
+            first.aiProcessingError == original.aiProcessingError && first.aiTokensPerSecond == original.aiTokensPerSecond &&
+            first.transcriptionDurationMilliseconds == original.transcriptionDurationMilliseconds &&
+            first.parakeetProcessingDurationMilliseconds == original.parakeetProcessingDurationMilliseconds &&
+            first.aiProcessingDurationMilliseconds == original.aiProcessingDurationMilliseconds,
+            "Manual edits do not rewrite inference provenance")
+        precondition(first.characterCount == first.processedText.count && first.previewText == first.processedText &&
+            first.clipboardText == first.processedText, "Every display/copy path uses corrected final text")
+        precondition(first.searchRecord.revision > before.searchRecord.revision && first.searchRecord.text.contains("Pichi Voice"),
+            "A correction advances the existing search revision")
+        precondition(store.search(query: "Pichi").map(\.id) == [original.id], "Corrected text is searchable")
+        precondition(!store.applyWordCorrection(entryID: original.id, expectedText: displayed,
+            range: lastWord, replacement: "Stale", profile: profile), "Stale text cannot change a newer correction")
+        let firstWord = (first.processedText as NSString).range(of: "Pech")
+        precondition(store.applyWordCorrection(entryID: original.id, expectedText: first.processedText,
+            range: firstWord, replacement: "Pichi", profile: profile))
+        let second = store.entries[0]
+        precondition(second.originalProcessedText == original.processedText && second.searchRecord.revision > first.searchRecord.revision,
+            "Later edits preserve the first model bytes and advance revision again")
+        let emoji = (second.processedText as NSString).range(of: "🦔")
+        for invalid in [NSRange(location: NSNotFound, length: 1), NSRange(location: -1, length: 1),
+                        NSRange(location: Int.max - 1, length: Int.max - 1),
+                        NSRange(location: emoji.location, length: 1)] {
+            precondition(!store.applyWordCorrection(entryID: original.id, expectedText: second.processedText,
+                range: invalid, replacement: "invalid", profile: profile), "Malformed UTF16 ranges are rejected")
+        }
+        precondition(!store.applyWordCorrection(entryID: original.id, expectedText: second.processedText,
+            range: NSRange(location: 0, length: 1), replacement: "bad\nline", profile: profile), "Word edits cannot inject control characters")
+        precondition(!store.applyWordCorrection(entryID: original.id, expectedText: second.processedText,
+            range: NSRange(location: 0, length: second.processedText.utf16.count), replacement: "", profile: profile),
+            "Empty final text cannot silently fall back to the uncorrected raw text")
+        precondition(store.entries[0] == second, "Rejected edits leave all metadata unchanged")
+        store.attachAudio(laterAudioMetadata(), to: original.id)
+        let attached = store.entries[0]
+        precondition(attached.originalProcessedText == original.processedText && attached.processedText == second.processedText,
+            "Later audio metadata updates preserve manual corrections")
+        await store.finishPendingWrites()
+        let reloaded = try await TranscriptionHistoryWriter(defaults: defaults, url: url).load()
+        precondition(reloaded == store.entries, "Edited text and exact original output survive SQLite reload")
+        let backup = try JSONDecoder().decode([TranscriptionHistoryEntry].self, from: JSONEncoder().encode(store.makeBackupPayload()))
+        precondition(backup == store.entries, "Backup export keeps both current final and original model output")
+        var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as! [String: Any]
+        legacy.removeValue(forKey: "originalProcessedText")
+        let legacyEntry = try JSONDecoder().decode(TranscriptionHistoryEntry.self, from: JSONSerialization.data(withJSONObject: legacy))
+        precondition(legacyEntry.originalProcessedText == nil && legacyEntry == original, "Legacy entries decode without a manual correction field")
+        let sourceOriginal = TranscriptionHistoryEntry(rawText: "Ёжик 🦔 Pech и Pech.",
+            processedText: "AI formatted result.", appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: true, audio: audio)
+        store.restore(from: [sourceOriginal])
+        let sourceRange = (sourceOriginal.rawText as NSString).range(of: "Pech", options: .backwards)
+        precondition(store.applyWordCorrection(entryID: sourceOriginal.id, expectedText: sourceOriginal.rawText,
+            range: sourceRange, replacement: "Pichi", profile: profile, isOriginal: true))
+        let sourceEdited = store.entries[0]
+        precondition(sourceEdited.sourceTranscriptText == "Ёжик 🦔 Pech и Pichi." && sourceEdited.rawText == sourceOriginal.rawText,
+            "Source edits preserve exact immutable ASR bytes and the selected repeated occurrence")
+        precondition(sourceEdited.processedText.contains("Pichi") && sourceEdited.originalProcessedText == sourceOriginal.processedText,
+            "Explicit source corrections override divergent AI output and preserve its original bytes")
+        precondition(store.search(query: "Pichi").map(\.id) == [sourceOriginal.id] && sourceEdited.searchRecord.text.contains("Pichi"))
+        precondition(!store.applyWordCorrection(entryID: sourceOriginal.id, expectedText: sourceOriginal.rawText,
+            range: sourceRange, replacement: "Stale", profile: profile, isOriginal: true))
+        store.attachAudio(laterAudioMetadata(), to: sourceOriginal.id)
+        await store.finishPendingWrites()
+        let sourceReloaded = try await TranscriptionHistoryWriter(defaults: defaults, url: url).load()
+        precondition(sourceReloaded == store.entries && sourceReloaded[0].correctedRawText == sourceEdited.correctedRawText,
+            "Corrected source survives audio attachment and SQLite reload")
+        let sourceBackup = try JSONDecoder().decode([TranscriptionHistoryEntry].self, from: JSONEncoder().encode(store.makeBackupPayload()))
+        precondition(sourceBackup == store.entries)
+        let identical = TranscriptionHistoryEntry(rawText: "Приложение PGI.", processedText: "Приложение PGI.",
+            appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: false)
+        store.restore(from: [identical])
+        precondition(store.applyWordCorrection(entryID: identical.id, expectedText: identical.rawText,
+            range: (identical.rawText as NSString).range(of: "PGI"), replacement: "Pichi AI", profile: profile, isOriginal: true))
+        precondition(store.entries[0].sourceTranscriptText == "Приложение Pichi AI." &&
+            store.entries[0].clipboardText == "Приложение Pichi AI." && store.entries[0].rawText == identical.rawText &&
+            store.entries[0].originalProcessedText == identical.processedText,
+            "Identical source/final text shares the exact user correction while preserving both model outputs")
+        let correctionCases:[(String,String,String,String)] = [
+   ("Итак, проверим Peachi AI, Newo и Asprity.", "Итак, проверим Pichi AI, Newo и Asprity.", "Итак, проверим Peach I, Newa и aspirity.", "Итак, проверим Pichi AI, Newa и aspirity."),
+   ("Проверь Peachi AI, потом Asprity и Arcody.","Проверь Pichi AI, потом Aspirity и Aircody.","Проверь Peach I,\nпотом aspirity и Arcodi!","Проверь Pichi AI,\nпотом Aspirity и Aircody!"),
+   ("Сначала Pech AI, потом Pech AI.","Сначала Pech AI, потом Pichi AI.","Сначала Peach I,\nпотом Peach I.","Сначала Peach I,\nпотом Pichi AI."),
+   ("Тут Pech.","Тут Pichi AI.","Тут Peach!","Тут Pichi AI!"),
+   ("Тут старый термин.","Тут термин.","Тут старый, термин!","Тут термин!"),
+   ("Hello world","Hello friend","Hello,\nworld!","Hello,\nfriend!"),
+   ("Ёжик 🦔 Pech AI.","Ёжик 🦔 Pichi AI.","Ёжик 🦔 Peach I!","Ёжик 🦔 Pichi AI!"),
+   ("Тут модель.","Тут Pichi AI модель.","Тут модель!","Тут Pichi AI модель!"),
+   ("тут Pech.","тут Pichi.","Тут Pichi!","Тут Pichi!"),
+   ("Слово.","Термин.","","Термин.")
+  ]
+        for (raw, corrected, formatted, expected) in correctionCases {
+            let result = SourceTranscriptCorrection.apply(original: raw, corrected: corrected, to: formatted)
+            precondition(result == expected, "Source correction must reach the selected final span: \(result)")
+            precondition(SourceTranscriptCorrection.apply(original: raw, corrected: corrected, to: result) == result,
+                "Repeated reconciliation cannot duplicate an inserted compound")
+        }
+        let repeatedSource = "Проверь Alfa AI, или, например, Beta Voice, или другое, например, Game и Testo."
+        let repeatedCorrected = "Проверь Alpha AI, или, например, Beta Voice, или другое, например, Gamma и Test."
+        let repeatedFormatted = "Проверь Alf I, например, Beta Voice, или другое, например, Gama и testo."
+        let settled = SourceTranscriptCorrection.apply(original: repeatedSource, corrected: repeatedCorrected, to: repeatedFormatted)
+        precondition(settled.contains("Alpha AI") && settled.contains("Gamma") && settled.contains("Test"))
+        precondition(SourceTranscriptCorrection.apply(original: repeatedSource, corrected: repeatedCorrected, to: settled) == settled,
+            "Repeated context and punctuation must settle before a correction is persisted")
+        let reverted = TranscriptionHistoryEntry(rawText: "Тут Pech AI.", processedText: "Тут Pichi AI!",
+            appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: true,
+            originalProcessedText: "Тут Peach I!", correctedRawText: "Тут Pichi AI.").replacingSourceText("Тут Pech AI.")
+        precondition(reverted.processedText == "Тут Pech AI!", "Reverting a source correction also changes its final occurrence")
+        let large = String(repeating: "one two ", count: 3000)
+        precondition(SourceTranscriptCorrection.apply(original: large, corrected: large + "Pichi AI", to: "AI rewrite") == large + "Pichi AI",
+            "Oversized alignment falls back to authoritative corrected source within a bounded token budget")
+        let legacyCorrected = TranscriptionHistoryEntry(rawText: "Тут Peachi AI.", processedText: "Тут Peach I!",
+            appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: true, audio: audio,
+            correctedRawText: "Тут Pichi AI.")
+        let legacyURL = root.appendingPathComponent("source-reconciliation.sqlite3")
+        let legacyWriter = TranscriptionHistoryWriter(defaults: defaults, url: legacyURL)
+        let legacyStore = TranscriptionHistoryStore(writer: legacyWriter)
+        try await legacyStore.waitUntilLoaded()
+        legacyStore.restore(from: [legacyCorrected])
+        await legacyStore.finishPendingWrites()
+        precondition(legacyStore.entries[0].processedText == "Тут Pichi AI!")
+        // Seed a genuinely old, mismatched row directly through the real writer.
+        legacyWriter.write(upserts: [legacyCorrected], deletes: [], replacing: true) { _ in }
+        let migrationWriteError = await legacyWriter.drain()
+        precondition(migrationWriteError == nil)
+        let repairedStore = TranscriptionHistoryStore(writer: legacyWriter)
+        try await repairedStore.waitUntilLoaded()
+        await repairedStore.finishPendingWrites()
+        let repaired = repairedStore.entries[0]
+        precondition(repaired.processedText == "Тут Pichi AI!" && repaired.rawText == legacyCorrected.rawText &&
+            repaired.audio == legacyCorrected.audio && repaired.originalProcessedText == legacyCorrected.processedText &&
+            repaired.searchRevision != nil, "Existing manual source edits reconcile on load without changing provenance")
+        let stableStore = TranscriptionHistoryStore(writer: legacyWriter)
+        try await stableStore.waitUntilLoaded()
+        precondition(stableStore.entries[0] == repaired, "Reopening an already-repaired entry is a no-op")
+        let groupedOriginal = TranscriptionHistoryEntry(rawText: "Ёжик 🦔 Pichi AI и Term.", processedText: "Ёжик 🦔 Peach I, и Term!",
+            appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: true, audio: audio)
+        store.restore(from: [groupedOriginal])
+        let compoundRange = (groupedOriginal.rawText as NSString).range(of: "Pichi AI")
+        precondition(store.applyWordCorrection(entryID: groupedOriginal.id, expectedText: groupedOriginal.rawText,
+            range: compoundRange, replacement: "Pichi AI", profile: profile, isOriginal: true),
+            "Saving an unchanged multiword selection confirms one persistent fragment")
+        let grouped = store.entries[0]
+        precondition(grouped.sourceFragments.count == 1 && grouped.sourceFragments[0].range == compoundRange &&
+            grouped.sourceFragments[0].text == "Pichi AI" && grouped.processedText == "Ёжик 🦔 Pichi AI, и Term!",
+            "The grouped range includes its space and overrides a divergent formatted compound")
+        precondition(!store.applyWordCorrection(entryID: grouped.id, expectedText: grouped.sourceTranscriptText,
+            range: compoundRange, replacement: "Pichi AI", profile: profile, isOriginal: true), "Repeated grouping is a no-op")
+        let prefixRange = (grouped.sourceTranscriptText as NSString).range(of: "Ёжик")
+        precondition(store.applyWordCorrection(entryID: grouped.id, expectedText: grouped.sourceTranscriptText,
+            range: prefixRange, replacement: "Большой Ёжик", profile: profile, isOriginal: true))
+        let shifted = store.entries[0]
+        precondition(shifted.sourceFragments.first { $0.text == "Pichi AI" }?.range == (shifted.sourceTranscriptText as NSString).range(of: "Pichi AI"),
+            "Editing before a group shifts its UTF16 range across a Unicode prefix")
+        let component = (shifted.sourceTranscriptText as NSString).range(of: "AI")
+        precondition(store.applyWordCorrection(entryID: grouped.id, expectedText: shifted.sourceTranscriptText,
+            range: component, replacement: "Enablement", profile: profile, isOriginal: true))
+        let changedGroup = store.entries[0]
+        precondition(changedGroup.sourceFragments.contains { $0.text == "Pichi Enablement" && $0.isValid(in: changedGroup.sourceTranscriptText) },
+            "Editing a component keeps the full group together")
+        store.attachAudio(laterAudioMetadata(), to: grouped.id)
+        await store.finishPendingWrites()
+        let groupReload = try await TranscriptionHistoryWriter(defaults: defaults, url: url).load()
+        precondition(groupReload == store.entries && groupReload[0].sourceFragments == changedGroup.sourceFragments,
+            "Grouped terms survive audio attachment and persistence")
+        let groupBackup = try JSONDecoder().decode([TranscriptionHistoryEntry].self, from: JSONEncoder().encode(store.makeBackupPayload()))
+        precondition(groupBackup == store.entries)
+        let entireGroup = (store.entries[0].sourceTranscriptText as NSString).range(of: "Pichi Enablement")
+        precondition(store.applyWordCorrection(entryID: grouped.id, expectedText: store.entries[0].sourceTranscriptText,
+            range: entireGroup, replacement: "", profile: profile, isOriginal: true))
+        precondition(!store.entries[0].sourceFragments.contains { $0.text.contains("Pichi") }, "Deleting a group removes its metadata")
+        let invalidGroup = TranscriptionHistoryEntry.SourceFragment(location: 0, length: 5, text: "wrong")
+        let sanitized = TranscriptionHistoryEntry(rawText: "hello", processedText: "hello", appName: "Synthetic", windowTitle: "Synthetic",
+            wasAIProcessed: false, sourceFragments: [invalidGroup])
+        precondition(sanitized.sourceFragments.isEmpty, "A stale fragment cannot highlight unrelated text")
+        print("PASS: grouped fragments, source and final corrections, exact UTF16 occurrence, provenance, search, persistence, audio, backup and legacy decoding")
+    }
+
+    static func laterAudioMetadata() -> DictationAudioMetadata {
+        DictationAudioMetadata(fileName: "later.wav", durationMilliseconds: 2000, byteCount: 64_000,
+            sampleRate: 16_000, channels: 1, model: "synthetic")
     }
 
     @MainActor static func testStars(root: URL, defaults: UserDefaults, audio: DictationAudioMetadata) async throws {

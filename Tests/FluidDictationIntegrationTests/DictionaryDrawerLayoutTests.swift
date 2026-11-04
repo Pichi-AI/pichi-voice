@@ -5,6 +5,23 @@ import XCTest
 
 @MainActor
 final class DictionaryDrawerLayoutTests: XCTestCase {
+    func testAudioSummaryExcludesFeatureOnlyReferencesAndUsesLatestLinkedTimestamp() {
+        var legacy = PronunciationEnrollmentCapture(values: [1], sourceFrameCount: 1, modelKey: "fixture")
+        legacy.capturedAt = Date(timeIntervalSince1970: 300)
+        var inspection = legacy
+        inspection.inspectionID = UUID()
+        inspection.capturedAt = Date(timeIntervalSince1970: 100)
+        var original = legacy
+        original.originalAudioID = UUID()
+        original.capturedAt = Date(timeIntervalSince1970: 200)
+        let summary = DictionarySavedAudioSummary.from([legacy, inspection, original])
+        XCTAssertEqual(summary.count, 2)
+        XCTAssertEqual(summary.latestCapture, original.capturedAt)
+        let empty = DictionarySavedAudioSummary.from([legacy])
+        XCTAssertEqual(empty.count, 0)
+        XCTAssertNil(empty.latestCapture)
+    }
+
     func testShortReplacementGetsFullDrawerWidthAndVisibleActions() throws {
         try self.verifyLayouts(replacement: "E2E Тест Ёжик", aliases: ["e2e ёлка", "e2e ежик"], attachment: "short")
     }
@@ -32,7 +49,7 @@ final class DictionaryDrawerLayoutTests: XCTestCase {
                             var actions = 0
                             let entry = SettingsStore.CustomDictionaryEntry(triggers: aliases, replacement: replacement)
                             let row = DictionaryDrawerEntryRow(
-                                entry: entry, isTestDisabled: false,
+                                entry: entry, audioSummary: .init(count: 10, latestCapture: Date(timeIntervalSince1970: 1_700_000_000)), isTestDisabled: false,
                                 onTest: { actions += 1 }, onEdit: { actions += 1 }, onDelete: { actions += 1 },
                                 onLayout: { frames[$0] = $1 }
                             )
@@ -56,6 +73,8 @@ final class DictionaryDrawerLayoutTests: XCTestCase {
                             XCTAssertEqual(frames.count, DictionaryDrawerEntryRow.Part.allCases.count, context)
                             let title = try XCTUnwrap(frames[.replacement], context)
                             let triggerFrame = try XCTUnwrap(frames[.aliases], context)
+                            let samples = try XCTUnwrap(frames[.samples], context)
+                            XCTAssertGreaterThanOrEqual(samples.minY, triggerFrame.maxY, context)
                             XCTAssertEqual(title.minX, 0, accuracy: 0.5, context)
                             // Compare native bounds with native bounds. An unbroken sans word
                             // can fit at 189 points for a fractional 188.4-point proposal, with
@@ -98,8 +117,12 @@ final class DictionaryDrawerLayoutTests: XCTestCase {
                             }
                             let expectedTitle = try XCTUnwrap(referenceFrames[.replacement], context)
                             let expectedAliases = try XCTUnwrap(referenceFrames[.aliases], context)
-                            XCTAssertEqual(title.width, expectedTitle.width, accuracy: 0.5, context)
-                            XCTAssertEqual(triggerFrame.width, expectedAliases.width, accuracy: 0.5, context)
+                            // Each native edge may round independently. Comparing
+                            // the summed width would double-count that rounding.
+                            XCTAssertEqual(title.minX, expectedTitle.minX, accuracy: 0.5, context)
+                            XCTAssertEqual(title.maxX, expectedTitle.maxX, accuracy: 0.5, context)
+                            XCTAssertEqual(triggerFrame.minX, expectedAliases.minX, accuracy: 0.5, context)
+                            XCTAssertEqual(triggerFrame.maxX, expectedAliases.maxX, accuracy: 0.5, context)
                             XCTAssertEqual(title.height, expectedTitle.height, accuracy: 0.5, context)
                             let rowBounds = CGRect(x: 0, y: 0, width: contentWidth, height: size.height)
                             for part in DictionaryDrawerEntryRow.Part.allCases {
@@ -116,7 +139,7 @@ final class DictionaryDrawerLayoutTests: XCTestCase {
                                 let frame = try XCTUnwrap(frames[part], context)
                                 XCTAssertGreaterThanOrEqual(frame.width, 22, context)
                                 XCTAssertGreaterThanOrEqual(frame.height, 22, context)
-                                XCTAssertGreaterThanOrEqual(frame.minY, triggerFrame.maxY, context)
+                                XCTAssertGreaterThanOrEqual(frame.minY, samples.maxY, context)
                                 return frame
                             }
                             for index in controls.indices {
@@ -127,12 +150,12 @@ final class DictionaryDrawerLayoutTests: XCTestCase {
                                 }
                             }
                             XCTAssertEqual(actions, 0, "Rendering must not test, edit or delete a word")
-                            if language == "ru", scheme == .dark, design == .sans, scale == 1, drawerWidth == 240 {
+                            if design == .sans, scale == 1, drawerWidth == 240 {
                                 let bitmap = try XCTUnwrap(controller.view.bitmapImageRepForCachingDisplay(in: controller.view.bounds))
                                 controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
                                 let imageAttachment = XCTAttachment(data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
                                                                uniformTypeIdentifier: "public.png")
-                                imageAttachment.name = "dictionary-drawer-\(attachment)-ru-dark-240"
+                                imageAttachment.name = "dictionary-drawer-\(attachment)-\(language)-\(scheme)-240"
                                 imageAttachment.lifetime = .keepAlways
                                 add(imageAttachment)
                             }

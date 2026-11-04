@@ -92,7 +92,7 @@ nonisolated enum PronunciationDictionaryStoreError: Error { case staleEvidence, 
         func inspection(for id: UUID) throws -> DictionaryAudioInspection { .init() }
         func originalAudioSamples(for capture: PronunciationEnrollmentCapture, entryID: UUID) throws -> [Float] { [1] }
     }
-    func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>, includingSharedFamilies: Bool = false,
+    func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>, includingSharedFamilies: Bool = false, maximumReferencesPerProfile: Int = 3,
         referenceSelection: @Sendable (PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] = { $0.matchingEnrollments }) throws -> CaptureRead { .init() }
     static func selectSharedProfiles(_ profiles: [PronunciationDictionaryProfile], modelKey: String, hiddenSize: Int?) -> [PronunciationDictionaryProfile] {
         profiles.filter { $0.modelKey == modelKey && (hiddenSize == nil || $0.hiddenSize == hiddenSize) }
@@ -160,6 +160,11 @@ nonisolated enum GigaAMDictionaryAcoustics {
     static func activeCaptures(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] {
         Array(captures.prefix(3))
     }
+}
+
+nonisolated enum GigaAMEncoderDictionaryStorage {
+    static func modelKey(fingerprint: String) -> String { "synthetic-encoder/" + fingerprint }
+    static func retainedCaptures(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] { captures }
 }
 
 // ACTUAL_PROVIDER_CAPTURE_SOURCE

@@ -14,8 +14,7 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "CTranscribe",
-            url: "https://github.com/handy-computer/transcribe.cpp/releases/download/v0.1.2/TranscribeCpp.xcframework.zip",
-            checksum: "4092276cd295860ae9637a2913cf2d8747f39d454bb7fb3c79d6af9f858a4bb8"
+            path: "Artifacts/TranscribeCpp.xcframework.zip"
         ),
         .target(
             name: "TranscribeCpp",

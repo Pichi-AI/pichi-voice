@@ -12,7 +12,7 @@ struct DictionaryWordTrainingRequest: Identifiable {
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
               DictionaryCorrectionEditPolicy.isTerm(candidate.heardText),
               DictionaryCorrectionEditPolicy.isTerm(candidate.correctedText),
-              candidate.heardText != candidate.correctedText,
+              candidate.heardText != candidate.correctedText || candidate.correctedText.split(whereSeparator: \.isWhitespace).count > 1,
               candidate.audioEvidence.map({ !$0.samples.isEmpty && $0.samples.count <= 238_080 }) ?? true
         else { return nil }
         self.profile = profile
@@ -56,6 +56,6 @@ struct DictionaryHistoryWordSelection: Identifiable {
 
     func matches(_ entry: TranscriptionHistoryEntry) -> Bool {
         PrivateProfileStorage.isReadable(self.profile) && PrivateProfileStorage.acceptsNewWork &&
-            entry.id == self.entryID && (self.isOriginal ? entry.rawText : (entry.clipboardText ?? "")) == self.sourceText
+            entry.id == self.entryID && (self.isOriginal ? entry.sourceTranscriptText : (entry.clipboardText ?? "")) == self.sourceText
     }
 }

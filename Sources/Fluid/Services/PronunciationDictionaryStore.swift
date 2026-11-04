@@ -87,6 +87,7 @@ nonisolated enum PronunciationDictionaryStoreError: LocalizedError, Equatable {
 }
 
 actor PronunciationDictionaryStore {
+    nonisolated static let didChangeNotification = Notification.Name("PronunciationDictionaryStoreDidChange")
     private static let cache = PrivateProfileStoreCache<PronunciationDictionaryStore>()
     static var shared: PronunciationDictionaryStore {
         cache.value { profile in PronunciationDictionaryStore(
@@ -157,6 +158,23 @@ actor PronunciationDictionaryStore {
             }
         }
 
+        /// Optional learned evidence may be absent or corrupt. A closed lease or
+        /// cancelled task remains an error and cannot be downgraded to a miss.
+        func optionalInspection(for id: UUID) throws -> DictionaryAudioInspection? {
+            self.lock.lock(); defer { self.lock.unlock() }
+            guard !self.closed else { throw PronunciationDictionaryStoreError.staleEvidence }
+            guard let file = self.inspections[id] else { return nil }
+            do {
+                return try file.read { data in
+                    let value = try PropertyListDecoder().decode(DictionaryAudioInspection.self, from: data)
+                    guard value.isValid else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+                    return value
+                }
+            } catch is CancellationError { throw CancellationError() }
+            catch PronunciationDictionaryStoreError.staleEvidence { throw PronunciationDictionaryStoreError.staleEvidence }
+            catch { return nil }
+        }
+
         func originalAudioSamples(for capture: PronunciationEnrollmentCapture, entryID: UUID) throws -> [Float] {
             self.lock.lock(); defer { self.lock.unlock() }
             guard !self.closed, let id = capture.originalAudioID, let file = self.originals[id],
@@ -192,9 +210,12 @@ actor PronunciationDictionaryStore {
     /// excess optional candidates are omitted before the immutable snapshot is created. One
     /// fallback per otherwise unrepresented word precedes extra variants for an admitted word.
     nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>,
-                                     includingSharedFamilies: Bool = false,
+                                     includingSharedFamilies: Bool = false, maximumReferencesPerProfile: Int = 3,
                                      referenceSelection: @Sendable (PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] = { $0.matchingEnrollments }) throws -> CaptureRead {
         try Task.checkCancellation()
+        guard (3...10).contains(maximumReferencesPerProfile) else {
+            throw PronunciationDictionaryStoreError.inconsistentEnrollment
+        }
         guard let profile = self.profile, PrivateProfileStorage.isReadable(profile),
               PrivateProfileStorage.acceptsNewWork else { throw PronunciationDictionaryStoreError.staleEvidence }
         var exact: [PronunciationDictionaryProfile] = []
@@ -248,10 +269,9 @@ actor PronunciationDictionaryStore {
                 for file in originals.values { file.close() }
             }
         }
-        func pinReferences(_ selected: PronunciationDictionaryProfile, optional: Bool) throws -> Bool {
+        func pinReferences(_ selected: PronunciationDictionaryProfile, captures: [PronunciationEnrollmentCapture], optional: Bool, append: Bool = false) throws -> Bool {
             try Task.checkCancellation()
-            let captures = referenceSelection(selected)
-            guard captures.count <= 3, captures.allSatisfy({ selected.enrollments.contains($0) }) else {
+            guard captures.allSatisfy({ selected.enrollments.contains($0) }) else {
                 if optional { return false }
                 throw PronunciationDictionaryStoreError.inconsistentEnrollment
             }
@@ -285,11 +305,20 @@ actor PronunciationDictionaryStore {
             }
             for (id, file) in addedInspections { inspections[id] = file }
             for (id, file) in addedOriginals { originals[id] = file }
-            selectedReferences[selected.id] = captures
+            if append { selectedReferences[selected.id, default: []] += captures }
+            else { selectedReferences[selected.id] = captures }
             committed = true
             return true
         }
-        for selected in exact { _ = try pinReferences(selected, optional: false) }
+        var exactSelections: [[PronunciationEnrollmentCapture]] = []
+        for selected in exact {
+            let captures = referenceSelection(selected)
+            guard captures.count <= maximumReferencesPerProfile, captures.allSatisfy({ selected.enrollments.contains($0) }) else {
+                throw PronunciationDictionaryStoreError.inconsistentEnrollment
+            }
+            exactSelections.append(captures)
+            _ = try pinReferences(selected, captures: Array(captures.prefix(3)), optional: false)
+        }
         var profiles = exact
         var admittedEntries = Set(exact.map(\.dictionaryEntryID))
         var attempted = Set<Int>()
@@ -297,7 +326,9 @@ actor PronunciationDictionaryStore {
             attempted.insert(index)
             do {
                 let candidate = shared[index]
-                if try pinReferences(candidate, optional: true) {
+                let captures = referenceSelection(candidate)
+                guard captures.count <= maximumReferencesPerProfile else { return }
+                if try pinReferences(candidate, captures: captures, optional: true) {
                     profiles.append(candidate)
                     admittedEntries.insert(candidate.dictionaryEntryID)
                 }
@@ -308,6 +339,17 @@ actor PronunciationDictionaryStore {
             try admitOptional(index)
         }
         for index in shared.indices where !attempted.contains(index) { try admitOptional(index) }
+        // Mandatory exact baselines are all pinned before any optional extras.
+        // Admit extras individually so a missing file or full budget cannot
+        // prevent a different profile's baseline from being captured.
+        for (index, selected) in exact.enumerated() {
+            for capture in exactSelections[index].dropFirst(3) {
+                do { _ = try pinReferences(selected, captures: [capture], optional: true, append: true) }
+                catch is CancellationError { throw CancellationError() }
+                catch PronunciationDictionaryStoreError.staleEvidence { throw PronunciationDictionaryStoreError.staleEvidence }
+                catch { /* Unusable optional evidence never blocks dictation. */ }
+            }
+        }
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else {
             throw PronunciationDictionaryStoreError.staleEvidence
         }
@@ -413,7 +455,12 @@ actor PronunciationDictionaryStore {
         if let expectedExistingEnrollments, existingEnrollments != expectedExistingEnrollments {
             throw PronunciationDictionaryStoreError.staleEvidence
         }
-        var prepared = enrollments
+        var occurrences = Set(existingEnrollments.compactMap(Self.occurrenceKey))
+        var prepared = enrollments.filter { capture in
+            guard let key = Self.occurrenceKey(capture) else { return true }
+            return occurrences.insert(key).inserted
+        }
+        guard !prepared.isEmpty else { return }
         var writtenInspectionIDs: [UUID] = []
         do {
             for index in prepared.indices {
@@ -477,10 +524,28 @@ actor PronunciationDictionaryStore {
     }
 
     /// Keep trained references when automatically learned examples reach the history limit.
+    nonisolated private static func occurrenceKey(_ capture: PronunciationEnrollmentCapture) -> String? {
+        guard let id = capture.sourceRecordingID, let range = capture.sourceFocalRange else { return nil }
+        return "\(id):\(range.lowerBound):\(range.upperBound)"
+    }
+
     static func retainedEnrollments(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] {
         let protected = Set(captures.indices.filter { captures[$0].originalAudioID == nil }.suffix(3))
-        let remaining = captures.indices.filter { !protected.contains($0) }.suffix(10 - protected.count)
-        let selected = protected.union(remaining)
+        let candidates = captures.indices.filter { !protected.contains($0) }.reversed()
+        var seen = Set<String>(), distinct: [Int] = [], repeated: [Int] = []
+        for index in candidates {
+            let observed = captures[index].observedText ?? ""
+            let text = observed.count <= 80 ? observed : ""
+            let latin = text.applyingTransform(.toLatin, reverse: false) ?? text
+            let key = (latin.applyingTransform(.stripCombiningMarks, reverse: false) ?? latin)
+                .lowercased().filter { $0.isLetter || $0.isNumber }
+            if captures[index].originalAudioID != nil && !key.isEmpty && seen.insert(key).inserted {
+                distinct.append(index)
+            } else { repeated.append(index) }
+        }
+        // Retain the newest representative of each observed spelling first;
+        // use remaining slots for the newest repeats or legacy references.
+        let selected = protected.union((distinct + repeated).prefix(10 - protected.count))
         // Manual references first so the matcher can keep its existing calibration.
         return selected.sorted { lhs, rhs in
             let leftManual = captures[lhs].originalAudioID == nil
@@ -822,6 +887,7 @@ actor PronunciationDictionaryStore {
         let oldInspectionIDs = Set((self.document?.profiles ?? []).flatMap(\.enrollments).compactMap(\.inspectionID))
         let newInspectionIDs = Set(updated.profiles.flatMap(\.enrollments).compactMap(\.inspectionID))
         self.document = updated
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         for id in oldInspectionIDs.subtracting(newInspectionIDs) {
             try? FileManager.default.removeItem(at: self.inspectionURL(id))
         }

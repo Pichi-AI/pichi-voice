@@ -3416,6 +3416,32 @@ extension DictationE2ETests {
         )) { XCTAssertEqual($0 as? DictionaryLearningAlignmentError, .ambiguousSource) }
     }
 
+    func testHistoryLearningAlignsChangedDecodeOnlyBetweenUniqueAnchors() throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        func resolve(_ original: String, _ decoded: String, _ selected: String) throws -> Range<Int> {
+            let words = decoded.split(separator: " ").enumerated().map { index, text in
+                ASRWordTiming(text: String(text), start: Double(index), end: Double(index) + 0.5)
+            }
+            let recording = try XCTUnwrap(DictionaryLearningRecording(
+                alignment: .init(modelKey: "parakeet-v3", words: words),
+                samples: [Float](repeating: 0, count: 16_000 * 20), now: now
+            ))
+            return try DictionaryLearningAlignmentResolver.resolve(
+                recording: recording, deliveredTextBeforeEdit: original,
+                selectedUTF16Range: (original as NSString).range(of: selected), observedText: selected, now: now
+            ).sourceWordRange
+        }
+        XCTAssertEqual(try resolve("flued voice opens now", "fluid voice opens now", "flued voice"), 0..<2)
+        XCTAssertEqual(try resolve("please open flued voice now thanks", "please open fluid voice now thanks", "flued voice"), 2..<4)
+        XCTAssertEqual(try resolve("please open flued voice", "please open fluid voice", "flued voice"), 2..<4)
+        XCTAssertThrowsError(try resolve("open flued voice now thanks", "open fluid voice now thanks open fluid voice now thanks", "flued voice"))
+        XCTAssertThrowsError(try resolve("flued voice", "fluid voice", "flued voice"))
+        XCTAssertThrowsError(try resolve(
+            "please open flued voice now thanks and open flued voice now",
+            "please open fluid voice now thanks and open flued voice now thanks", "flued voice"
+        ), "An exact match at another occurrence must not override the changed selected occurrence")
+    }
+
     func testDictionaryLearningRejectsExpiredAndInvalidEvidence() throws {
         let now = Date(timeIntervalSince1970: 1000)
         let words = [ASRWordTiming(text: "hello", start: 0.1, end: 0.5)]
@@ -3658,6 +3684,388 @@ extension DictationE2ETests {
         XCTAssertEqual(profiles.first?.enrollments.count, 1)
         let calls = await extractor.calls
         XCTAssertEqual(calls, 2)
+    }
+
+    func testHistoryLearningTargetCreatesAcousticOnlyEntryAndReusesExisting() throws {
+        let source = "please open flued voice now"
+        let range = (source as NSString).range(of: "flued voice")
+        let corrected = "please open Fluid Voice now"
+        let history = TranscriptionHistoryEntry(rawText: source, processedText: source, appName: "", windowTitle: "",
+            wasAIProcessed: false, correctedRawText: corrected)
+        let selection = try XCTUnwrap(DictionaryHistoryWordSelection(entryID: history.id, sourceText: source, range: range, isOriginal: true))
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "flued voice", correctedText: "Fluid Voice", sourceUTF16Range: range)
+        let created = try XCTUnwrap(HistoryDictionaryAudioLearningService.targetEntry(candidate: candidate, selection: selection, history: history, entries: []))
+        XCTAssertEqual(created.replacement, "Fluid Voice")
+        XCTAssertTrue(created.triggers.isEmpty)
+        XCTAssertEqual(created, HistoryDictionaryAudioLearningService.targetEntry(candidate: candidate, selection: selection, history: history, entries: []))
+        let existing = SettingsStore.CustomDictionaryEntry(triggers: ["another"], replacement: "Fluid Voice")
+        XCTAssertEqual(HistoryDictionaryAudioLearningService.targetEntry(candidate: candidate, selection: selection, history: history, entries: [existing]), existing)
+        XCTAssertTrue(HistoryDictionaryAudioLearningService.entryStillEligible(created, entries: [], allowMissing: true))
+        XCTAssertTrue(HistoryDictionaryAudioLearningService.entryStillEligible(created, entries: [created], allowMissing: true))
+        XCTAssertFalse(HistoryDictionaryAudioLearningService.entryStillEligible(created, entries: [existing], allowMissing: true))
+        XCTAssertNil(HistoryDictionaryAudioLearningService.targetEntry(candidate: candidate, selection: selection, history: history, entries: [existing, created]))
+    }
+
+    func testHistoryLearningTargetAcceptsExplicitCrossScriptNames() throws {
+        for (heard, intended) in [("PGI", "Pichi AI"), ("Пичи ай", "Pichi AI"), ("INblement", "AIEnablement")] {
+            let range = NSRange(location: 0, length: heard.utf16.count)
+            let history = TranscriptionHistoryEntry(rawText: heard, processedText: heard, appName: "", windowTitle: "",
+                wasAIProcessed: false, correctedRawText: intended)
+            let selection = try XCTUnwrap(DictionaryHistoryWordSelection(entryID: history.id, sourceText: heard, range: range, isOriginal: true))
+            let candidate = AutomaticDictionaryCorrectionCandidate(heardText: heard, correctedText: intended, sourceUTF16Range: range)
+            let entry = try XCTUnwrap(HistoryDictionaryAudioLearningService.targetEntry(candidate: candidate, selection: selection, history: history, entries: []))
+            XCTAssertEqual(entry.replacement, intended)
+            XCTAssertTrue(entry.triggers.isEmpty)
+        }
+    }
+
+    func testHistoryLearningTargetRequiresConfirmedReplay() throws {
+        let source = "doctor"
+        let history = TranscriptionHistoryEntry(rawText: source, processedText: source, appName: "", windowTitle: "", wasAIProcessed: false)
+        let range = NSRange(location: 0, length: source.utf16.count)
+        let selection = try XCTUnwrap(DictionaryHistoryWordSelection(entryID: history.id, sourceText: source, range: range, isOriginal: true))
+        let unchanged = AutomaticDictionaryCorrectionCandidate(heardText: source, correctedText: source, sourceUTF16Range: range)
+        XCTAssertNil(HistoryDictionaryAudioLearningService.targetEntry(candidate: unchanged, selection: selection, history: history, entries: []))
+        let confirmed = TranscriptionHistoryEntry(id: history.id, rawText: source, processedText: source, appName: "", windowTitle: "",
+            wasAIProcessed: false, correctedRawText: source,
+            sourceFragments: [.init(location: 0, length: source.utf16.count, text: source)])
+        let result = try XCTUnwrap(HistoryDictionaryAudioLearningService.targetEntry(candidate: unchanged, selection: selection, history: confirmed, entries: []))
+        XCTAssertTrue(result.triggers.isEmpty)
+    }
+
+    func testHistoryNewEntryIsActivatedAfterEvidenceAndDuplicateIsSavedOnce() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Fluid")
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: "flued",
+            sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
+        var active = false
+        var valid = true
+        var idle = false
+        var worker: DictionaryAudioLearningService!
+        var notifications = 0
+        worker = DictionaryAudioLearningService(store: store,
+            extract: { _ in PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "parakeet-v3") },
+            canProcess: { idle }, canProcessHistory: { idle }, isCurrent: { $0 == entry && active })
+        let id = UUID()
+        let prepare: @MainActor () async throws -> DictionaryLearningAudioEvidence? = { evidence }
+        let publish: @MainActor () -> DictionaryAudioLearningService.TargetPublication = { active = true; return .created }
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: id, isValid: { valid }, isCurrentBeforePreparation: { valid },
+            publishTarget: publish, didPublishTarget: { notifications += 1; worker.cancelForRecording() }, prepare: prepare))
+        XCTAssertFalse(worker.enqueue(entry: entry, evidenceID: id, isValid: { valid }, isCurrentBeforePreparation: { valid },
+            publishTarget: publish, prepare: prepare))
+        XCTAssertFalse(active)
+        idle = true
+        worker.activityDidEnd()
+        for _ in 0..<200 where worker.pendingCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(worker.pendingCount, 0)
+        XCTAssertTrue(active)
+        XCTAssertEqual(notifications, 1)
+        let profiles = await store.allProfiles()
+        XCTAssertEqual(profiles.first?.enrollments.count, 1)
+        valid = false
+        XCTAssertFalse(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { valid }, isCurrentBeforePreparation: { valid }, prepare: prepare))
+        await worker.prepareForPrivateProfileTransition()
+    }
+
+    func testDictionaryEntriesNoticeDoesNotResetOrCancelNextQueuedLearning() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Fluid")
+        let secondRecording = UUID()
+        func evidence(_ recording: UUID) -> DictionaryLearningAudioEvidence {
+            DictionaryLearningAudioEvidence(recordingID: recording, modelKey: "parakeet-v3", observedText: "flued",
+                sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
+        }
+        let first = evidence(UUID()), second = evidence(secondRecording)
+        let observed = expectation(description: "deferred vocabulary observer ran")
+        let secondStarted = expectation(description: "second learning job started")
+        var idle = false
+        var active = false
+        let worker = DictionaryAudioLearningService(store: store, extract: { item in
+            if item.recordingID == secondRecording {
+                secondStarted.fulfill()
+                try await Task.sleep(for: .milliseconds(150))
+            }
+            return PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "parakeet-v3")
+        }, canProcess: { idle }, canProcessHistory: { idle }, isCurrent: { _ in active })
+        let observer = NotificationCenter.default.addObserver(forName: .parakeetVocabularyDidChange, object: nil, queue: .main) { notification in
+            let reload = DictionaryEntriesChangeNotice.requiresVocabularyReload(notification)
+            Task { @MainActor in
+                if reload { worker.cancelForRecording() }
+                observed.fulfill()
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        XCTAssertTrue(DictionaryEntriesChangeNotice.requiresVocabularyReload(Notification(name: .parakeetVocabularyDidChange)))
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, isCurrentBeforePreparation: { true },
+            publishTarget: { active = true; return .created }, didPublishTarget: { DictionaryEntriesChangeNotice.post() }, prepare: { first }))
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, isCurrentBeforePreparation: { true },
+            publishTarget: { .unchanged }, prepare: { second }))
+        idle = true
+        worker.activityDidEnd()
+        await fulfillment(of: [observed, secondStarted], timeout: 2)
+        for _ in 0..<200 where worker.pendingCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(worker.pendingCount, 0)
+        let profiles = await store.allProfiles()
+        XCTAssertEqual(profiles.first?.enrollments.count, 2)
+        await worker.prepareForPrivateProfileTransition()
+    }
+
+    func testHistoryNewTargetFailuresDoNotPublishOrLeaveAudio() async throws {
+        for failure in ["extract", "save", "publication"] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+            let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Fluid")
+            let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: "flued",
+                sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
+            var published = false
+            let worker = DictionaryAudioLearningService(store: store, extract: { _ in
+                if failure == "extract" { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+                return PronunciationEnrollmentCapture(values: failure == "save" ? [.nan] : [1], sourceFrameCount: 1, modelKey: "parakeet-v3")
+            }, canProcess: { true }, canProcessHistory: { true }, isCurrent: { _ in published })
+            XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, isCurrentBeforePreparation: { true },
+                publishTarget: { if failure == "publication" { return .rejected }; published = true; return .created },
+                prepare: { evidence }))
+            for _ in 0..<200 where worker.pendingCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertEqual(worker.pendingCount, 0, failure)
+            XCTAssertFalse(published, failure)
+            let profiles = await store.allProfiles()
+            XCTAssertTrue(profiles.allSatisfy { $0.enrollments.isEmpty }, failure)
+            await worker.prepareForPrivateProfileTransition()
+        }
+    }
+
+    func testHistoryNewTargetProfileInvalidationDuringExtractionDiscardsEvidence() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Fluid")
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: "flued",
+            sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
+        let started = expectation(description: "new target extraction started")
+        let cancelled = expectation(description: "new target extraction cancelled")
+        let extractor = DictionaryLearningTestExtractor(started: started, cancelled: cancelled)
+        var valid = true
+        var published = false
+        let worker = DictionaryAudioLearningService(store: store, extract: { try await extractor.extract($0) },
+            canProcess: { true }, canProcessHistory: { true }, isCurrent: { _ in published })
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { valid }, isCurrentBeforePreparation: { valid },
+            publishTarget: { published = true; return .created }, prepare: { evidence }))
+        await fulfillment(of: [started], timeout: 2)
+        valid = false
+        await worker.prepareForPrivateProfileTransition()
+        await fulfillment(of: [cancelled], timeout: 2)
+        XCTAssertFalse(published)
+        let profiles = await store.allProfiles()
+        XCTAssertTrue(profiles.isEmpty)
+    }
+
+    func testHistoryNewTargetForegroundPreemptionKeepsEntryUnpublished() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Fluid")
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: "flued",
+            sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
+        let started = expectation(description: "new target extraction started before foreground")
+        let cancelled = expectation(description: "foreground cancelled new target")
+        let extractor = DictionaryLearningTestExtractor(started: started, cancelled: cancelled)
+        var valid = true
+        var published = false
+        let worker = DictionaryAudioLearningService(store: store, extract: { try await extractor.extract($0) },
+            canProcess: { true }, canProcessHistory: { true }, isCurrent: { _ in published })
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { valid }, isCurrentBeforePreparation: { valid },
+            publishTarget: { published = true; return .created }, prepare: { evidence }))
+        await fulfillment(of: [started], timeout: 2)
+        await worker.pauseForForegroundAdmission()
+        await fulfillment(of: [cancelled], timeout: 2)
+        XCTAssertFalse(published)
+        let before = await store.allProfiles()
+        XCTAssertTrue(before.isEmpty)
+        valid = false
+        worker.resumeAfterForegroundAdmission()
+        for _ in 0..<200 where worker.pendingCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(worker.pendingCount, 0)
+        XCTAssertFalse(published)
+        let after = await store.allProfiles()
+        XCTAssertTrue(after.isEmpty)
+        await worker.prepareForPrivateProfileTransition()
+    }
+
+    func testHistoryLearningPreparationRetiresWithProfileAndDeduplicates() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["flued"], replacement: "Fluid")
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3",
+            observedText: "flued", sourceWordRange: 0..<1, sourceSampleRange: 0..<1,
+            focalSampleRange: 0..<1, samples: [0])
+        let started = self.expectation(description: "History preparation started")
+        let cancelled = self.expectation(description: "History preparation cancelled")
+        let extractor = DictionaryLearningTestExtractor(started: started, cancelled: cancelled)
+        let service = DictionaryAudioLearningService(store: store, extract: { try await extractor.extract($0) },
+            canProcess: { true }, canProcessHistory: { true }, isCurrent: { $0 == entry })
+        let eventID = UUID()
+        service.enqueue(entry: entry, evidenceID: eventID, isValid: { true }, prepare: { evidence })
+        service.enqueue(entry: entry, evidenceID: eventID, isValid: { true }, prepare: { evidence })
+        await self.fulfillment(of: [started], timeout: 2)
+        XCTAssertEqual(service.pendingCount, 1)
+        await service.prepareForPrivateProfileTransition()
+        await self.fulfillment(of: [cancelled], timeout: 2)
+        XCTAssertEqual(service.pendingCount, 0)
+        let profiles = await store.allProfiles()
+        XCTAssertTrue(profiles.isEmpty)
+        service.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, prepare: { evidence })
+        XCTAssertEqual(service.pendingCount, 0)
+    }
+
+    func testForegroundAdmissionJoinsHistoryRetirementBeforeGrantAndRetriesAfterRelease() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["flued"], replacement: "Fluid")
+        let started = expectation(description: "history decode holds lease")
+        let retiring = expectation(description: "cancelled decode is retiring")
+        var unblock: CheckedContinuation<Void, Never>?
+        var leaseHeld = false
+        var foregroundHeld = false
+        var calls = 0
+        let service = DictionaryAudioLearningService(store: store, canProcess: { !foregroundHeld },
+            canProcessHistory: { !foregroundHeld }, isCurrent: { $0 == entry })
+        service.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }) {
+            calls += 1
+            XCTAssertFalse(foregroundHeld)
+            XCTAssertFalse(leaseHeld)
+            leaseHeld = true
+            if calls == 1 {
+                started.fulfill()
+                do { try await Task.sleep(for: .seconds(30)) } catch {
+                    retiring.fulfill()
+                    await withCheckedContinuation { unblock = $0 }
+                    leaseHeld = false
+                    throw error
+                }
+            }
+            leaseHeld = false
+            return nil
+        }
+        await fulfillment(of: [started], timeout: 2)
+        let admission = Task { @MainActor in
+            await service.pauseForForegroundAdmission()
+            XCTAssertFalse(leaseHeld, "foreground must wait for provider retirement")
+            foregroundHeld = true
+            service.resumeAfterForegroundAdmission()
+        }
+        await fulfillment(of: [retiring], timeout: 2)
+        XCTAssertFalse(foregroundHeld)
+        XCTAssertTrue(leaseHeld)
+        unblock?.resume()
+        await admission.value
+        XCTAssertTrue(foregroundHeld)
+        XCTAssertEqual(calls, 1)
+        foregroundHeld = false
+        service.activityDidEnd()
+        for _ in 0..<200 where service.pendingCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(service.pendingCount, 0)
+        await service.prepareForPrivateProfileTransition()
+    }
+
+    #if DEBUG
+    func testStopDuringHistoryRetirementCancelsActualASRStart() async throws {
+        try await self.checkStartCancelledDuringHistoryRetirement(terminate: false)
+    }
+
+    func testTerminationDuringHistoryRetirementCancelsActualASRStart() async throws {
+        try await self.checkStartCancelledDuringHistoryRetirement(terminate: true)
+    }
+
+    private func checkStartCancelledDuringHistoryRetirement(terminate: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["flued"], replacement: "Fluid")
+        let asr = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        asr.useMediaPlaybackForTesting(MediaPlaybackService(transport: MediaPlaybackProcessTransport()))
+        asr.micStatus = .authorized
+        let started = expectation(description: "history owns actual ASR lease")
+        let retiring = expectation(description: "history retirement is suspended")
+        var unblock: CheckedContinuation<Void, Never>?
+        var historyLease: ASRActivityLease?
+        let learning = DictionaryAudioLearningService(store: store,
+            canProcess: { asr.activeExclusiveActivity == nil },
+            canProcessHistory: { asr.activeExclusiveActivity == nil }, isCurrent: { $0 == entry })
+        asr.foregroundLearningForTesting = learning
+        learning.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }) {
+            let lease = try asr.acquireExclusiveActivity(.fileTranscription)
+            historyLease = lease
+            started.fulfill()
+            do { try await Task.sleep(for: .seconds(30)) } catch {
+                retiring.fulfill()
+                await withCheckedContinuation { unblock = $0 }
+                asr.releaseExclusiveActivity(lease)
+                historyLease = nil
+                throw error
+            }
+            asr.releaseExclusiveActivity(lease)
+            historyLease = nil
+            return nil
+        }
+        await fulfillment(of: [started], timeout: 2)
+        var microphoneStarted = false
+        let start = Task { @MainActor in await asr.start(onCaptureStarted: { microphoneStarted = true }) }
+        await fulfillment(of: [retiring], timeout: 2)
+        XCTAssertTrue(asr.isStarting)
+        XCTAssertEqual(asr.activeExclusiveActivity, .fileTranscription)
+        XCTAssertNotNil(historyLease)
+        let generation = asr.startGenerationForTesting
+        let stop = Task { @MainActor in
+            if terminate { await asr.shutdownForTermination() }
+            else { _ = await asr.stop() }
+        }
+        // Observe the actual lifecycle invalidation before letting the provider drain.
+        for _ in 0..<200 where terminate ? !asr.isTerminatingForTesting : asr.startGenerationForTesting == generation {
+            await Task.yield()
+        }
+        XCTAssertTrue(terminate ? asr.isTerminatingForTesting : asr.startGenerationForTesting != generation)
+        XCTAssertFalse(microphoneStarted)
+        XCTAssertEqual(asr.activeExclusiveActivity, .fileTranscription)
+        unblock?.resume()
+        let result = await start.value
+        await stop.value
+        XCTAssertEqual(result, .failed)
+        XCTAssertFalse(asr.isStarting)
+        XCTAssertFalse(asr.isRunning)
+        XCTAssertFalse(microphoneStarted)
+        XCTAssertNil(asr.activeExclusiveActivity)
+        await learning.prepareForPrivateProfileTransition()
+    }
+    #endif
+
+    func testExplicitHistoryPassesIneligibleAutomaticQueueHead() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["flued"], replacement: "Fluid")
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3",
+            observedText: "flued", sourceWordRange: 0..<1, sourceSampleRange: 0..<1,
+            focalSampleRange: 0..<1, samples: [0])
+        var historyEligible = false
+        let processed = expectation(description: "explicit history processed")
+        let service = DictionaryAudioLearningService(store: store, canProcess: { false },
+            canProcessHistory: { historyEligible }, isCurrent: { $0 == entry })
+        service.learn(entry: entry, evidenceID: UUID(), evidence: evidence)
+        service.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }) { processed.fulfill(); return nil }
+        historyEligible = true
+        service.activityDidEnd()
+        await fulfillment(of: [processed], timeout: 2)
+        for _ in 0..<200 where service.pendingCount > 1 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(service.pendingCount, 1)
+        await service.prepareForPrivateProfileTransition()
     }
 
     func testDictionaryLearningQueueIsBoundedAndExpiresWithoutSaving() async throws {
@@ -4760,6 +5168,19 @@ extension DictationE2ETests {
             DictionaryVoiceSpellingLearner.confirmationWindow
         )
         XCTAssertEqual(AutomaticDictionaryCorrectionTracker.observationDuration(hasVoiceSpellings: false), .seconds(30))
+        let now = Date(timeIntervalSince1970: 1000)
+        XCTAssertEqual(AutomaticDictionaryCorrectionTracker.observationDuration(
+            hasVoiceSpellings: false, originalAudioExpiresAt: now.addingTimeInterval(DictionaryLearningRecording.lifetime), now: now
+        ), .seconds(DictionaryLearningRecording.lifetime))
+        XCTAssertEqual(AutomaticDictionaryCorrectionTracker.observationDuration(
+            hasVoiceSpellings: false, originalAudioExpiresAt: now.addingTimeInterval(50), now: now
+        ), .seconds(50))
+        XCTAssertEqual(AutomaticDictionaryCorrectionTracker.observationDuration(
+            hasVoiceSpellings: false, originalAudioExpiresAt: now.addingTimeInterval(-1), now: now
+        ), .zero)
+        XCTAssertEqual(AutomaticDictionaryCorrectionTracker.observationDuration(
+            hasVoiceSpellings: false, originalAudioExpiresAt: now.addingTimeInterval(1000), now: now
+        ), .seconds(DictionaryLearningRecording.lifetime))
     }
 
     func testEndingObservationCancelsOnlyThatRecordingsUnconfirmedSpellings() async throws {
