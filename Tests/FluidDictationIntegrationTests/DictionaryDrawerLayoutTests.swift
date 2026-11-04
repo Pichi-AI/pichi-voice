@@ -146,12 +146,12 @@ final class DictionaryDrawerLayoutTests: XCTestCase {
                                 }
                             }
                             XCTAssertEqual(actions, 0, "Rendering must not test, edit or delete a word")
-                            if language == "ru", scheme == .dark, design == .sans, scale == 1, drawerWidth == 240 {
+                            if design == .sans, scale == 1, drawerWidth == 240 {
                                 let bitmap = try XCTUnwrap(controller.view.bitmapImageRepForCachingDisplay(in: controller.view.bounds))
                                 controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
                                 let imageAttachment = XCTAttachment(data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
                                                                uniformTypeIdentifier: "public.png")
-                                imageAttachment.name = "dictionary-drawer-\(attachment)-ru-dark-240"
+                                imageAttachment.name = "dictionary-drawer-\(attachment)-\(language)-\(scheme)-240"
                                 imageAttachment.lifetime = .keepAlways
                                 add(imageAttachment)
                             }
