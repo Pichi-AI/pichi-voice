@@ -63,10 +63,19 @@ final class HistoryDictionaryAudioLearningService {
             )
             try Task.checkCancellation()
             guard isValid() else { return nil }
-            return try DictionaryLearningAlignmentResolver.resolve(
+            let evidence = try DictionaryLearningAlignmentResolver.resolve(
                 recording: recording, deliveredTextBeforeEdit: source,
                 selectedUTF16Range: selection.range, observedText: candidate.heardText
             )
+            // A saved group's displayed spelling is already canonical. Preserve
+            // the freshly aligned original ASR spelling as the learned error,
+            // rather than teaching the matcher that the canonical label failed.
+            let observed = recording.alignment.words[evidence.sourceWordRange].map(\.text).joined(separator: " ")
+            guard DictionaryCorrectionEditPolicy.isTerm(observed) else { return nil }
+            return DictionaryLearningAudioEvidence(recordingID: evidence.recordingID, modelKey: evidence.modelKey,
+                observedText: observed, sourceWordRange: evidence.sourceWordRange,
+                sourceSampleRange: evidence.sourceSampleRange, focalSampleRange: evidence.focalSampleRange,
+                samples: evidence.samples, featureFrames: evidence.featureFrames)
         }
     }
 
