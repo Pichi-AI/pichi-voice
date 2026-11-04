@@ -64305,6 +64305,54 @@
           }
         }
       }
+    },
+    "Use original audio": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use original audio"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать исходное аудио"
+          }
+        }
+      }
+    },
+    "Pronunciation sample queued": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pronunciation sample queued"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиопример добавлен в очередь"
+          }
+        }
+      }
+    },
+    "Pronunciation sample unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pronunciation sample unavailable"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиопример недоступен"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

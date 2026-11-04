@@ -82,11 +82,11 @@ final class HistoryDictionaryAudioLearningService {
 
     /// Explicit replay of persisted user-confirmed groups, through the same worker
     /// as inline Save. A caller cannot supply new spellings, intervals or audio paths.
-    func enqueueSavedCorrection(entryID: UUID, fragmentIndex: Int = 0) -> Int {
+    func enqueueSavedCorrection(entryID: UUID, fragmentIndex: Int, expectedSourceText: String) -> Int {
         let profile = PrivateProfileStorage.current
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
               let entry = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == entryID }),
-              entry.correctedRawText != nil, entry.audio != nil,
+              entry.sourceTranscriptText == expectedSourceText, entry.correctedRawText != nil, entry.audio != nil,
               (0..<128).contains(fragmentIndex), entry.sourceFragments.indices.contains(fragmentIndex) else { return 0 }
         let fragment = entry.sourceFragments[fragmentIndex]
         guard fragment.isValid(in: entry.sourceTranscriptText),

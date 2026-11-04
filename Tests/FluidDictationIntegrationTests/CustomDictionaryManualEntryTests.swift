@@ -828,25 +828,6 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         }
     }
 
-    func testHistoryAudioLearningAPIRejectsMalformedIDsAndDoesNotInventCorrections() async throws {
-        let before = TranscriptionHistoryStore.shared.entries
-        func request(_ body: String) -> LocalAPI.Request {
-            .init(method: "POST", path: "/v1/dictionary/learn-history", query: [:],
-                  headers: ["content-type": "application/json"], body: Data(body.utf8))
-        }
-        for body in ["{}", #"{"historyID":"not-a-uuid"}"#, #"{"historyID":null}"#] {
-            let response = await DictionaryAPIController().handle(request(body))
-            XCTAssertEqual(response.status, 400)
-        }
-        let response = await DictionaryAPIController().handle(request(
-            "{\"historyID\":\"\(UUID().uuidString)\",\"path\":\"/no/audio/permission\",\"replacement\":\"Invented\"}"
-        ))
-        XCTAssertEqual(response.status, 200)
-        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: response.body) as? [String: Any])
-        XCTAssertEqual(body["queued"] as? Int, 0)
-        XCTAssertEqual(TranscriptionHistoryStore.shared.entries, before)
-    }
-
     private func withRestoredDictionary(_ entries: [SettingsStore.CustomDictionaryEntry], run: () -> Void) {
         let original = SettingsStore.shared.customDictionaryEntries
         defer {

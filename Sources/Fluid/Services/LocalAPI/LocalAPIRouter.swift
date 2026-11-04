@@ -23,7 +23,6 @@ final class LocalAPIRouter {
         self.register(method: "POST", path: "/v1/dictionary/replacements", handler: dictionary)
         self.register(method: "GET", path: "/v1/dictionary/custom-words", handler: dictionary)
         self.register(method: "POST", path: "/v1/dictionary/custom-words", handler: dictionary)
-        self.register(method: "POST", path: "/v1/dictionary/learn-history", handler: dictionary)
 
         let inference = InferenceAPIController()
         self.register(method: "POST", path: "/v1/transcribe", handler: inference)

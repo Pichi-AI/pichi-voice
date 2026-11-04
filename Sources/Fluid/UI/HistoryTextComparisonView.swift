@@ -17,6 +17,7 @@ struct HistoryTextComparisonView: View {
     @State private var interactionEpoch = UUID()
     @State private var isPreparingPronunciation = false
     @State private var pronunciationTask: Task<Void, Never>?
+    @State private var savedAudioStatus: String?
 
     private struct ComparisonInput: Equatable {
         let entryID: UUID
@@ -121,7 +122,10 @@ struct HistoryTextComparisonView: View {
             self.sectionHeader(title: title, content: content, isOriginal: isOriginal)
             self.transcript(content: content, isOriginal: isOriginal)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if isOriginal { self.inlineStatus }
+            if isOriginal {
+                self.inlineStatus
+                self.savedAudioActions
+            }
         }
         .padding(20)
         .background { RoundedRectangle(cornerRadius: 16).fill(self.theme.palette.cardBackground) }
@@ -183,6 +187,39 @@ struct HistoryTextComparisonView: View {
             }
             .font(self.theme.typography.caption)
         }
+    }
+
+    @ViewBuilder private var savedAudioActions: some View {
+        let indices = self.entry.sourceFragments.indices.filter { index in
+            let text = self.entry.sourceFragments[index].text
+            return SettingsStore.shared.customDictionaryEntries.contains {
+                $0.replacement.caseInsensitiveCompare(text) == .orderedSame
+            }
+        }
+        if self.savedInlineCorrection == nil, self.entry.correctedRawText != nil, self.entry.audio != nil, !indices.isEmpty {
+            HStack(spacing: 8) {
+                if let status = self.savedAudioStatus {
+                    Text(PichiLocalization.text(status)).foregroundStyle(self.theme.palette.secondaryText)
+                }
+                Spacer(minLength: 8)
+                if indices.count == 1, let index = indices.first {
+                    Button("Use original audio") { self.learnSavedAudio(fragmentIndex: index) }
+                        .buttonStyle(.borderless)
+                } else {
+                    Menu("Use original audio") {
+                        ForEach(indices, id: \.self) { index in
+                            Button(self.entry.sourceFragments[index].text) { self.learnSavedAudio(fragmentIndex: index) }
+                        }
+                    }.menuStyle(.borderlessButton).fixedSize()
+                }
+            }.font(self.theme.typography.caption)
+        }
+    }
+
+    private func learnSavedAudio(fragmentIndex: Int) {
+        let queued = HistoryDictionaryAudioLearningService.shared.enqueueSavedCorrection(entryID: self.entry.id,
+            fragmentIndex: fragmentIndex, expectedSourceText: self.entry.sourceTranscriptText)
+        self.savedAudioStatus = queued > 0 ? "Pronunciation sample queued" : "Pronunciation sample unavailable"
     }
 
     private func sectionTitle(_ title: String) -> some View {
@@ -269,6 +306,7 @@ struct HistoryTextComparisonView: View {
         self.activeInlineCorrection = nil
         self.savedInlineCorrection = nil
         self.inlineError = nil
+        self.savedAudioStatus = nil
     }
 
     private func beginInlineCorrection(range: NSRange, source: String) -> Bool {
