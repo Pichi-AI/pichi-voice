@@ -38,7 +38,6 @@ final class MeetingProviderBackedBackend: MeetingTranscriptionBackend {
 
     func prepareIdleResources(configuration: MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)? {
         guard configuration.effectiveSpeakerProcessingMode == .streaming else { return nil }
-        try descriptor.validateSpeakerProcessingMode(configuration: configuration, mode: .inRoom)
         try validatePCMInput(configuration: configuration, mode: .inRoom)
         return try await idleResourcePreparation?(configuration)
     }
