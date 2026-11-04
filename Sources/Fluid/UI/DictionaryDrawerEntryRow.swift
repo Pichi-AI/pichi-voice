@@ -1,16 +1,44 @@
 import SwiftUI
 
+struct DictionarySavedAudioSummary {
+    let count: Int
+    let latestCapture: Date?
+}
+
+struct DictionarySavedAudioSummaryView: View {
+    let summary: DictionarySavedAudioSummary
+    @Environment(\.theme) private var theme
+    @Environment(\.locale) private var locale
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if self.summary.count == 0 {
+                Text("No saved audio samples")
+            } else {
+                Text(PichiLocalization.format("Saved audio samples: %lld (up to 10 per model)", self.summary.count))
+                if let latest = self.summary.latestCapture {
+                    Text(PichiLocalization.format("Latest sample recorded: %@", latest.formatted(Date.FormatStyle(date: .abbreviated, time: .standard).locale(self.locale))))
+                }
+            }
+        }
+        .font(self.theme.typography.caption)
+        .foregroundStyle(self.theme.palette.secondaryText)
+        .lineLimit(nil)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 /// Presentation only. Persistence, training and deletion remain owned by the drawer.
 struct DictionaryDrawerEntryRow: View {
     let entry: SettingsStore.CustomDictionaryEntry
-    var pronunciationCount: Int? = nil
+    var audioSummary: DictionarySavedAudioSummary? = nil
     let isTestDisabled: Bool
     let onTest: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
     @Environment(\.theme) private var theme
 
-    enum Part: CaseIterable, Hashable { case replacement, aliases, test, edit, delete }
+    enum Part: CaseIterable, Hashable { case replacement, aliases, samples, test, edit, delete }
     #if DEBUG
     /// Measures the actual production row without creating the dictionary service UI.
     var onLayout: ((Part, CGRect) -> Void)? = nil
@@ -35,11 +63,8 @@ struct DictionaryDrawerEntryRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading),
                 part: .aliases
             )
-            if let count = self.pronunciationCount {
-                Label(PichiLocalization.format("Saved pronunciation samples: %lld", count), systemImage: "waveform")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+            if let summary = self.audioSummary {
+                self.measured(DictionarySavedAudioSummaryView(summary: summary), part: .samples)
             }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: self.theme.metrics.spacing.sm) {

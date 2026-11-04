@@ -32,7 +32,7 @@ final class DictionaryDrawerLayoutTests: XCTestCase {
                             var actions = 0
                             let entry = SettingsStore.CustomDictionaryEntry(triggers: aliases, replacement: replacement)
                             let row = DictionaryDrawerEntryRow(
-                                entry: entry, isTestDisabled: false,
+                                entry: entry, audioSummary: .init(count: 10, latestCapture: Date(timeIntervalSince1970: 1_700_000_000)), isTestDisabled: false,
                                 onTest: { actions += 1 }, onEdit: { actions += 1 }, onDelete: { actions += 1 },
                                 onLayout: { frames[$0] = $1 }
                             )
@@ -56,6 +56,8 @@ final class DictionaryDrawerLayoutTests: XCTestCase {
                             XCTAssertEqual(frames.count, DictionaryDrawerEntryRow.Part.allCases.count, context)
                             let title = try XCTUnwrap(frames[.replacement], context)
                             let triggerFrame = try XCTUnwrap(frames[.aliases], context)
+                            let samples = try XCTUnwrap(frames[.samples], context)
+                            XCTAssertGreaterThanOrEqual(samples.minY, triggerFrame.maxY, context)
                             XCTAssertEqual(title.minX, 0, accuracy: 0.5, context)
                             // Compare native bounds with native bounds. An unbroken sans word
                             // can fit at 189 points for a fractional 188.4-point proposal, with
@@ -116,7 +118,7 @@ final class DictionaryDrawerLayoutTests: XCTestCase {
                                 let frame = try XCTUnwrap(frames[part], context)
                                 XCTAssertGreaterThanOrEqual(frame.width, 22, context)
                                 XCTAssertGreaterThanOrEqual(frame.height, 22, context)
-                                XCTAssertGreaterThanOrEqual(frame.minY, triggerFrame.maxY, context)
+                                XCTAssertGreaterThanOrEqual(frame.minY, samples.maxY, context)
                                 return frame
                             }
                             for index in controls.indices {

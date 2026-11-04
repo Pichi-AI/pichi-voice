@@ -64272,6 +64272,57 @@
         }
       }
     },
+    "No saved audio samples": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No saved audio samples"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиообразцов пока нет"
+          }
+        }
+      }
+    },
+    "Saved audio samples: %lld (up to 10 per model)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved audio samples: %lld (up to 10 per model)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранено аудиообразцов: %lld (до 10 для каждой модели)"
+          }
+        }
+      }
+    },
+    "Latest sample recorded: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Latest sample recorded: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Последний образец записан: %@"
+          }
+        }
+      }
+    },
     "Saved pronunciation samples: %lld": {
       "extractionState": "manual",
       "localizations": {
