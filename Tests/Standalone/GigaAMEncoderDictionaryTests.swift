@@ -38,6 +38,26 @@ struct DictionaryMatchFrames: Sendable {
         let result = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("🙂 Alfa!", [("Alfa!", 0, 0.24)]),
             features: reference, modelKey: model, words: prepared.words, entries: [])
         precondition(result.text == "🙂 Alpha!" && result.accepted.count == 1, "Actual native encoder search and UTF16 replacement")
+        let acronym = GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Nova AI", modelKey: model,
+            references: [reference, reference, reference], observedVariants: ["Nova и Ай"])
+        let acronymPrepared = try GigaAMEncoderDictionary.prepare(terms: [acronym], modelKey: model)
+        let acronymAudio = try self.features([0, 1, 2, 3, 4, 5, 20, 21, 22])
+        let acronymSource = self.transcript("Nova и Ай есть", [("Nova", 0, 0.08), ("и", 0.08, 0.16),
+            ("Ай", 0.16, 0.24), ("есть", 0.24, 0.36)])
+        let acronymResult = try await GigaAMEncoderDictionary.correct(transcript: acronymSource,
+            features: acronymAudio, modelKey: model, words: acronymPrepared.words, entries: [])
+        precondition(acronymResult.text == "Nova AI есть", "Recorded acronym and strong audio preserve the following word")
+        let unrecorded = GigaAMEncoderDictionary.Term(entryID: acronym.entryID, label: acronym.label, modelKey: model,
+            references: acronym.references, observedVariants: [])
+        let noEvidence = try GigaAMEncoderDictionary.prepare(terms: [unrecorded], modelKey: model)
+        let protectedAcronym = try await GigaAMEncoderDictionary.correct(transcript: acronymSource,
+            features: acronymAudio, modelKey: model, words: noEvidence.words, entries: [])
+        precondition(protectedAcronym.text == acronymSource.text, "Audio without the recorded spelling cannot remove a conjunction")
+        var vetoTerm = acronym; vetoTerm.negatives = [reference]
+        let vetoPrepared = GigaAMEncoderDictionary.PreparedTerm(term: vetoTerm, cohorts: acronymPrepared.words[0].cohorts)
+        let vetoResult = try await GigaAMEncoderDictionary.correct(transcript: acronymSource,
+            features: acronymAudio, modelKey: model, words: [vetoPrepared], entries: [])
+        precondition(vetoResult.text == acronymSource.text, "A matching negative still vetoes a recorded acronym")
         let prefixOnlyAudio = try self.features([0, 1, 2, 3, 4, 5, 20, 21, 22, 23])
         let truncatedSource = try await GigaAMEncoderDictionary.correct(
             transcript: self.transcript("🙂 Alfadesk!", [("Alfadesk!", 0, 0.4)]),

@@ -72,6 +72,18 @@ import Foundation
                      ("you help me", "me help you"), ("couldn't call", "call")] {
             precondition(comparison(pair.0, pair.1, [pair.0]).protectsContent)
         }
+        func terminal(_ heard: String, _ canonical: String, _ variants: [String]) -> Bool {
+            GigaAMDictionaryLexicalEvidence.recordedTerminalLetterI(heard: heard, canonical: canonical, observedVariants: variants)
+        }
+        precondition(terminal("Nova и Ай", "Nova AI", ["Nova и Ай"]))
+        precondition(!terminal("Nova и Ай", "Nova AI", []))
+        precondition(!terminal("Nova и Ай", "Nova AI", ["Novaи Ай"]))
+        precondition(!terminal("не Nova и Ай", "Nova AI", ["не Nova и Ай"]))
+        precondition(!terminal("и Nova и Ай", "Nova AI", ["и Nova и Ай"]))
+        precondition(!terminal("Nova 2 и Ай", "Nova AI", ["Nova 2 и Ай"]))
+        precondition(!terminal("Nova и ой", "Nova AI", ["Nova и ой"]))
+        precondition(!terminal("Nova и Ай", "Nova Voice", ["Nova и Ай"]))
+        precondition(terminal("PC I", "Nova AI", ["PCI"])) // Preserve established ASCII alias semantics.
         let unknown = GigaAMDictionaryLexicalEvidence.assess(heard: "Xyqra Voice", canonical: "Xyqro Voice", observedVariants: ["Xyqra Voice"], requiredLanguages: ["ru"])
         if DictionaryLexicalEvidence.hasRequiredLexicons(["ru"]) {
             precondition(unknown.allowsWeakCorrection && unknown.reason == .unknownChangedComponents)

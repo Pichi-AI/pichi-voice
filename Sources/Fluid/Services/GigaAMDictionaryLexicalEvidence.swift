@@ -55,22 +55,27 @@ nonisolated enum GigaAMDictionaryLexicalEvidence {
         )
     }
 
-    /// An exact enrolled spelling may render the final letter of an uppercase
-    /// acronym as the standalone ASCII letter I. Recheck every other role and
-    /// number marker after substituting the actual terminal acronym component.
-    /// This only removes an independent veto; the caller still requires the
-    /// ordinary (not corroborated) calibrated two-reference acoustic match.
+    /// An enrolled whole spelling may represent the terminal component of an
+    /// uppercase acronym as its spoken transliteration. Keep the existing ASCII
+    /// letter rule and require matching token boundaries for the new form. Every
+    /// other role and number is rechecked; the caller still requires ordinary,
+    /// calibrated two-reference audio and its negative and competitor vetoes.
     static func recordedTerminalLetterI(heard: String, canonical: String, observedVariants: [String]) -> Bool {
         guard let original = self.compare(heard: heard, canonical: canonical, observedVariants: observedVariants),
               original.protectsContent, original.matchesObservedVariant,
               let component = canonical.split(whereSeparator: \.isWhitespace).last,
               (2...5).contains(component.count), component.last == "I",
               component.unicodeScalars.allSatisfy({ (65...90).contains($0.value) }),
-              let finalLetter = heard.range(of: #"(?<![\p{L}\p{N}])I(?=[^\p{L}\p{N}]*$)"#, options: .regularExpression) else { return false }
-        // A recorded spelling may include the Russian homophonic connector
-        // immediately before the final letter. Only that terminal pair is
-        // considered; every other connector, role and number remains guarded.
-        let terminalPair = heard.range(of: #"(?<![\p{L}\p{N}])и\s+I(?=[^\p{L}\p{N}]*$)"#, options: .regularExpression)
+              let finalLetter = heard.range(of: #"(?<![\p{L}\p{N}])[\p{L}]+(?=[^\p{L}\p{N}]*$)"#, options: .regularExpression) else { return false }
+        let token = String(heard[finalLetter])
+        let transliterated = self.literalKey(token)
+        let normalized = transliterated.hasSuffix("j") ? String(transliterated.dropLast()) + "i" : transliterated
+        guard token == "I" || normalized == self.literalKey(String(component)) else { return false }
+        if token != "I" {
+            guard let sourceTokens = self.tokens(heard),
+                  observedVariants.contains(where: { self.tokens($0)?.map(\.key) == sourceTokens.map(\.key) }) else { return false }
+        }
+        let terminalPair = heard.range(of: #"(?<![\p{L}\p{N}])и\s+[\p{L}]+(?=[^\p{L}\p{N}]*$)"#, options: .regularExpression)
         var adjusted = heard
         adjusted.replaceSubrange(terminalPair ?? finalLetter, with: component)
         guard let comparison = self.compare(heard: adjusted, canonical: canonical, observedVariants: []) else { return false }
