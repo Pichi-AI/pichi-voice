@@ -1282,9 +1282,6 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
 
     var displayTitle: String { self.displayTitle(language: PichiLocalization.language) }
 
-    /// Start information belongs to the separate metadata row, never automatic title copy.
-    var displayTitleIncludesStart: Bool { false }
-
     func displayTitle(language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
         if let automaticTitle = self.automaticTitle {
             guard automaticTitle.algorithmVersion == MeetingAutomaticTitle.supportedAlgorithmVersion else { return self.title }

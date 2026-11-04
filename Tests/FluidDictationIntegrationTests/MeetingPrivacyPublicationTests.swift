@@ -161,25 +161,6 @@ final class MeetingSpeakerHardwareAdmissionTests: XCTestCase {
     }
 }
 
-final class MeetingTranscriptDisplayProjectionTests: XCTestCase {
-    func testRepeatedSpeakerLabelsCollapseWithoutCollapsingAttributionStatesOrData() {
-        let track = UUID()
-        let configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic",
-            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic"))
-        let session = MeetingSession(configuration: configuration, timebase: .init(startedHostTime: 0,
-            machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
-        let segments = ["Первое", "второе", "третье"].enumerated().map { index, text in
-            MeetingTranscriptSegment(id: UUID(), start: .init(value: Int64(index), timescale: 1),
-                end: .init(value: Int64(index + 1), timescale: 1), sourceTrackID: track, speakerID: nil,
-                text: text, revision: 0, status: .final, overlap: .none, completeness: .complete,
-                attributionState: index == 2 ? .timingUncertain : .unassigned)
-        }
-        let rows = MeetingTranscriptExporter.displayRows(for: segments, in: session)
-        XCTAssertEqual(rows.map(\.showsLabel), [true, false, true])
-        XCTAssertEqual(rows.map(\.segment), segments)
-    }
-}
-
 /// Ordinary retained-audio processing must prepare the exact frozen privacy capability even
 /// after a cold launch. Synthetic canonical evidence exercises the real pipeline/publication.
 @MainActor

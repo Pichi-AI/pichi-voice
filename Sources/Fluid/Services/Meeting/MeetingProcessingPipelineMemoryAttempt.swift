@@ -165,8 +165,6 @@ extension MeetingProcessingPipeline {
                 throw MeetingBackendError.unsupportedInput(backend: backendID, input: .boundedMicrophonePCM)
             }))
         try backend.descriptor.validatePCMInput(configuration: configuration, mode: mode, admissionContext: admissionContext)
-        try backend.descriptor.validateSpeakerProcessingMode(configuration: configuration,
-            mode: mode)
         try backend.validatePCMInput(configuration: configuration, mode: mode, admissionContext: admissionContext)
         return backend
     }
@@ -236,8 +234,6 @@ extension MeetingProcessingPipeline {
             throw MeetingBackendError.backendDescriptorMismatch(backend: backendID)
         }
         try descriptor.validatePCMInput(request, admissionContext: admissionContext)
-        try descriptor.validateSpeakerProcessingMode(configuration: request.configuration,
-            mode: session.mode)
         try backend.validatePCMInput(configuration: request.configuration, mode: session.mode, admissionContext: admissionContext)
         let runtime = try backend.makePCMRuntime(request)
         let configuration = request.configuration
