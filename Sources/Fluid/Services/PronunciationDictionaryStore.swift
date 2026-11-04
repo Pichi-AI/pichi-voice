@@ -158,6 +158,23 @@ actor PronunciationDictionaryStore {
             }
         }
 
+        /// Optional learned evidence may be absent or corrupt. A closed lease or
+        /// cancelled task remains an error and cannot be downgraded to a miss.
+        func optionalInspection(for id: UUID) throws -> DictionaryAudioInspection? {
+            self.lock.lock(); defer { self.lock.unlock() }
+            guard !self.closed else { throw PronunciationDictionaryStoreError.staleEvidence }
+            guard let file = self.inspections[id] else { return nil }
+            do {
+                return try file.read { data in
+                    let value = try PropertyListDecoder().decode(DictionaryAudioInspection.self, from: data)
+                    guard value.isValid else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+                    return value
+                }
+            } catch is CancellationError { throw CancellationError() }
+            catch PronunciationDictionaryStoreError.staleEvidence { throw PronunciationDictionaryStoreError.staleEvidence }
+            catch { return nil }
+        }
+
         func originalAudioSamples(for capture: PronunciationEnrollmentCapture, entryID: UUID) throws -> [Float] {
             self.lock.lock(); defer { self.lock.unlock() }
             guard !self.closed, let id = capture.originalAudioID, let file = self.originals[id],
@@ -252,10 +269,9 @@ actor PronunciationDictionaryStore {
                 for file in originals.values { file.close() }
             }
         }
-        func pinReferences(_ selected: PronunciationDictionaryProfile, optional: Bool) throws -> Bool {
+        func pinReferences(_ selected: PronunciationDictionaryProfile, captures: [PronunciationEnrollmentCapture], optional: Bool, append: Bool = false) throws -> Bool {
             try Task.checkCancellation()
-            let captures = referenceSelection(selected)
-            guard captures.count <= maximumReferencesPerProfile, captures.allSatisfy({ selected.enrollments.contains($0) }) else {
+            guard captures.allSatisfy({ selected.enrollments.contains($0) }) else {
                 if optional { return false }
                 throw PronunciationDictionaryStoreError.inconsistentEnrollment
             }
@@ -289,11 +305,20 @@ actor PronunciationDictionaryStore {
             }
             for (id, file) in addedInspections { inspections[id] = file }
             for (id, file) in addedOriginals { originals[id] = file }
-            selectedReferences[selected.id] = captures
+            if append { selectedReferences[selected.id, default: []] += captures }
+            else { selectedReferences[selected.id] = captures }
             committed = true
             return true
         }
-        for selected in exact { _ = try pinReferences(selected, optional: false) }
+        var exactSelections: [[PronunciationEnrollmentCapture]] = []
+        for selected in exact {
+            let captures = referenceSelection(selected)
+            guard captures.count <= maximumReferencesPerProfile, captures.allSatisfy({ selected.enrollments.contains($0) }) else {
+                throw PronunciationDictionaryStoreError.inconsistentEnrollment
+            }
+            exactSelections.append(captures)
+            _ = try pinReferences(selected, captures: Array(captures.prefix(3)), optional: false)
+        }
         var profiles = exact
         var admittedEntries = Set(exact.map(\.dictionaryEntryID))
         var attempted = Set<Int>()
@@ -301,7 +326,9 @@ actor PronunciationDictionaryStore {
             attempted.insert(index)
             do {
                 let candidate = shared[index]
-                if try pinReferences(candidate, optional: true) {
+                let captures = referenceSelection(candidate)
+                guard captures.count <= maximumReferencesPerProfile else { return }
+                if try pinReferences(candidate, captures: captures, optional: true) {
                     profiles.append(candidate)
                     admittedEntries.insert(candidate.dictionaryEntryID)
                 }
@@ -312,6 +339,17 @@ actor PronunciationDictionaryStore {
             try admitOptional(index)
         }
         for index in shared.indices where !attempted.contains(index) { try admitOptional(index) }
+        // Mandatory exact baselines are all pinned before any optional extras.
+        // Admit extras individually so a missing file or full budget cannot
+        // prevent a different profile's baseline from being captured.
+        for (index, selected) in exact.enumerated() {
+            for capture in exactSelections[index].dropFirst(3) {
+                do { _ = try pinReferences(selected, captures: [capture], optional: true, append: true) }
+                catch is CancellationError { throw CancellationError() }
+                catch PronunciationDictionaryStoreError.staleEvidence { throw PronunciationDictionaryStoreError.staleEvidence }
+                catch { /* Unusable optional evidence never blocks dictation. */ }
+            }
+        }
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else {
             throw PronunciationDictionaryStoreError.staleEvidence
         }

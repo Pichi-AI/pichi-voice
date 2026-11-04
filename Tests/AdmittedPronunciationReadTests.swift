@@ -386,6 +386,22 @@ import Darwin
             maximumReferencesPerProfile: 10, referenceSelection: { $0.enrollments })
         expect(tenRead.matchingEnrollments(for: tenProfile).count == 10, "Opt-in permits exactly ten references")
         tenRead.close(leaseID: multiLease)
+        try FileManager.default.removeItem(at: inspectionDirectory.appendingPathComponent("\(tenCaptures[4].inspectionID!).plist"))
+        let missingOptional = try tenStore.admitCaptureRead(leaseID: multiLease, modelKey: "synthetic", entryIDs: [tenProfile.dictionaryEntryID],
+            maximumReferencesPerProfile: 10, referenceSelection: { $0.enrollments })
+        let available = missingOptional.matchingEnrollments(for: tenProfile)
+        expect(available.count == 9 && available.starts(with: tenCaptures.prefix(3)), "Missing optional file retains baseline and other extras")
+        missingOptional.close(leaseID: multiLease)
+        let corruptID = tenCaptures[5].inspectionID!
+        try Data("not a property list".utf8).write(to: inspectionDirectory.appendingPathComponent("\(corruptID).plist"))
+        let corruptRead = try tenStore.admitCaptureRead(leaseID: multiLease, modelKey: "synthetic", entryIDs: [tenProfile.dictionaryEntryID],
+            maximumReferencesPerProfile: 10, referenceSelection: { $0.enrollments })
+        expect(corruptRead.matchingEnrollments(for: tenProfile).starts(with: tenCaptures.prefix(3)),
+            "Corrupt optional bytes do not remove mandatory pins")
+        expect(try corruptRead.optionalInspection(for: corruptID) == nil, "Corrupt optional inspection is a bounded miss")
+        expect(try corruptRead.inspection(for: tenCaptures[0].inspectionID!) == inspection, "A manual reference remains readable")
+        corruptRead.close(leaseID: multiLease)
+        rejects("Closed lease remains a stale evidence error for optional reads") { _ = try corruptRead.optionalInspection(for: corruptID) }
         let familyURL = a.rootDirectory.appendingPathComponent("synthetic-family-profiles.json")
         let familyStore = PronunciationDictionaryStore(fileURL: familyURL, profile: a)
         let familyEntry = UUID(), unselectedEntry = UUID()
@@ -494,12 +510,17 @@ import Darwin
         }
         try await capacityStore.replaceAllProfiles(expanded)
         let beforeExpanded = try descriptorCount()
-        rejects("Expanded mandatory references cannot exceed 384 pinned files") {
-            _ = try capacityStore.admitCaptureRead(leaseID: capacityLease, modelKey: "synthetic-family-b",
-                entryIDs: Set(expanded.map(\.dictionaryEntryID)), maximumReferencesPerProfile: 10,
-                referenceSelection: { $0.enrollments })
-        }
-        expect(try descriptorCount() == beforeExpanded, "Rejected expanded admission releases its descriptors")
+        let expandedRead = try capacityStore.admitCaptureRead(leaseID: capacityLease, modelKey: "synthetic-family-b",
+            entryIDs: Set(expanded.map(\.dictionaryEntryID)), maximumReferencesPerProfile: 10,
+            referenceSelection: { $0.enrollments })
+        expect(expandedRead.profiles.count == 39, "All 39 profiles remain admitted above expanded file budget")
+        expect(expanded.allSatisfy { expandedRead.matchingEnrollments(for: $0).starts(with: $0.enrollments.prefix(3)) },
+            "Every exact profile retains its three baseline references before any extras")
+        expect(expanded.reduce(0) { $0 + expandedRead.matchingEnrollments(for: $1).count } == 384,
+            "Extras fill but never exceed the 384-file budget")
+        expect(try descriptorCount() == beforeExpanded + 384, "Expanded admission retains only bounded descriptors")
+        expandedRead.close(leaseID: capacityLease)
+        expect(try descriptorCount() == beforeExpanded, "Expanded admission releases all descriptors")
         struct CapacityDocument: Encodable { let version = 1; let profiles: [PronunciationDictionaryProfile] }
         var malformedOptional = sharedFamily; malformedOptional.enrollments[0] = .init(values: [1], sourceFrameCount: 1, modelKey: malformedOptional.modelKey)
         try JSONEncoder().encode(CapacityDocument(profiles: [malformedOptional, exactDifferentWidth])).write(to: capacityURL, options: .atomic)

@@ -45,6 +45,9 @@ actor PronunciationDictionaryStore {
             })
         }
         func matchingEnrollments(for profile: PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] { pinned[profile.id] ?? [] }
+        func optionalInspection(for id: UUID) throws -> DictionaryAudioInspection? {
+            lock.withLock { reads += 1; return inspections[id] }
+        }
         func inspection(for id: UUID) throws -> DictionaryAudioInspection {
             try lock.withLock {
                 reads += 1
@@ -187,7 +190,22 @@ nonisolated enum DictionaryNegativeExampleStore {
         let wrongPins = PronunciationDictionaryStore.CaptureRead(profiles: [profile], inspections: inspections, pinned: [profile.id: Array(saved.prefix(3))])
         let unpinned = try await GigaAMEncoderDictionaryStorage.preparedWords(.init(modelKey: key, generation: "frozen", enabled: true,
             entries: entries, pronunciation: wrongPins, negatives: nil))
-        expect(unpinned.words.isEmpty && wrongPins.readCount == 0, "A newly active original must already be pinned before preparation")
+        expect(unpinned.words.count == 1 && unpinned.words[0].term.references.count == 3,
+            "The actually pinned baseline remains usable when optional references were not admitted")
+        var missingInspections = inspections
+        missingInspections.removeValue(forKey: originalID)
+        let missingOptional = PronunciationDictionaryStore.CaptureRead(profiles: [profile], inspections: missingInspections)
+        let missingPrepared = try await GigaAMEncoderDictionaryStorage.preparedWords(.init(modelKey: key, generation: "frozen", enabled: true,
+            entries: entries, pronunciation: missingOptional, negatives: nil))
+        expect(missingPrepared.words.count == 1 && missingPrepared.words[0].term.references.count == 3 &&
+            missingPrepared.diagnostics.contains { $0.reason == .invalidReferences }, "Missing optional inspection preserves calibrated manual baseline")
+        var corruptInspections = inspections
+        corruptInspections[originalID] = .init(samples: [], recordedSampleCount: 0, frames: [], words: [], selectedStart: 0, selectedEnd: 0)
+        let corruptOptional = PronunciationDictionaryStore.CaptureRead(profiles: [profile], inspections: corruptInspections)
+        let corruptPrepared = try await GigaAMEncoderDictionaryStorage.preparedWords(.init(modelKey: key, generation: "frozen", enabled: true,
+            entries: entries, pronunciation: corruptOptional, negatives: nil))
+        expect(corruptPrepared.words.count == 1 && corruptPrepared.words[0].term.references.count == 3 &&
+            corruptPrepared.diagnostics.contains { $0.reason == .invalidReferences }, "Corrupt optional inspection preserves calibrated manual baseline")
         let changed = PronunciationDictionaryStore.CaptureRead(profiles: [profile], inspections: inspections)
         let wrongLabel = try await GigaAMEncoderDictionaryStorage.preparedWords(.init(modelKey: key, generation: "frozen", enabled: true,
             entries: [.init(id: entry, triggers: [], replacement: "Beta")], pronunciation: changed, negatives: nil))

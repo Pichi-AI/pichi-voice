@@ -27,24 +27,39 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
         for profile in profiles {
             try Task.checkCancellation()
             guard profile.modelKey == snapshot.modelKey, profile.hiddenSize == GigaAMEncoderFeatures.dimension,
-                  profile.enrollments.allSatisfy({ self.validCapture($0, modelKey: snapshot.modelKey) }),
                   let entry = entries[profile.dictionaryEntryID], profile.label == entry.replacement else {
                 diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID)); continue
             }
-            let captures = self.retainedCaptures(profile.enrollments)
-            let pinned = read.matchingEnrollments(for: profile)
-            guard (3...10).contains(captures.count), captures.allSatisfy({ pinned.contains($0) }) else {
+            let retained = self.retainedCaptures(profile.enrollments)
+            let captures = read.matchingEnrollments(for: profile)
+            guard (3...10).contains(captures.count), Array(captures.prefix(3)) == Array(retained.prefix(3)),
+                  captures == retained.filter({ captures.contains($0) }),
+                  captures.prefix(3).allSatisfy({ self.validCapture($0, modelKey: snapshot.modelKey) }) else {
                 diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID)); continue
             }
             do {
                 var references: [GigaAMEncoderFeatures] = []
-                for capture in captures {
+                for (index, capture) in captures.enumerated() {
                     try Task.checkCancellation()
-                    guard let id = capture.inspectionID,
-                          let features = try self.features(capture: capture, inspection: read.inspection(for: id)) else {
-                        throw PronunciationDictionaryStoreError.inconsistentEnrollment
+                    if index < 3 {
+                        guard let id = capture.inspectionID,
+                              let features = try self.features(capture: capture, inspection: read.inspection(for: id)) else {
+                            throw PronunciationDictionaryStoreError.inconsistentEnrollment
+                        }
+                        references.append(features)
+                    } else {
+                        guard self.validCapture(capture, modelKey: snapshot.modelKey), let id = capture.inspectionID,
+                              let inspection = try read.optionalInspection(for: id) else {
+                            diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID)); continue
+                        }
+                        do {
+                            guard let features = try self.features(capture: capture, inspection: inspection) else {
+                                diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID)); continue
+                            }
+                            references.append(features)
+                        } catch is CancellationError { throw CancellationError() }
+                        catch { diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID)) }
                     }
-                    references.append(features)
                 }
                 let profileKey = DictionaryNegativeEvidenceResolver.profileKey(profile) + ":shared-features-v1"
                 var negatives: [GigaAMEncoderFeatures] = []
@@ -67,6 +82,7 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
                     references: references, observedVariants: profile.enrollments.compactMap(\.observedText).filter { !$0.isEmpty },
                     negatives: negatives))
             } catch is CancellationError { throw CancellationError() }
+            catch PronunciationDictionaryStoreError.staleEvidence { throw PronunciationDictionaryStoreError.staleEvidence }
             catch { diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID)) }
         }
         let prepared = try GigaAMEncoderDictionary.prepare(terms: terms, modelKey: snapshot.modelKey)
