@@ -19,9 +19,14 @@ nonisolated enum GigaAMEncoderDictionary {
         var extractorVersion = GigaAMEncoderFeatures.extractorVersion
     }
 
+    struct Cohort: Sendable {
+        let references: [GigaAMEncoderFeatures]
+        let calibration: GigaAMAcousticMatcher.EncoderCalibration
+    }
+
     struct PreparedTerm: Sendable {
         let term: Term
-        let calibration: GigaAMAcousticMatcher.EncoderCalibration
+        let cohorts: [Cohort]
     }
 
     enum Reason: String, Sendable {
@@ -231,10 +236,31 @@ nonisolated enum GigaAMEncoderDictionary {
             contrasts += term.negatives
             contrasts += others.flatMap { Array($0.references.dropFirst()) }
             if contrasts.count > 128 { diagnostics.append(.init(.contrastBudget, term.entryID)) }
-            guard let calibration = try GigaAMAcousticMatcher.calibrateEncoder(
-                references: term.references, contrastReferences: Array(contrasts.prefix(128))
-            ) else { diagnostics.append(.init(.uncalibrated, term.entryID)); continue }
-            result.append(PreparedTerm(term: term, calibration: calibration))
+            // Select several bounded, duration-compatible triples. Every triple
+            // still passes the unchanged leave-one-out and contrast calibration.
+            // The first three retain the manual fallback; each other reference
+            // gets its two closest-duration neighbours as a possible cohort.
+            var indices: [[Int]] = [Array(0..<3)]
+            for index in term.references.indices {
+                let neighbours = term.references.indices.filter { $0 != index }.sorted {
+                    let left = abs(term.references[$0].frameCount - term.references[index].frameCount)
+                    let right = abs(term.references[$1].frameCount - term.references[index].frameCount)
+                    return left == right ? $0 < $1 : left < right
+                }
+                let cohort = ([index] + neighbours.prefix(2)).sorted()
+                if !indices.contains(cohort) { indices.append(cohort) }
+            }
+            var cohorts: [Cohort] = []
+            for cohort in indices {
+                try Task.checkCancellation()
+                let refs = cohort.map { term.references[$0] }
+                guard let calibration = try GigaAMAcousticMatcher.calibrateEncoder(
+                    references: refs, contrastReferences: Array(contrasts.prefix(128))
+                ) else { continue }
+                cohorts.append(Cohort(references: refs, calibration: calibration))
+            }
+            if cohorts.isEmpty { diagnostics.append(.init(.uncalibrated, term.entryID)) }
+            else { result.append(PreparedTerm(term: term, cohorts: cohorts)) }
         }
         return Preparation(words: result, diagnostics: diagnostics)
     }
@@ -273,8 +299,19 @@ nonisolated enum GigaAMEncoderDictionary {
             if hits[index].isEmpty { diagnostics.append(.init(.noSearchHits, term.entryID)) }
             for hit in hits[index] {
                 try Task.checkCancellation()
-                guard let range = self.wordRange(frames: hit.frames, words: source),
-                      range.allSatisfy({ !claimed.contains($0) }) else {
+                guard let hitRange = self.wordRange(frames: hit.frames, words: source) else {
+                    diagnostics.append(.init(.invalidWordSpan, term.entryID)); continue
+                }
+                // A DTW hit may extend into a neighbouring word. A narrower
+                // range is eligible only when the complete selected words match
+                // a recorded spelling; arbitrary short substrings cannot vote.
+                let fullHeard = source[hitRange].map(\.text).joined(separator: " ")
+                let fullComparison = GigaAMDictionaryLexicalEvidence.compare(
+                    heard: fullHeard, canonical: term.label, observedVariants: term.observedVariants)
+                let needsNarrowing = fullComparison == nil || fullComparison!.protectsContent ||
+                    GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: fullHeard, canonical: term.label)
+                let range = needsNarrowing ? (self.recordedSubrange(hitRange, words: source, term: term) ?? hitRange) : hitRange
+                guard range.allSatisfy({ !claimed.contains($0) }) else {
                     diagnostics.append(.init(.protectedTextRule, term.entryID)); continue
                 }
                 guard range.count <= 4, !self.crossesSentence(range, words: source) else {
@@ -290,36 +327,41 @@ nonisolated enum GigaAMEncoderDictionary {
                 guard hit.frames.lowerBound >= 0, hit.frames.upperBound <= features.frameCount, !hit.frames.isEmpty else {
                     diagnostics.append(.init(.invalidWordSpan, term.entryID)); continue
                 }
+                let cutRange: Range<Int>
+                if range == hitRange { cutRange = hit.frames }
+                else {
+                    let lower = max(hit.frames.lowerBound, Int(floor(source[range.lowerBound].start / GigaAMEncoderFeatures.frameDuration)))
+                    let upper = min(hit.frames.upperBound, Int(ceil(source[range.upperBound].end / GigaAMEncoderFeatures.frameDuration)))
+                    guard lower < upper else { diagnostics.append(.init(.invalidWordSpan, term.entryID)); continue }
+                    cutRange = lower..<upper
+                }
                 let cut = try GigaAMEncoderFeatures(values: Array(features.values[
-                    (hit.frames.lowerBound * GigaAMEncoderFeatures.dimension)..<(hit.frames.upperBound * GigaAMEncoderFeatures.dimension)
+                    (cutRange.lowerBound * GigaAMEncoderFeatures.dimension)..<(cutRange.upperBound * GigaAMEncoderFeatures.dimension)
                 ]))
-                guard let ordinary = try GigaAMAcousticMatcher.matchEncoder(query: cut, references: term.references,
-                    calibration: prepared.calibration, negativeReferences: term.negatives) else {
-                    diagnostics.append(.init(.acousticRejected, term.entryID)); continue
+                var best: (match: GigaAMAcousticMatcher.Match, limit: Float, corroborated: Bool)?
+                for cohort in prepared.cohorts {
+                    try Task.checkCancellation()
+                    if let ordinary = try GigaAMAcousticMatcher.matchEncoder(query: cut, references: cohort.references,
+                        calibration: cohort.calibration, negativeReferences: term.negatives), ordinary.accepted {
+                        if best == nil || ordinary.distance / cohort.calibration.acceptanceDistance < best!.match.distance / best!.limit {
+                            best = (ordinary, cohort.calibration.acceptanceDistance, false)
+                        }
+                    } else if GigaAMDictionaryLexicalEvidence.observedStemSupport(
+                        heard: heard, canonical: term.label, observedVariants: term.observedVariants
+                    ), let limit = cohort.calibration.corroboratedAcceptanceDistance,
+                       let corroborated = try GigaAMAcousticMatcher.matchEncoderCorroborated(
+                        query: cut, references: cohort.references, calibration: cohort.calibration,
+                        negativeReferences: term.negatives), corroborated.accepted {
+                        if best == nil || corroborated.distance / limit < best!.match.distance / best!.limit {
+                            best = (corroborated, limit, true)
+                        }
+                    }
                 }
-                let match: GigaAMAcousticMatcher.Match
-                let effectiveLimit: Float
-                if ordinary.accepted {
-                    match = ordinary
-                    effectiveLimit = prepared.calibration.acceptanceDistance
-                } else if GigaAMDictionaryLexicalEvidence.observedStemSupport(
-                    heard: heard, canonical: term.label, observedVariants: term.observedVariants
-                ), let limit = prepared.calibration.corroboratedAcceptanceDistance,
-                   let corroborated = try GigaAMAcousticMatcher.matchEncoderCorroborated(
-                    query: cut, references: term.references, calibration: prepared.calibration,
-                    negativeReferences: term.negatives
-                   ), corroborated.accepted {
-                    // A complete user-recorded stem and a bounded grammatical
-                    // ending add independent evidence. Ordinary acoustic limits,
-                    // negative vetoes and all word/meaning guards remain intact.
-                    match = corroborated
-                    effectiveLimit = limit
-                    diagnostics.append(.init(.recordedVariantCorroborated, term.entryID))
-                } else {
-                    diagnostics.append(.init(.acousticRejected, term.entryID)); continue
-                }
+                guard let best else { diagnostics.append(.init(.acousticRejected, term.entryID)); continue }
+                if best.corroborated { diagnostics.append(.init(.recordedVariantCorroborated, term.entryID)) }
+                let match = best.match, effectiveLimit = best.limit
                 candidates.append(AcceptedSpan(entryID: term.entryID, label: term.label, wordRange: range,
-                    frameRange: hit.frames, distance: match.distance, acceptanceDistance: effectiveLimit,
+                    frameRange: cutRange, distance: match.distance, acceptanceDistance: effectiveLimit,
                     spellingSupport: lexical.phoneticSimilarity, canonicalSupport: lexical.canonicalSimilarity,
                     additionalComponentSupport: GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: heard, canonical: term.label),
                     sourceTruncation: GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: heard, canonical: term.label)))
@@ -407,6 +449,26 @@ nonisolated enum GigaAMEncoderDictionary {
               let prefixComponents = GigaAMDictionaryLexicalEvidence.componentKeys(prefix.label),
               !prefixComponents.isEmpty, fullComponents.count > prefixComponents.count else { return false }
         return fullComponents.starts(with: prefixComponents)
+    }
+
+    static func recordedSubrange(_ range: ClosedRange<Int>, words: [GigaAMWordTiming], term: Term) -> ClosedRange<Int>? {
+        guard range.count > 1 else { return nil }
+        var matches: [ClosedRange<Int>] = []
+        for first in range {
+            for last in first...range.upperBound {
+                let candidate = first...last
+                guard candidate != range else { continue }
+                let heard = words[candidate].map(\.text).joined(separator: " ")
+                guard let comparison = GigaAMDictionaryLexicalEvidence.compare(
+                    heard: heard, canonical: term.label, observedVariants: term.observedVariants
+                ), comparison.matchesObservedVariant, !comparison.protectsContent,
+                   !GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: heard, canonical: term.label) else { continue }
+                matches.append(candidate)
+            }
+        }
+        // Multiple recorded subranges are ambiguous. Keep the original hit and
+        // its existing content guards rather than guessing which word to erase.
+        return matches.count == 1 ? matches[0] : nil
     }
 
     private static func wordRange(frames: Range<Int>, words: [GigaAMWordTiming]) -> ClosedRange<Int>? {

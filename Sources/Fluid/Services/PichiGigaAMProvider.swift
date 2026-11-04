@@ -434,9 +434,12 @@ final class PichiGigaAMProvider: TranscriptionProvider {
                 : GigaAMDictionaryAcoustics.modelKey(fingerprint: $0)
         } ?? ""
         let entryIDs = Set(entries.map(\.id))
+        let useEncoderReferences = self.dictionaryUsesEncoderFeatures
         let pronunciation = dictionaryEnabled && !entryIDs.isEmpty
             ? try self.pronunciationStore.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs,
-                referenceSelection: { GigaAMDictionaryAcoustics.activeCaptures($0.enrollments) }) : nil
+                referenceSelection: { profile in
+                    useEncoderReferences ? GigaAMEncoderDictionaryStorage.retainedCaptures(profile.enrollments)
+                        : GigaAMDictionaryAcoustics.activeCaptures(profile.enrollments) }) : nil
         let negatives: DictionaryNegativeExampleStore.CaptureRead?
         do {
             negatives = dictionaryEnabled && DictionaryMatcherExperiment.compareNegatives && !entryIDs.isEmpty

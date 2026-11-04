@@ -31,9 +31,9 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
                   let entry = entries[profile.dictionaryEntryID], profile.label == entry.replacement else {
                 diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID)); continue
             }
-            let captures = GigaAMDictionaryAcoustics.activeCaptures(profile.enrollments)
+            let captures = self.retainedCaptures(profile.enrollments)
             let pinned = read.matchingEnrollments(for: profile)
-            guard captures.count == 3, captures.allSatisfy({ pinned.contains($0) }) else {
+            guard (3...10).contains(captures.count), captures.allSatisfy({ pinned.contains($0) }) else {
                 diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID)); continue
             }
             do {
@@ -71,6 +71,19 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
         }
         let prepared = try GigaAMEncoderDictionary.prepare(terms: terms, modelKey: snapshot.modelKey)
         return .init(words: prepared.words, diagnostics: diagnostics + prepared.diagnostics)
+    }
+
+    /// Keep the latest manual set as fallback, followed by recent distinct
+    /// contextual recordings. A recording cannot vote twice in one profile.
+    static func retainedCaptures(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] {
+        let manual = Array(captures.filter { $0.originalAudioID == nil }.suffix(3))
+        var seen = Set<UUID>()
+        let contextual = captures.reversed().filter { capture in
+            guard let id = capture.sourceRecordingID, capture.observedText?.isEmpty == false else { return false }
+            return seen.insert(id).inserted
+        }
+        let legacy = captures.reversed().filter { $0.originalAudioID != nil && $0.sourceRecordingID == nil }
+        return manual + Array((contextual + legacy).prefix(10 - manual.count))
     }
 
     @concurrent static func enrollment(

@@ -7,6 +7,43 @@ import AppKit
 #endif
 
 extension PichiGigaAMIntegrationTests {
+    func testEncoderCohortsKeepCompatibleManualAndContextReferences() throws {
+        func feature(_ frames: Int, axis: Int = 0) throws -> GigaAMEncoderFeatures {
+            var row = [Float](repeating: 0, count: GigaAMEncoderFeatures.dimension)
+            row[axis] = 1
+            return try GigaAMEncoderFeatures(values: Array(repeating: row, count: frames).flatMap { $0 })
+        }
+        let slow = try feature(60), quick = try feature(20), other = try feature(20, axis: 1)
+        let entry = UUID(), key = "cohort-test"
+        let term = GigaAMEncoderDictionary.Term(entryID: entry, label: "Example", modelKey: key,
+            references: [slow, slow, slow, quick, quick, quick], observedVariants: [])
+        let prepared = try GigaAMEncoderDictionary.prepare(terms: [term], modelKey: key)
+        let word = try XCTUnwrap(prepared.words.first)
+        XCTAssertEqual(prepared.words.count, 1)
+        XCTAssertTrue(word.cohorts.contains { $0.references.allSatisfy { $0.frameCount == 60 } })
+        let contextual = try XCTUnwrap(word.cohorts.first { $0.references.allSatisfy { $0.frameCount == 20 } })
+        XCTAssertTrue(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoder(query: quick,
+            references: contextual.references, calibration: contextual.calibration)).accepted)
+        XCTAssertFalse(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoder(query: quick,
+            references: contextual.references, calibration: contextual.calibration, negativeReferences: [quick])).accepted)
+        XCTAssertFalse(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoder(query: other,
+            references: contextual.references, calibration: contextual.calibration)).accepted)
+    }
+
+    func testEncoderRecordedSubrangePreservesAdjacentWordsAndRoleGuards() throws {
+        let row = [Float(1)] + [Float](repeating: 0, count: GigaAMEncoderFeatures.dimension - 1)
+        let feature = try GigaAMEncoderFeatures(values: Array(repeating: row, count: 20).flatMap { $0 })
+        let term = GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Example", modelKey: "test",
+            references: [feature, feature, feature], observedVariants: ["Eksample"])
+        let words = [GigaAMWordTiming(text: "Eksample", start: 0, end: 0.5, confidence: 0.4),
+                     GigaAMWordTiming(text: "then", start: 0.5, end: 0.8, confidence: 0.4)]
+        XCTAssertEqual(GigaAMEncoderDictionary.recordedSubrange(0...1, words: words, term: term), 0...0)
+        let role = GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Example", modelKey: "test",
+            references: [feature, feature, feature], observedVariants: ["I"])
+        let protected = [GigaAMWordTiming(text: "I", start: 0, end: 0.3, confidence: 0.4), words[1]]
+        XCTAssertNil(GigaAMEncoderDictionary.recordedSubrange(0...1, words: protected, term: role))
+    }
+
     /// Exercise the complete saved-template path with generated signals, independent
     /// from model weights, user preferences, microphones and network services.
     @MainActor
