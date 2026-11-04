@@ -466,8 +466,11 @@ nonisolated enum GigaAMEncoderDictionary {
                 let heard = words[candidate].map(\.text).joined(separator: " ")
                 guard let comparison = GigaAMDictionaryLexicalEvidence.compare(
                     heard: heard, canonical: term.label, observedVariants: term.observedVariants
-                ), comparison.matchesObservedVariant, !comparison.protectsContent,
-                   !GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: heard, canonical: term.label) else { continue }
+                ), comparison.matchesObservedVariant else { continue }
+                let terminalLetter = comparison.protectsContent && GigaAMDictionaryLexicalEvidence.recordedTerminalLetterI(
+                    heard: heard, canonical: term.label, observedVariants: term.observedVariants)
+                guard (!comparison.protectsContent || terminalLetter),
+                      !GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: heard, canonical: term.label) else { continue }
                 matches.append(candidate)
             }
         }

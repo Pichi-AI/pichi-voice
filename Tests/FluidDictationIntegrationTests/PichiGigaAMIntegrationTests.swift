@@ -56,6 +56,18 @@ extension PichiGigaAMIntegrationTests {
             references: [feature, feature, feature], observedVariants: ["I"])
         let protected = [GigaAMWordTiming(text: "I", start: 0, end: 0.3, confidence: 0.4), words[1]]
         XCTAssertNil(GigaAMEncoderDictionary.recordedSubrange(0...1, words: protected, term: role))
+        let acronym = GigaAMEncoderDictionary.Term(entryID: UUID(), label: "Nova AI", modelKey: "test",
+            references: [feature, feature, feature], observedVariants: ["Nova и I"])
+        let span = [GigaAMWordTiming(text: "Nova", start: 0, end: 0.3, confidence: 0.4),
+                    GigaAMWordTiming(text: "и", start: 0.3, end: 0.4, confidence: 0.4),
+                    GigaAMWordTiming(text: "I", start: 0.4, end: 0.5, confidence: 0.4),
+                    GigaAMWordTiming(text: "тогда", start: 0.5, end: 0.8, confidence: 0.4)]
+        XCTAssertEqual(GigaAMEncoderDictionary.recordedSubrange(0...3, words: span, term: acronym), 0...2)
+        let calibration = try XCTUnwrap(GigaAMAcousticMatcher.calibrateEncoder(references: acronym.references))
+        XCTAssertTrue(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoder(query: feature,
+            references: acronym.references, calibration: calibration)).accepted)
+        XCTAssertFalse(try XCTUnwrap(GigaAMAcousticMatcher.matchEncoder(query: feature,
+            references: acronym.references, calibration: calibration, negativeReferences: [feature])).accepted)
     }
 
     /// Exercise the complete saved-template path with generated signals, independent
