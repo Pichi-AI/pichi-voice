@@ -62,6 +62,7 @@ actor PronunciationDictionaryStore {
         }
     }
     nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>,
+        includingSharedFamilies: Bool = false, maximumReferencesPerProfile: Int = 3,
         referenceSelection: @Sendable (PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] = { $0.matchingEnrollments }) throws -> CaptureRead {
         preconditionFailure("Artifact ownership tests must never read private dictionaries")
     }
@@ -110,6 +111,15 @@ nonisolated enum GigaAMDictionaryAcoustics {
 
 nonisolated enum GigaAMEncoderDictionaryStorage {
     // ACTUAL_ENCODER_MODEL_KEY
+    static func retainedCaptures(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] {
+        preconditionFailure("Artifact ownership tests must never select learned encoder references")
+    }
+    static func admittedReferenceKey(_ read: PronunciationDictionaryStore.CaptureRead?) -> String {
+        preconditionFailure("Artifact ownership tests must never key learned encoder references")
+    }
+    static func canCache(_ preparation: GigaAMEncoderDictionary.Preparation) -> Bool {
+        preconditionFailure("Artifact ownership tests must never cache learned encoder references")
+    }
     static func preparedWords(_ snapshot: GigaAMDictionaryAcoustics.Snapshot) async throws -> GigaAMEncoderDictionary.Preparation {
         preconditionFailure("Artifact ownership tests must never prepare learned encoder references")
     }

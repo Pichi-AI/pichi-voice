@@ -25,6 +25,7 @@ nonisolated struct SpeechModelLibraryMetadata { let size: String; let processor:
 nonisolated final class DebugLogger {
     static let shared = DebugLogger()
     func log(_ message: String, source: String) {}
+    func info(_ message: String, source: String) {}
 }
 nonisolated enum ProgressiveFileDownloader {
     static func download(from: URL, configuration: URLSessionConfiguration, maximumBytes: Int64,
