@@ -196,7 +196,8 @@ struct HistoryTextComparisonView: View {
                 $0.replacement.caseInsensitiveCompare(text) == .orderedSame
             }
         }
-        if self.savedInlineCorrection == nil, self.entry.correctedRawText != nil, self.entry.audio != nil, !indices.isEmpty {
+        if DictionaryMatcherExperiment.sharedFeaturesEnabled, self.savedInlineCorrection == nil,
+           self.entry.correctedRawText != nil, self.entry.audio != nil, !indices.isEmpty {
             HStack(spacing: 8) {
                 if let status = self.savedAudioStatus {
                     Text(PichiLocalization.text(status)).foregroundStyle(self.theme.palette.secondaryText)
