@@ -682,7 +682,11 @@ final class ASRService: ObservableObject {
             && !self.recordingBufferHandoffGate.isActive && !self.recordingBufferHandoffGate.isRecovering
     }
 
-    func acquireExclusiveActivity(_ activity: ASRExclusiveActivity, cancelDictionaryLearning: Bool = true) throws -> ASRActivityLease {
+    func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
+        try self.acquireExclusiveActivity(activity, cancelDictionaryLearning: true)
+    }
+
+    private func acquireExclusiveActivity(_ activity: ASRExclusiveActivity, cancelDictionaryLearning: Bool) throws -> ASRActivityLease {
         guard PrivateProfileStorage.acceptsNewWork || activity == .settingsRestore
             || (privateProfileResetInProgress && activity == .modelMaintenance) else {
             throw ASRActivityError.settingsRestoreUnavailable
