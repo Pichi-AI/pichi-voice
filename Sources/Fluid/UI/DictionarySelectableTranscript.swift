@@ -88,6 +88,9 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
     private var tracking: NSTrackingArea?
     private var wordRanges: [NSRange] = []
     private var hoveredRange: NSRange?
+    private var dragAnchor: NSRange?
+    private var draggedRange: NSRange?
+    private var gestureGeneration: UInt64 = 0
     private var inlineEditingEnabled = false
     private var interactionIdentity = ""
     private var accentColor = NSColor.controlAccentColor
@@ -100,6 +103,8 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
     ) {
         if !enabled || identity != self.interactionIdentity { self.cancelInlineEdit(notify: false) }
         self.inlineEditingEnabled = enabled
+        self.isSelectable = !enabled
+        if enabled { self.setSelectedRange(NSRange(location: 0, length: 0)) }
         self.interactionIdentity = identity
         self.accentColor = accentColor
         self.editorBackgroundColor = backgroundColor
@@ -107,14 +112,18 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
         self.inlineEditor?.backgroundColor = backgroundColor
         self.inlineEditor?.textColor = textColor
         self.editorContainer?.layer?.backgroundColor = backgroundColor.cgColor
-        if !enabled { self.hoveredRange = nil }
+        if !enabled { self.hoveredRange = nil; self.clearFragmentDrag() }
+        self.window?.invalidateCursorRects(for: self)
         self.needsDisplay = true
     }
 
     func updateDisplayedText(_ text: NSAttributedString, fragments: [NSRange] = []) {
         let groups = fragments.filter { DictionaryInlineTextEdit(sourceText: text.string, range: $0) != nil }
         guard !self.sourceText.isEqual(to: text) || groups != self.groupedRanges else { return }
-        if self.sourceText.string != text.string || groups != self.groupedRanges { self.cancelInlineEdit(notify: false) }
+        if self.sourceText.string != text.string || groups != self.groupedRanges {
+            self.cancelInlineEdit(notify: false)
+            self.clearFragmentDrag()
+        }
         let selection = self.selectedRange()
         self.sourceText = NSAttributedString(attributedString: text)
         self.groupedRanges = groups
@@ -124,7 +133,7 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
             self.updateEditorLayout()
         } else {
             self.textStorage?.setAttributedString(text)
-            if selection.location <= text.length, selection.length <= text.length - selection.location {
+            if !self.inlineEditingEnabled, selection.location <= text.length, selection.length <= text.length - selection.location {
                 self.setSelectedRange(selection)
             }
         }
@@ -153,6 +162,18 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
         self.tracking = tracking
     }
 
+    override var acceptsFirstResponder: Bool { self.inlineEditingEnabled || super.acceptsFirstResponder }
+
+    override func resetCursorRects() {
+        if self.inlineEditingEnabled {
+            // The transcript is a set of clickable fragments. Its child field
+            // editor still owns the normal insertion cursor while editing.
+            self.addCursorRect(self.visibleRect, cursor: .pointingHand)
+        } else {
+            super.resetCursorRects()
+        }
+    }
+
     override func mouseMoved(with event: NSEvent) {
         guard self.inlineEditingEnabled, self.inlineEdit == nil else { return }
         let range = self.wordRange(at: self.convert(event.locationInWindow, from: nil))
@@ -169,7 +190,7 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
     override func draw(_ dirtyRect: NSRect) {
         // NSTextView skips drawBackground when drawsBackground is false.
         // Paint the decoration before native glyphs, without changing source attributes.
-        if self.inlineEdit == nil, let range = self.hoveredRange,
+        if self.inlineEdit == nil, let range = self.draggedRange ?? self.hoveredRange,
            let manager = self.layoutManager, let container = self.textContainer {
             let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             self.accentColor.withAlphaComponent(0.26).setFill()
@@ -188,41 +209,66 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard self.inlineEditingEnabled else { super.mouseDown(with: event); return }
         if self.inlineEdit != nil {
             self.cancelInlineEdit()
             return
         }
-        let point = self.convert(event.locationInWindow, from: nil)
-        let clicked = self.wordRange(at: point)
-        let previousSelection = self.selectedRange()
-        if self.inlineEditingEnabled, event.clickCount == 1, !event.modifierFlags.contains(.shift), previousSelection.length > 0 {
-            self.setSelectedRange(NSRange(location: previousSelection.location, length: 0))
-        }
-        super.mouseDown(with: event) // Native selection tracking owns the multiword gesture.
-        guard self.inlineEditingEnabled, event.clickCount == 1, !event.modifierFlags.contains(.shift),
-              let clicked else { return }
-        let selection = self.selectedRange()
-        let range: NSRange
-        if selection.length > 0 {
-            guard let phrase = DictionaryInlineTextEdit.phraseRange(for: selection, in: self.wordRanges) else { return }
-            range = phrase
-        } else {
-            range = previousSelection.length > 0 && NSIntersectionRange(previousSelection, clicked).length > 0
-                ? previousSelection : clicked
-        }
-        // Finish NSTextView's native mouse tracking before handing focus to a
-        // field editor. Otherwise the same click can take that focus back.
-        let source = self.string
+        self.clearFragmentDrag()
+        guard let clicked = self.wordRange(at: self.convert(event.locationInWindow, from: nil)) else { return }
+        self.window?.makeFirstResponder(self)
+        self.dragAnchor = clicked
+        self.draggedRange = clicked
+        self.needsDisplay = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard self.inlineEditingEnabled else { super.mouseDragged(with: event); return }
+        guard let anchor = self.dragAnchor,
+              let end = self.dragEndpoint(at: self.convert(event.locationInWindow, from: nil)) else { return }
+        self.draggedRange = NSUnionRange(anchor, end)
+        self.needsDisplay = true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard self.inlineEditingEnabled else { super.mouseUp(with: event); return }
+        guard let range = self.draggedRange else { return }
+        self.clearFragmentDrag()
+        // Finish this gesture before handing focus to the actual text field.
+        let source = self.sourceText.string
         let identity = self.interactionIdentity
+        let generation = self.gestureGeneration
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.string == source, self.interactionIdentity == identity else { return }
+            guard let self, self.gestureGeneration == generation,
+                  self.sourceText.string == source, self.interactionIdentity == identity else { return }
             self.beginInlineEdit(range: range)
         }
     }
 
+    private func clearFragmentDrag() {
+        self.gestureGeneration &+= 1
+        self.dragAnchor = nil
+        self.draggedRange = nil
+        self.needsDisplay = true
+    }
+
+    private func dragEndpoint(at point: NSPoint) -> NSRange? {
+        if let hit = self.wordRange(at: point) { return hit }
+        guard let manager = self.layoutManager, let container = self.textContainer,
+              manager.numberOfGlyphs > 0 else { return nil }
+        let position = NSPoint(x: point.x - self.textContainerOrigin.x, y: point.y - self.textContainerOrigin.y)
+        let glyph = min(manager.glyphIndex(for: position, in: container), manager.numberOfGlyphs - 1)
+        let character = manager.characterIndexForGlyph(at: glyph)
+        return self.wordRanges.first { NSMaxRange($0) > character } ?? self.wordRanges.last
+    }
+
     override func keyDown(with event: NSEvent) {
-        if self.inlineEditingEnabled, event.keyCode == 36 || event.keyCode == 76,
-           self.beginInlineEdit(range: DictionaryInlineTextEdit.phraseRange(for: self.selectedRange(), in: self.wordRanges) ?? self.selectedRange()) { return }
+        if self.inlineEditingEnabled {
+            if event.keyCode == 36 || event.keyCode == 76, let range = self.hoveredRange {
+                self.beginInlineEdit(range: range)
+            }
+            return
+        }
         super.keyDown(with: event)
     }
 
@@ -247,6 +293,7 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
         self.cancelInlineEdit()
         guard self.onBeginEdit?(range) != false else { return false }
         self.inlineEdit = edit
+        self.clearFragmentDrag()
         self.hoveredRange = nil
         let field = NSTextField(string: edit.heardText)
         field.font = self.sourceText.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont ?? self.font
@@ -291,7 +338,7 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
         let size = max(9, (self.font?.pointSize ?? NSFont.systemFontSize) * 0.72)
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: size, weight: .semibold)) ?? NSImage()
-        let button = NSButton(image: image, target: self, action: action)
+        let button = DictionaryInlineActionButton(image: image, target: self, action: action)
         button.bezelStyle = .inline
         button.isBordered = false
         button.contentTintColor = self.accentColor
@@ -382,6 +429,7 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
     }
 
     func cancelInlineEdit(notify: Bool = true) {
+        self.clearFragmentDrag()
         let wasEditing = self.inlineEdit != nil
         if let monitor = self.dismissMouseMonitor { NSEvent.removeMonitor(monitor) }
         self.dismissMouseMonitor = nil
@@ -457,6 +505,13 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
     isolated deinit {
         if let monitor = self.dismissMouseMonitor { NSEvent.removeMonitor(monitor) }
         if let observer = self.resignKeyObserver { NotificationCenter.default.removeObserver(observer) }
+    }
+}
+
+/// Native buttons need their own cursor region above the transcript's region.
+private final class DictionaryInlineActionButton: NSButton {
+    override func resetCursorRects() {
+        self.addCursorRect(self.visibleRect, cursor: .pointingHand)
     }
 }
 

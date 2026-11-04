@@ -51,8 +51,9 @@ private struct InlineFocusHost: View {
             windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
         let up = NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [], timestamp: 1.01,
             windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 0)!
-        NSApp.postEvent(up, atStart: true)
         view.mouseDown(with: down)
+        precondition(!view.isSelectable && view.selectedRange().length == 0, "Source fragments do not use native text selection")
+        view.mouseUp(with: up)
         pump() // Includes the real SwiftUI update caused by onBeginEdit.
         guard let field = view.inlineEditor else { preconditionFailure("Editor survives SwiftUI state update") }
         precondition(window.firstResponder === field || window.firstResponder === field.currentEditor(),
@@ -87,9 +88,10 @@ private struct InlineFocusHost: View {
                 pressure: type == .leftMouseUp ? 0 : 1)!
         }
         view.setSelectedRange(NSRange(location: 0, length: 0))
-        NSApp.postEvent(mouse(.leftMouseUp, dragEnd, 12), atStart: true)
-        NSApp.postEvent(mouse(.leftMouseDragged, dragEnd, 11), atStart: true)
         view.mouseDown(with: mouse(.leftMouseDown, dragStart, 10))
+        view.mouseDragged(with: mouse(.leftMouseDragged, dragEnd, 11))
+        precondition(view.selectedRange().length == 0 && view.inlineEditor == nil, "Dragging highlights fragments without native selection or opening the editor early")
+        view.mouseUp(with: mouse(.leftMouseUp, dragEnd, 12))
         pump()
         precondition(view.inlineEdit?.range == phrase && view.inlineEditor?.stringValue == "Pech AI",
             "Dragging across two fragments opens one whole-phrase editor after mouse release")
@@ -114,8 +116,8 @@ private struct InlineFocusHost: View {
             forCharacterRange: groupEnd, actualCharacterRange: nil), in: view.textContainer!)
         let groupPoint = view.convert(NSPoint(x: groupBox.midX, y: groupBox.midY), to: nil)
         view.setSelectedRange(NSRange(location: 0, length: 0))
-        NSApp.postEvent(mouse(.leftMouseUp, groupPoint, 22), atStart: true)
-        view.mouseDown(with: mouse(.leftMouseDown, groupPoint, 21)); pump()
+        view.mouseDown(with: mouse(.leftMouseDown, groupPoint, 21))
+        view.mouseUp(with: mouse(.leftMouseUp, groupPoint, 22)); pump()
         precondition(view.inlineEdit?.range == phrase && view.inlineEditor?.stringValue == "Pech AI",
             "Clicking the second word of a saved fragment edits its complete range, including the space")
         view.cancelInlineEdit(); pump()
@@ -151,12 +153,30 @@ private struct InlineFocusHost: View {
             forCharacterRange: conjunction, actualCharacterRange: nil), in: view.textContainer!)
         let extendStart = view.convert(NSPoint(x: firstBox.minX + 0.1, y: firstBox.midY), to: nil)
         let extendEnd = view.convert(NSPoint(x: conjunctionBox.maxX - 0.1, y: conjunctionBox.midY), to: nil)
-        NSApp.postEvent(mouse(.leftMouseUp, extendEnd, 42), atStart: true)
-        NSApp.postEvent(mouse(.leftMouseDragged, extendEnd, 41), atStart: true)
-        view.mouseDown(with: mouse(.leftMouseDown, extendStart, 40)); pump()
+        view.mouseDown(with: mouse(.leftMouseDown, extendStart, 40))
+        view.mouseDragged(with: mouse(.leftMouseDragged, extendEnd, 41))
+        view.mouseUp(with: mouse(.leftMouseUp, extendEnd, 42)); pump()
         precondition(view.inlineEditor?.stringValue == "Pech AI и", "A drag can extend an already selected saved fragment")
-        view.cancelInlineEdit()
+        view.cancelInlineEdit(); pump()
+        view.mouseDown(with: mouse(.leftMouseDown, extendEnd, 50))
+        view.mouseDragged(with: mouse(.leftMouseDragged, extendStart, 51))
+        view.mouseUp(with: mouse(.leftMouseUp, extendStart, 52)); pump()
+        precondition(view.inlineEditor?.stringValue == "Pech AI и", "Reverse drag snaps to the same whole saved fragment and neighbor")
+        view.cancelInlineEdit(); pump()
+        view.mouseDown(with: mouse(.leftMouseDown, extendStart, 60))
+        view.configureInlineEditing(enabled: true, identity: "different-record-same-text", accentColor: .systemPurple,
+                                    backgroundColor: .white, textColor: .black)
+        view.mouseUp(with: mouse(.leftMouseUp, extendStart, 61)); pump()
+        precondition(view.inlineEditor == nil, "A record switch during dragging cancels the old gesture even when text matches")
+        view.mouseDown(with: mouse(.leftMouseDown, extendStart, 70))
+        view.mouseUp(with: mouse(.leftMouseUp, extendStart, 71))
+        view.updateDisplayedText(NSAttributedString(string: source, attributes: [.font: NSFont.systemFont(ofSize: 16)]), fragments: [])
+        pump()
+        precondition(view.inlineEditor == nil, "Changed fragment boundaries invalidate the queued mouse-up edit")
+        view.configureInlineEditing(enabled: false, identity: "final", accentColor: .systemPurple,
+                                    backgroundColor: .white, textColor: .black)
+        precondition(view.isSelectable, "Read-only final transcript retains ordinary text selection")
         window.close()
-        print("PASS: reserved editor flow, outside cancellation, saved compound hit-testing, multiword drag and focus survive SwiftUI updates and late notifications; save, cancel, focus loss and stale identity")
+        print("PASS: fragment-only forward/reverse dragging without native text selection, reserved editor flow, outside cancellation, saved compound hit-testing, multiword drag and focus survive SwiftUI updates and late notifications; save, cancel, focus loss and stale identity")
     }
 }
