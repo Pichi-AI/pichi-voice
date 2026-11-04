@@ -34,6 +34,17 @@ nonisolated enum DictionaryCorrectionEditPolicy {
         }
     }
 
+    /// Native ASR may attach terminal punctuation or spell a compound with &.
+    /// Only explicitly selected acoustic evidence uses this comparison spelling;
+    /// it grants no permission to create a permanent text replacement.
+    static func acousticSpelling(_ text: String) -> String? {
+        guard !text.isEmpty, text.count <= 80,
+              text.rangeOfCharacter(from: .controlCharacters) == nil else { return nil }
+        let value = text.replacingOccurrences(of: "&", with: " ")
+            .trimmingCharacters(in: .whitespaces.union(.punctuationCharacters))
+        return self.isTerm(value) ? value : nil
+    }
+
     private static func editDistance(_ first: String, _ second: String) -> Int {
         let left = Array(first), right = Array(second)
         var previous = Array(0...right.count)

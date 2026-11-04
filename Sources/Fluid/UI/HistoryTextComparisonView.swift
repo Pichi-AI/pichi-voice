@@ -323,11 +323,11 @@ struct HistoryTextComparisonView: View {
     }
 
     private func explicitInlineCandidate(context: InlineCorrection, replacement: String) -> AutomaticDictionaryCorrectionCandidate? {
-        guard DictionaryCorrectionEditPolicy.isTerm(context.edit.heardText),
+        guard let heard = DictionaryCorrectionEditPolicy.acousticSpelling(context.edit.heardText),
               DictionaryCorrectionEditPolicy.isTerm(replacement),
               replacement != context.edit.heardText || DictionaryInlineTextEdit.wordRanges(in: replacement).count > 1 else { return nil }
         return AutomaticDictionaryCorrectionCandidate(
-            heardText: context.edit.heardText, correctedText: replacement,
+            heardText: heard, correctedText: replacement,
             sourceUTF16Range: context.edit.range
         )
     }

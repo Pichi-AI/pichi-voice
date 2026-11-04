@@ -49,6 +49,11 @@ struct DictionaryNegativeCorrection {}
         self.expect(!DictionaryCorrectionEditPolicy.isTerm("one two three four five"), "Limit selected terms to four words")
         self.expect(!DictionaryCorrectionEditPolicy.isTerm("first\nsecond"), "Reject multiline selection")
         self.expect(!DictionaryCorrectionEditPolicy.isTerm(String(repeating: "x", count: 81)), "Bound selection length")
+        self.expect(DictionaryCorrectionEditPolicy.acousticSpelling("Pch&I.") == "Pch I", "Retain a native fused-letter spelling for acoustic learning")
+        self.expect(DictionaryCorrectionEditPolicy.acousticSpelling("  PCEI. ") == "PCEI", "Native sentence punctuation must not drop the pronunciation sample")
+        self.expect(DictionaryCorrectionEditPolicy.acousticSpelling("Pici и I,") == "Pici и I", "Keep the actual letter case and source tokens")
+        self.expect(DictionaryCorrectionEditPolicy.acousticSpelling("first. second") == nil, "Internal sentence punctuation is not a selected dictionary term")
+        self.expect(DictionaryCorrectionEditPolicy.acousticSpelling("first\nsecond") == nil, "Do not join different lines into a learned word")
         self.expect(DictionaryCorrectionEditPolicy.allows(heard: "Home Assistent", corrected: "Home Assistant"), "Allow a selected short term repair")
         self.expect(DictionaryTrainingSpellingPolicy.exactTriggers(accepted: ["BIMCheck"], manuallyConfirmed: [], acousticCorrection: true).isEmpty,
                     "A spoken AI Enablement correction must not globally replace the valid term BIMCheck")
