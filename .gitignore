@@ -272,7 +272,6 @@ builds/
 !/docs/development/speaker-colors/iphone-light.png
 !/docs/development/speaker-colors/iphone-dark.png
 !/docs/development/mobile-first-run-setup.md
-!/docs/development/pichi-native-isolation-outbox.md
 !/docs/development/pichi-private-profile-api.md
 !/docs/development/mobile-meetings.md
 !/docs/development/ipad-demo-install-via-mac.md

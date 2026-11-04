@@ -137,7 +137,7 @@ Whisper Tiny уже имеет общий provider, но ещё требует �
 
 Порядок extraction: общие values/contracts -> model catalog/preferences и общий lifecycle owner -> существующий coordinator/pipeline/store -> общие SwiftUI компоненты -> iOS capture. Первый функциональный milestone должен завершить синтетическую встречу на Mac и iOS Simulator через **одни и те же классы** coordinator/store/pipeline. Аппаратные capture/inference/background milestones идут затем.
 
-Анимированный прототип уже проверяет небольшую часть этой схемы: девять production-файлов компилируются для macOS и iOS SDK, включая исходный renderer текста и общий renderer диктовки. Canvas/Timeline и неизменённая spring simulation выделены из `BottomWaveformView` в `AudioWaveformBars`; исходная панель использует тот же компонент. Desktop state, настройки и shimmer остаются в её wrapper. Theme bridge и synthetic replay остаются только в `Prototypes/`; они не заменяют сервисы приложения. Общие contract tests должны защищать preparation ownership, residency restoration, provider options, canonical publication, recovery/retention и live-row identity.
+Canvas/Timeline и неизменённая spring simulation выделены из `BottomWaveformView` в `AudioWaveformBars`; исходная панель использует тот же компонент. Desktop state, настройки и shimmer остаются в её wrapper. Общие contract tests должны защищать preparation ownership, residency restoration, provider options, canonical publication, recovery/retention и live-row identity.
 
 ## Мобильный набор моделей
 
@@ -220,7 +220,7 @@ Speaker matching использует проверенные similarity threshol
 
 Отдельное родительское рабочее дерево: `/Users/sabbah/.codex/worktrees/ipad-voice-design/pichi-voice`, ветка `codex/ipad-voice-design`. Источник дизайна: существующий versioned brand package. Production-приложение на этом этапе не меняется.
 
-`bash scripts/dev/setup.sh` выполнен в этом worktree: portable checks и 6 проверок String Catalog прошли. Установлен Xcode 27.0 с iOS/macOS SDK. Simulator runtimes отсутствуют. UI-прототип можно скомпилировать под iOS SDK и смотреть как native SwiftUI preview на Mac; это не запуск на iPad и не проверка background microphone capture. Подробные команды и итоговая визуальная проверка находятся в `Prototypes/iPadMeetingConcepts/README.md`.
+`bash scripts/dev/setup.sh` выполнен в этом worktree: portable checks и 6 проверок String Catalog прошли. Установлен Xcode 27.0 с iOS/macOS SDK. Simulator runtimes отсутствуют. UI-прототип можно скомпилировать под iOS SDK и смотреть как native SwiftUI preview на Mac; это не запуск на iPad и не проверка background microphone capture.
 
 Вариант A выбран пользователем и уточняется анимацией записи. Функциональные capture/inference сервисы на этом этапе остаются неподключёнными.
 
