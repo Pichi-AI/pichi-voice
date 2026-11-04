@@ -633,14 +633,16 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         if usesEncoder { alignment.featureFrames = Self.learningFrames(result.encoderWindows) }
         var text = result.text
         if usesEncoder, let snapshot = self.dictionarySnapshot, snapshot.enabled, snapshot.modelKey == key {
-            let cacheKey = GigaAMDictionaryAcoustics.referenceCacheKey(snapshot)
+            let cacheKey = GigaAMDictionaryAcoustics.referenceCacheKey(snapshot) +
+                GigaAMEncoderDictionaryStorage.admittedReferenceKey(snapshot.pronunciation)
             let preparation: GigaAMEncoderDictionary.Preparation
             if let cached = self.encoderReferenceCache, cached.key == cacheKey { preparation = cached.preparation }
             else {
                 preparation = try await GigaAMEncoderDictionaryStorage.preparedWords(snapshot)
                 try Task.checkCancellation()
                 guard self.lifecycleGeneration == generation, self.loadedModelFingerprint == fingerprint else { throw CancellationError() }
-                self.encoderReferenceCache = (cacheKey, preparation)
+                self.encoderReferenceCache = GigaAMEncoderDictionaryStorage.canCache(preparation)
+                    ? (cacheKey, preparation) : nil
             }
             let corrected = try await GigaAMEncoderDictionary.correct(transcript: result,
                 windows: result.encoderWindows, modelKey: key, words: preparation.words, entries: snapshot.entries)

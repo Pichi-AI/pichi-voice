@@ -188,10 +188,18 @@ nonisolated enum DictionaryNegativeExampleStore {
         expect(prepared.words[0].term.observedVariants == ["Alfa0", "Alfa1", "Alfa2", "Alfo"], "All retained observed variants survive active-reference selection")
         expect(read.readCount == 4, "Preparation uses only the pinned capture reader")
         let wrongPins = PronunciationDictionaryStore.CaptureRead(profiles: [profile], inspections: inspections, pinned: [profile.id: Array(saved.prefix(3))])
+        expect(GigaAMEncoderDictionaryStorage.admittedReferenceKey(read) != GigaAMEncoderDictionaryStorage.admittedReferenceKey(wrongPins),
+            "Identical profile metadata with different admitted references must invalidate provider preparation")
         let unpinned = try await GigaAMEncoderDictionaryStorage.preparedWords(.init(modelKey: key, generation: "frozen", enabled: true,
             entries: entries, pronunciation: wrongPins, negatives: nil))
         expect(unpinned.words.count == 1 && unpinned.words[0].term.references.count == 3,
             "The actually pinned baseline remains usable when optional references were not admitted")
+        let previousKey = GigaAMEncoderDictionaryStorage.admittedReferenceKey(wrongPins)
+        let nextKey = GigaAMEncoderDictionaryStorage.admittedReferenceKey(read)
+        let reused = previousKey == nextKey && GigaAMEncoderDictionaryStorage.canCache(unpinned)
+        let next = reused ? unpinned : try await GigaAMEncoderDictionaryStorage.preparedWords(snapshot)
+        expect(!reused && next.words[0].term.references.count == 4,
+            "A newly admitted reference is prepared instead of reusing the three-reference result")
         var missingInspections = inspections
         missingInspections.removeValue(forKey: originalID)
         let missingOptional = PronunciationDictionaryStore.CaptureRead(profiles: [profile], inspections: missingInspections)
@@ -199,6 +207,8 @@ nonisolated enum DictionaryNegativeExampleStore {
             entries: entries, pronunciation: missingOptional, negatives: nil))
         expect(missingPrepared.words.count == 1 && missingPrepared.words[0].term.references.count == 3 &&
             missingPrepared.diagnostics.contains { $0.reason == .invalidReferences }, "Missing optional inspection preserves calibrated manual baseline")
+        expect(!GigaAMEncoderDictionaryStorage.canCache(missingPrepared) && GigaAMEncoderDictionaryStorage.canCache(prepared),
+            "A transient invalid inspection is retried even when the admitted IDs and metadata do not change")
         var corruptInspections = inspections
         corruptInspections[originalID] = .init(samples: [], recordedSampleCount: 0, frames: [], words: [], selectedStart: 0, selectedEnd: 0)
         let corruptOptional = PronunciationDictionaryStore.CaptureRead(profiles: [profile], inspections: corruptInspections)

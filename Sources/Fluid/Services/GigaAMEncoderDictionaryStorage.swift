@@ -13,6 +13,28 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
             value.unicodeScalars.allSatisfy { $0.isASCII && !CharacterSet.whitespacesAndNewlines.contains($0) && !CharacterSet.controlCharacters.contains($0) }
     }
 
+    /// The profile metadata can stay unchanged while the bounded admission lease
+    /// pins a different subset. Include that exact ordered subset in the cache key.
+    static func admittedReferenceKey(_ read: PronunciationDictionaryStore.CaptureRead?) -> String {
+        guard let read else { return "" }
+        var parts: [String] = []
+        for profile in read.profiles {
+            parts.append(profile.id)
+            let captures = read.matchingEnrollments(for: profile)
+            parts.append(String(captures.count))
+            for capture in captures {
+                parts += [capture.inspectionID?.uuidString ?? "", capture.originalAudioID?.uuidString ?? "",
+                          capture.sourceRecordingID?.uuidString ?? ""]
+            }
+        }
+        return parts.map { "\($0.utf8.count):" + $0 }.joined()
+    }
+
+    /// A missing or invalid optional file can recover without a metadata change.
+    static func canCache(_ preparation: GigaAMEncoderDictionary.Preparation) -> Bool {
+        !preparation.diagnostics.contains { $0.reason == .invalidReferences }
+    }
+
     @concurrent static func preparedWords(_ snapshot: GigaAMDictionaryAcoustics.Snapshot) async throws -> GigaAMEncoderDictionary.Preparation {
         try Task.checkCancellation()
         guard snapshot.enabled, let read = snapshot.pronunciation else { return .init(words: [], diagnostics: []) }
