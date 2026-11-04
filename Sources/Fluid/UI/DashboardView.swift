@@ -29,10 +29,11 @@ struct DashboardLayout {
 }
 
 struct DashboardSetupStatus {
-    enum Requirement: CaseIterable { case voiceModel, microphone, typingAccess }
+    enum Requirement: CaseIterable { case voiceModel, microphone, typingAccess, screenCapture }
     let voiceModelReady: Bool
     let microphoneReady: Bool
     let typingAccessReady: Bool
+    let screenCaptureReady: Bool
 
     var missing: [Requirement] {
         Requirement.allCases.filter {
@@ -40,6 +41,7 @@ struct DashboardSetupStatus {
             case .voiceModel: !self.voiceModelReady
             case .microphone: !self.microphoneReady
             case .typingAccess: !self.typingAccessReady
+            case .screenCapture: !self.screenCaptureReady
             }
         }
     }
@@ -61,6 +63,8 @@ struct DashboardView: View {
     @Environment(\.theme) private var theme
     @Environment(\.locale) private var locale
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @StateObject private var screenPermission = DictationScreenPermissionController()
+    @State private var screenPermissionRequestTask: Task<Void, Never>?
     @State private var statsOwner = UUID()
     @State private var greeting = "Welcome back"
     @State private var greetingName = ""
@@ -70,6 +74,7 @@ struct DashboardView: View {
 
     private var busy: Bool { self.asr.isRunning || self.asr.isStarting || self.contentState.isProcessing }
     private var shortcut: String { self.settings.primaryDictationShortcutDisplayString }
+    private var supportsScreenContext: Bool { PrivateAIProviderFeature.shared.isAvailable && CPUArchitecture.isAppleSilicon }
 
     var body: some View {
         GeometryReader { geometry in
@@ -106,7 +111,18 @@ struct DashboardView: View {
             self.greeting = salutation
             self.greetingName = name
         }
-        .onDisappear { self.stats.deactivate(self.statsOwner) }
+        .task { if self.supportsScreenContext { await self.screenPermission.refresh() } }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard self.supportsScreenContext else { return }
+            Task { await self.screenPermission.refresh() }
+        }
+        .onChange(of: self.busy) { _, busy in
+            if busy { self.screenPermissionRequestTask?.cancel() }
+        }
+        .onDisappear {
+            self.stats.deactivate(self.statsOwner)
+            self.screenPermissionRequestTask?.cancel()
+        }
         .onChange(of: self.stats.snapshot?.hasFluidIntelligenceUse, initial: true) { _, hasUsed in
             if hasUsed == true { self.settings.recordFluidIntelligenceUse(output: "existing successful use") }
         }
@@ -229,6 +245,7 @@ struct DashboardView: View {
         let title: String
         let icon: String
         let detail: String
+        var actionTitle = "Set up"
         let action: () -> Void
     }
 
@@ -242,6 +259,14 @@ struct DashboardView: View {
             })
         case .typingAccess:
             .init(title: "Typing access", icon: "keyboard", detail: "Dictate in any app", action: self.openAccessibilitySettings)
+        case .screenCapture:
+            .init(
+                title: "Screen Capture",
+                icon: "display",
+                detail: "Optional · Helps with Edit Mode and on-screen context.",
+                actionTitle: self.screenPermission.requiresSettings ? "Open settings" : "Set up",
+                action: self.requestScreenAccess
+            )
         }
     }
 
@@ -250,7 +275,8 @@ struct DashboardView: View {
         let missing = DashboardSetupStatus(
             voiceModelReady: self.asr.modelsExistOnDisk || self.asr.isAsrReady,
             microphoneReady: self.asr.micStatus == .authorized,
-            typingAccessReady: self.accessibilityEnabled
+            typingAccessReady: self.accessibilityEnabled,
+            screenCaptureReady: !self.supportsScreenContext || !self.screenPermission.hasChecked || self.screenPermission.isAllowed
         ).missing
         if !missing.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
@@ -258,11 +284,25 @@ struct DashboardView: View {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: layout.setupColumns(count: missing.count)), alignment: .leading, spacing: 10) {
                     ForEach(missing, id: \.self) { requirement in
                         let item = self.setupItem(for: requirement)
-                        DashboardSetupCard(title: item.title, detail: item.detail, icon: item.icon, action: item.action)
-                            .disabled(self.busy)
+                        DashboardSetupCard(title: item.title, detail: item.detail, icon: item.icon, actionTitle: item.actionTitle, action: item.action)
+                            .disabled(self.busy || (requirement == .screenCapture && self.screenPermission.isRequesting))
                     }
                 }
             }
+        }
+    }
+
+    private func requestScreenAccess() {
+        guard !self.busy, self.screenPermissionRequestTask == nil else { return }
+        if self.screenPermission.requiresSettings {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
+        self.screenPermissionRequestTask = Task {
+            defer { self.screenPermissionRequestTask = nil }
+            await self.screenPermission.requestIfNeeded { !self.busy && !Task.isCancelled }
         }
     }
 
@@ -449,6 +489,7 @@ private struct DashboardSetupCard: View {
     let title: String
     let detail: String
     let icon: String
+    var actionTitle = "Set up"
     let action: () -> Void
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -462,15 +503,16 @@ private struct DashboardSetupCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(PichiLocalization.text(self.title)).font(self.theme.typography.bodySmallStrong).lineLimit(1)
                     Text(PichiLocalization.text(self.detail)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
-                        .lineLimit(1)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
-                Text("Set up")
+                Text(PichiLocalization.text(self.actionTitle))
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(self.theme.palette.accentText)
                     .fixedSize()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .dashboardTile(hovered: self.hovered)
         }
         .buttonStyle(.plain)

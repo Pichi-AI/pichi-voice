@@ -31,7 +31,7 @@ enum SidebarItem: Hashable {
         switch self {
         case .welcome: PichiLocalization.text("Dashboard", language: language, bundle: bundle)
         case .voiceEngine: PichiLocalization.text("Voice Engine", language: language, bundle: bundle)
-        case .aiEnhancements: PichiLocalization.text("AI Providers", language: language, bundle: bundle)
+        case .aiEnhancements: PichiLocalization.text("AI Settings", language: language, bundle: bundle)
         case .cleanupStyles: PichiLocalization.text("Cleanup Styles", language: language, bundle: bundle)
         case .fileTranscription: PichiLocalization.text("File Transcription", language: language, bundle: bundle)
         case .meetingTranscription: AppBrand.text("FluidMeet", profile: profile, language: language, bundle: bundle)

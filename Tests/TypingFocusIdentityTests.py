@@ -65,7 +65,9 @@ if args.mutation=='direct_focus':
 snapshot = read('Sources/Fluid/Services/DictationStopSnapshot.swift')
 snapshot_methods = '\n'.join(block(snapshot,marker) for marker in ('    var focusTarget: TypingService.CapturedFocusTarget? {','    static func selectTarget(','    func prepareDelivery('))
 coordinator = read('Sources/Fluid/Services/PasteDeliveryCoordinator.swift')
-coord_body = block(read('Sources/Fluid/Services/PasteDeliveryCoordinator.swift',args.ownership_reference),'final class PasteDeliveryCoordinator {')
+coord_source = read('Sources/Fluid/Services/PasteDeliveryCoordinator.swift',args.ownership_reference)
+coord_marker = ('final class PasteDeliveryCoordinator: PrivateProfileTransitionParticipant {' if 'final class PasteDeliveryCoordinator: PrivateProfileTransitionParticipant {' in coord_source else 'final class PasteDeliveryCoordinator {')
+coord_body = block(coord_source,coord_marker)
 coord_body = mutate(coord_body,'static let shared = PasteDeliveryCoordinator()','static var shared = PasteDeliveryCoordinator(pasteboard: syntheticPasteboard, commandPoster: syntheticPoster, settlementDelayNanoseconds: 10_000_000_000)')
 if args.mutation=='clipboard_focus':
     gate=block(coord_body,'        guard targetIsReady() else {\n            // Match copyBackup admission without acquiring the slot we already own.')
@@ -81,6 +83,7 @@ literal=block(read('Sources/Fluid/Services/ASRService+DictationLiteralFormatting
 assessment=read('Sources/Fluid/Services/DeliveryTargetAssessment.swift').replace('import ApplicationServices\n','')
 analytics=block(read('Sources/Fluid/Analytics/AnalyticsEvent.swift'),'enum AnalyticsInsertionPath: String {')
 fixture='import Foundation\nimport CoreFoundation\n'+clipboard_types+'\n'+literal+'\n'+analytics+'\n'+assessment+'\n'
+fixture+='@MainActor '+block(read('Sources/Fluid/Services/PasteVerifier.swift'),'final class PasteRecoveryPresentationPolicy {')+'\n'
 fixture+='''nonisolated struct PrivateProfileSnapshot {}
 nonisolated enum PrivateProfileStorage {
     static var current: PrivateProfileSnapshot { .init() }
@@ -110,7 +113,7 @@ fixture+='@MainActor final class TypingService {\n'+'\n'.join(declarations+metho
     func bench(_ text: String) {}
     func ghosttyTargetPID(preferredTargetPID: pid_t?) -> pid_t? { nil }
     func recordInsertionLatency(path: AnalyticsInsertionPath, result: TextDeliveryResult, requestedAt: TimeInterval, textReadyAt: TimeInterval?, toggleStopRequestedAt: TimeInterval?, completedAt: TimeInterval = 0) {}
-    func verifyPasteLanded(_ text: String, before: Int, profile: PrivateProfileSnapshot, isOutputValid: @escaping @MainActor () -> Bool) {}
+    func verifyPasteLanded(_ text: String, before: Int, profile: PrivateProfileSnapshot, verificationID: UInt64, postedAt: TimeInterval, isOutputValid: @escaping @MainActor () -> Bool) {}
     func waitForPhysicalModifiersToRelease(timeout: TimeInterval) async -> Bool { true }
     func postReturnKey(_ key: SettingsStore.SpokenSendKey, targetPID: pid_t) async -> Bool { syntheticAX.sendCount += 1; return true }
 }\n'''
@@ -232,6 +235,8 @@ if not args.rewrite_reference:
     profile_fields='    private let profile = PrivateProfileStorage.current\n'+profile_visibility[0]
     fixture+='@MainActor final class RewriteAcceptViewAction { let service: RewriteModeService; let asr=AppServices.shared.asr; var onClose: (() -> Void)?; init(service:RewriteModeService) { self.service=service }\n'+profile_fields+'\n'+'\n'.join(fields+wrappers)+'\n'+owner+'\n}\n'
 fixture+=(repo/'Tests/TypingFocusIdentityRegression.swift').read_text()
+# These inert presentation edges are outside this runner's target/cancellation contract.
+fixture+='\n@MainActor extension AutomaticRewriteDouble { var lastErrorMessage: String? { nil } }\n@MainActor extension AutomaticDeliveryCaller { func showEditModeFailure(_ message: String) {} }\n'
 fixture+='\n'+(repo/'Tests/Support/ClipboardTargetBackupFixtureTests.swift').read_text()
 localization=read('Sources/Fluid/Localization/PichiLocalization.swift')
 fixture+='\n'+localization

@@ -62,6 +62,9 @@ final class MobileNavigationUITests: XCTestCase {
             let language = name.contains("testSharedGuestHistoryAcrossAccountProfiles") ? "ru" : "en"
             app.launchArguments += ["-PichiInterfaceLanguage", language]
         }
+        if name.contains("testSensitivePolicySettingsInBothLanguagesAndThemes") {
+            app.launchArguments += ["-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
+        }
         if name.contains("testSharedGuestHistoryAcrossAccountProfiles") {
             app.launchEnvironment["PICHI_UI_SHARED_GUEST_HISTORY_REVIEW"] = "1"
             app.launchEnvironment["PICHI_UI_SHARED_GUEST_HISTORY_PROFILE"] = "a"
@@ -636,6 +639,74 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertTrue(app.secureTextFields["account.legacy.password"].waitForExistence(timeout: 5))
             XCTAssertFalse(app.buttons["account.signIn"].isEnabled, "Leaving the account screen clears the transient password")
             capture("legacy-\(language)-\(appearance)-reopened")
+        }
+        app.terminate()
+        #endif
+    }
+
+    func testSensitivePolicySettingsInBothLanguagesAndThemes() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Staged privacy settings review requires an owned simulator")
+        #else
+        let revision = ProcessInfo.processInfo.environment["PICHI_TEST_REVISION"] ?? "candidate"
+        func scrollTo(_ element: XCUIElement) {
+            let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+            if element.exists && element.isHittable { return }
+            // A returned Form may retain its old offset. Search from the top.
+            for _ in 0..<7 { scroll.swipeDown() }
+            for _ in 0..<40 where !element.exists || !element.isHittable {
+                scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.70))
+                    .press(forDuration: 0.05, thenDragTo: scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.57)))
+            }
+            XCTAssertTrue(element.exists && element.isHittable)
+        }
+        for (language, appearance) in [("ru", "light"), ("ru", "dark"), ("en", "light")] {
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
+                "-MeetingPIIRedactionEnabled", "NO", "-MeetingPIIRedactionRequested", "NO"]
+            app.launch()
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 20))
+            openNavigation("settings", title: language == "ru" ? "Настройки" : "Settings")
+            let privacy = app.buttons["settings.privacy"]
+            scrollTo(privacy); privacy.tap()
+            let add = app.buttons["privacy.dictionary.add"]
+            scrollTo(add); add.tap()
+            XCTAssertTrue(app.textFields["privacy.dictionary.phrase"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Opening inline input must present the keyboard")
+            XCTAssertFalse(app.buttons["privacy.dictionary.add"].exists, "The field replaces the Add row")
+            XCTAssertFalse(app.pickers["privacy.dictionary.matchMode"].exists)
+            capture("sensitive-\(revision)-\(language)-\(appearance)-dictionary-editor")
+            app.buttons["privacy.dictionary.cancel"].tap()
+            let group = app.buttons["privacy.groups.illicit-remuneration"]
+            scrollTo(group)
+            capture("sensitive-\(revision)-\(language)-\(appearance)-groups")
+            group.tap()
+            let enabled = app.switches["privacy.groups.illicit-remuneration.enabled"]
+            XCTAssertTrue(enabled.waitForExistence(timeout: 5))
+            capture("sensitive-\(revision)-\(language)-\(appearance)-group-detail")
+            let edit = app.buttons["privacy.groups.illicit-remuneration.edit"]
+            scrollTo(edit); edit.tap()
+            XCTAssertTrue(app.textViews["privacy.groups.illicit-remuneration.expressions"].waitForExistence(timeout: 5))
+            capture("sensitive-\(revision)-\(language)-\(appearance)-group-editor")
+            app.buttons["privacy.groups.illicit-remuneration.cancel"].tap()
+            // Exercise the actual shared settings service, then restore this owned fixture.
+            let old = enabled.value as? String
+            try tapNativeSwitch("privacy.groups.illicit-remuneration.enabled")
+            XCTAssertNotEqual(enabled.value as? String, old)
+            try tapNativeSwitch("privacy.groups.illicit-remuneration.enabled")
+            XCTAssertEqual(enabled.value as? String, old)
+            // Start this destination from its root. The iPad has a separate
+            // sidebar button before its Back control in the accessibility tree.
+            app.terminate(); app.launch()
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 20))
+            openNavigation("settings", title: language == "ru" ? "Настройки" : "Settings")
+            let reopenedPrivacy = app.buttons["settings.privacy"]
+            scrollTo(reopenedPrivacy); reopenedPrivacy.tap()
+            scrollTo(app.buttons["privacy.dictionary.add"])
+            XCTAssertFalse(app.buttons["privacy.topics.open"].exists)
+            XCTAssertFalse(app.buttons["privacy.topics.import"].exists)
+            capture("sensitive-\(revision)-\(language)-\(appearance)-automatic-policy")
         }
         app.terminate()
         #endif

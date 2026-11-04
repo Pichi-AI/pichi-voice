@@ -1055,6 +1055,8 @@ nonisolated struct MeetingProcessingAttempt: Codable, Identifiable, Equatable, S
     var asrModel: String?
     var languageCode: String? = nil
     var asrArtifactFingerprint: String? = nil
+    /// The language of a retained completed transcript while a replacement is pending.
+    var retainedTranscriptLanguageCode: String? = nil
     var diarizationModel: String?
     var lastCompletedTrackID: MeetingAudioTrackID?
     var errorCode: String?
@@ -1208,6 +1210,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     var postProcessing: MeetingPostProcessingArtifact? = nil
     /// Backend selected at capture start, used by the first processing attempt. Older sessions have no pin.
     var recordingBackendID: String? = nil
+    var recordingASRModel: String? = nil
     var recordingASRArtifactFingerprint: String? = nil
     /// Immutable privacy/attribution policy captured when the meeting begins.
     var audioStorageMode: MeetingAudioStorageMode? = nil

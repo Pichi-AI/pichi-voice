@@ -301,6 +301,10 @@ nonisolated struct TranscriptionResult: Identifiable, Sendable, Codable {
         }
     }
 
+    var jsonExport: Data {
+        get throws { try self.jsonExportData() }
+    }
+
     var textExport: String {
         var metadata = [
             "Transcription: \(self.fileName)",

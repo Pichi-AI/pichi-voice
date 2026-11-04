@@ -677,7 +677,7 @@ struct SettingsView: View {
                                                     iconColor: .secondary,
                                                     title: "Start / Stop Meeting",
                                                     description: self.settings.fluidMeetEnabled
-                                                        ? "Toggle meeting recording using your saved source"
+                                                        ? PichiLocalization.text("Choose sources, press again to record, or stop an active meeting")
                                                         : AppBrand.text("Enable FluidMeet in FluidMeet Settings to use this shortcut")
                                                 ),
                                                 shortcut: self.settings.meetingRecordingHotkeyShortcut,
@@ -2273,6 +2273,7 @@ private extension SettingsView {
                     var updated = self.settings.dictationPromptConfiguration(for: .privateAI)
                     updated.shortcut = nil
                     self.settings.setDictationPromptConfiguration(updated, for: .privateAI)
+                    NotificationCenter.default.post(name: .dictationPromptShortcutsChanged, object: nil)
                 }
             )
             .padding(.vertical, 2)

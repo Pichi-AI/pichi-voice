@@ -474,6 +474,7 @@ final class TypingService {
             callerIsOutputValid() && PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork
         }
         guard isOutputValid() else { return .cancelled }
+        let verificationID = PasteRecoveryPresentationPolicy.shared.beginDelivery()
         let requestedAt = ProcessInfo.processInfo.systemUptime
         var closeTrace = OverlayCloseTrace("typing.delivery")
         defer { closeTrace.finish() }
@@ -604,10 +605,11 @@ final class TypingService {
             toggleStopRequestedAt: toggleStopRequestedAt,
             completedAt: completedAt
         )
-        if verifiesLanding, SettingsStore.shared.showPasteCheckAlerts,
-           result == .commandPosted, deliveryPath != .direct, let verificationBefore
-        {
-            self.verifyPasteLanded(text, before: verificationBefore, profile: profile, isOutputValid: isOutputValid)
+        if verifiesLanding, result == .commandPosted, deliveryPath != .direct, let verificationBefore {
+            self.verifyPasteLanded(text, before: verificationBefore, profile: profile,
+                verificationID: verificationID, postedAt: completedAt, isOutputValid: isOutputValid)
+        } else if verifiesLanding, result == .commandPosted, deliveryPath != .direct {
+            DebugLogger.shared.info("PASTE_VERIFY unknown reason=baseline_unavailable", source: "TypingService")
         }
         // The caller starts correction tracking after completing delivery UI.
         return result
@@ -721,6 +723,10 @@ final class TypingService {
         toggleStopRequestedAt: TimeInterval?,
         completedAt: TimeInterval = ProcessInfo.processInfo.systemUptime
     ) {
+        DebugLogger.shared.info(
+            "TEXT_DELIVERY path=\(path.rawValue) result=\(String(describing: result)) elapsedMs=\(max(0, Self.elapsedMs(from: requestedAt, to: completedAt)))",
+            source: "TypingService"
+        )
         guard let outcome = Self.analyticsOutcome(for: result) else { return }
         let isClipboardDispatch = outcome == .dispatched &&
             (path == .clipboard || path == .clipboardFallback)
@@ -737,13 +743,15 @@ final class TypingService {
         )
     }
 
-    /// Off-main read-back after a paste. Logs readable-owner verdicts; only a certain
-    /// `notLanded` reaches the UI.
+    /// Bounded off-main read-back records readable-owner diagnostics even with alerts off.
+    /// Only a certain miss from the current delivery may produce a recovery card.
     @MainActor @discardableResult
     private func verifyPasteLanded(_ text: String, before: PasteVerifier.Snapshot,
                                    profile: PrivateProfileSnapshot,
+                                   verificationID: UInt64, postedAt: TimeInterval,
                                    isOutputValid: @escaping @MainActor () -> Bool) -> Task<Void, Never>? {
         guard !Task.isCancelled, isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return nil }
+        let pipelineID = DebugLogger.pipelineID
         // Register before queueing so retirement also closes a verifier that has not started.
         let owner = PrivateProfileOperationOwner(registerForTransitions: true)
         return Task { @MainActor in
@@ -752,27 +760,32 @@ final class TypingService {
                 guard owner.isCurrent, !Task.isCancelled, isOutputValid() else { throw CancellationError() }
                 let worker = Task.detached(priority: .utility) {
                     guard !Task.isCancelled else { return }
-                    let startedAt = ProcessInfo.processInfo.systemUptime
-                    var verdict = await PasteVerifier.verify(before: before, pastedText: text)
-                    guard !Task.isCancelled else { return }
-                    if case .notLanded = verdict, PasteVerifier.userActedAfterPaste(
-                        secondsSinceLastInput: PasteVerifier.secondsSinceLastUserInput(),
-                        secondsSincePaste: ProcessInfo.processInfo.systemUptime - startedAt
-                    ) {
-                        verdict = .unknown(reason: "user_input_after_paste")
-                    }
-                    let app = NSRunningApplication(processIdentifier: before.pid)?.bundleIdentifier ?? "pid\(before.pid)"
-                    let completedVerdict = verdict
-                    await MainActor.run {
-                        guard !Task.isCancelled, owner.isCurrent, isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
-                        DebugLogger.shared.info(
-                            "PASTE_VERIFY \(completedVerdict.logDescription) app=\(app) before[\(before.summary)] " +
-                                "elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
-                            source: "TypingService"
-                        )
-                        guard case .notLanded = completedVerdict else { return }
-                        NotificationCenter.default.post(name: .fluidPasteNotLanded, object: nil,
-                            userInfo: ["transcript": text, "privateProfile": profile])
+                    await DebugLogger.$pipelineID.withValue(pipelineID) {
+                        let startedAt = postedAt
+                        var verdict = await PasteVerifier.verify(before: before, pastedText: text)
+                        guard !Task.isCancelled else { return }
+                        if case .notLanded = verdict, PasteVerifier.userActedAfterPaste(
+                            secondsSinceLastInput: PasteVerifier.secondsSinceLastUserInput(),
+                            secondsSincePaste: ProcessInfo.processInfo.systemUptime - startedAt
+                        ) {
+                            verdict = .unknown(reason: "user_input_after_paste")
+                        }
+                        let app = NSRunningApplication(processIdentifier: before.pid)?.bundleIdentifier ?? "pid\(before.pid)"
+                        let completedVerdict = verdict
+                        await MainActor.run {
+                            guard !Task.isCancelled, owner.isCurrent, isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
+                            DebugLogger.shared.info(
+                                "PASTE_VERIFY \(completedVerdict.logDescription) app=\(app) before[\(before.summary)] " +
+                                    "elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
+                                source: "TypingService"
+                            )
+                            guard case .notLanded = completedVerdict,
+                                  PasteRecoveryPresentationPolicy.shared.isCurrent(verificationID),
+                                  SettingsStore.shared.showPasteCheckAlerts else { return }
+                            NotificationCenter.default.post(name: .fluidPasteNotLanded, object: nil,
+                                userInfo: ["transcript": text, "privateProfile": profile,
+                                    "verificationID": verificationID, "postedAt": postedAt])
+                        }
                     }
                 }
                 // Cancellation forwards to the actual reader and still waits for any AX call

@@ -57,9 +57,10 @@ public struct GigaAMAcousticFeatures: Equatable, Sendable {
         guard count <= Self.maximumFrames else { throw GigaAMAcousticError.invalidFeatures }
         let cepstra = 20
         let scale = sqrt(2.0 / Double(GigaAMFrontend.melCount))
-        let basis = (1...cepstra).flatMap { coefficient in
-            (0..<GigaAMFrontend.melCount).map { bin in
-                Float(scale * cos(.pi * Double(coefficient) * (Double(bin) + 0.5) / Double(GigaAMFrontend.melCount)))
+        let basis: [Float] = (1...cepstra).flatMap { (coefficient: Int) -> [Float] in
+            (0..<GigaAMFrontend.melCount).map { (bin: Int) -> Float in
+                let angle = Double.pi * Double(coefficient) * (Double(bin) + 0.5) / Double(GigaAMFrontend.melCount)
+                return Float(scale * cos(angle))
             }
         }
         var statics = [Float](repeating: 0, count: count * cepstra)

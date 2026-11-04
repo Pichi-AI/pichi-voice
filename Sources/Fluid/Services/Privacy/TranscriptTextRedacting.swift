@@ -12,6 +12,10 @@ nonisolated protocol TranscriptTextRedacting: Sendable {
     /// before publication, including a retained-audio retry after a fresh application launch.
     func prepareForMeeting() async throws
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction
+    /// Optional original-input boundary for durable publication. A contextual
+    /// detector can require a complete unit before any of it enters a checkpoint.
+    /// This is separate from display approval and cannot promote a preview.
+    nonisolated func durablePublicationLimit(in text: String) throws -> Int?
     /// Optional explicit admission of a sealed speech boundary. Unsupported adapters
     /// keep their existing lexical hold. This is not a promotion of display approval.
     nonisolated var supportsSpeechBoundaryAdmission: Bool { get }
@@ -44,6 +48,7 @@ nonisolated enum TranscriptTextRedactionError: Error {
 extension TranscriptTextRedacting {
     nonisolated var checkpointIdentity: String? { nil }
     nonisolated var supportsSpeechBoundaryAdmission: Bool { false }
+    nonisolated func durablePublicationLimit(in text: String) throws -> Int? { nil }
     func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         throw TranscriptTextRedactionError.unsupportedSpeechBoundary
     }

@@ -89,6 +89,65 @@ import Foundation
         await freshView.privateOutputOperations.retireAndJoin()
         await oldGenerationView.privateOutputOperations.retireAndJoin()
         await staleView.privateOutputOperations.retireAndJoin()
+
+        // Edit Mode uses the same reader admission and private operation owner. Clearing
+        // transient UI state must not let a canceled OS reader escape transition joining.
+        PrivateProfileStorage.select(a)
+        let settings = SettingsStore.shared
+        let savedEditReadsScreen = settings.editModeReadsScreen
+        settings.editModeReadsScreen = true
+        defer { settings.editModeReadsScreen = savedEditReadsScreen }
+        let editReader = HeldContextReader()
+        var editCapture: DictationContextCapture?
+        let editService = RewriteContextProfileHarness(captureWindow: { target in
+            let capture = DictationContextCapture.start(target: target) { await editReader.read() }
+            editCapture = capture
+            return capture
+        })
+        editService.startReadingWindow(target: target)
+        await editReader.waitUntilStarted()
+        editService.stopReadingWindow()
+        PrivateProfileStorage.conceal(generation: UUID())
+        var editJoined = false
+        let editTransition = Task { @MainActor in
+            try? await editService.prepareForPrivateProfileTransition()
+            editJoined = true
+        }
+        for _ in 0..<20 { await Task.yield() }
+        check(!editJoined, "Edit transition joins a canceled reader after its UI state was cleared")
+        let retiringEditReplacement = DictationContextCapture.start(target: target) { nil }
+        check(retiringEditReplacement == nil, "Retiring Edit reader keeps shared screen admission closed")
+        await editReader.finish(.init(textBeforeCursor: nil, screenText: nil,
+            windowLines: [.init(text: "Late private A window", x: 0, y: 0, width: 100, height: 20)]))
+        await editTransition.value
+        let retiredEditContext = await editService.windowContextForRewrite()
+        check(editJoined && retiredEditContext == nil, "Retired Edit owner drops late private window context")
+        await editCapture?.cancelAndWait()
+
+        // A completed Edit read cannot cross profile identity or generation either.
+        PrivateProfileStorage.select(a)
+        let readyEdit = DictationContextCapture(target: target, task: Task {
+            .init(textBeforeCursor: nil, screenText: nil,
+                windowLines: [.init(text: "Ready A window", x: 0, y: 0, width: 100, height: 20)])
+        })
+        let staleEditService = RewriteContextProfileHarness(captureWindow: { _ in readyEdit })
+        staleEditService.startReadingWindow(target: target)
+        PrivateProfileStorage.select(b)
+        let staleEditContext = await staleEditService.windowContextForRewrite()
+        check(staleEditContext == nil, "Actual Edit context attachment rejects a different private profile")
+        try await staleEditService.prepareForPrivateProfileTransition()
+        await readyEdit.cancelAndWait()
+
+        let currentEdit = DictationContextCapture(target: target, task: Task {
+            .init(textBeforeCursor: nil, screenText: nil,
+                windowLines: [.init(text: "Current B window", x: 0, y: 0, width: 100, height: 20)])
+        })
+        let freshEditService = RewriteContextProfileHarness(captureWindow: { _ in currentEdit })
+        freshEditService.startReadingWindow(target: target)
+        let freshEditContext = await freshEditService.windowContextForRewrite()
+        check(freshEditContext?.windowLines?.first?.text == "Current B window", "Current Edit owner may attach its own window context")
+        try await freshEditService.prepareForPrivateProfileTransition()
+        await currentEdit.cancelAndWait()
     }
 }
 

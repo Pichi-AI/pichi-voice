@@ -17,7 +17,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
     nonisolated static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
-        version: "9",
+        version: "10",
         execution: .local,
         supportedLanguageCodes: VoiceEngineLanguageCatalog.parakeetV3LanguageIDs,
         supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
@@ -26,7 +26,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         knownLimits: [
             "Nemotron-3 has 8 speaker slots per analysis epoch; a ninth voice is not reliably announced or separated.",
             "Speaker slots are epoch-scoped; conservative local voice matching can reconnect identities across epochs of the same track.",
-            "Parakeet TDT v2 handles English; v3 handles the supported European languages.",
+            "Parakeet v2 handles English; v3 and Fluid Speech Pro handle the supported European languages.",
             "When ASR returns text without usable word timings, validated native segment intervals are retained as utterances; otherwise one epoch-covering utterance is emitted.",
             "Local Nemotron model must be installed before planning. Voice matching downloads its local embedding model on first use.",
         ],
@@ -652,7 +652,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             let end = min(count, start + coreSamples)
             var lower = max(0, start - contextSamples)
             var upper = min(count, end + contextSamples)
-            var output = try await asr.transcribeWithTimings(try await audio.source.readSamples(in: lower..<upper))
+            // Pad only inference. Original sample bounds still constrain timing and coverage.
+            var output = try await asr.transcribeWithTimings(Self.asrInput(try await audio.source.readSamples(in: lower..<upper)))
             func validWords() -> [ASRWordTiming] {
                 output.words.filter { word in
                     !word.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -666,7 +667,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 // Word timing can be unavailable or malformed for one core. Its actual text
                 // survives a bounded core-only retry; this says nothing about later cores.
                 lower = start; upper = end
-                output = try await asr.transcribeWithTimings(try await audio.source.readSamples(in: lower..<upper))
+                output = try await asr.transcribeWithTimings(Self.asrInput(try await audio.source.readSamples(in: lower..<upper)))
                 physicalWords = validWords()
             }
             let offset = Double(lower) / audio.sampleRate
@@ -677,7 +678,9 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 }
                 words.append(contentsOf: kept.map { .init(text: $0.text, start: $0.start + offset, end: $0.end + offset) })
                 text.append(kept.map(\.text).joined(separator: " "))
-            } else {
+            } else if output.words.isEmpty || upper - lower >= 16_000 {
+                // Timed words rejected from padded silence cannot become an untimed utterance.
+                // Preserve the existing core-only fallback for an unpadded provider result.
                 let value = output.result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !value.isEmpty {
                     text.append(value)
@@ -694,6 +697,11 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         return MeetingParakeetEpochOutput(epochID: epochID, text: text.filter { !$0.isEmpty }.joined(separator: " "),
             words: words, sampleRate: audio.sampleRate, sampleCount: count, spanSamples: audio.spanSamples,
             untimedChunks: untimedChunks)
+    }
+
+    nonisolated static func asrInput(_ samples: [Float]) -> [Float] {
+        guard !samples.isEmpty, samples.count < 16_000 else { return samples }
+        return samples + [Float](repeating: 0, count: 16_000 - samples.count)
     }
 
     // MARK: - Units, assignment and receipts
@@ -922,6 +930,9 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             return wordUnits.sorted { ($0.analysisStart, $0.analysisEnd, $0.id) < ($1.analysisStart, $1.analysisEnd, $1.id) }
         }
 
+        // A provider without timings may supply an utterance. Rejected timed words must
+        // not return through that fallback, including words predicted only in padded silence.
+        guard output.words.isEmpty else { return [] }
         let text = output.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return [] }
         let nativeSegments = ASRSegmentTiming.validated(output.segmentTimings, text: text,

@@ -20,10 +20,25 @@ private struct DictionaryOverlappingRedactor: TranscriptTextRedacting {
     }
 }
 
+/// A deterministic contextual contract tests publication scheduling independently
+/// of learned-model quality. Only the detector's interface is synthetic here.
+private struct WholeUnitDictionaryTestRedactor: TranscriptTextRedacting {
+    nonisolated func durablePublicationLimit(in text: String) throws -> Int? {
+        guard let last = text.lastIndex(of: ".") else { return 0 }
+        return NSRange(text.startIndex...last, in: text).length
+    }
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let spans: [TranscriptRedactedSpan] = text.contains("секретная тема")
+            ? [.init(range: NSRange(location: 0, length: text.utf16.count), replacement: "[СКРЫТО]")] : []
+        return .init(text: spans.isEmpty ? text : "[СКРЫТО]", spans: spans,
+            provisionalSafeUTF16: spans.isEmpty ? try durablePublicationLimit(in: text) : 0)
+    }
+}
+
 extension MeetingPrivacyContextTests {
     static func sensitiveDictionarySuite() async throws {
         func dictionary(_ phrases: [String]) throws -> TranscriptSensitiveDictionarySnapshot {
-            try .init(entries: phrases.map { .init(phrase: $0) })
+            try .init(entries: phrases.map { .init(phrase: $0, matchMode: .exact) })
         }
         func redactor(_ phrases: [String]) throws -> TranscriptDictionaryRedactor {
             try .init(wrapped: DictionaryEchoRedactor(), dictionary: dictionary(phrases))
@@ -62,9 +77,108 @@ extension MeetingPrivacyContextTests {
         let empty = TranscriptDictionaryRedactor(wrapped: DictionaryEchoRedactor(), dictionary: try dictionary([]))
         try check(empty.checkpointIdentity == "synthetic-model-v1" && empty.supportsSpeechBoundaryAdmission, "Empty dictionary broke checkpoint compatibility")
         try check(dictionaryRedactor.checkpointIdentity?.contains(first.entries[0].phrase) == false, "Fingerprint exposed phrase text")
+        try await sensitiveDictionaryWholeUnitSuite()
+        try await sensitiveDictionaryWordFormsSuite()
+        try sensitiveBusinessConversationSuite()
         try await sensitiveDictionaryPersistenceSuite()
         try await sensitiveDictionaryProjectionSuite()
         print("Sensitive dictionary synthetic suites passed")
+    }
+
+    private static func sensitiveDictionaryWholeUnitSuite() async throws {
+        let detector = WholeUnitDictionaryTestRedactor()
+        let track = UUID()
+        let words = (0..<50).map { segment("обычно", track: track, start: $0) }
+        let context = MeetingTranscriptPrivacyContext(redactor: detector)
+        let pending = try await context.redact(.init(segments: words))
+        try check(pending.segments.isEmpty && pending.livePreview == nil,
+                  "Contextual phrase beginning escaped the ordinary 32-token tail")
+        try check(try await context.admitSpeechBoundary() == nil, "Silence sealed a contextual sentence")
+        _ = try await context.finish()
+        for (count, unfinished) in [(130, true), (250, false)] {
+            var input = MeetingLiveTranscriptSnapshot.empty
+            input.revision = 1
+            input.utterances = (0..<count).map { index in
+                let text = unfinished ? (index == 0 ? "секретная тема" : index == count - 1 ? "конец." : "продолжение") : "обычная реплика."
+                return .init(id: UUID(), speaker: index % 2 == 0 ? .you : .them, text: text,
+                    start: Double(index), end: Double(index + 1))
+            }
+            let publisher = MeetingLivePrivacyPublication()
+            var failures = 0
+            var publications: [MeetingLiveTranscriptSnapshot] = []
+            publisher.submit(input, generation: UUID(), using: detector, latestSnapshot: { input },
+                publish: { snapshot, _ in publications.append(snapshot) }, failed: { _ in failures += 1 })
+            await publisher.waitForCurrentWork()
+            if unfinished {
+                try check(failures == 1 && publications.isEmpty,
+                    "Oversized unsealed contextual unit leaked a page suffix or stalled")
+            } else {
+                try check(failures == 0 && publications.last?.utterances.count == count,
+                    "Completed contextual pages failed to make bounded progress")
+            }
+            await publisher.stop()
+        }
+        print("Whole-unit privacy: >32-token strict hold, >100-row fail-closed and 250-row progress passed")
+    }
+
+    private static func sensitiveDictionaryWordFormsSuite() async throws {
+        let dictionary = try TranscriptSensitiveDictionarySnapshot(entries: [.init(phrase: "взятка"), .init(phrase: "откат")])
+        let redactor = TranscriptDictionaryRedactor(wrapped: DictionaryEchoRedactor(), dictionary: dictionary)
+        for word in ["взятка", "взятки", "взятке", "взятку", "взяткой", "взяткою", "взяток", "взяткам", "взятками", "взятках",
+                     "откат", "отката", "откату", "откатом", "откате", "откаты", "откатов", "откатам", "откатами", "откатах"] {
+            try check(try await redactor.redactWithSpans("О \(word)!").text == "О [СКРЫТО]!", "Word-form mismatch: \(word)")
+        }
+        try check(try await redactor.redactWithSpans("взяточник откатить подоткат").spans.isEmpty,
+                  "Morphology confused derivation/substrings with an inflection")
+        let phrase = try TranscriptDictionaryRedactor(wrapped: DictionaryEchoRedactor(), dictionary: .init(entries: [.init(phrase: "коммерческий подкуп")]))
+        try check(try await phrase.redactWithSpans("О коммерческом подкупе.").text == "О [СКРЫТО].", "Inflected multiword phrase missed")
+        let held = try await phrase.redactWithSpans("О коммерческом")
+        try check(held.provisionalSafeUTF16 == 2, "Inflected phrase prefix leaked")
+        let exact = try TranscriptDictionaryRedactor(wrapped: DictionaryEchoRedactor(), dictionary: .init(entries: [.init(phrase: "взятка", matchMode: .exact)]))
+        try check(try await exact.redactWithSpans("взятке").spans.isEmpty, "Exact mode unexpectedly inflected")
+        try check(dictionary.fingerprint != TranscriptSensitiveDictionarySnapshot(entries: [.init(phrase: "взятка", matchMode: .exact), .init(phrase: "откат")]).fingerprint,
+                  "Matching mode missing from immutable capability identity")
+        let groupID = "illicit-remuneration"
+        let custom = try TranscriptSensitiveDictionarySnapshot(entries: [], selectedGroupIDs: [groupID], groupTermOverrides: [groupID: ["взятка"]])
+        try check(try custom.spans(in: "взяток").count == 1, "Group override omitted morphology")
+        let changed = try TranscriptSensitiveDictionarySnapshot(entries: [], selectedGroupIDs: [groupID], groupTermOverrides: [groupID: ["откат"]])
+        try check(custom.fingerprint != changed.fingerprint, "Changed private group terms retained stale checkpoint identity")
+        let legacy = Data("[{\"id\":\"00000000-0000-0000-0000-000000000001\",\"phrase\":\"взятка\"}]".utf8)
+        let migrated = try JSONDecoder().decode([SensitiveDataDictionaryEntry].self, from: legacy)
+        try check(migrated[0].matchMode == .wordForms, "Legacy dictionary did not gain word forms")
+    }
+
+    private static func sensitiveBusinessConversationSuite() throws {
+        struct Fixture: Decodable {
+            struct Case: Decodable {
+                let id: String; let groupID: String; let kind: String; let text: String
+                let expectedMaskedSubstrings: [String]
+            }
+            let cases: [Case]
+        }
+        let path = "Tests/Fixtures/SensitiveBusinessPrivacy/conversational-regression-ru-v2.json"
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+        for item in fixture.cases {
+            let snapshot = try TranscriptSensitiveDictionarySnapshot(entries: [], selectedGroupIDs: [item.groupID])
+            let spans = try snapshot.spans(in: item.text)
+            if item.expectedMaskedSubstrings.isEmpty {
+                try check(spans.isEmpty, "Conversational near-match or context-only rule overmasked: \(item.id)")
+            } else {
+                for fragment in item.expectedMaskedSubstrings {
+                    let target = (item.text as NSString).range(of: fragment)
+                    try check(target.location != NSNotFound && (target.location..<NSMaxRange(target)).allSatisfy { offset in
+                        spans.contains { NSLocationInRange(offset, $0.range) }
+                    }, "Conversational inflection or phrase missed: \(item.id)")
+                }
+            }
+        }
+        let terms = SensitiveBusinessGroupCatalog.groups.flatMap(\.terms)
+        try check(terms.count <= SensitiveBusinessGroupCatalog.maximumCatalogTerms,
+                  "Conversational catalog exceeded its admission budget")
+        for bare in ["занести", "занос", "отблагодарить", "благодарность", "интерес", "взаймы", "техничка", "договориться", "закрыть раунд", "продать долю"] {
+            try check(!terms.contains(bare), "An ambiguous cue became an unconditional rule")
+        }
+        print("Conversational catalog: \(fixture.cases.count) original lexical/negative/context-only cases passed")
     }
 
     private static func sensitiveDictionaryPersistenceSuite() async throws {

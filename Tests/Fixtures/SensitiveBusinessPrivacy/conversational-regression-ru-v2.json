@@ -1,0 +1,393 @@
+{
+  "schemaVersion": 1,
+  "scope": "Original synthetic editorial regression, inspired by researched speech. Not verbatim source quotes, not an independent holdout and not classifier training. Context-only cases intentionally have no literal masks; they are not labeled benign.",
+  "cases": [
+    {
+      "id": "conversation-01",
+      "groupID": "illicit-remuneration",
+      "kind": "literal-positive",
+      "text": "За такое им дают на лапу.",
+      "expectedMaskedSubstrings": [
+        "дают на лапу"
+      ]
+    },
+    {
+      "id": "conversation-02",
+      "groupID": "illicit-remuneration",
+      "kind": "literal-positive",
+      "text": "Он брал на лапу.",
+      "expectedMaskedSubstrings": [
+        "брал на лапу"
+      ]
+    },
+    {
+      "id": "conversation-03",
+      "groupID": "illicit-remuneration",
+      "kind": "literal-positive",
+      "text": "Они закладывали откаты в цену.",
+      "expectedMaskedSubstrings": [
+        "закладывали откаты в цену"
+      ]
+    },
+    {
+      "id": "conversation-04",
+      "groupID": "illicit-remuneration",
+      "kind": "literal-positive",
+      "text": "Она получала откаты от поставщиков.",
+      "expectedMaskedSubstrings": [
+        "получала откаты от поставщиков"
+      ]
+    },
+    {
+      "id": "conversation-05",
+      "groupID": "illicit-remuneration",
+      "kind": "literal-positive",
+      "text": "Мы получили откат за контракт.",
+      "expectedMaskedSubstrings": [
+        "получили откат за контракт"
+      ]
+    },
+    {
+      "id": "conversation-06",
+      "groupID": "procurement-collusion",
+      "kind": "literal-positive",
+      "text": "Их ТЗ заточено под одну компанию.",
+      "expectedMaskedSubstrings": [
+        "ТЗ заточено под одну компанию"
+      ]
+    },
+    {
+      "id": "conversation-07",
+      "groupID": "procurement-collusion",
+      "kind": "literal-positive",
+      "text": "Конкурентов пригласили на тендер для массовки.",
+      "expectedMaskedSubstrings": [
+        "тендер для массовки"
+      ]
+    },
+    {
+      "id": "conversation-08",
+      "groupID": "procurement-collusion",
+      "kind": "literal-positive",
+      "text": "Появились подставные заявки.",
+      "expectedMaskedSubstrings": [
+        "подставные заявки"
+      ]
+    },
+    {
+      "id": "conversation-09",
+      "groupID": "commercial-metrics",
+      "kind": "literal-positive",
+      "text": "Мы работали в минус.",
+      "expectedMaskedSubstrings": [
+        "работали в минус"
+      ]
+    },
+    {
+      "id": "conversation-10",
+      "groupID": "commercial-metrics",
+      "kind": "literal-positive",
+      "text": "Выручку пока не раскрываем.",
+      "expectedMaskedSubstrings": [
+        "Выручку"
+      ]
+    },
+    {
+      "id": "conversation-11",
+      "groupID": "planned-transactions",
+      "kind": "literal-positive",
+      "text": "К осени закроем инвестиционный раунд.",
+      "expectedMaskedSubstrings": [
+        "закроем инвестиционный раунд"
+      ]
+    },
+    {
+      "id": "conversation-12",
+      "groupID": "planned-transactions",
+      "kind": "literal-positive",
+      "text": "Собираются продать долю в компании.",
+      "expectedMaskedSubstrings": [
+        "продать долю в компании"
+      ]
+    },
+    {
+      "id": "conversation-13",
+      "groupID": "employee-compensation",
+      "kind": "literal-positive",
+      "text": "Платят серую зарплату.",
+      "expectedMaskedSubstrings": [
+        "серую зарплату"
+      ]
+    },
+    {
+      "id": "conversation-14",
+      "groupID": "employee-compensation",
+      "kind": "literal-positive",
+      "text": "Размер годового бонуса сотрудника обсудим отдельно.",
+      "expectedMaskedSubstrings": [
+        "годового бонуса сотрудника"
+      ]
+    },
+    {
+      "id": "conversation-15",
+      "groupID": "personal-health",
+      "kind": "literal-positive",
+      "text": "Я принимаю таблетки.",
+      "expectedMaskedSubstrings": [
+        "принимаю таблетки"
+      ]
+    },
+    {
+      "id": "conversation-16",
+      "groupID": "personal-health",
+      "kind": "literal-positive",
+      "text": "Вчера назначили лекарство.",
+      "expectedMaskedSubstrings": [
+        "назначили лекарство"
+      ]
+    },
+    {
+      "id": "conversation-17",
+      "groupID": "personal-health",
+      "kind": "literal-positive",
+      "text": "Результаты анализа крови придут утром.",
+      "expectedMaskedSubstrings": [
+        "анализа крови"
+      ]
+    },
+    {
+      "id": "conversation-18",
+      "groupID": "personal-health",
+      "kind": "literal-positive",
+      "text": "Он лежал в больнице.",
+      "expectedMaskedSubstrings": [
+        "лежал в больнице"
+      ]
+    },
+    {
+      "id": "conversation-19",
+      "groupID": "illicit-remuneration",
+      "kind": "benign-near-match",
+      "text": "Мы получили откат транзакции.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-20",
+      "groupID": "illicit-remuneration",
+      "kind": "benign-near-match",
+      "text": "Закладываем откаты в план релиза.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-21",
+      "groupID": "procurement-collusion",
+      "kind": "benign-near-match",
+      "text": "ТЗ заточено под безопасность.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-22",
+      "groupID": "procurement-collusion",
+      "kind": "benign-near-match",
+      "text": "Техзадание заточено под проверку типов.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-23",
+      "groupID": "planned-transactions",
+      "kind": "benign-near-match",
+      "text": "Друзья хотят закрыть раунд в игре.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-24",
+      "groupID": "planned-transactions",
+      "kind": "benign-near-match",
+      "text": "Продаю долю квартиры.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-25",
+      "groupID": "commercial-metrics",
+      "kind": "benign-near-match",
+      "text": "Нужно выйти в плюс по рейтингу.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-26",
+      "groupID": "employee-compensation",
+      "kind": "benign-near-match",
+      "text": "Годовой бонус банка за покупки уже начислен.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-27",
+      "groupID": "employee-compensation",
+      "kind": "benign-near-match",
+      "text": "Выдай документы на руки.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-28",
+      "groupID": "illicit-remuneration",
+      "kind": "benign-near-match",
+      "text": "Занеси документы в полицию.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-29",
+      "groupID": "illicit-remuneration",
+      "kind": "benign-near-match",
+      "text": "Я вас поблагодарю за помощь с переездом.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-30",
+      "groupID": "illicit-remuneration",
+      "kind": "benign-near-match",
+      "text": "Мой интерес в том, чтобы код читался.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-31",
+      "groupID": "illicit-remuneration",
+      "kind": "benign-near-match",
+      "text": "Могу дать взаймы другу до пятницы.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-32",
+      "groupID": "illicit-remuneration",
+      "kind": "benign-near-match",
+      "text": "Другие тоже не будут в обиде: всем достанется торт.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-33",
+      "groupID": "personal-health",
+      "kind": "benign-near-match",
+      "text": "Лечим сервер после сбоя.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-34",
+      "groupID": "personal-health",
+      "kind": "benign-near-match",
+      "text": "Пройдём обследование здания.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-35",
+      "groupID": "procurement-collusion",
+      "kind": "benign-near-match",
+      "text": "Выиграли тендеры по очереди без предварительной договорённости.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-36",
+      "groupID": "procurement-collusion",
+      "kind": "benign-near-match",
+      "text": "Помоги заполнить заявку, мы участвуем независимо.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-37",
+      "groupID": "illicit-remuneration",
+      "kind": "context-only-not-a-literal-rule",
+      "text": "Сколько нужно занести, чтобы проверку закрыли?",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-38",
+      "groupID": "illicit-remuneration",
+      "kind": "context-only-not-a-literal-rule",
+      "text": "После подписи мы вас отдельно отблагодарим деньгами.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-39",
+      "groupID": "illicit-remuneration",
+      "kind": "context-only-not-a-literal-rule",
+      "text": "Ваш личный процент передадим наличными после нужного решения.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-40",
+      "groupID": "illicit-remuneration",
+      "kind": "context-only-not-a-literal-rule",
+      "text": "Плату за подпись предлагают оформить как заём, возвращать его не надо.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-41",
+      "groupID": "procurement-collusion",
+      "kind": "context-only-not-a-literal-rule",
+      "text": "Подайся для количества и поставь цену выше нашей.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-42",
+      "groupID": "procurement-collusion",
+      "kind": "context-only-not-a-literal-rule",
+      "text": "Эту закупку заранее оставляем вам, следующую берём себе.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-43",
+      "groupID": "planned-transactions",
+      "kind": "context-only-not-a-literal-rule",
+      "text": "Поднимаем раунд, инвестор готов взять пятую часть компании.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-44",
+      "groupID": "employee-compensation",
+      "kind": "context-only-not-a-literal-rule",
+      "text": "На бумаге одна сумма, а остальное работнику доплачивают отдельно.",
+      "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-45",
+      "groupID": "planned-transactions",
+      "kind": "literal-positive",
+      "text": "О слиянии и поглощении пока никому не говорим.",
+      "expectedMaskedSubstrings": [
+        "слиянии и поглощении"
+      ]
+    },
+    {
+      "id": "conversation-46",
+      "groupID": "employee-compensation",
+      "kind": "literal-positive",
+      "text": "Условия компенсационного пакета согласованы.",
+      "expectedMaskedSubstrings": [
+        "компенсационного пакета"
+      ]
+    },
+    {
+      "id": "conversation-47",
+      "groupID": "personal-health",
+      "kind": "literal-positive",
+      "text": "Это относится к врачебной тайне.",
+      "expectedMaskedSubstrings": [
+        "врачебной тайне"
+      ]
+    },
+    {
+      "id": "conversation-48",
+      "groupID": "commercial-metrics",
+      "kind": "literal-positive",
+      "text": "Данные управленческой отчётности остаются внутри компании.",
+      "expectedMaskedSubstrings": [
+        "управленческой отчётности"
+      ]
+    },
+    {
+      "id": "conversation-49",
+      "groupID": "procurement-collusion",
+      "kind": "benign-near-match",
+      "text": "Набираем участников для массовки в кино.",
+      "expectedMaskedSubstrings": []
+    }
+  ]
+}

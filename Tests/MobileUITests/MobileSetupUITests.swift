@@ -215,7 +215,7 @@ final class MobileSetupUITests: XCTestCase {
         let sidebar = app.buttons["navigation.settings"]
         // Far from the label and icon: the whole sidebar row must respond.
         if sidebar.waitForExistence(timeout: 5) { sidebar.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap() }
-        else { app.tabBars.buttons["Настройки"].tap() }
+        else { app.tabBars.buttons.matching(NSPredicate(format: "label IN %@", ["Настройки", "Settings"])).firstMatch.tap() }
         let replay = app.buttons["settings.replaySetup"]
         XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 10))
         // Replay is the last row of the Settings root, below the fold on a phone.
@@ -318,64 +318,111 @@ final class MobileSetupUITests: XCTestCase {
     }
 
     func testNativeSensitiveDictionaryCRUDAndDarkAppearance() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Inline dictionary acceptance requires an owned simulator")
+        #else
         let app = XCUIApplication()
-        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light", "-MobileSetupVersion", "1"]
-        app.launch()
-        openPrivacy(in: app)
-        reveal("privacy.dictionary.add", in: app)
-        let previousFixture = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
-            "privacy.dictionary.entry.", "Ёжик Тестовый")).firstMatch
-        if ProcessInfo.processInfo.environment["PICHI_SETUP_REMOVE_INTERRUPTED_TEST_ENTRY"] == "1", previousFixture.exists {
-            capture("dictionary-fixture-before-cleanup")
-            previousFixture.tap()
-            XCTAssertTrue(app.buttons["privacy.dictionary.delete"].waitForExistence(timeout: 5))
-            app.buttons["privacy.dictionary.delete"].tap()
-            capture("dictionary-fixture-cleaned")
+        for (language, appearance) in [("ru", "dark"), ("en", "light")] {
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
+                "-MeetingPIIRedactionEnabled", "NO", "-MeetingPIIRedactionRequested", "NO"]
+            app.launch()
+            openPrivacy(in: app)
+            reveal("privacy.dictionary.add", in: app)
+            let add = app.buttons["privacy.dictionary.add"]
+            capture("dictionary-\(language)-\(appearance)-00-settings")
+            add.tap()
+            // A fresh simulator can present the OS keyboard's one-time typing tip.
+            // This is fixture setup, independent of the app's automatic field focus.
+            for host in [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")] {
+                let tip = host.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Speed up your typing")).firstMatch
+                if tip.waitForExistence(timeout: 1) {
+                    capture("dictionary-\(language)-\(appearance)-keyboard-welcome")
+                    host.buttons["Continue"].tap()
+                }
+            }
+            let input = app.textFields["privacy.dictionary.phrase"]
+            XCTAssertTrue(input.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Keyboard must appear without tapping the input")
+            XCTAssertFalse(add.exists, "Input must replace the Add row")
+            XCTAssertFalse(app.pickers["privacy.dictionary.matchMode"].exists)
+            XCTAssertTrue(app.descendants(matching: .any)["settings.privacy.detail"].firstMatch.exists,
+                          "Editing stays in the privacy page")
+            XCTAssertTrue(input.isHittable)
+            XCTAssertLessThanOrEqual(input.frame.maxY, app.keyboards.firstMatch.frame.minY + 1,
+                                     "Keyboard must not cover the input")
+            XCTAssertFalse(app.buttons["privacy.dictionary.save"].isEnabled)
+            capture("dictionary-\(language)-\(appearance)-01-inline-keyboard")
+            if language == "ru" {
+                input.typeText("Ёжик Тестовый\n")
+                let entry = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+                    "privacy.dictionary.entry.", "Ёжик Тестовый")).firstMatch
+                XCTAssertTrue(entry.waitForExistence(timeout: 5))
+                XCTAssertFalse(input.exists)
+                capture("dictionary-ru-dark-02-return-saved")
+                add.tap()
+                XCTAssertTrue(input.waitForExistence(timeout: 5))
+                XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+                input.typeText("Ёжик Тестовый")
+                app.buttons["privacy.dictionary.save"].tap()
+                let validation = app.staticTexts["privacy.dictionary.error"]
+                XCTAssertTrue(validation.waitForExistence(timeout: 5))
+                XCTAssertTrue(validation.isHittable)
+                XCTAssertLessThanOrEqual(validation.frame.maxY, app.keyboards.firstMatch.frame.minY + 1,
+                                         "Validation must remain readable above the keyboard")
+                XCTAssertLessThanOrEqual(input.frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
+                XCTAssertLessThanOrEqual(app.buttons["privacy.dictionary.cancel"].frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
+                XCTAssertTrue(input.exists && app.keyboards.firstMatch.exists, "Failed save preserves the focused draft")
+                XCTAssertEqual(input.value as? String, "Ёжик Тестовый")
+                capture("dictionary-ru-dark-03-duplicate")
+                app.buttons["privacy.dictionary.cancel"].tap()
+                XCTAssertFalse(input.exists)
+                entry.tap()
+                XCTAssertTrue(input.waitForExistence(timeout: 5))
+                XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+                input.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+                input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Ёжик Тестовый".count))
+                input.typeText("Ёжик Проверочный")
+                XCTAssertEqual(input.value as? String, "Ёжик Проверочный")
+                app.buttons["privacy.dictionary.save"].tap()
+                let changed = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+                    "privacy.dictionary.entry.", "Ёжик Проверочный")).firstMatch
+                XCTAssertTrue(changed.waitForExistence(timeout: 5))
+                capture("dictionary-ru-dark-04-edited")
+                changed.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+                    .press(forDuration: 0.05, thenDragTo: changed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+                let delete = app.buttons["privacy.dictionary.delete"]
+                XCTAssertTrue(delete.waitForExistence(timeout: 5))
+                delete.tap()
+                XCTAssertFalse(changed.exists)
+                add.tap()
+                XCTAssertTrue(input.waitForExistence(timeout: 5))
+                input.typeText("Несохранённый черновик")
+                app.buttons["privacy.dictionary.cancel"].tap()
+                XCTAssertFalse(input.exists)
+                XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "privacy.dictionary.entry.")).firstMatch.exists)
+                capture("dictionary-ru-dark-05-deleted-cancelled")
+            } else {
+                app.buttons["privacy.dictionary.cancel"].tap()
+                XCTAssertFalse(input.exists)
+            }
+            reveal("privacy.groups.illicit-remuneration", in: app)
+            app.buttons["privacy.groups.illicit-remuneration"].tap()
+            XCTAssertTrue(app.switches["privacy.groups.illicit-remuneration.enabled"].waitForExistence(timeout: 5))
+            capture("dictionary-\(language)-\(appearance)-group-cleanup-copy")
+            app.terminate()
         }
-        capture("dictionary-00-settings")
-        app.buttons["privacy.dictionary.add"].tap()
-        let input = app.descendants(matching: .any)["privacy.dictionary.phrase"].firstMatch
-        XCTAssertTrue(input.waitForExistence(timeout: 5))
-        input.tap()
-        input.typeText("Ёжик Тестовый")
-        capture("dictionary-01-add")
-        app.buttons["privacy.dictionary.save"].tap()
-        let entry = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "privacy.dictionary.entry.")).firstMatch
-        XCTAssertTrue(entry.waitForExistence(timeout: 5))
-        XCTAssertTrue(entry.label.contains("Ёжик Тестовый"))
-        capture("dictionary-02-saved")
-        entry.tap()
-        XCTAssertTrue(input.waitForExistence(timeout: 5))
-        input.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        // First focus moves the sheet when the software keyboard appears. Tap the
-        // settled text field's trailing area to place the caret after the short fixture.
-        input.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
-        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Ёжик Тестовый".count))
-        XCTAssertFalse((input.value as? String ?? "").contains("Ёжик"))
-        input.typeText("Ёжик Проверочный")
-        XCTAssertEqual(input.value as? String, "Ёжик Проверочный")
-        app.buttons["privacy.dictionary.save"].tap()
-        XCTAssertTrue(entry.waitForExistence(timeout: 5))
-        XCTAssertEqual(entry.label, "Ёжик Проверочный")
-        capture("dictionary-03-edited")
-        entry.tap()
-        app.buttons["privacy.dictionary.delete"].tap()
-        XCTAssertFalse(entry.exists)
-        capture("dictionary-04-deleted")
-        app.terminate()
-        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark", "-MobileSetupVersion", "1"]
-        app.launch()
-        openPrivacy(in: app)
-        reveal("privacy.dictionary.add", in: app)
-        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "privacy.dictionary.entry.")).firstMatch.exists)
-        capture("dictionary-05-dark-restart")
+        #endif
     }
 
     private func openPrivacy(in app: XCUIApplication) {
         let sidebar = app.buttons["navigation.settings"]
         if sidebar.waitForExistence(timeout: 2) { sidebar.tap() }
-        else { app.tabBars.buttons["Настройки"].tap() }
+        else {
+            let settings = app.tabBars.buttons.matching(NSPredicate(format: "label IN %@", ["Настройки", "Settings"])).firstMatch
+            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            settings.tap()
+        }
         XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 10))
         reveal("settings.privacy", in: app)
         app.buttons["settings.privacy"].tap()

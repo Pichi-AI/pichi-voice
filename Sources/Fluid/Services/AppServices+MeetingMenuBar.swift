@@ -59,15 +59,11 @@ extension AppServices {
             throw MeetingCaptureError.microphoneUnavailable
         }
         microphone.role = .unknown
-        let selectedApplication = defaults.savedApplication(in: applications)
-        if defaults.mode == .onlineCall, defaults.effectiveApplicationAudioScope == .selectedApplication, !defaults.usesAutomaticApplication, selectedApplication == nil {
-            throw MeetingCaptureError.applicationUnavailable(defaults.applicationDisplayName ?? defaults.applicationBundleIdentifier ?? "")
-        }
-        let application = try defaults.mode == .onlineCall && defaults.effectiveApplicationAudioScope == .systemAudio ? nil : MeetingCaptureSourceCatalog.resolveRecordingApplication(
+        let application = try MeetingRecordingSourceResolver.resolve(
             mode: defaults.mode,
-            usesAutomaticApplication: defaults.usesAutomaticApplication,
-            selectedApplication: selectedApplication,
-            automaticTarget: target,
+            source: MeetingRecordingSource(defaults: defaults),
+            applicationAudioScope: defaults.effectiveApplicationAudioScope,
+            target: target,
             applications: applications
         )
         return MeetingCaptureConfiguration(

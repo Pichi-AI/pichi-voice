@@ -84,13 +84,16 @@ def main():
     delivery = typing[delivery_start:typing.index("    func typeOutputPlanInstantly(", delivery_start + 1)]
     assert delivery.index("let profile = PrivateProfileStorage.current") < delivery.index("await ")
     assert "callerIsOutputValid() && PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork" in delivery
-    assert "self.verifyPasteLanded(text, before: verificationBefore, profile: profile, isOutputValid: isOutputValid)" in delivery
+    assert "self.verifyPasteLanded(text, before: verificationBefore, profile: profile," in delivery
+    assert "verificationID: verificationID, postedAt: completedAt, isOutputValid: isOutputValid)" in delivery
     if args.unguarded_verifier == "post":
-        fence = "                        guard !Task.isCancelled, owner.isCurrent, isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }"
+        fence = "guard !Task.isCancelled, owner.isCurrent, isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }"
         assert verifier.count(fence) == 1
         verifier = verifier.replace(fence, "", 1)
     elif args.unguarded_verifier == "presentation":
-        paste_presentation = paste_presentation.replace("PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,", "", 1)
+        fence = "guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }"
+        assert paste_presentation.count(fence) == 1
+        paste_presentation = paste_presentation.replace(fence, "", 1)
     if args.unjoined_verifier:
         assert verifier.count("PrivateProfileOperationOwner(registerForTransitions: true)") == 1
         verifier = verifier.replace("PrivateProfileOperationOwner(registerForTransitions: true)", "PrivateProfileOperationOwner(registerForTransitions: false)")
@@ -98,10 +101,21 @@ def main():
         assert verifier.count("worker.cancel()") == 1
         verifier = verifier.replace("worker.cancel()", "// Negative control: reader cancellation omitted")
     real_verifier = (ROOT / "Sources/Fluid/Services/PasteVerifier.swift").read_text()
-    real_verify_body = declaration(real_verifier, "    nonisolated static func verify(")
+    real_verify_start = real_verifier.index("    nonisolated static func verify(")
+    real_verify_body = real_verifier[real_verify_start:real_verifier.index("\n    }\n", real_verify_start) + len("\n    }")]
+    recovery_policy = declaration(real_verifier, "final class PasteRecoveryPresentationPolicy {")
+    real_timing = "\n".join(line for line in real_verifier.splitlines() if line.startswith((
+        "    static let firstCheckDelay:", "    static let secondCheckDelay:", "    static let finalCheckDelay:"
+    )))
+    assert len(real_timing.splitlines()) == 3
     if args.unchecked_readback:
-        real_verify_body = real_verify_body.replace('catch { return .unknown(reason: "cancelled") }', 'catch {}')
+        real_verify_body = real_verify_body.replace('return !Task.isCancelled', 'return true')
+        real_verify_body = real_verify_body.replace('return false', 'return true')
         real_verify_body = real_verify_body.replace('        guard !Task.isCancelled else { return .unknown(reason: "cancelled") }', '')
+        for delay in ('firstCheckDelay', 'secondCheckDelay', 'finalCheckDelay'):
+            real_verify_body = real_verify_body.replace(
+                f'guard await wait(self.{delay}), !Task.isCancelled else {{ return .unknown(reason: "cancelled") }}',
+                f'_ = await wait(self.{delay})')
     real_readback = "\n".join(declaration(real_verifier, marker) for marker in [
         "    struct Snapshot {", "    enum Verdict: Equatable {", "    private nonisolated static func unchangedVerdict(",
         "    private nonisolated static func confirmation(", "    private nonisolated static func normalize(",
@@ -161,6 +175,7 @@ def main():
 }
 @MainActor final class DebugLogger {
     static let shared = DebugLogger()
+    @TaskLocal static var pipelineID: String?
     var information: [String] = []
     func debug(_ text: String, source: String) {}
     func error(_ text: String, source: String) {}
@@ -205,6 +220,11 @@ struct MeetingSession {
         captureWasCancelled = Task.isCancelled
     }
 }
+@MainActor final class MeetingRecordingSourcePromptController {
+    static let shared = MeetingRecordingSourcePromptController()
+    var shortcutRequests = 0
+    func handleShortcut() { shortcutRequests += 1 }
+}
 @MainActor final class ASRService {
     @Published var partialTranscription = ""
     var isRunning = false
@@ -240,6 +260,7 @@ enum MeetingCoordinatorError: Error { case featureDisabled }
 @MainActor final class SettingsStore {
     static let shared = SettingsStore()
     var fluidMeetEnabled = true
+    var showPasteCheckAlerts = true
     var meetingRecordingDefaults = MeetingRecordingDefaults()
     var preferredInputDeviceUID: String?
 }
@@ -335,13 +356,13 @@ nonisolated enum PasteVerifier {
     static func secondsSinceLastUserInput() -> Double { 10 }
 }
 extension Notification.Name { static let fluidPasteNotLanded = Notification.Name("SyntheticPasteNotLanded") }
+@MainActor
+''' + recovery_policy + r'''
 @MainActor final class TypingService {
 ''' + verifier + r'''
 }
 ''' + "\nnonisolated enum ActualPasteVerifierProbe {\n" + real_readback + "\n" + real_verify_body + r'''
-    static let firstCheckDelay: TimeInterval = 0.15
-    static let secondCheckDelay: TimeInterval = 0.35
-    static let finalCheckDelay: TimeInterval = 1.0
+''' + real_timing + r'''
     static func capture() -> Snapshot? { PasteReadbackDouble.shared.capture() }
 }
 nonisolated final class PasteReadbackDouble: @unchecked Sendable {

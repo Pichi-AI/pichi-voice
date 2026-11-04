@@ -227,7 +227,7 @@ struct TemplateMeetingSummaryView: View {
 
     private var setupPrompt: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-            Text("Summaries use a provider from AI Providers. Add and verify one to summarize this meeting.")
+            Text("Summaries use a provider from AI Settings. Add and verify one to summarize this meeting.")
                 .font(self.theme.typography.bodySmall)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
