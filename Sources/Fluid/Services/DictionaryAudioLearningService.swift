@@ -16,6 +16,7 @@ final class DictionaryAudioLearningService {
         let evidenceID: UUID
         let prepare: @MainActor () async throws -> DictionaryLearningAudioEvidence?
         let isValid: @MainActor () -> Bool
+        let isCurrentBeforePreparation: @MainActor () -> Bool
         let explicitHistory: Bool
         let expiresAt: Date
         let pronunciationGeneration: String
@@ -101,6 +102,7 @@ final class DictionaryAudioLearningService {
     func enqueue(
         entry: SettingsStore.CustomDictionaryEntry, evidenceID: UUID, explicitHistory: Bool = true,
         isValid: @escaping @MainActor () -> Bool,
+        isCurrentBeforePreparation: (@MainActor () -> Bool)? = nil,
         prepare: @escaping @MainActor () async throws -> DictionaryLearningAudioEvidence?
     ) -> Bool {
         guard !retired, PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
@@ -120,6 +122,7 @@ final class DictionaryAudioLearningService {
             evidenceID: evidenceID,
             prepare: prepare,
             isValid: isValid,
+            isCurrentBeforePreparation: isCurrentBeforePreparation ?? { [isCurrent] in isCurrent(entry) },
             explicitHistory: explicitHistory,
             expiresAt: Date().addingTimeInterval(self.lifetime),
             pronunciationGeneration: DictionaryMatcherExperiment.generation
@@ -144,7 +147,7 @@ final class DictionaryAudioLearningService {
                 self.drain()
                 self.scheduleExpiry()
             }
-            guard self.isCurrent(request.entry), request.isValid(), request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
+            guard request.isCurrentBeforePreparation(), request.isValid(), request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
             do {
                 guard let evidence = try await request.prepare(), !evidence.samples.isEmpty, evidence.samples.count <= 238_080 else { return }
                 try Task.checkCancellation()

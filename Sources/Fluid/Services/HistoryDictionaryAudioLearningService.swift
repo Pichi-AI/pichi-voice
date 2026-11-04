@@ -38,13 +38,15 @@ final class HistoryDictionaryAudioLearningService {
     /// persistence are owned by the shared worker and retired with the private profile.
     @discardableResult
     func enqueueInline(candidate: AutomaticDictionaryCorrectionCandidate, selection: DictionaryHistoryWordSelection, expectedText: String) -> Bool {
-        let matches = SettingsStore.shared.customDictionaryEntries.filter {
-            $0.replacement.caseInsensitiveCompare(candidate.correctedText.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
-        }
-        guard matches.count == 1, let dictionaryEntry = matches.first,
+        guard selection.isOriginal, candidate.sourceUTF16Range == selection.range,
+              (selection.sourceText as NSString).replacingCharacters(in: selection.range, with: candidate.correctedText) == expectedText,
               let history = self.currentEntry(selection: selection, candidate: candidate),
               history.sourceTranscriptText == expectedText, let audio = history.audio,
-              let url = DictationAudioHistoryStore.scoped(to: selection.profile).audioFileURL(for: history) else { return false }
+              let url = DictationAudioHistoryStore.scoped(to: selection.profile).audioFileURL(for: history),
+              FileManager.default.fileExists(atPath: url.path),
+              let dictionaryEntry = Self.targetEntry(candidate: candidate, selection: selection,
+                  history: history, entries: SettingsStore.shared.customDictionaryEntries) else { return false }
+        let wasNew = !SettingsStore.shared.customDictionaryEntries.contains(dictionaryEntry)
         let source = selection.sourceText
         let identity = "\(selection.entryID.uuidString):\(audio.fileName):\(selection.range.location):\(selection.range.length):\(dictionaryEntry.id.uuidString):\(source)"
         let evidenceID = Self.stableID(identity)
@@ -52,12 +54,14 @@ final class HistoryDictionaryAudioLearningService {
         let isValid: @MainActor () -> Bool = {
             guard PrivateProfileStorage.isReadable(selection.profile), PrivateProfileStorage.acceptsNewWork,
                   DictionaryMatcherExperiment.sharedFeaturesEnabled, generation == DictionaryMatcherExperiment.generation,
-                  SettingsStore.shared.customDictionaryEntries.contains(dictionaryEntry),
+                  Self.entryStillEligible(dictionaryEntry, entries: SettingsStore.shared.customDictionaryEntries, allowMissing: wasNew),
+                  FileManager.default.fileExists(atPath: url.path),
                   let current = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == selection.entryID }) else { return false }
             return current.sourceTranscriptText == expectedText && current.rawText == history.rawText && current.audio == audio &&
                 DictationAudioHistoryStore.scoped(to: selection.profile).audioFileURL(for: current) == url
         }
-        return DictionaryAudioLearningService.shared.enqueue(entry: dictionaryEntry, evidenceID: evidenceID, isValid: isValid) {
+        return DictionaryAudioLearningService.shared.enqueue(entry: dictionaryEntry, evidenceID: evidenceID, isValid: isValid,
+            isCurrentBeforePreparation: isValid) {
             guard isValid() else { return nil }
             let recording = try await AppServices.shared.asr.historyDictionaryRecording(
                 fileURL: url, recordingID: Self.recordingID(entryID: history.id, fileName: audio.fileName), profile: selection.profile, ownedByLearningWorker: true
@@ -72,7 +76,14 @@ final class HistoryDictionaryAudioLearningService {
             // the freshly aligned original ASR spelling as the learned error,
             // rather than teaching the matcher that the canonical label failed.
             let rawObserved = recording.alignment.words[evidence.sourceWordRange].map(\.text).joined(separator: " ")
-            guard let observed = DictionaryCorrectionEditPolicy.acousticSpelling(rawObserved) else { return nil }
+            guard let observed = DictionaryCorrectionEditPolicy.acousticSpelling(rawObserved), isValid() else { return nil }
+            if wasNew && !SettingsStore.shared.customDictionaryEntries.contains(dictionaryEntry) {
+                // Main-actor admission makes the duplicate check and settings update atomic.
+                guard Self.entryStillEligible(dictionaryEntry, entries: SettingsStore.shared.customDictionaryEntries, allowMissing: true) else { return nil }
+                SettingsStore.shared.customDictionaryEntries.append(dictionaryEntry)
+                ASRService.invalidateDictionaryCache()
+                NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
+            }
             return DictionaryLearningAudioEvidence(recordingID: evidence.recordingID, modelKey: evidence.modelKey,
                 observedText: observed, sourceWordRange: evidence.sourceWordRange,
                 sourceSampleRange: evidence.sourceSampleRange, focalSampleRange: evidence.focalSampleRange,
@@ -95,6 +106,29 @@ final class HistoryDictionaryAudioLearningService {
         let candidate = AutomaticDictionaryCorrectionCandidate(heardText: fragment.text, correctedText: fragment.text,
             sourceUTF16Range: fragment.range)
         return self.enqueueInline(candidate: candidate, selection: selection, expectedText: entry.sourceTranscriptText) ? 1 : 0
+    }
+
+    /// Existing spellings remain untouched; a new acoustic term never grants a text replacement.
+    static func targetEntry(candidate: AutomaticDictionaryCorrectionCandidate, selection: DictionaryHistoryWordSelection,
+                            history: TranscriptionHistoryEntry, entries: [SettingsStore.CustomDictionaryEntry]) -> SettingsStore.CustomDictionaryEntry? {
+        let corrected = candidate.correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard DictionaryCorrectionEditPolicy.isTerm(corrected),
+              let selected = DictionaryCorrectionEditPolicy.acousticSpelling(selection.heardText),
+              let heard = DictionaryCorrectionEditPolicy.acousticSpelling(candidate.heardText), selected == heard else { return nil }
+        if heard == corrected {
+            guard history.correctedRawText != nil,
+                  history.sourceFragments.contains(where: { $0.range == selection.range && $0.isValid(in: history.sourceTranscriptText) }) else { return nil }
+        }
+        let matches = entries.filter { $0.replacement.caseInsensitiveCompare(corrected) == .orderedSame }
+        guard matches.count <= 1 else { return nil }
+        return matches.first ?? SettingsStore.CustomDictionaryEntry(
+            id: Self.stableID("history-acoustic-entry:" + corrected.lowercased()), triggers: [], replacement: corrected
+        )
+    }
+
+    static func entryStillEligible(_ entry: SettingsStore.CustomDictionaryEntry, entries: [SettingsStore.CustomDictionaryEntry], allowMissing: Bool) -> Bool {
+        let matches = entries.filter { $0.replacement.caseInsensitiveCompare(entry.replacement) == .orderedSame || $0.id == entry.id }
+        return matches.isEmpty ? allowMissing : matches.count == 1 && matches[0] == entry
     }
 
     nonisolated private static func stableID(_ text: String) -> UUID {

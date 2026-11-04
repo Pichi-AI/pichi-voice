@@ -3652,6 +3652,83 @@ extension DictationE2ETests {
         XCTAssertEqual(calls, 2)
     }
 
+    func testHistoryLearningTargetCreatesAcousticOnlyEntryAndReusesExisting() throws {
+        let source = "please open flued voice now"
+        let range = (source as NSString).range(of: "flued voice")
+        let corrected = "please open Fluid Voice now"
+        let history = TranscriptionHistoryEntry(rawText: source, processedText: source, appName: "", windowTitle: "",
+            wasAIProcessed: false, correctedRawText: corrected)
+        let selection = try XCTUnwrap(DictionaryHistoryWordSelection(entryID: history.id, sourceText: source, range: range, isOriginal: true))
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "flued voice", correctedText: "Fluid Voice", sourceUTF16Range: range)
+        let created = try XCTUnwrap(HistoryDictionaryAudioLearningService.targetEntry(candidate: candidate, selection: selection, history: history, entries: []))
+        XCTAssertEqual(created.replacement, "Fluid Voice")
+        XCTAssertTrue(created.triggers.isEmpty)
+        XCTAssertEqual(created, HistoryDictionaryAudioLearningService.targetEntry(candidate: candidate, selection: selection, history: history, entries: []))
+        let existing = SettingsStore.CustomDictionaryEntry(triggers: ["another"], replacement: "Fluid Voice")
+        XCTAssertEqual(HistoryDictionaryAudioLearningService.targetEntry(candidate: candidate, selection: selection, history: history, entries: [existing]), existing)
+        XCTAssertTrue(HistoryDictionaryAudioLearningService.entryStillEligible(created, entries: [], allowMissing: true))
+        XCTAssertTrue(HistoryDictionaryAudioLearningService.entryStillEligible(created, entries: [created], allowMissing: true))
+        XCTAssertFalse(HistoryDictionaryAudioLearningService.entryStillEligible(created, entries: [existing], allowMissing: true))
+        XCTAssertNil(HistoryDictionaryAudioLearningService.targetEntry(candidate: candidate, selection: selection, history: history, entries: [existing, created]))
+    }
+
+    func testHistoryLearningTargetAcceptsExplicitCrossScriptNames() throws {
+        for (heard, intended) in [("PGI", "Pichi AI"), ("Пичи ай", "Pichi AI"), ("INblement", "AIEnablement")] {
+            let range = NSRange(location: 0, length: heard.utf16.count)
+            let history = TranscriptionHistoryEntry(rawText: heard, processedText: heard, appName: "", windowTitle: "",
+                wasAIProcessed: false, correctedRawText: intended)
+            let selection = try XCTUnwrap(DictionaryHistoryWordSelection(entryID: history.id, sourceText: heard, range: range, isOriginal: true))
+            let candidate = AutomaticDictionaryCorrectionCandidate(heardText: heard, correctedText: intended, sourceUTF16Range: range)
+            let entry = try XCTUnwrap(HistoryDictionaryAudioLearningService.targetEntry(candidate: candidate, selection: selection, history: history, entries: []))
+            XCTAssertEqual(entry.replacement, intended)
+            XCTAssertTrue(entry.triggers.isEmpty)
+        }
+    }
+
+    func testHistoryLearningTargetRequiresConfirmedReplay() throws {
+        let source = "doctor"
+        let history = TranscriptionHistoryEntry(rawText: source, processedText: source, appName: "", windowTitle: "", wasAIProcessed: false)
+        let range = NSRange(location: 0, length: source.utf16.count)
+        let selection = try XCTUnwrap(DictionaryHistoryWordSelection(entryID: history.id, sourceText: source, range: range, isOriginal: true))
+        let unchanged = AutomaticDictionaryCorrectionCandidate(heardText: source, correctedText: source, sourceUTF16Range: range)
+        XCTAssertNil(HistoryDictionaryAudioLearningService.targetEntry(candidate: unchanged, selection: selection, history: history, entries: []))
+        let confirmed = TranscriptionHistoryEntry(id: history.id, rawText: source, processedText: source, appName: "", windowTitle: "",
+            wasAIProcessed: false, correctedRawText: source,
+            sourceFragments: [.init(location: 0, length: source.utf16.count, text: source)])
+        let result = try XCTUnwrap(HistoryDictionaryAudioLearningService.targetEntry(candidate: unchanged, selection: selection, history: confirmed, entries: []))
+        XCTAssertTrue(result.triggers.isEmpty)
+    }
+
+    func testHistoryNewEntryIsActivatedAfterEvidenceAndDuplicateIsSavedOnce() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Fluid")
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: "flued",
+            sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
+        var active = false
+        var valid = true
+        var idle = false
+        let worker = DictionaryAudioLearningService(store: store,
+            extract: { _ in PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "parakeet-v3") },
+            canProcess: { idle }, canProcessHistory: { idle }, isCurrent: { $0 == entry && active })
+        let id = UUID()
+        let prepare: @MainActor () async throws -> DictionaryLearningAudioEvidence? = { active = true; return evidence }
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: id, isValid: { valid }, isCurrentBeforePreparation: { valid }, prepare: prepare))
+        XCTAssertFalse(worker.enqueue(entry: entry, evidenceID: id, isValid: { valid }, isCurrentBeforePreparation: { valid }, prepare: prepare))
+        XCTAssertFalse(active)
+        idle = true
+        worker.activityDidEnd()
+        for _ in 0..<200 where worker.pendingCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(worker.pendingCount, 0)
+        XCTAssertTrue(active)
+        let profiles = await store.allProfiles()
+        XCTAssertEqual(profiles.first?.enrollments.count, 1)
+        valid = false
+        XCTAssertFalse(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { valid }, isCurrentBeforePreparation: { valid }, prepare: prepare))
+        await worker.prepareForPrivateProfileTransition()
+    }
+
     func testHistoryLearningPreparationRetiresWithProfileAndDeduplicates() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
