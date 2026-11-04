@@ -191,10 +191,9 @@ struct HistoryTextComparisonView: View {
 
     @ViewBuilder private var savedAudioActions: some View {
         let indices = self.entry.sourceFragments.indices.filter { index in
-            let text = self.entry.sourceFragments[index].text
-            return SettingsStore.shared.customDictionaryEntries.contains {
-                $0.replacement.caseInsensitiveCompare(text) == .orderedSame
-            }
+            let fragment = self.entry.sourceFragments[index]
+            return fragment.isValid(in: self.entry.sourceTranscriptText) &&
+                DictionaryCorrectionEditPolicy.isTerm(fragment.text)
         }
         if DictionaryMatcherExperiment.sharedFeaturesEnabled, self.savedInlineCorrection == nil,
            self.entry.correctedRawText != nil, self.entry.audio != nil, !indices.isEmpty {
