@@ -15,6 +15,7 @@ struct DictionarySelectableTranscript: NSViewRepresentable {
     var onBeginEdit: ((NSRange) -> Bool)?
     var onEndEdit: (() -> Void)?
     var onEdit: ((NSRange, String) -> Bool)?
+    var onConfirmFragment: ((NSRange) -> Void)?
     let onCorrect: (NSRange) -> Void
 
     func makeNSView(context: Context) -> DictionarySelectableTextView {
@@ -38,6 +39,7 @@ struct DictionarySelectableTranscript: NSViewRepresentable {
         view.onBeginEdit = self.onBeginEdit
         view.onEndEdit = self.onEndEdit
         view.onEdit = self.onEdit
+        view.onConfirmFragment = self.onConfirmFragment
         view.configureInlineEditing(
             enabled: self.inlineEditingEnabled,
             identity: self.interactionIdentity,
@@ -67,6 +69,7 @@ struct DictionarySelectableTranscript: NSViewRepresentable {
         view.cancelInlineEdit(notify: false)
         view.onCorrect = nil
         view.onEdit = nil
+        view.onConfirmFragment = nil
         view.onBeginEdit = nil
         view.onEndEdit = nil
     }
@@ -77,6 +80,7 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
     var onBeginEdit: ((NSRange) -> Bool)?
     var onEndEdit: (() -> Void)?
     var onEdit: ((NSRange, String) -> Bool)?
+    var onConfirmFragment: ((NSRange) -> Void)?
     private(set) var inlineEdit: DictionaryInlineTextEdit?
     private(set) var inlineEditor: NSTextField?
     private var editorContainer: NSView?
@@ -418,6 +422,7 @@ final class DictionarySelectableTextView: NSTextView, NSTextFieldDelegate {
         let replacement = field.stringValue
         if replacement == edit.heardText,
            DictionaryInlineTextEdit.wordRanges(in: replacement).count < 2 || self.groupedRanges.contains(edit.range) {
+            if self.groupedRanges.contains(edit.range) { self.onConfirmFragment?(edit.range) }
             self.cancelInlineEdit(); return true
         }
         guard self.onEdit?(edit.range, replacement) == true else {

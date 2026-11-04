@@ -122,8 +122,11 @@ private struct InlineFocusHost: View {
             "Clicking the second word of a saved fragment edits its complete range, including the space")
         view.cancelInlineEdit(); pump()
         precondition(view.beginInlineEdit(range: last)); pump()
+        var confirmations: [NSRange] = []
+        view.onConfirmFragment = { confirmations.append($0) }
         precondition(view.commitInlineEdit() && state.commits.count == 3,
             "An already grouped unchanged phrase does not write a duplicate group")
+        precondition(confirmations == [phrase], "Confirming a saved group forwards its occurrence for audio learning without a duplicate text edit")
         precondition(view.beginInlineEdit(range: last)); pump()
         view.inlineEditor!.stringValue = "Blank click must cancel"
         NSApp.sendEvent(mouse(.leftMouseDown, NSPoint(x: 490, y: 79), 30))

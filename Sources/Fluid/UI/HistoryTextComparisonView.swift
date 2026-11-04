@@ -163,6 +163,7 @@ struct HistoryTextComparisonView: View {
         if isOriginal {
             view.onBeginEdit = { range in self.beginInlineCorrection(range: range, source: content) }
             view.onEdit = { range, replacement in self.commitInlineCorrection(range: range, replacement: replacement) }
+            view.onConfirmFragment = { range in self.confirmInlinePronunciation(range: range) }
         }
         return view
     }
@@ -329,6 +330,19 @@ struct HistoryTextComparisonView: View {
             heardText: context.edit.heardText, correctedText: replacement,
             sourceUTF16Range: context.edit.range
         )
+    }
+
+    /// Confirming a previously corrected group can teach its retained audio
+    /// without rewriting the history entry or inventing another text edit.
+    private func confirmInlinePronunciation(range: NSRange) {
+        guard let context = self.activeInlineCorrection, context.entryID == self.entry.id,
+              context.edit.range == range, PrivateProfileStorage.isReadable(context.profile),
+              let current = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == context.entryID }),
+              current.sourceTranscriptText == context.edit.sourceText,
+              current.sourceFragments.contains(where: { $0.range == range }),
+              let selection = DictionaryHistoryWordSelection(entryID: context.entryID, sourceText: context.edit.sourceText, range: range, isOriginal: true),
+              let candidate = self.explicitInlineCandidate(context: context, replacement: context.edit.heardText) else { return }
+        HistoryDictionaryAudioLearningService.shared.enqueueInline(candidate: candidate, selection: selection, expectedText: current.sourceTranscriptText)
     }
 
     private func openSavedInlinePronunciation() {
