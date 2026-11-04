@@ -5,6 +5,23 @@ import XCTest
 
 @MainActor
 final class DictionaryDrawerLayoutTests: XCTestCase {
+    func testAudioSummaryExcludesFeatureOnlyReferencesAndUsesLatestLinkedTimestamp() {
+        var legacy = PronunciationEnrollmentCapture(values: [1], sourceFrameCount: 1, modelKey: "fixture")
+        legacy.capturedAt = Date(timeIntervalSince1970: 300)
+        var inspection = legacy
+        inspection.inspectionID = UUID()
+        inspection.capturedAt = Date(timeIntervalSince1970: 100)
+        var original = legacy
+        original.originalAudioID = UUID()
+        original.capturedAt = Date(timeIntervalSince1970: 200)
+        let summary = DictionarySavedAudioSummary.from([legacy, inspection, original])
+        XCTAssertEqual(summary.count, 2)
+        XCTAssertEqual(summary.latestCapture, original.capturedAt)
+        let empty = DictionarySavedAudioSummary.from([legacy])
+        XCTAssertEqual(empty.count, 0)
+        XCTAssertNil(empty.latestCapture)
+    }
+
     func testShortReplacementGetsFullDrawerWidthAndVisibleActions() throws {
         try self.verifyLayouts(replacement: "E2E Тест Ёжик", aliases: ["e2e ёлка", "e2e ежик"], attachment: "short")
     }

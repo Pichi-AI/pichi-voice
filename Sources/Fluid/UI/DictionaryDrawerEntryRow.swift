@@ -3,6 +3,13 @@ import SwiftUI
 struct DictionarySavedAudioSummary {
     let count: Int
     let latestCapture: Date?
+
+    /// Counts links in committed metadata. A legacy feature-only reference is
+    /// not an audio sample; the links do not verify that their files are readable.
+    static func from(_ captures: [PronunciationEnrollmentCapture]) -> Self {
+        let linked = captures.filter { $0.inspectionID != nil || $0.originalAudioID != nil }
+        return Self(count: linked.count, latestCapture: linked.compactMap(\.capturedAt).max())
+    }
 }
 
 struct DictionarySavedAudioSummaryView: View {
@@ -13,11 +20,11 @@ struct DictionarySavedAudioSummaryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             if self.summary.count == 0 {
-                Text("No saved audio samples")
+                Text("No linked audio samples")
             } else {
-                Text(PichiLocalization.format("Saved audio samples: %lld (up to 10 per model)", self.summary.count))
+                Text(PichiLocalization.format("Linked audio samples: %lld (up to 10 per model)", self.summary.count))
                 if let latest = self.summary.latestCapture {
-                    Text(PichiLocalization.format("Latest sample recorded: %@", latest.formatted(Date.FormatStyle(date: .abbreviated, time: .standard).locale(self.locale))))
+                    Text(PichiLocalization.format("Latest sample added: %@", latest.formatted(Date.FormatStyle(date: .abbreviated, time: .standard).locale(self.locale))))
                 }
             }
         }

@@ -379,7 +379,7 @@ struct CustomDictionaryView: View {
                 let captures = profiles.filter {
                     $0.dictionaryEntryID == entry.id && $0.label.caseInsensitiveCompare(entry.replacement) == .orderedSame
                 }.flatMap(\.enrollments)
-                return (entry.id, DictionarySavedAudioSummary(count: captures.count, latestCapture: captures.compactMap(\.capturedAt).max()))
+                return (entry.id, DictionarySavedAudioSummary.from(captures))
             })
         }
         .onReceive(NotificationCenter.default.publisher(for: PronunciationDictionaryStore.didChangeNotification).receive(on: RunLoop.main)) { _ in

@@ -64272,53 +64272,53 @@
         }
       }
     },
-    "No saved audio samples": {
+    "No linked audio samples": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "No saved audio samples"
+            "value": "No linked audio samples"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Аудиообразцов пока нет"
+            "value": "Нет связанных аудиообразцов"
           }
         }
       }
     },
-    "Saved audio samples: %lld (up to 10 per model)": {
+    "Linked audio samples: %lld (up to 10 per model)": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Saved audio samples: %lld (up to 10 per model)"
+            "value": "Linked audio samples: %lld (up to 10 per model)"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Сохранено аудиообразцов: %lld (до 10 для каждой модели)"
+            "value": "Связано аудиообразцов: %lld (до 10 для каждой модели)"
           }
         }
       }
     },
-    "Latest sample recorded: %@": {
+    "Latest sample added: %@": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Latest sample recorded: %@"
+            "value": "Latest sample added: %@"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Последний образец записан: %@"
+            "value": "Последний образец добавлен: %@"
           }
         }
       }
