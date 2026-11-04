@@ -686,8 +686,18 @@ final class ASRService: ObservableObject {
         try self.acquireExclusiveActivity(activity, cancelDictionaryLearning: true)
     }
 
+    #if DEBUG
+    var foregroundLearningForTesting: DictionaryAudioLearningService?
+    var startGenerationForTesting: UInt64 { self.audioCaptureStartGeneration }
+    var isTerminatingForTesting: Bool { self.isTerminating }
+    #endif
+
     func acquireForegroundActivity(_ activity: ASRExclusiveActivity) async throws -> ASRActivityLease {
+        #if DEBUG
+        let learning = self.foregroundLearningForTesting ?? DictionaryAudioLearningService.shared
+        #else
         let learning = DictionaryAudioLearningService.shared
+        #endif
         await learning.pauseForForegroundAdmission()
         defer { learning.resumeAfterForegroundAdmission() }
         try Task.checkCancellation()
@@ -1236,9 +1246,9 @@ final class ASRService: ObservableObject {
     }
 
     func shutdownForTermination() async {
+        self.isTerminating = true
         self.meetingModelResidency.beginTermination()
         await self.meetingModelResidency.retireIdlePreparation()
-        self.isTerminating = true
         // Give media restoration the same quit window as audio cleanup.
         self.mediaPlaybackService.beginShutdown()
         if self.isStarting, self.isRunning == false {
@@ -3172,9 +3182,30 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.warning("START() blocked - app is terminating", source: "ASRService")
             return .failed
         }
+        // Publish the pending attempt before joining background work so stop and
+        // termination can invalidate it while provider retirement is suspended.
+        let profile = PrivateProfileStorage.current
+        self.audioCaptureStartGeneration &+= 1
+        let startGeneration = self.audioCaptureStartGeneration
+        self.isStarting = true
+        self.isPronunciationTrainingStart = forDictionaryTraining && requiresPronunciation
+        self.pronunciationTrainingStartGeneration = self.isPronunciationTrainingStart ? DictionaryMatcherExperiment.generation : nil
+        defer {
+            self.pronunciationTrainingStartGeneration = nil
+            self.isPronunciationTrainingStart = false
+            self.finishAudioCaptureStart()
+        }
+
         let captureLease: ASRActivityLease
         do {
             captureLease = try await self.acquireForegroundActivity(.dictation)
+            guard startGeneration == self.audioCaptureStartGeneration, !self.isTerminating,
+                  !Task.isCancelled, self.isPronunciationTrainingStartCurrent,
+                  PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(profile),
+                  PrivateProfileStorage.current == profile else {
+                self.releaseExclusiveActivity(captureLease)
+                return .failed
+            }
             self.dictationActivityLease = captureLease
             do {
                 try self.admitDictationTranscription(captureLease)
@@ -3191,16 +3222,7 @@ final class ASRService: ObservableObject {
             return .failed
         }
         self.retainDictionaryLearningRecording(nil)
-        self.audioCaptureStartGeneration &+= 1
-        let startGeneration = self.audioCaptureStartGeneration
-        self.isStarting = true
-        // Spelling-only training owns the same isolated capture, without requiring voice matching.
-        self.isPronunciationTrainingStart = forDictionaryTraining && requiresPronunciation
-        self.pronunciationTrainingStartGeneration = self.isPronunciationTrainingStart ? DictionaryMatcherExperiment.generation : nil
         defer {
-            self.pronunciationTrainingStartGeneration = nil
-            self.isPronunciationTrainingStart = false
-            self.finishAudioCaptureStart()
             if !self.isRunning { self.releaseDictationActivityIfNeeded(captureLease) }
         }
 

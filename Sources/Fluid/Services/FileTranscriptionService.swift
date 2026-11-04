@@ -554,6 +554,8 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
         }
 
         defer { self.asrService.releaseExclusiveActivity(activityLease) }
+        try self.requireCurrentOperation()
+        guard !callerCancellation.isCanceled else { throw CancellationError() }
         let profile = PrivateProfileStorage.current
         let output = try self.historyStore.admitWrite()
         defer { output.finish() }

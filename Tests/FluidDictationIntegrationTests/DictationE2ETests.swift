@@ -3731,6 +3731,77 @@ extension DictationE2ETests {
         await service.prepareForPrivateProfileTransition()
     }
 
+    #if DEBUG
+    func testStopDuringHistoryRetirementCancelsActualASRStart() async throws {
+        try await self.checkStartCancelledDuringHistoryRetirement(terminate: false)
+    }
+
+    func testTerminationDuringHistoryRetirementCancelsActualASRStart() async throws {
+        try await self.checkStartCancelledDuringHistoryRetirement(terminate: true)
+    }
+
+    private func checkStartCancelledDuringHistoryRetirement(terminate: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["flued"], replacement: "Fluid")
+        let asr = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        asr.useMediaPlaybackForTesting(MediaPlaybackService(transport: MediaPlaybackProcessTransport()))
+        asr.micStatus = .authorized
+        let started = expectation(description: "history owns actual ASR lease")
+        let retiring = expectation(description: "history retirement is suspended")
+        var unblock: CheckedContinuation<Void, Never>?
+        var historyLease: ASRActivityLease?
+        let learning = DictionaryAudioLearningService(store: store,
+            canProcess: { asr.activeExclusiveActivity == nil },
+            canProcessHistory: { asr.activeExclusiveActivity == nil }, isCurrent: { $0 == entry })
+        asr.foregroundLearningForTesting = learning
+        learning.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }) {
+            let lease = try asr.acquireExclusiveActivity(.fileTranscription)
+            historyLease = lease
+            started.fulfill()
+            do { try await Task.sleep(for: .seconds(30)) } catch {
+                retiring.fulfill()
+                await withCheckedContinuation { unblock = $0 }
+                asr.releaseExclusiveActivity(lease)
+                historyLease = nil
+                throw error
+            }
+            asr.releaseExclusiveActivity(lease)
+            historyLease = nil
+            return nil
+        }
+        await fulfillment(of: [started], timeout: 2)
+        var microphoneStarted = false
+        let start = Task { @MainActor in await asr.start(onCaptureStarted: { microphoneStarted = true }) }
+        await fulfillment(of: [retiring], timeout: 2)
+        XCTAssertTrue(asr.isStarting)
+        XCTAssertEqual(asr.activeExclusiveActivity, .fileTranscription)
+        XCTAssertNotNil(historyLease)
+        let generation = asr.startGenerationForTesting
+        let stop = Task { @MainActor in
+            if terminate { await asr.shutdownForTermination() }
+            else { _ = await asr.stop() }
+        }
+        // Observe the actual lifecycle invalidation before letting the provider drain.
+        for _ in 0..<200 where terminate ? !asr.isTerminatingForTesting : asr.startGenerationForTesting == generation {
+            await Task.yield()
+        }
+        XCTAssertTrue(terminate ? asr.isTerminatingForTesting : asr.startGenerationForTesting != generation)
+        XCTAssertFalse(microphoneStarted)
+        XCTAssertEqual(asr.activeExclusiveActivity, .fileTranscription)
+        unblock?.resume()
+        let result = await start.value
+        await stop.value
+        XCTAssertEqual(result, .failed)
+        XCTAssertFalse(asr.isStarting)
+        XCTAssertFalse(asr.isRunning)
+        XCTAssertFalse(microphoneStarted)
+        XCTAssertNil(asr.activeExclusiveActivity)
+        await learning.prepareForPrivateProfileTransition()
+    }
+    #endif
+
     func testExplicitHistoryPassesIneligibleAutomaticQueueHead() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
