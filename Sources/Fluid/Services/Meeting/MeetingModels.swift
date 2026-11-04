@@ -1072,6 +1072,45 @@ nonisolated struct MeetingRetentionState: Codable, Equatable, Sendable {
     var retainAudioUntil: Date?
 }
 
+/// Applied retroactively from the CURRENT global setting — deliberate: there is no per-session
+/// retention snapshot, so changing the setting re-evaluates every session's deadline immediately.
+nonisolated enum MeetingAudioRetentionPolicy: String, Codable, CaseIterable, Sendable {
+    case afterTranscription
+    case days7
+    case days30
+    case never
+
+    var displayName: String {
+        switch self {
+        case .afterTranscription: return "After transcription"
+        case .days7: return "7 days"
+        case .days30: return "30 days"
+        case .never: return "Forever"
+        }
+    }
+
+    var retentionDays: Int? {
+        switch self {
+        case .days7: return 7
+        case .days30: return 30
+        case .afterTranscription, .never: return nil
+        }
+    }
+
+    func deadline(endedAt: Date?, startedAt: Date) -> Date? {
+        let completedAt = endedAt ?? startedAt
+        if self == .afterTranscription { return completedAt }
+        guard let retentionDays else { return nil }
+        return Calendar.current.date(byAdding: .day, value: retentionDays, to: completedAt)
+    }
+
+    /// Informational display value only; sweep deadlines always come from `deadline(endedAt:startedAt:)`.
+    func retainUntil(startedAt: Date) -> Date? {
+        guard let retentionDays else { return nil }
+        return Calendar.current.date(byAdding: .day, value: retentionDays, to: startedAt)
+    }
+}
+
 /// Captured once at the meeting's start. Addresses come from the system geocoder,
 /// keyed by interface language; they are never passed through the UI string catalog.
 nonisolated struct MeetingLocation: Codable, Equatable, Sendable {
