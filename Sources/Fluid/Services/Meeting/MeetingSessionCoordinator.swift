@@ -117,6 +117,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     @Published private(set) var activeSession: MeetingSession?
     @Published private(set) var latestCompletedSession: MeetingSession?
     @Published private(set) var trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth] = [:]
+    #if os(macOS)
+    @Published private(set) var microphoneMuteState: MeetingMicrophoneMuteState = .notApplicable
+    #endif
     @Published private(set) var liveTranscript: MeetingLiveTranscriptSnapshot = .empty
     @Published private(set) var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
     /// Advances when a retention sweep commits an audio deletion. History projections reload on
@@ -754,6 +757,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             .retainUntil(startedAt: session.startedAt)
         self.activeSession = session
         self.state = .preparing(session.id)
+        #if os(macOS)
+        self.microphoneMuteState = configuration.mode == .onlineCall ? .checking : .notApplicable
+        #endif
         self.startupTrackHealth.removeAll()
         self.startupWriterFailures.removeAll()
         defer { self.startupTrackHealth.removeAll() }
@@ -2939,6 +2945,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         var requiresPersistence = true
         self.liveTranscriptionCoordinator?.recordComparisonCaptureEvent(event)
         switch event {
+        #if os(macOS)
+        case let .microphoneMuteStateChanged(muteState):
+            if self.microphoneMuteState != muteState { self.microphoneMuteState = muteState }
+            return // Ephemeral status only; no polling observations are written into meeting history.
+        #endif
         case let .audioComparisonProbeStarted(probe):
             self.liveTranscriptionCoordinator?.attachComparisonProbe(probe)
             return // Diagnostic-only: no recording, persistence, navigation or transcript writes.
@@ -2968,7 +2979,13 @@ final class MeetingSessionCoordinator: ObservableObject {
             let previousState = session.state
             var health = health
             let kind = session.audioTracks[index].kind
-            let watchdogTripped = kind == .applicationAudio && health.status != .degraded
+            let microphoneMayBeActive: Bool
+            #if os(macOS)
+            microphoneMayBeActive = self.microphoneMuteState.admitsMicrophone
+            #else
+            microphoneMayBeActive = true
+            #endif
+            let watchdogTripped = microphoneMayBeActive && kind == .applicationAudio && health.status != .degraded
                 && (health.silentForSeconds ?? 0) >= Self.silenceWatchdogThresholdSeconds
                 && (self.trackHealth[.microphone]?.silentForSeconds).map {
                     $0 < Self.microphoneRecentActivityThresholdSeconds
