@@ -237,6 +237,20 @@ class Probe:
         return [interpreters[self.interpreter], self.script]
 
 
+# Discovery covers Tests/run_* only, so checks that live elsewhere are listed here by hand.
+OTHER_PROBES = (
+    Probe("Tests/test_published_upstream_release.py", "python3"),
+    Probe("scripts/dev/test-meeting-microphone-privacy.sh", "bash"),
+    Probe("scripts/dev/test-memory-audio-archive.sh", "bash"),
+    Probe("scripts/dev/test-nemotron-compile-owner.sh", "bash"),
+    Probe("scripts/dev/test-retained-diarization-scope.sh", "bash"),
+    Probe("scripts/test_dictation_default_provider.sh", "sh"),
+    Probe("scripts/test_dictation_target.sh", "sh"),
+    Probe("scripts/test_paste_clipboard.sh", "sh"),
+    Probe("tools/test_meeting_continuity_fixture.py", "python3"),
+    Probe("tools/test_meeting_playback_stage05_signal_gate.py", "python3"),
+)
+
 # Registration is explicit: a new probe needs a reviewed interpreter/UI classification.
 # This reviewed orchestrator invokes the complete CI sequence; it is not a leaf probe.
 ORCHESTRATOR_SCRIPTS = {"Tests/run_ci_checks.sh"}
@@ -281,7 +295,7 @@ PROBES = tuple(sorted(
        Probe("Tests/run_sensitive_policy_settings_tests.sh", "bash"),
        Probe("Tests/run_privacy_idle_preparation_tests.sh", "bash"),
        Probe("Tests/run_upstream_sync_tests.sh", "bash"),
-       Probe("Tests/run_update_prompt_tests.sh", "sh", requires_ui=True)],
+       Probe("Tests/run_update_prompt_tests.sh", "sh", requires_ui=True), *OTHER_PROBES],
     key=lambda probe: probe.name,
 ))
 
@@ -292,7 +306,7 @@ def validate_registry(root, probes=PROBES):
         raise ValueError("Standalone registry contains duplicate paths or names")
     discovered = {str(path.relative_to(root)) for path in (root / "Tests").glob("run_*")
                   if path.suffix in (".sh", ".py") and str(path.relative_to(root)) not in ORCHESTRATOR_SCRIPTS}
-    if registered != discovered:
+    if registered - {probe.script for probe in OTHER_PROBES} != discovered:
         raise ValueError(f"Standalone registry mismatch: unregistered={sorted(discovered - registered)}, missing={sorted(registered - discovered)}")
     for probe in probes:
         path = root / probe.script

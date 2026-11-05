@@ -55,6 +55,15 @@ python3 -S Tests/test_signed_build_product.py
 python3 -S Tests/test_meeting_diarization_eval.py
 python3 -B -S -m unittest discover -s tools -p test_meeting_asr_text_eval.py
 python3 -S tools/meeting-native-eval/test_batch_preflight.py
+python3 -B -S Tests/test_file_operation_preferences_cleanup.py
+python3 -B -S Tests/test_sensitive_topic_trainer.py
+python3 -B -S Tests/test_sensitive_topic_version_report.py
+python3 -B -S Tests/test_text_model_eval_protocol.py
+python3 -B -S tools/test_meeting_admission_b3_eval.py
+python3 -B -S tools/test_meeting_continuity_driver.py
+python3 -B -S tools/test_meeting_playback_stage0_baseline.py
+python3 -B -S tools/test_meeting_reliability_baseline.py
+python3 -B -S scripts/test_dictation_log_summary.py
 python3 -B -S tools/meeting-native-eval/test_weak_score.py
 python3 -B -S tools/meeting-native-eval/test_migrate_replay_v2.py
 python3 -B -S tools/meeting-native-eval/test_report.py
