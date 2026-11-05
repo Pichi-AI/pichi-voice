@@ -461,6 +461,7 @@ struct MeetingTranscriptionView: View {
             setupDraft: self.$privateState.setupDraft,
             state: self.canvasState,
             pendingSpeech: self.profileService.isPrivateDataVisible ? self.coordinator.pendingSpeech : .empty,
+            microphoneMuteState: self.coordinator.microphoneMuteState,
             applications: self.applications,
             microphones: self.microphones,
             readiness: self.readiness,
@@ -1763,6 +1764,7 @@ struct MeetingTranscriptionCanvas: View {
 
     let state: MeetingTranscriptionCanvasState
     var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
+    var microphoneMuteState: MeetingMicrophoneMuteState = .notApplicable
     let applications: [MeetingApplicationOption]
     let microphones: [MeetingMicrophoneOption]
     let readiness: MeetingSetupReadiness
@@ -1861,6 +1863,7 @@ struct MeetingTranscriptionCanvas: View {
                         trackHealth: trackHealth,
                         liveTranscript: liveTranscript,
                         pendingSpeech: self.pendingSpeech,
+                        microphoneMuteState: self.microphoneMuteState,
                         isStopping: false,
                         onStop: self.onStop
                     )
@@ -1870,6 +1873,7 @@ struct MeetingTranscriptionCanvas: View {
                         trackHealth: trackHealth,
                         liveTranscript: liveTranscript,
                         pendingSpeech: self.pendingSpeech,
+                        microphoneMuteState: self.microphoneMuteState,
                         isStopping: true,
                         onStop: self.onStop
                     )

@@ -158,6 +158,30 @@ nonisolated struct MeetingMicrophonePTSClock {
     }
 }
 
+/// Privacy admission needs acquisition evidence, independently of the writer's intentionally
+/// sample-count-based timeline. A host-clock gap must never turn fresh private PCM into old PCM.
+nonisolated enum MeetingMicrophonePrivacyTiming {
+    static let maximumDivergenceSeconds: Double = 0.020
+
+    static func acceptsTap(hostTime: UInt64?, windowHostTime: UInt64?, accumulatedFrameCount: Int) -> Bool {
+        guard let hostTime, accumulatedFrameCount >= 0 else { return false }
+        guard accumulatedFrameCount > 0 else { return windowHostTime == nil }
+        guard let windowHostTime else { return false }
+        let actualDelta = CMTimeSubtract(CMClockMakeHostTimeFromSystemUnits(hostTime),
+            CMClockMakeHostTimeFromSystemUnits(windowHostTime)).seconds
+        let expectedDelta = Double(accumulatedFrameCount) / Double(MeetingMicrophonePTSClock.timescale)
+        return actualDelta.isFinite && abs(actualDelta - expectedDelta) <= Self.maximumDivergenceSeconds
+    }
+
+    static func acceptsEmission(_ outcome: MeetingMicrophonePTSClock.Outcome, acquisitionHostTime: UInt64?) -> Bool {
+        guard let acquisitionHostTime, case let .emitted(pts, synthesized, _, _) = outcome,
+              !synthesized, pts.isNumeric else { return false }
+        let actual = CMClockMakeHostTimeFromSystemUnits(acquisitionHostTime)
+        let divergence = CMTimeSubtract(pts, actual).seconds
+        return divergence.isFinite && abs(divergence) <= Self.maximumDivergenceSeconds
+    }
+}
+
 // MARK: - Binding
 
 /// Pure decision table, unit-testable headless.
@@ -574,6 +598,23 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
     private let canonicalFormat: AVAudioFormat
     private let onSample: @Sendable (CMSampleBuffer) -> Void
     private let onSampleMetadata: @Sendable (CMSampleBuffer, Bool, Bool) -> Void
+    private let privacyGate: MeetingMicrophonePrivacyGate?
+    // The existing tap emits owned 100 ms PCM blocks. This handoff only retains them on the
+    // render callback; the privacy gate's deep copy runs on this bounded non-real-time queue.
+    private let privacyQueue = DispatchQueue(label: "com.fluidvoice.meeting.microphone.privacy", qos: .userInteractive)
+    private let privacySlots = DispatchSemaphore(value: 8)
+    private let privacyHandoffGroup = DispatchGroup()
+    private let privacyStateLock = NSLock()
+    private var privacyDeliveryStopped = false
+
+    private final class PrivacySample: @unchecked Sendable {
+        let buffer: CMSampleBuffer
+        let synthesized: Bool
+        let resynced: Bool
+        init(_ buffer: CMSampleBuffer, synthesized: Bool, resynced: Bool) {
+            self.buffer = buffer; self.synthesized = synthesized; self.resynced = resynced
+        }
+    }
 
     private var clock = MeetingMicrophonePTSClock()
     private var converter: AVAudioConverter?
@@ -586,11 +627,13 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
     init(
         statsBox: MeetingMicrophoneCaptureStats,
         canonicalFormat: AVAudioFormat,
+        privacyGate: MeetingMicrophonePrivacyGate? = nil,
         onSample: @escaping @Sendable (CMSampleBuffer) -> Void,
         onSampleMetadata: @escaping @Sendable (CMSampleBuffer, Bool, Bool) -> Void = { _, _, _ in }
     ) {
         self.statsBox = statsBox
         self.canonicalFormat = canonicalFormat
+        self.privacyGate = privacyGate
         self.onSample = onSample
         self.onSampleMetadata = onSampleMetadata
     }
@@ -601,6 +644,21 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
 
         self.consumePendingResetIfNeeded()
         self.checkSequenceContinuity(time: time, frameCount: Int(buffer.frameLength))
+
+        if self.privacyGate != nil {
+            let hostTime = time.isHostTimeValid ? time.hostTime : nil
+            if !MeetingMicrophonePrivacyTiming.acceptsTap(hostTime: hostTime,
+                windowHostTime: self.windowHostTime, accumulatedFrameCount: self.accumulated.count) {
+                self.accumulated.removeAll(keepingCapacity: true)
+                self.windowHostTime = nil
+                self.windowHostTimeValid = false
+                self.clock.requestTimelineReset()
+                // Converter history belongs to the retired acquisition interval as well.
+                self.converter = nil
+                self.converterSourceFormat = nil
+                guard hostTime != nil else { return }
+            }
+        }
 
         let converted = self.convertToMono(buffer)
         guard let mono = converted, !mono.isEmpty else {
@@ -621,11 +679,18 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
 
     private func flush() {
         let frameCount = self.accumulated.count
-        let outcome = self.clock.stamp(hostTime: self.windowHostTimeValid ? self.windowHostTime : nil, frameCount: frameCount)
+        let acquisitionHostTime = self.windowHostTimeValid ? self.windowHostTime : nil
+        let outcome = self.clock.stamp(hostTime: acquisitionHostTime, frameCount: frameCount)
         let samples = self.accumulated
         self.accumulated.removeAll(keepingCapacity: true)
         self.windowHostTime = nil
         self.windowHostTimeValid = false
+
+        if self.privacyGate != nil,
+           !MeetingMicrophonePrivacyTiming.acceptsEmission(outcome, acquisitionHostTime: acquisitionHostTime) {
+            self.clock.requestTimelineReset()
+            return
+        }
 
         guard case let .emitted(pts, synthesized, anchorCorrected, resynced) = outcome else {
             self.statsBox.mutate { $0.droppedPostCapCount += 1 }
@@ -662,8 +727,48 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
             stats.firstValidHostSeconds = clock.firstValidHostSeconds
             stats.lastValidHostSeconds = clock.lastValidHostSeconds
         }
-        self.onSampleMetadata(sampleBuffer, synthesized, resynced)
-        self.onSample(sampleBuffer)
+        if let privacyGate = self.privacyGate {
+            self.enqueuePrivacySample(sampleBuffer, synthesized: synthesized, resynced: resynced, gate: privacyGate)
+        } else {
+            self.onSampleMetadata(sampleBuffer, synthesized, resynced)
+            self.onSample(sampleBuffer)
+        }
+    }
+
+    private func enqueuePrivacySample(_ sampleBuffer: CMSampleBuffer, synthesized: Bool, resynced: Bool,
+        gate: MeetingMicrophonePrivacyGate) {
+        // A malformed or unexpectedly large block must not defeat the eight-slot handoff bound.
+        guard let block = CMSampleBufferGetDataBuffer(sampleBuffer),
+              CMBlockBufferGetDataLength(block) <= 131_072 else { return }
+        self.privacyStateLock.lock()
+        guard !self.privacyDeliveryStopped, self.privacySlots.wait(timeout: .now()) == .success else {
+            self.privacyStateLock.unlock(); return
+        }
+        self.privacyHandoffGroup.enter()
+        let sample = PrivacySample(sampleBuffer, synthesized: synthesized, resynced: resynced)
+        self.privacyQueue.async { [self, sample] in
+            defer { self.privacySlots.signal(); self.privacyHandoffGroup.leave() }
+            guard self.privacyStateLock.withLock({ !self.privacyDeliveryStopped }) else { return }
+            let synthesized = sample.synthesized
+            let resynced = sample.resynced
+            gate.submit(sample.buffer, deliveryQueue: self.privacyQueue) { [weak self] approved in
+                guard let self, self.privacyStateLock.withLock({ !self.privacyDeliveryStopped }) else { return }
+                self.onSampleMetadata(approved, synthesized, resynced)
+                self.onSample(approved)
+            }
+        }
+        self.privacyStateLock.unlock()
+    }
+
+    func closePrivacyDelivery() {
+        self.privacyStateLock.withLock { self.privacyDeliveryStopped = true }
+    }
+
+    func stopPrivacyDelivery() async {
+        self.closePrivacyDelivery()
+        await withCheckedContinuation { continuation in
+            self.privacyHandoffGroup.notify(queue: self.privacyQueue) { continuation.resume() }
+        }
     }
 
     /// Set off the tap thread; consumed at the next callback so the clock re-anchors.
@@ -794,6 +899,7 @@ actor MeetingMicrophoneCapture {
     func start(
         microphone: MeetingMicrophoneIdentity,
         authorizationPreflighted: Bool = false,
+        privacyGate: MeetingMicrophonePrivacyGate? = nil,
         onSample: @escaping @Sendable (CMSampleBuffer) -> Void,
         onSampleMetadata: @escaping @Sendable (CMSampleBuffer, Bool, Bool) -> Void = { _, _, _ in },
         onEvent: @escaping @Sendable (MeetingMicrophoneCaptureEvent) -> Void = { _ in }
@@ -897,6 +1003,7 @@ actor MeetingMicrophoneCapture {
         let tapState = MeetingMicrophoneTapState(
             statsBox: self.statsBox,
             canonicalFormat: Self.canonicalFormat,
+            privacyGate: privacyGate,
             onSample: onSample,
             onSampleMetadata: onSampleMetadata
         )
@@ -982,6 +1089,7 @@ actor MeetingMicrophoneCapture {
             input.removeTap(onBus: 0)
             engine.stop()
             self.engine = nil
+            self.tapState?.closePrivacyDelivery()
             self.tapState = nil
             self.isRunning = false
             return self.fail(microphone: microphone, reason: "Input format never became valid (persistent 0 Hz).", generation: currentGeneration)
@@ -1055,6 +1163,7 @@ actor MeetingMicrophoneCapture {
         // Snapshot and detach every generation-owned reference before the first await. A new start
         // may legally enter while listener removal is suspended and must remain completely isolated.
         let oldEngine = self.engine
+        let oldTapState = self.tapState
         let oldProbePlayerNode = self.probePlayerNode
         let oldConfigObserver = self.configObserver
         let oldDefaultInputListenerToken = self.defaultInputListenerToken
@@ -1062,6 +1171,7 @@ actor MeetingMicrophoneCapture {
         let oldOverloadListenerDeviceID = self.overloadListenerDeviceID
         self.engine = nil
         self.probePlayerNode = nil
+        self.tapState?.closePrivacyDelivery()
         self.tapState = nil
         self.configObserver = nil
         self.defaultInputListenerToken = nil
@@ -1095,6 +1205,7 @@ actor MeetingMicrophoneCapture {
             AudioTopologyDiagnostics.record(.engineStopEnd, owner: .meetingMicrophone, queueRole: .actorControl, phase: .engine, status: noErr, generation: stopGeneration)
             #endif
         }
+        await oldTapState?.stopPrivacyDelivery()
         await Self.removeEventObservers(
             defaultInputToken: oldDefaultInputListenerToken,
             overloadToken: oldOverloadListenerToken,
@@ -1488,12 +1599,14 @@ actor MeetingMicrophoneCapture {
         self.isRunning = false
         _ = self.generationBox.advance()
         self.activeGeneration = nil
+        let oldTapState = self.tapState
         let oldConfigObserver = self.configObserver
         let oldDefaultInputListenerToken = self.defaultInputListenerToken
         let oldOverloadListenerToken = self.overloadListenerToken
         let oldOverloadListenerDeviceID = self.overloadListenerDeviceID
         self.engine = nil
         self.probePlayerNode = nil
+        self.tapState?.closePrivacyDelivery()
         self.tapState = nil
         self.configObserver = nil
         self.defaultInputListenerToken = nil
@@ -1503,6 +1616,7 @@ actor MeetingMicrophoneCapture {
         if let oldConfigObserver { NotificationCenter.default.removeObserver(oldConfigObserver) }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        await oldTapState?.stopPrivacyDelivery()
         await Self.removeEventObservers(
             defaultInputToken: oldDefaultInputListenerToken,
             overloadToken: oldOverloadListenerToken,
@@ -1520,6 +1634,7 @@ actor MeetingMicrophoneCapture {
             self.activeGeneration = nil
             self.isRunning = false
             self.engine = nil
+            self.tapState?.closePrivacyDelivery()
             self.tapState = nil
         }
         let outcome = MeetingMicrophoneBindingOutcome.unavailable(reason: reason)

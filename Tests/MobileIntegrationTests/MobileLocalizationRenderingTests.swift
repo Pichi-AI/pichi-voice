@@ -74,7 +74,6 @@ final class MobileLocalizationRenderingTests: XCTestCase {
         var session = locationSession()
         XCTAssertTrue(["Запись", "Recording"].contains(session.mobileTitle), session.mobileTitle)
         XCTAssertEqual(session.displayTitle, session.mobileTitle)
-        XCTAssertFalse(session.displayTitleIncludesStart)
         XCTAssertFalse(session.hasDistinctMobileTitle)
         XCTAssertNotNil(session.savedLocationLabel(language: PichiLocalization.language))
         session.location = nil

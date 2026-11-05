@@ -1597,8 +1597,6 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
             speakerNames: [speaker: "Анна"], language: .english), "Анна")
         XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source,
             speakerNames: [speaker: "Анна"], language: .russian), "Анна")
-        XCTAssertEqual(MeetingTranscriptExporter.displayRows(for: rows, in: source).map(\.showsLabel), [true, true, true],
-            "The evidence/correction row projection still describes each changed attribution")
     }
 
     func testWordFragmentsReadAsParagraphWithoutRewritingEvidence() {

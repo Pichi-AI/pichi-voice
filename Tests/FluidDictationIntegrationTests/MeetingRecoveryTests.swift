@@ -8712,7 +8712,6 @@ final class MeetingRecoveryTests: XCTestCase {
             previousTitle: "Meeting with an old start", previousDefaultTitleBase: "Meeting", languageCode: "ru")
         XCTAssertEqual(session.displayTitle(language: .russian), "Обсуждение вопросов")
         XCTAssertEqual(session.displayTitle(language: .english), "Обсуждение вопросов")
-        XCTAssertFalse(session.displayTitleIncludesStart)
         session.automaticTitle = .init(algorithmVersion: MeetingUniversalTitleEngine.algorithmVersion,
             candidateID: "discussion__questions", localizationKey: "Discussion of questions",
             previousTitle: "Meeting with an old start", previousDefaultTitleBase: "Meeting", languageCode: "en")

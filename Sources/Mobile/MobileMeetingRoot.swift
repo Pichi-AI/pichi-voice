@@ -1201,9 +1201,7 @@ struct MobileMeetingRoot: View {
                   fresh.retention.audioDeletedAt == nil, fresh.hasFinalizedAudio
             else { throw CocoaError(.fileNoSuchFile) }
             guard privatePresentation.publications.canPublish(admission) else { return }
-            let directory = source.directory
-            guard privatePresentation.publications.canPublish(admission) else { return }
-            let payload = try await MeetingSharePayload.audio(session: fresh, directory: directory)
+            let payload = try await MeetingSharePayload.audio(session: fresh, directory: source.directory)
             guard privatePresentation.publications.canPublish(admission) else { payload.cleanup(); return }
             share?.cleanup(); share = payload
         }

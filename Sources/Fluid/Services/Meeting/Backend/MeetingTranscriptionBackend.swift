@@ -48,8 +48,6 @@ nonisolated enum MeetingBackendResultContract: String, Codable, Sendable {
     case canonicalEvidence
 }
 
-/// Identity/version, platform reach, execution locality, supported final precision, track topology
-/// and the limits a caller must not assume away.
 nonisolated enum MeetingDiarizationDependency: String, Hashable, Sendable {
     case speakerSeparation
     case voiceMatching
@@ -122,6 +120,8 @@ nonisolated struct MeetingPCMObservationPolicy: Equatable, Sendable {
     let intervalSeconds: Double
 }
 
+/// Identity/version, platform reach, execution locality, supported final precision, track topology
+/// and the limits a caller must not assume away.
 nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     let id: MeetingBackendID
     let version: String

@@ -105,7 +105,7 @@ def configs(label, test=False, hosted=False, extension=False):
             "SDKROOT":"iphoneos", "SUPPORTED_PLATFORMS":"iphoneos iphonesimulator", "IPHONEOS_DEPLOYMENT_TARGET":"17.0",
             "TARGETED_DEVICE_FAMILY":"1,2", "SUPPORTS_MACCATALYST":"NO", "SWIFT_VERSION":"5.0",
             "SWIFT_STRICT_CONCURRENCY":"targeted", "SWIFT_DEFAULT_ACTOR_ISOLATION":"MainActor",
-            "SWIFT_ACTIVE_COMPILATION_CONDITIONS":"$(inherited) MOBILE" + (" DEBUG" if name=="Debug" else ""),
+            "SWIFT_ACTIVE_COMPILATION_CONDITIONS":"$(inherited)" + (" DEBUG" if name=="Debug" else ""),
             "PRODUCT_NAME":"$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER":APP_BUNDLE + (".integrationtests" if hosted else ".uitests" if test else ""),
             "ENABLE_TESTABILITY":"YES" if name=="Debug" else "NO",
             "PICHI_PRODUCT_NAME":json.loads((ROOT / "Sources/Fluid/Branding/brand-package.json").read_text())["profile"]["appName"],

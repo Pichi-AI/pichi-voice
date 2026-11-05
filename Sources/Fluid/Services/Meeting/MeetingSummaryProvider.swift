@@ -144,16 +144,6 @@ nonisolated struct MeetingSummaryRoute {
             selectedProviderID: providerID
         )
     }
-
-    /// Provider selection is shared; generation, grounding, resource ownership
-    /// and bounded execution remain the existing public summary contract.
-    func groundedConfiguration(language: String, execution: PichiMeetingSummaryExecution) throws -> PichiMeetingSummaryConfiguration {
-        let configuration = PichiMeetingSummaryConfiguration(providerID: self.selectedProviderID ?? self.providerID, modelID: self.modelID,
-            baseURL: self.baseURL, apiKey: self.apiKey, language: language,
-            connectionOptions: self.connectionOptions, execution: execution)
-        try configuration.validate()
-        return configuration
-    }
 }
 
 /// Uses a dedicated session so meeting requests can exceed the dictation transport's resource timeout.
