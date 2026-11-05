@@ -81,7 +81,10 @@ Full runs require an isolated worktree, macOS and full Xcode. The runner prevent
 ```bash
 bash scripts/dev/standalone-regression.sh --list
 bash scripts/dev/standalone-regression.sh --only file_export --only file_transcript_relative_date --only ui_contrast
+bash scripts/dev/standalone-regression.sh --jobs 8
 ```
+
+`--jobs N` runs N probes at once, with the same process ownership, cleanup and report as one at a time. Use it for a full run: 105 probes take about 5 minutes with 8 jobs instead of about 22 minutes. Timing-sensitive runs and performance measurements stay sequential.
 
 Each probe owns a separate process session. INT and TERM trigger bounded TERM/KILL cleanup, wait for runnable descendants to stop and reap the direct process before releasing the worktree lock. Reports retain the runner's 130/143 status separately from the direct child's actual exit code. If cleanup cannot finish, its ownership marker blocks another suite from using those build directories. Signal delivery during process creation is deferred until its owner and marker are stored, without changing the child's inherited signal mask.
 
