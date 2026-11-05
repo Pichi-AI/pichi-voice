@@ -698,10 +698,6 @@
 		7C9A71022F58B00000FB7CAF /* TranscribeCpp in Frameworks */ = {isa = PBXBuildFile; productRef = 7C9A71012F58B00000FB7CAF /* TranscribeCpp */; };
 		7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */; };
 		DAB600000000000000000001 /* DashboardLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAB600000000000000000002 /* DashboardLayoutTests.swift */; };
-		DD11B0000000000000000001 /* HistoryPersistenceXCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD11A0000000000000000001 /* HistoryPersistenceXCTests.swift */; };
-		DD11B0000000000000000002 /* PichiPublicationAssessmentOptionsXCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD11A0000000000000000002 /* PichiPublicationAssessmentOptionsXCTests.swift */; };
-		DD11B0000000000000000003 /* PichiPublicationConsentXCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD11A0000000000000000003 /* PichiPublicationConsentXCTests.swift */; };
-		DD11B0000000000000000004 /* PichiPublicationWireXCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD11A0000000000000000004 /* PichiPublicationWireXCTests.swift */; };
 		FEB700000000000000000001 /* FeedbackClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEB700000000000000000002 /* FeedbackClientTests.swift */; };
 		7C91B0A12F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C91B0A22F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift */; };
 		C0DE89000000000000000002 /* SettingsNavigationStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE89000000000000000001 /* SettingsNavigationStateTests.swift */; };
@@ -983,10 +979,6 @@
 		7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FluidVoice Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyShortcutTests.swift; sourceTree = "<group>"; };
 		DAB600000000000000000002 /* DashboardLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLayoutTests.swift; sourceTree = "<group>"; };
-		DD11A0000000000000000001 /* HistoryPersistenceXCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryPersistenceXCTests.swift; sourceTree = "<group>"; };
-		DD11A0000000000000000002 /* PichiPublicationAssessmentOptionsXCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiPublicationAssessmentOptionsXCTests.swift; sourceTree = "<group>"; };
-		DD11A0000000000000000003 /* PichiPublicationConsentXCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiPublicationConsentXCTests.swift; sourceTree = "<group>"; };
-		DD11A0000000000000000004 /* PichiPublicationWireXCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiPublicationWireXCTests.swift; sourceTree = "<group>"; };
 		FEB700000000000000000002 /* FeedbackClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackClientTests.swift; sourceTree = "<group>"; };
 		7C91B0A22F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliveryTargetAssessmentTests.swift; sourceTree = "<group>"; };
 		C0DE89000000000000000001 /* SettingsNavigationStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsNavigationStateTests.swift; sourceTree = "<group>"; };
@@ -1080,6 +1072,11 @@
 		A5B000000000000000000020 /* FluidASRBaselineTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = FluidASRBaselineTests;
+			sourceTree = "<group>";
+		};
+		DD22A0000000000000000001 /* PichiIntegrationTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PichiIntegrationTests;
 			sourceTree = "<group>";
 		};
 		F5E000000000000000000010 /* Sources/FVServe */ = {
@@ -1183,6 +1180,7 @@
 			isa = PBXGroup;
 			children = (
 				7CDB0A252F3C4D5600FB7CAD /* FluidDictationIntegrationTests */,
+				DD22A0000000000000000001 /* PichiIntegrationTests */,
 				A5B000000000000000000010 /* FluidASRBaselineHost */,
 				A5B000000000000000000020 /* FluidASRBaselineTests */,
 			);
@@ -1223,10 +1221,6 @@
 				AD1030000000000000000005 /* DictionaryDrawerLayoutTests.swift */,
 				AD1030000000000000000001 /* HoldToMuteTests.swift */,
 				DAB600000000000000000002 /* DashboardLayoutTests.swift */,
-				DD11A0000000000000000001 /* HistoryPersistenceXCTests.swift */,
-				DD11A0000000000000000002 /* PichiPublicationAssessmentOptionsXCTests.swift */,
-				DD11A0000000000000000003 /* PichiPublicationConsentXCTests.swift */,
-				DD11A0000000000000000004 /* PichiPublicationWireXCTests.swift */,
 				FEB700000000000000000002 /* FeedbackClientTests.swift */,
 				7C91B0A22F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift */,
 				C0DE89000000000000000001 /* SettingsNavigationStateTests.swift */,
@@ -1436,6 +1430,9 @@
 			);
 			dependencies = (
 				7CDB0A312F3C4D5600FB7CAD /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				DD22A0000000000000000001 /* PichiIntegrationTests */,
 			);
 			name = FluidDictationIntegrationTests;
 			packageProductDependencies = (
@@ -1685,10 +1682,6 @@
 				AD1030000000000000000006 /* DictionaryDrawerLayoutTests.swift in Sources */,
 				AD1030000000000000000002 /* HoldToMuteTests.swift in Sources */,
 				DAB600000000000000000001 /* DashboardLayoutTests.swift in Sources */,
-				DD11B0000000000000000001 /* HistoryPersistenceXCTests.swift in Sources */,
-				DD11B0000000000000000002 /* PichiPublicationAssessmentOptionsXCTests.swift in Sources */,
-				DD11B0000000000000000003 /* PichiPublicationConsentXCTests.swift in Sources */,
-				DD11B0000000000000000004 /* PichiPublicationWireXCTests.swift in Sources */,
 				FEB700000000000000000001 /* FeedbackClientTests.swift in Sources */,
 				7C91B0A12F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift in Sources */,
 				C0DE89000000000000000002 /* SettingsNavigationStateTests.swift in Sources */,
