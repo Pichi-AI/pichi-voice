@@ -48,7 +48,8 @@ class QuarantineTests(unittest.TestCase):
         self.assertTrue(POLICY.quarantine_problems({"entries": []}, TODAY))
 
     def test_probe_ids_are_accepted(self):
-        self.assertEqual(POLICY.quarantine_problems(quarantine(entry(test="probe:ui_contrast")), TODAY), [])
+        for test in ("probe:ui_contrast", "probe:test-memory-audio-archive"):
+            self.assertEqual(POLICY.quarantine_problems(quarantine(entry(test=test)), TODAY), [])
 
 
 class SkipRegistryTests(unittest.TestCase):

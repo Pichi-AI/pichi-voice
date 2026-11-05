@@ -16,7 +16,7 @@ QUARANTINE = ROOT / "Tests/quarantine.json"
 SKIPS = ROOT / "Tests/skip-registry.json"
 LAYERS = frozenset({"L1-visual", "L2-needs-runner", "L3-real-model", "L4-hardware-or-manual", "L4-signed-release",
                     "manual-private-data", "diagnostic-tool"})
-TEST_ID = re.compile(r"(?:probe:[a-z0-9_]+|[A-Za-z0-9_]+/[A-Za-z0-9_]+/[A-Za-z0-9_]+(?:\(\))?)")
+TEST_ID = re.compile(r"(?:probe:[a-z0-9_-]+|[A-Za-z0-9_]+/[A-Za-z0-9_]+/[A-Za-z0-9_]+(?:\(\))?)")
 SKIP_ID = re.compile(r"[A-Za-z0-9_]+/[A-Za-z0-9_]+/[A-Za-z0-9_]+(?:\(\))?")
 
 

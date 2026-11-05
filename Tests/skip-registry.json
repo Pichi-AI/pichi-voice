@@ -344,6 +344,186 @@
   "FluidDictationIntegrationTests/WhisperLanguageSelectionTests/testQwenTranscribesFixtureFromExistingModelAndPreservesWhisperCache()": {
    "layer": "L3-real-model",
    "reason": "Set FLUIDVOICE_QWEN_MODEL_PATH to an existing Qwen GGUF for the local inference check."
+  },
+  "PichiVoiceMobileIntegrationTests/MeetingLiveCaptionNativeScrollTests/testIOS17ProgrammaticOffsetCorrectionKeepsFollowingWhenNewRowsArrive()": {
+   "layer": "L2-needs-runner",
+   "reason": "This exercises the iOS 17 geometry fallback; programmatic movement is not a user gesture."
+  },
+  "PichiVoiceMobileIntegrationTests/MeetingOwnerVoiceProfileTests/testRealWeSpeakerEnrollmentMatchesOnlyTheEnrolledSyntheticVoice()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "PichiVoiceMobileIntegrationTests/MobileAudioStorageTests/testFileProtectionClassOnPhysicalDevice()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "The iOS Simulator does not implement device Data Protection. Verify on a physical iPad or iPhone."
+  },
+  "PichiVoiceMobileIntegrationTests/MobileFirstUseModelTests/testAuthorizedPhysicalDeviceActivationOfWhisperTiny()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Requires the explicitly authorized physical device"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileFirstUseModelTests/testAuthorizedPhysicalRestoreTestPreferences()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Requires the explicitly authorized physical device"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileLocalizationRenderingTests/testNativeMeetingLocationFromControlledSimulator()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Opt-in: uses the controlled simulator location and Apple's network geocoder"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileMeetingEndToEndTests/testCombinedRussianMeetingPrivacySpeakersAndFootprint()": {
+   "layer": "L3-real-model",
+   "reason": "Explicitly enable combined Russian fixture inference"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileMeetingEndToEndTests/testPhysicalMicrophoneThroughLiveGigaAMPrivacyAndExport()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Requires an explicitly enabled physical microphone and speaker test"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileMeetingEndToEndTests/testPhysicalStreamingExternalSpeechContinuesInBackground()": {
+   "layer": "L3-real-model",
+   "reason": "Explicitly enable the real-microphone external synthetic speech probe"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileMeetingEndToEndTests/testPhysicalStrictGigaAMWithSpeakersAndPrivacyKeepsUp()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Requires explicitly enabled physical strict meeting recording"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileMeetingEndToEndTests/testPhysicalStrictParakeetWithSpeakersAndPrivacyKeepsUp()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Requires explicitly enabled physical strict meeting recording"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileMeetingEndToEndTests/testPhysicalStrictWhisperTinyWithSpeakersAndPrivacyKeepsUp()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Requires explicitly enabled physical strict meeting recording"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileMeetingEndToEndTests/testRegisteredStreamingMeetingPrivacySpeakersAndFootprint()": {
+   "layer": "L3-real-model",
+   "reason": "Explicitly enable registered-provider streaming fixture inference"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileMeetingEndToEndTests/testRetainedStreamingRussianMeetingAndFreshPipelineRetry()": {
+   "layer": "L3-real-model",
+   "reason": "Explicitly enable retained streaming and fresh-pipeline recovery inference"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileMeetingEndToEndTests/testStreamingRussianMeetingPrivacySpeakersAndFootprint()": {
+   "layer": "L3-real-model",
+   "reason": "Explicitly enable actual streaming Russian fixture inference"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileMeetingEndToEndTests/testStrictMeetingThroughActualMobileCompositionPersistsAndExports()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "PichiVoiceMobileIntegrationTests/MobileNemotronFP16DiagnosticTests/testCoreMLDeviceEligibilitySnapshot()": {
+   "layer": "diagnostic-tool",
+   "reason": "Explicitly opt in to device eligibility diagnostics"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileNemotronFP16DiagnosticTests/testPinnedFP16DiagnosticReplay()": {
+   "layer": "diagnostic-tool",
+   "reason": "Explicitly opt in to the pinned private FP16 diagnostic"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileOwnerVoiceComparisonTests/testPrivateExistingOwnerVoiceScalarComparison()": {
+   "layer": "manual-private-data",
+   "reason": "Explicitly opt in to private scalar owner-voice comparison"
+  },
+  "PichiVoiceMobileIntegrationTests/MobilePCMAdmissionTests/testPhysicalInstalledExportHasNoObsoleteCombinedLiveWorkloadRestriction()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Requires the physical deployment; Simulator is separate evidence"
+  },
+  "PichiVoiceMobileIntegrationTests/MobilePrivacyPersistenceTests/testNativeColdTranscriptEditAndUndoPreparePrivacyWithoutAudio()": {
+   "layer": "L3-real-model",
+   "reason": "Explicitly enable actual A1 cold transcript correction inference"
+  },
+  "PichiVoiceMobileIntegrationTests/MobilePrivacyPersistenceTests/testNativeExplicitMedicationContextPreservesDrugAndRedactsRecipient()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "PichiVoiceMobileIntegrationTests/MobilePrivacyPersistenceTests/testNativeKnownNonPersonNERKeepsStrictPreviewAdvancingAcrossWindows()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "PichiVoiceMobileIntegrationTests/MobilePrivacyPersistenceTests/testNativeLivePIIRetagsCompletedRowsAcrossPartialUpdates()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "PichiVoiceMobileIntegrationTests/MobilePrivacyPersistenceTests/testNativePIIAcrossSegmentsAndStrictWindowsBeforePersistence()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "PichiVoiceMobileIntegrationTests/MobilePrivacyPersistenceTests/testNativePIIDoesNotClassifyATransientASRSpellingAsAName()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "PichiVoiceMobileIntegrationTests/MobilePrivacyPersistenceTests/testNativeStablePCMHypothesisSurvivesNativeAndCoarseTimingPartitions()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "PichiVoiceMobileIntegrationTests/MobileProtectedDeliveryHTTPTests/testDirectQAMedicalConversationAssessmentRetainedAfterLocalRemoval()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Opt in with PICHI_NATIVE_QA_ASSESSMENT_ACCEPTANCE=1"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileProtectedDeliveryHTTPTests/testDirectQASyntheticCaptureReceiptHistoryAndLocalRemoval()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Opt in with PICHI_NATIVE_QA_ACCEPTANCE=1"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileProtectedDeliveryHTTPTests/testEncryptedCaptureRealHTTPSReceiptHistoryAndCurrentDeletePolicy()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Opt in with PICHI_NATIVE_HTTP_ACCEPTANCE=1"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileProtectedDeliveryHTTPTests/testLostCommittedResponseRetainsSourceWithDeletionOnUntilDurableReceipt()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Opt in with PICHI_NATIVE_HTTP_ACCEPTANCE=1"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileProtectedDeliveryHTTPTests/testLostCommittedResponseRetriesIdenticalBodyWithoutDuplicateImportOrCharge()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Opt in with PICHI_NATIVE_HTTP_ACCEPTANCE=1"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileProtectedDeliveryHTTPTests/testOfflineQueueAcrossTestHostRelaunch()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Opt in with PICHI_NATIVE_HTTP_ACCEPTANCE=1"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileProtectedDeliveryHTTPTests/testOfflineQueueSurvivesFreshAccountStoreAndForegroundNetworkWake()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Opt in with PICHI_NATIVE_HTTP_ACCEPTANCE=1"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileRegisteredModelInferenceTests/testDefaultEightSecondSpeakerWindowsForAllRegisteredModels()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "PichiVoiceMobileIntegrationTests/MobileRegisteredModelInferenceTests/testGigaAMSustainedSixtySecondPacedBufferedCaptions()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_GIGA_SUSTAINED=1 for the bounded sixty-second GigaAM benchmark"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileRegisteredModelInferenceTests/testOriginalBufferedCaptionEngineUsesEachRegisteredPublicArtifact()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "PichiVoiceMobileIntegrationTests/MobileRegisteredModelInferenceTests/testPinnedNemotronAndLocalWeSpeakerSeparateTwoSyntheticVoicesAcrossPCMWindows()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "PichiVoiceMobileIntegrationTests/MobileRegisteredModelInferenceTests/testPublicMobileArtifactsRecognizeRUENMixedAndPreserveStreamingTiming()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "PichiVoiceMobileIntegrationTests/MobileRegisteredModelInferenceTests/testRegisteredStrictPCMWindowsCreateTranscriptWithoutAudioFiles()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "PichiVoiceMobileIntegrationTests/MobileRegisteredModelInferenceTests/testStrictGigaAMWindowCadenceBenchmark()": {
+   "layer": "L3-real-model",
+   "reason": "Enable the public-model strict cadence measurement explicitly"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileRegisteredModelInferenceTests/testWhisperTinyKnownRussianAndEnglishQuality()": {
+   "layer": "L3-real-model",
+   "reason": "Explicitly stage the approved Tiny groundtruth fixtures"
+  },
+  "PichiVoiceMobileIntegrationTests/PhysicalDevicePrerequisiteTests/testAuthorizedCleanupOfDerivedCoreMLCache()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Requires the explicitly authorized physical device"
+  },
+  "PichiVoiceMobileIntegrationTests/PhysicalDevicePrerequisiteTests/testMicrophonePermissionWithoutModelInstallation()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "This prerequisite checks the physical iPad microphone permission"
+  },
+  "PichiVoiceMobileIntegrationTests/PhysicalDevicePrerequisiteTests/testPhysicalMicrophoneDeliversPCMWithoutAudioFiles()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Requires a physical iPad or iPhone"
   }
  }
 }
