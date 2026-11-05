@@ -47,12 +47,60 @@
               "file": "ONNXRuntime-LICENSE.txt"
             },
             {
-              "titleKey": "Third-party notices (part 1 of 2)",
+              "titleKey": "Third-party notices (part 1 of 14)",
               "file": "ONNXRuntime-ThirdPartyNotices-1.txt"
             },
             {
-              "titleKey": "Third-party notices (part 2 of 2)",
+              "titleKey": "Third-party notices (part 2 of 14)",
               "file": "ONNXRuntime-ThirdPartyNotices-2.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 3 of 14)",
+              "file": "ONNXRuntime-ThirdPartyNotices-3.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 4 of 14)",
+              "file": "ONNXRuntime-ThirdPartyNotices-4.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 5 of 14)",
+              "file": "ONNXRuntime-ThirdPartyNotices-5.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 6 of 14)",
+              "file": "ONNXRuntime-ThirdPartyNotices-6.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 7 of 14)",
+              "file": "ONNXRuntime-ThirdPartyNotices-7.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 8 of 14)",
+              "file": "ONNXRuntime-ThirdPartyNotices-8.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 9 of 14)",
+              "file": "ONNXRuntime-ThirdPartyNotices-9.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 10 of 14)",
+              "file": "ONNXRuntime-ThirdPartyNotices-10.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 11 of 14)",
+              "file": "ONNXRuntime-ThirdPartyNotices-11.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 12 of 14)",
+              "file": "ONNXRuntime-ThirdPartyNotices-12.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 13 of 14)",
+              "file": "ONNXRuntime-ThirdPartyNotices-13.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 14 of 14)",
+              "file": "ONNXRuntime-ThirdPartyNotices-14.txt"
             }
           ]
         },
