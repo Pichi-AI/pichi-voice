@@ -777,7 +777,9 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
     private let originBox: MeetingLiveOriginBox
     private let onUpdate: @Sendable (MeetingPendingSpeechSnapshot) -> Void
     private var projection: MeetingPendingSpeechProjection
-    private var activityWorker: MeetingCaptureSpeechActivityWorker?
+    /// Recurrent state and silence evidence belong to a physical source, not a participant.
+    /// The source set is frozen at initialization and never grows with transcript history.
+    private var activityWorkers: [MeetingLiveSpeaker: MeetingCaptureSpeechActivityWorker] = [:]
     private let onDiagnostic: (@Sendable (MeetingPendingSpeechProjection.DiagnosticEvent) -> Void)?
     private var meters: [MeetingLiveSpeaker: Meter] = [:]
     private var publicationScheduled = false
@@ -785,6 +787,7 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
 
     init(originBox: MeetingLiveOriginBox,
          activityModel: MeetingCaptureSpeechActivityWorker.Factory? = nil,
+         activitySources: Set<MeetingLiveSpeaker> = [.you],
          diagnostics: (@Sendable (MeetingPendingSpeechProjection.DiagnosticEvent) -> Void)? = nil,
          onUpdate: @escaping @Sendable (MeetingPendingSpeechSnapshot) -> Void) {
         self.originBox = originBox
@@ -792,34 +795,40 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         self.onDiagnostic = diagnostics
         self.projection = MeetingPendingSpeechProjection(diagnostics: diagnostics)
         if let activityModel {
-            self.activityWorker = MeetingCaptureSpeechActivityWorker(factory: activityModel) { [weak self] start, end, activity in
-                guard let self, self.activityWorker?.isUnavailable != true else { return }
-                let publish = self.lock.withLock {
-                    self.projection.observeSpeechActivity(source: .you, start: start, end: end, activity: activity)
-                    return self.reservePublication()
+            for source in activitySources {
+                self.activityWorkers[source] = MeetingCaptureSpeechActivityWorker(factory: activityModel, source: source) { [weak self] start, end, activity in
+                    guard let self, self.activityWorkers[source]?.isUnavailable != true else { return }
+                    let publish = self.lock.withLock {
+                        self.projection.observeSpeechActivity(source: source, start: start, end: end, activity: activity)
+                        return self.reservePublication()
+                    }
+                    if publish { self.schedulePublication() }
                 }
-                if publish { self.schedulePublication() }
             }
         }
     }
 
-    func confidentlyNonSpeech(start: Double, end: Double) -> Bool {
-        self.activityWorker?.confidentlyNonSpeech(start: start, end: end) ?? false
+    func confidentlyNonSpeech(source: MeetingLiveSpeaker = .you, start: Double, end: Double) -> Bool {
+        self.activityWorkers[source]?.confidentlyNonSpeech(start: start, end: end) ?? false
     }
 
-    func awaitConfidentNonSpeech(start: Double, end: Double) async -> Bool {
-        await self.activityWorker?.awaitConfidentNonSpeech(start: start, end: end) ?? false
+    func awaitConfidentNonSpeech(source: MeetingLiveSpeaker = .you, start: Double, end: Double) async -> Bool {
+        await self.activityWorkers[source]?.awaitConfidentNonSpeech(start: start, end: end) ?? false
     }
 
     func stopAndWait() async {
         self.stop()
-        await self.activityWorker?.join()
+        await withTaskGroup(of: Void.self) { group in
+            for worker in self.activityWorkers.values { group.addTask { await worker.join() } }
+        }
         MeetingTimelineTrace.shared?.record("capture_joined")
         await MeetingTimelineTrace.shared?.flush()
     }
 
     func offer(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
-        if let activityWorker, kind == .microphone, !activityWorker.isUnavailable {
+        let source: MeetingLiveSpeaker = kind == .microphone ? .you : .them
+        let activityWorker = self.activityWorkers[source]
+        if let activityWorker, !activityWorker.isUnavailable {
             let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             guard pts.isNumeric else { return }
             let start = MeetingLiveTimeConversion.sessionSeconds(pts: pts, origin: self.originBox.establish(pts))
@@ -844,7 +853,7 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         let start = MeetingLiveTimeConversion.sessionSeconds(pts: pts, origin: origin)
         MeetingTimelineTrace.shared?.record("capture_pcm", fields: ["source": String(describing: kind),
             "sourceStartSeconds": String(start), "sampleCount": String(count),
-            "vadState": self.activityWorker == nil ? "not-configured" : "capture-fallback-see-vad-events"])
+            "vadState": activityWorker == nil ? "not-configured" : "capture-fallback-see-vad-events"])
         var needed = 0
         guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer,
             bufferListSizeNeededOut: &needed, bufferListOut: nil, bufferListSize: 0,
@@ -862,7 +871,6 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         let interleaved = asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0
         guard buffers.count == (interleaved ? 1 : channels),
               buffers.allSatisfy({ $0.mData != nil && Int($0.mDataByteSize) >= count * MemoryLayout<Float>.stride * (interleaved ? channels : 1) }) else { return }
-        let source: MeetingLiveSpeaker = kind == .microphone ? .you : .them
         let schedule = self.lock.withLock { () -> Bool in
             guard self.projection.snapshot.isCapturing else { return false }
             var meter = self.meters[source] ?? Meter()
@@ -926,7 +934,7 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
     }
 
     func stop() {
-        self.activityWorker?.stop()
+        for worker in self.activityWorkers.values { worker.stop() }
         self.lock.withLock { self.projection.stop(); self.meters.removeAll() }
     }
 
@@ -955,7 +963,7 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
 }
 
 
-/// The mobile tee already supplies normalized 16kHz mono PCM. A single attempt-owned
+/// Platform tees supply normalized measured 16kHz mono PCM. A source-owned
 /// worker loads one optional model and owns its recurrent state. Admission only retains
 /// bounded sample buffers; conversion, inference and model loading never run on capture.
 /// Unknown coverage always fails open for ASR. No audio file or model download is created.
@@ -1001,12 +1009,15 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     private var previousEnd: Double?
     private var previousEpoch: UInt64?
     private let session = UUID()
+    private let source: MeetingLiveSpeaker
     private let publish: @Sendable (Double, Double, MeetingSpeechActivity) -> Void
 
     init(factory: @escaping Factory,
+         source: MeetingLiveSpeaker = .you,
          clock: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime },
          publish: @escaping @Sendable (Double, Double, MeetingSpeechActivity) -> Void) {
         self.publish = publish
+        self.source = source
         queue.async { [self] in
             guard !lock.withLock({ closed }) else { return }
             // A missing or invalid model leaves the whole attempt unknown. Capture and
@@ -1122,6 +1133,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     private func recordNonSpeechQuery(_ query: NonSpeechAssessment, start: Double, end: Double,
                                      result: Bool? = nil, reason: String? = nil, waitMilliseconds: Double = 0) {
         MeetingTimelineTrace.shared?.record("vad_policy_query", fields: ["captureID": session.uuidString,
+            "source": source == .you ? "microphone" : "applicationAudio",
             "sourceStartSeconds": String(start), "sourceEndSeconds": String(end), "result": String(result ?? query.result),
             "reason": reason ?? query.reason, "scoredThroughSeconds": String(query.scoredThrough),
             "waitMilliseconds": String(waitMilliseconds)])
@@ -1177,7 +1189,8 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
             let start = sampleStart; sampleStart += 0.256
             let began = ProcessInfo.processInfo.systemUptime
             let result = detector?.process(samples: frame, valid: [Bool](repeating: true, count: 4096),
-                start: start, session: session, epoch: input.epoch, route: "normalized-microphone-16k",
+                start: start, session: session, epoch: input.epoch,
+                route: source == .you ? "normalized-microphone-16k" : "normalized-application-audio-16k",
                 cancelled: { self.lock.withLock { self.closed || self.epoch != input.epoch } })
             MeetingTimelineTrace.shared?.record("vad_frame", fields: ["captureID": session.uuidString,
                 "epoch": String(input.epoch), "sourceStartSeconds": String(start), "sourceEndSeconds": String(start + 0.256),

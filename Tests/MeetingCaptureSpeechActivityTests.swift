@@ -84,7 +84,85 @@ struct MeetingCaptureSpeechActivityTests {
         try require(CMSampleBufferSetDataReady(result!) == noErr, "ready")
         return result!
     }
+    static func waitUntil(_ predicate: @escaping @Sendable () -> Bool) async throws {
+        for _ in 0..<2000 {
+            if predicate() { return }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        throw NSError(domain: "CaptureVADEvidenceTimeout", code: 1)
+    }
+
+    static func independentPhysicalSourceEvidence() async throws {
+        let capture = MeetingPendingSpeechCapture(originBox: MeetingLiveOriginBox(),
+            activityModel: { Fake() }, activitySources: [.you, .them], onUpdate: { _ in })
+        defer { capture.stop() }
+        for index in 0..<4 {
+            let start = Double(index) * 0.256
+            capture.offer(kind: .microphone, sampleBuffer: try input(0, start: start))
+            capture.offer(kind: .applicationAudio, sampleBuffer: try input(0.99, start: start))
+        }
+        try await waitUntil { capture.confidentlyNonSpeech(source: .you, start: 0.256, end: 0.768) }
+        try require(!capture.confidentlyNonSpeech(source: .them, start: 0.256, end: 0.768),
+            "A quiet microphone cannot suppress actual speech in the meeting-audio source")
+        try require(!(await capture.awaitConfidentNonSpeech(source: .them, start: 0.256, end: 0.768)),
+            "Waiting cannot turn another source's speech into silence")
+        try require(!capture.confidentlyNonSpeech(source: .you, start: 0, end: 0.768),
+            "Source-specific queries preserve warmup and full coverage requirements")
+        try require(!capture.confidentlyNonSpeech(source: .you, start: 0.256, end: 2),
+            "Unreceived source tail remains unknown")
+        for index in 4..<8 {
+            let start = Double(index) * 0.256
+            capture.offer(kind: .microphone, sampleBuffer: try input(0.99, start: start))
+            capture.offer(kind: .applicationAudio, sampleBuffer: try input(0, start: start))
+        }
+        try await waitUntil { capture.confidentlyNonSpeech(source: .them, start: 1.28, end: 1.792) }
+        try require(!capture.confidentlyNonSpeech(source: .you, start: 1.28, end: 1.792),
+            "A quiet meeting-audio source cannot suppress actual microphone speech")
+        capture.offer(kind: .applicationAudio, sampleBuffer: try input(0, start: 4))
+        capture.offer(kind: .applicationAudio, sampleBuffer: try input(0, start: 4.256))
+        try await waitUntil { capture.confidentlyNonSpeech(source: .them, start: 4.256, end: 4.512) }
+        try require(!capture.confidentlyNonSpeech(source: .them, start: 1.28, end: 1.792),
+            "An interior source discontinuity invalidates stale silence evidence")
+        await capture.stopAndWait()
+        try require(!capture.confidentlyNonSpeech(source: .you, start: 0.256, end: 0.768)
+            && !capture.confidentlyNonSpeech(source: .them, start: 4.256, end: 4.512),
+            "Joined stop retires silence evidence for both physical sources")
+
+        let legacy = MeetingPendingSpeechCapture(originBox: MeetingLiveOriginBox(),
+            activityModel: { Fake() }, onUpdate: { _ in })
+        for index in 0..<4 {
+            let start = Double(index) * 0.256
+            legacy.offer(kind: .microphone, sampleBuffer: try input(0, start: start))
+            legacy.offer(kind: .applicationAudio, sampleBuffer: try input(0, start: start))
+        }
+        try await waitUntil { legacy.confidentlyNonSpeech(start: 0.256, end: 0.768) }
+        try require(!legacy.confidentlyNonSpeech(source: .them, start: 0.256, end: 0.768),
+            "The mobile-compatible default creates only the existing microphone worker")
+        await legacy.stopAndWait()
+        print("PASS independent source VAD: alternating speech, full coverage, gaps, default compatibility and joined retirement")
+    }
+
+    static func joinedPhysicalSourceStop() async throws {
+        let began = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0), completed = Events()
+        let capture = MeetingPendingSpeechCapture(originBox: MeetingLiveOriginBox(), activityModel: {
+            began.signal(); release.wait(); return Fake()
+        }, activitySources: [.you, .them], onUpdate: { _ in })
+        defer { release.signal(); release.signal(); capture.stop() }
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { began.wait(); began.wait(); continuation.resume() }
+        }
+        let stopped = Task { await capture.stopAndWait(); completed.add(0, 0, .nonSpeech) }
+        release.signal()
+        try require(completed.values.isEmpty, "Stop cannot return while either source is still loading its owned VAD")
+        release.signal()
+        await stopped.value
+        try require(completed.values.count == 1, "Both source model loads join before stop returns")
+        print("PASS joined two-source VAD preparation and cleanup")
+    }
+
     static func main() async throws {
+        try await independentPhysicalSourceEvidence()
+        try await joinedPhysicalSourceStop()
         try await budgetRecovery()
         try await delayedRightTail()
         let events = Events()
