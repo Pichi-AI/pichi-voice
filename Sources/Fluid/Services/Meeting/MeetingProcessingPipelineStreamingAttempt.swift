@@ -13,7 +13,10 @@ extension MeetingProcessingPipeline {
         let runtime = attempt.runtime
         let checkpoint: @Sendable (MeetingPCMTranscriptBatch) async throws -> Void = { try await attempt.publish($0) }
         let preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)? = attempt.preview.map { publish in
-            { partial in try await publish(track.kind, partial) }
+            { partial in
+                let projected = try attempt.projectedPreview(partial, trackID: track.id)
+                try await publish(track.kind, projected)
+            }
         }
         let publishPreview: @Sendable (MeetingStreamingTranscriptState.Emission) async throws -> Void = { emission in
             guard emission.hasPreviewChanges, let preview else { return }
@@ -27,6 +30,15 @@ extension MeetingProcessingPipeline {
         if let query = attempt.trackConfidentlyNonSpeech {
             nonSpeech = { start, end in await query(track.kind, start, end) }
         } else { nonSpeech = attempt.request.session.mode == .inRoom ? attempt.confidentlyNonSpeech : nil }
+        let sourceTimeline: MeetingPCMSourceTimeline?
+        if attempt.request.session.mode == .onlineCall {
+            let timebase = attempt.request.session.timebase
+            let origin = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
+                / Double(timebase.machTimebaseDenominator) / 1_000_000_000
+            let timeline = try MeetingPCMSourceTimeline(originSeconds: origin)
+            attempt.sourceTimelines[track.id] = timeline
+            sourceTimeline = timeline
+        } else { sourceTimeline = nil }
         let state = try MeetingStreamingTranscriptState(attemptID: attemptID, track: track,
             configuration: configuration, privacyContext: attempt.request.session.mode == .onlineCall
                 ? attempt.redactor.map { MeetingTranscriptPrivacyContext(redactor: $0) } : attempt.privacyContext,
@@ -48,13 +60,20 @@ extension MeetingProcessingPipeline {
         attempt.streamingTracks[track.id] = track
         attempt.streamingTranscripts[track.id] = state
         attempt.streamingProgress[track.id] = { observation in
-            let emission = try await state.observe(observation)
+            let admitted = try await attempt.observeEcho(observation, track: track)
+            let emission = try await state.observe(admitted)
             try await publish(emission, "progress")
         }
         let expectedTrackCount = attempt.request.session.mode == .onlineCall ? 2 : 1
         if attempt.streamingTracks.count == expectedTrackCount {
             let tracks = attempt.streamingTracks
             let progress = attempt.streamingProgress
+            if expectedTrackCount > 1 {
+                let timelines = attempt.sourceTimelines
+                attempt.echoAdmission = try MeetingStreamingEchoAdmission(tracks: Array(tracks.values),
+                    presentationInterval: { id, start, end in timelines[id]?.mapInterval(start: start, end: end) },
+                    presentationThrough: { id, end in timelines[id]?.mapEndTime(end) })
+            }
             let scope: MeetingStreamingPCMController.SharedScopeOperation = { body in
                 try await DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
                     let started = ProcessInfo.processInfo.systemUptime
@@ -131,11 +150,13 @@ extension MeetingProcessingPipeline {
                 // Only this source's complete measured quiet interval may suppress ASR.
                 confidentlyNonSpeech: nonSpeech,
                 pauseEndpointSilenceSeconds: 0.768,
+                sourceTimeline: sourceTimeline,
                 recognize: { window, offset in
                     let controller = try await getController()
                     let observation = try await controller.recognize(window: window, offset: offset,
                         preview: publishSpeech)
-                    let emission = try await state.observe(observation)
+                    let admitted = try await attempt.observeEcho(observation, track: track)
+                    let emission = try await state.observe(admitted)
                     try await publishPreview(emission)
                     Self.logStreamingEmission(emission, attemptID: attemptID, phase: "window")
                     return emission.safeBatch
@@ -159,8 +180,10 @@ extension MeetingProcessingPipeline {
                         await state.cancel()
                         return nil
                     }
+                    try await attempt.sealEcho(trackID: track.id)
                     let final = try await controller.finishStreaming()
-                    let emission = try await state.finish(final)
+                    let admitted = try await attempt.observeEcho(final, track: track)
+                    let emission = try await state.finish(admitted)
                     try await publishPreview(emission)
                     Self.logStreamingEmission(emission, attemptID: attemptID, phase: "finish")
                     return emission.safeBatch
@@ -169,6 +192,7 @@ extension MeetingProcessingPipeline {
                         DebugLogger.shared.info(message, source: "MeetingMemoryAudio")
                     }
                 }, failure: { _ in
+                    Task { @MainActor in await attempt.cancelStreamingAfterFailure() }
                     // The transport rejects subsequent input and preserves completed text.
                     // It has no hidden full-audio replay fallback in streaming mode.
                     DebugLogger.$pipelineID.withValue(attemptID.uuidString) {

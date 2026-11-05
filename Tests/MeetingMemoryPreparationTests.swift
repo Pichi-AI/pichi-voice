@@ -16,7 +16,7 @@ nonisolated enum MeetingConfigFingerprintEncoding {
 }
 typealias MeetingTrackConfidentNonSpeechQuery = @Sendable (MeetingAudioTrackKind, TimeInterval, TimeInterval) async -> Bool
 typealias MeetingAudioTrackID = UUID
-nonisolated struct MeetingAudioTrack: Sendable {}
+nonisolated struct MeetingAudioTrack: Sendable { let id = UUID() }
 nonisolated enum MeetingAudioTrackKind: Sendable { case microphone, applicationAudio }
 nonisolated struct MeetingStreamingPCMObservation: Sendable {}
 nonisolated enum MeetingStreamingPCMControllerError: Error { case invalidScope }
@@ -27,13 +27,37 @@ actor MeetingProcessingSerializationGate {
 nonisolated struct MeetingBackendRequest: Sendable {}
 nonisolated struct MeetingBackendDescriptor: Sendable {}
 nonisolated protocol MeetingParakeetNemotronRunning: Sendable {}
-nonisolated struct MeetingPCMTranscriptBatch: Sendable {}
-nonisolated struct MeetingLivePartial: Sendable {}
+nonisolated struct MeetingProbeTime: Sendable {
+    let value: Int64
+    let timescale: Int32
+    var seconds: Double { Double(value) / Double(timescale) }
+}
+nonisolated struct MeetingProbeSegment: Sendable {
+    var start: MeetingProbeTime
+    var end: MeetingProbeTime
+}
+nonisolated struct MeetingPCMTranscriptBatch: Sendable {
+    var sourceTrack: MeetingAudioTrack?
+    var segments: [MeetingProbeSegment] = []
+    var speakers: [String] = []
+    var speakerRevisions: [String] = []
+    var echoRevisions: [String] = []
+    var livePreview: MeetingLivePartial?
+    var protectedSourceThroughSample: Int?
+}
+nonisolated struct MeetingLivePartial: Sendable { var start: Double; var end: Double? }
 nonisolated struct MeetingProcessingResult: Sendable {}
 nonisolated final class MeetingMemoryAudioArchive: Sendable {}
 nonisolated protocol MeetingMemoryAudioConsuming: Sendable {}
 nonisolated final class MeetingArchivedMemoryAudioConsumer: Sendable {}
-nonisolated final class MeetingStreamingPCMController: Sendable {}
+nonisolated final class MeetingStreamingPCMController: Sendable { func cancelAndWait() async {} }
+actor MeetingStreamingEchoAdmission {
+    func observe(track: MeetingAudioTrack, observation: MeetingStreamingPCMObservation) -> MeetingStreamingPCMObservation { observation }
+    func admitting(_ batch: MeetingPCMTranscriptBatch) -> MeetingPCMTranscriptBatch { batch }
+    func pendingRevisionBatch() -> MeetingPCMTranscriptBatch? { nil }
+    func markSealed(trackID: UUID) {}
+    func cancel() {}
+}
 nonisolated final class MeetingStreamingTranscriptState: Sendable {}
 nonisolated final class MeetingTranscriptPrivacyContext: Sendable {
     init(redactor: any TranscriptTextRedacting) {}

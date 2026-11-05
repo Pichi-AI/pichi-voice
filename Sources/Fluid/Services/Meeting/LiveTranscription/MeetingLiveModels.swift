@@ -120,6 +120,20 @@ nonisolated struct MeetingLiveTranscriptSnapshot: Sendable, Equatable {
         return copy
     }
 
+    /// A checkpoint commits one source. An unrelated source's preview cannot restore
+    /// the committing source's older hypothesis while the reading projection awaits.
+    func preservingConcurrentPartials(from current: Self,
+                                      since previous: [MeetingLiveSpeaker: MeetingLivePartial],
+                                      committing source: MeetingLiveSpeaker?) -> Self {
+        var result = self
+        for key in [MeetingLiveSpeaker.you, .them] {
+            if key != source || current.partials[key] != previous[key] {
+                result.partials[key] = current.partials[key]
+            }
+        }
+        return result
+    }
+
     private mutating func markFinalized(_ id: UUID) {
         guard !self.finalizedTurnIDs.contains(id) else { return }
         self.finalizedTurnIDs.append(id)

@@ -48,6 +48,68 @@ final class MeetingMemoryProcessingAttempt {
     var streamingProgress: [MeetingAudioTrackID: @Sendable (MeetingStreamingPCMObservation) async throws -> Void] = [:]
     var streamingConsumers: [MeetingAudioTrackID: any MeetingMemoryAudioConsuming] = [:]
     let publicationGate = MeetingProcessingSerializationGate()
+    var sourceTimelines: [MeetingAudioTrackID: MeetingPCMSourceTimeline] = [:]
+    var echoAdmission: MeetingStreamingEchoAdmission?
+    var streamingFailureTask: Task<Void, Never>?
+
+    func observeEcho(_ observation: MeetingStreamingPCMObservation, track: MeetingAudioTrack) async throws -> MeetingStreamingPCMObservation {
+        guard let echoAdmission else { return observation }
+        let result = try await echoAdmission.observe(track: track, observation: observation)
+        if let revisions = await echoAdmission.pendingRevisionBatch() { try await publish(revisions) }
+        return result
+    }
+
+    func sealEcho(trackID: MeetingAudioTrackID) async throws {
+        guard let echoAdmission else { return }
+        try await echoAdmission.markSealed(trackID: trackID)
+        if let revisions = await echoAdmission.pendingRevisionBatch() { try await publish(revisions) }
+    }
+
+    func cancelStreamingAfterFailure() async {
+        if let task = streamingFailureTask { await task.value; return }
+        let controllers = Array(streamingControllers.values)
+        let echo = echoAdmission
+        let task = Task {
+            await withTaskGroup(of: Void.self) { group in
+                for controller in controllers { group.addTask { await controller.cancelAndWait() } }
+            }
+            await echo?.cancel()
+        }
+        streamingFailureTask = task
+        await task.value
+    }
+
+    func projectedPreview(_ partial: MeetingLivePartial?, trackID: MeetingAudioTrackID) throws -> MeetingLivePartial? {
+        guard var partial, let timeline = sourceTimelines[trackID] else { return partial }
+        guard let start = timeline.mapTime(partial.start) else { throw MeetingPCMSourceTimeline.Failure.invalidTimestamp }
+        partial.start = start
+        if let end = partial.end {
+            guard let mapped = timeline.mapEndTime(end) else { throw MeetingPCMSourceTimeline.Failure.invalidTimestamp }
+            partial.end = mapped
+        }
+        return partial
+    }
+
+    func projectedBatch(_ input: MeetingPCMTranscriptBatch) throws -> MeetingPCMTranscriptBatch {
+        guard let track = input.sourceTrack, let timeline = sourceTimelines[track.id] else { return input }
+        var batch = input
+        for index in batch.segments.indices {
+            guard let start = timeline.mapTime(batch.segments[index].start.seconds),
+                  let end = timeline.mapEndTime(batch.segments[index].end.seconds), end > start else {
+                throw MeetingPCMSourceTimeline.Failure.invalidTimestamp
+            }
+            batch.segments[index].start = .init(value: Int64((start * 1_000_000).rounded()), timescale: 1_000_000)
+            batch.segments[index].end = .init(value: Int64((end * 1_000_000).rounded()), timescale: 1_000_000)
+        }
+        batch.livePreview = try projectedPreview(batch.livePreview, trackID: track.id)
+        if let through = batch.protectedSourceThroughSample {
+            // A source gap has no measured continuous prefix. Individual mapped words still
+            // retire their own visible estimates; never acknowledge an unknown physical gap.
+            batch.protectedSourceThroughSample = timeline.hasGaps ? nil : timeline.mapEndTime(Double(through) / 16_000)
+                .map { Int(($0 * 16_000).rounded(.down)) }
+        }
+        return batch
+    }
 
     func controller(for trackID: MeetingAudioTrackID) throws -> MeetingStreamingPCMController {
         guard let controller = streamingControllers[trackID] else { throw MeetingStreamingPCMControllerError.invalidScope }
@@ -57,7 +119,12 @@ final class MeetingMemoryProcessingAttempt {
     func publish(_ batch: MeetingPCMTranscriptBatch) async throws {
         try await publicationGate.acquire()
         do {
-            try await checkpoint(batch)
+            var safe = try projectedBatch(batch)
+            if let echoAdmission { safe = try await echoAdmission.admitting(safe) }
+            if !safe.segments.isEmpty || !safe.speakers.isEmpty || !safe.speakerRevisions.isEmpty
+                || !safe.echoRevisions.isEmpty || safe.protectedSourceThroughSample != nil {
+                try await checkpoint(safe)
+            }
             await publicationGate.release()
         } catch {
             await publicationGate.release()
@@ -446,11 +513,7 @@ extension MeetingProcessingPipeline {
             analysis.cancel()
             _ = try? await analysis.value
         }
-        await withTaskGroup(of: Void.self) { group in
-            for controller in attempt.streamingControllers.values {
-                group.addTask { await controller.cancelAndWait() }
-            }
-        }
+        await attempt.cancelStreamingAfterFailure()
         for state in attempt.streamingTranscripts.values { await state.cancel() }
         for consumer in attempt.streamingConsumers.values { try? await consumer.finish() }
         try? await attempt.consumer?.finish()
@@ -458,6 +521,9 @@ extension MeetingProcessingPipeline {
         attempt.streamingTranscripts.removeAll()
         attempt.streamingConsumers.removeAll()
         attempt.streamingProgress.removeAll()
+        attempt.sourceTimelines.removeAll()
+        attempt.echoAdmission = nil
+        attempt.streamingFailureTask = nil
         attempt.consumer = nil
         attempt.archive.clear()
         if self.memoryAttempts[sessionID] === attempt { self.memoryAttempts.removeValue(forKey: sessionID) }
@@ -474,24 +540,41 @@ extension MeetingProcessingPipeline {
             }
             attempt.analysisTask = task
         }
-        return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+        return try await withTaskCancellationHandler {
+            do {
+                let result = try await task.value
+                await self.releaseMemoryAttempt(attempt, sessionID: session.id)
+                return result
+            } catch {
+                await self.releaseMemoryAttempt(attempt, sessionID: session.id)
+                throw error
+            }
+        } onCancel: { task.cancel() }
+    }
+
+    private func releaseMemoryAttempt(_ attempt: MeetingMemoryProcessingAttempt, sessionID: MeetingSessionID) async {
+        // Even a publication/finalizer failure may leave the shared sibling command idle.
+        // Join that exact resource stack before releasing references or its audio archive.
+        await attempt.cancelStreamingAfterFailure()
+        guard self.memoryAttempts[sessionID] === attempt else { return }
+        let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.archiveRelease)
+        attempt.archive.clear()
+        attempt.analysisTask = nil
+        attempt.consumer = nil
+        attempt.streamingConsumers.removeAll()
+        attempt.streamingControllers.removeAll()
+        attempt.streamingTranscripts.removeAll()
+        attempt.streamingProgress.removeAll()
+        attempt.sourceTimelines.removeAll()
+        attempt.echoAdmission = nil
+        attempt.streamingFailureTask = nil
+        self.memoryAttempts.removeValue(forKey: sessionID)
+        MeetingPCMRuntimeDiagnostics.completedDetailed(.archiveRelease, since: began)
     }
 
     private func completeMemoryAudio(session: MeetingSession, attempt: MeetingMemoryProcessingAttempt,
                                      progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
         guard attempt.consumer != nil || !attempt.streamingConsumers.isEmpty else { throw MeetingProcessingError.noRecoverableAudio }
-        defer {
-            let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.archiveRelease)
-            attempt.archive.clear()
-            attempt.analysisTask = nil
-            attempt.consumer = nil
-            attempt.streamingConsumers.removeAll()
-            attempt.streamingControllers.removeAll()
-            attempt.streamingTranscripts.removeAll()
-            attempt.streamingProgress.removeAll()
-            if self.memoryAttempts[session.id] === attempt { self.memoryAttempts.removeValue(forKey: session.id) }
-            MeetingPCMRuntimeDiagnostics.completedDetailed(.archiveRelease, since: began)
-        }
         progress(.transcribing)
         do {
             let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.speechTail)

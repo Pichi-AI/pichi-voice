@@ -44,6 +44,14 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
     /// immutable source evidence. Ordinary batches leave this additive capability empty.
     var speakerRevisions: [SpeakerRevision] = []
 
+    /// Cross-source acoustic/text admission may arrive after protected words. This patch
+    /// changes only duplicate visibility, preserving user text, native evidence and aliases.
+    struct EchoRevision: Equatable, Sendable {
+        let segmentID: MeetingTranscriptSegmentID
+        let isLikelyEcho: Bool
+    }
+    var echoRevisions: [EchoRevision] = []
+
     /// Provenance of one growing physical PCM window. Native timing partitions
     /// can change between observations without starting a different hypothesis.
     nonisolated struct SpeechObservationIdentity: Equatable, Sendable {

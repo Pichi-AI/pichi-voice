@@ -2627,6 +2627,12 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             try revision.apply(to: &session.transcriptSegments[index])
         }
+        for revision in batch.echoRevisions {
+            // A protected lexical tail may not have published this raw word yet. The
+            // attempt reapplies its latest echo decision when that word is admitted.
+            guard let index = indices[revision.segmentID] else { continue }
+            session.transcriptSegments[index].isLikelyEcho = revision.isLikelyEcho
+        }
         session.speakers = batch.mergingSpeakers(into: session.speakers)
         session.transcriptTimeDomain = .meetingRelative
         session.transcriptIsComplete = (session.transcriptIsComplete ?? true) && batch.isComplete
@@ -2646,18 +2652,19 @@ final class MeetingSessionCoordinator: ObservableObject {
         // protected reading history, so earlier participants do not disappear while
         // recording. Projection is pure and joined off the main actor.
         let revisionBeforeProjection = self.liveTranscript.revision
+        let partialsBeforeProjection = self.liveTranscript.partials
+        let committingSource: MeetingLiveSpeaker? = batch.sourceTrack.map { $0.kind == .applicationAudio ? .them : .you }
         var snapshot = try await Self.protectedLiveHistory(
-            session: session, revision: revisionBeforeProjection + 1, preview: batch.livePreview,
-            previewSource: batch.sourceTrack?.kind == .applicationAudio ? .them : .you,
+            session: session, revision: revisionBeforeProjection + 1, preview: committingSource == nil ? self.liveTranscript.partials[.you] : batch.livePreview,
+            previewSource: committingSource ?? .you,
             otherPartials: self.liveTranscript.partials)
         guard self.memoryCheckpointGeneration == generation, self.activeSession?.id == sessionID else {
             throw CancellationError()
         }
         // A newer safe preview may arrive while the pure reading projection runs.
         // Publishing durable history must not roll that preview or revision backward.
-        if self.liveTranscript.revision > revisionBeforeProjection {
-            snapshot.partials = self.liveTranscript.partials
-        }
+        snapshot = snapshot.preservingConcurrentPartials(from: self.liveTranscript,
+            since: partialsBeforeProjection, committing: committingSource)
         snapshot.revision = self.liveTranscript.revision + 1
         self.liveTranscript = snapshot
         self.reconcilePendingSpeech()

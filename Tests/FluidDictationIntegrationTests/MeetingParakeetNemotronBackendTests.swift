@@ -3302,14 +3302,14 @@ private final class OnlinePipelineService: MeetingASRServicing {
         .init(owner: "synthetic", snapshot: { nil }, suspend: {}, restore: { _ in })
     }
     func withMeetingModelResidency<T>(attemptID: UUID, acceptsCompletedCancellation: (T) -> Bool,
-        work: () async throws -> T) async throws -> T {
+        work: nonisolated(nonsending) () async throws -> T) async throws -> T {
         guard residencyEntries == residencyExits else { throw OnlinePipelineFailure.unexpected }
         residencyEntries += 1
         defer { residencyExits += 1 }
         return try await work()
     }
     func withPreparedMeetingASR<T>(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
-        body: @escaping (any TranscriptionProvider) async throws -> T) async throws -> T { throw OnlinePipelineFailure.unexpected }
+        body: nonisolated(nonsending) @escaping (any TranscriptionProvider) async throws -> T) async throws -> T { throw OnlinePipelineFailure.unexpected }
     func transcribeMeetingSamples(_ samples: [Float], provider: any TranscriptionProvider, languageCode: String) async throws -> ASRTranscriptionResult { throw OnlinePipelineFailure.unexpected }
     func transcribeMeetingSamplesWithTimings(_ samples: [Float], provider: any TranscriptionProvider) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) { throw OnlinePipelineFailure.unexpected }
     func transcribeMeetingFile(at fileURL: URL, provider: any TranscriptionProvider) async throws -> ASRTranscriptionResult { throw OnlinePipelineFailure.unexpected }
@@ -3328,8 +3328,8 @@ private final nonisolated class OnlinePipelineRuntime: MeetingParakeetNemotronRu
     var supportsMultiTrackStreamingPCMProcessing: Bool { true }
     func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws { evidence.record("prepare") }
     func withPreparedStreamingPCMTracks(trackIDs: [UUID], attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
-        onProgress: @escaping @Sendable (UUID, MeetingStreamingPCMObservation) async throws -> Void,
-        body: @escaping @Sendable ([UUID: any MeetingPreparedStreamingPCMProcessing]) async throws -> Void) async throws {
+        onProgress: nonisolated(nonsending) @escaping @Sendable (UUID, MeetingStreamingPCMObservation) async throws -> Void,
+        body: nonisolated(nonsending) @escaping @Sendable ([UUID: any MeetingPreparedStreamingPCMProcessing]) async throws -> Void) async throws {
         evidence.record("scope-open")
         defer { evidence.record("scope-cleaned") }
         let sessions = Dictionary(uniqueKeysWithValues: trackIDs.map { track in
@@ -3339,11 +3339,11 @@ private final nonisolated class OnlinePipelineRuntime: MeetingParakeetNemotronRu
         try await body(sessions)
     }
     func withNemotronDiarization(artifact: MeetingNemotronModelArtifact,
-        _ body: @escaping @Sendable (any MeetingNemotronDiarizerFactory) async throws -> MeetingNemotronPhaseResult) async throws -> MeetingNemotronPhaseResult {
+        _ body: nonisolated(nonsending) @escaping @Sendable (any MeetingNemotronDiarizerFactory) async throws -> MeetingNemotronPhaseResult) async throws -> MeetingNemotronPhaseResult {
         evidence.record("replay"); throw OnlinePipelineFailure.unexpected
     }
     func withPreparedASR(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
-        body: @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult) async throws -> MeetingParakeetPhaseResult {
+        body: nonisolated(nonsending) @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult) async throws -> MeetingParakeetPhaseResult {
         evidence.record("replay"); throw OnlinePipelineFailure.unexpected
     }
 }
@@ -3359,7 +3359,7 @@ private actor OnlinePipelinePrepared: MeetingPreparedStreamingPCMProcessing {
         self.track = track; self.attempt = attempt; self.evidence = evidence; self.progress = progress
     }
     func recognize(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
-        preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingStreamingPCMObservation {
+        preview: (nonisolated(nonsending) @Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingStreamingPCMObservation {
         evidence.record("recognize-entered")
         let start = Int((offset * 16_000).rounded())
         while let update = try await window.next() {
