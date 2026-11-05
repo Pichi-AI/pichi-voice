@@ -113,6 +113,8 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Account/PrivateProfileMeetingStore.swift \
     Sources/Fluid/Account/PrivateProfileService.swift \
     Sources/Fluid/Account/PrivateProfileOperationOwner.swift \
+    Tests/Support/StandaloneMeetingProcessingDependencies.swift \
+    Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift \
     Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     "$task_test_dir/ApplicationSupport.swift" Tests/MeetingSessionStoreCheckpointTests.swift \
