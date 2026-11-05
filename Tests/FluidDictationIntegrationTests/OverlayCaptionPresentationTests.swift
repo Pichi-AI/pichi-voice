@@ -212,9 +212,15 @@ final class OverlayCaptionPresentationTests: XCTestCase {
         }
     }
 
+    /// xcodebuild test hosts may never reach the active Space, so WindowServer
+    /// occlusion is not a test input. Ordering, alpha and hiding remain real.
+    private final class AssumedVisibleWindow: NSWindow {
+        override var occlusionState: NSWindow.OcclusionState { self.isVisible ? .visible : [] }
+    }
+
     func testWaitingShimmerStopsWhenItsViewOrWindowIsHidden() async throws {
         let view = CompositorShimmerSweepView(frame: CGRect(x: 0, y: 0, width: 100, height: 20))
-        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = AssumedVisibleWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.animationBehavior = .none
         window.contentView = view
