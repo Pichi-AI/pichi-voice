@@ -1257,6 +1257,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         session.resultSidecarReference = inputSession.resultSidecarReference
         session.transcriptIsComplete = inputSession.transcriptIsComplete
         session.transcriptTimeDomain = inputSession.transcriptTimeDomain
+        session.transcriptPresentationOrigin = inputSession.transcriptPresentationOrigin
     }
 
     /// Puts the pre-retry language back. Legacy meetings may have no attempt language at all, so the

@@ -1266,6 +1266,9 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
     /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
     var transcriptTimeDomain: MeetingTranscriptTimeDomain? = nil
+    /// Explicit clock basis for new source-streaming publication. Older recordings keep
+    /// their minimum-chunk origin; this value aligns retained playback and later retries.
+    var transcriptPresentationOrigin: MeetingMediaTime? = nil
     var retention: MeetingRetentionState
     var processingAttempts: [MeetingProcessingAttempt]
     var updatedAt: Date
@@ -1298,6 +1301,15 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.selectedMicrophone = configuration.microphone
         self.startedAt = startedAt
         self.timebase = timebase
+        if configuration.mode == .onlineCall, configuration.effectiveSpeakerProcessingMode == .streaming,
+           timebase.machTimebaseDenominator > 0 {
+            let seconds = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
+                / Double(timebase.machTimebaseDenominator) / 1_000_000_000
+            if seconds.isFinite, seconds >= 0, seconds < Double(Int64.max) / 1_000_000 {
+                self.transcriptPresentationOrigin = .init(value: Int64((seconds * 1_000_000).rounded()), timescale: 1_000_000)
+                self.transcriptTimeDomain = .meetingRelative
+            }
+        }
         self.state = .preparing
         self.events = []
         self.failures = []

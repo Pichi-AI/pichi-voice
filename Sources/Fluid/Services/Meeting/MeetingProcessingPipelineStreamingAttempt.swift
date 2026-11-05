@@ -43,6 +43,12 @@ extension MeetingProcessingPipeline {
             configuration: configuration, privacyContext: attempt.request.session.mode == .onlineCall
                 ? attempt.redactor.map { MeetingTranscriptPrivacyContext(redactor: $0) } : attempt.privacyContext,
             priorSpeakers: attempt.request.session.speakers)
+        let retireSourceTimeline: @Sendable () async -> Void = {
+            // Keep every privacy/attribution-held word and the preceding physical ASR
+            // window. Echo caches already retain positioned intervals, not source maps.
+            let protectedFloor = await state.retainActivityFromSample
+            sourceTimeline?.discard(beforeSample: max(0, protectedFloor - 20 * 16_000))
+        }
         let publish: @Sendable (MeetingStreamingTranscriptState.Emission, String) async throws -> Void = { emission, phase in
             try Task.checkCancellation()
             let batch = emission.safeBatch
@@ -63,6 +69,7 @@ extension MeetingProcessingPipeline {
             let admitted = try await attempt.observeEcho(observation, track: track)
             let emission = try await state.observe(admitted)
             try await publish(emission, "progress")
+            await retireSourceTimeline()
         }
         let expectedTrackCount = attempt.request.session.mode == .onlineCall ? 2 : 1
         if attempt.streamingTracks.count == expectedTrackCount {
@@ -168,6 +175,7 @@ extension MeetingProcessingPipeline {
                         let controller = try await getController()
                         try await controller.discardActivity(beforeSample: await state.retainActivityFromSample)
                     }
+                    await retireSourceTimeline()
                 }, didProcessWindow: { feedback in
                     // The timing owner excludes only waits for future PCM. This receipt joins
                     // canonical privacy above and the full checkpoint/projection before the
