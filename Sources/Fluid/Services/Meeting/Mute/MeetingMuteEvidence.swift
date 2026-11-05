@@ -61,39 +61,132 @@ nonisolated enum MeetingMuteVisualState: Equatable, Sendable {
     case unknown
 }
 
-/// Only a possible PTT attempt owns a release fence. A key never proves unmute.
-nonisolated struct MeetingMutePTTState {
+/// A recording attempt remembers the last explicit conference transition. Missing evidence is
+/// not a transition. Space can identify a temporary grant, but cannot itself open microphone PCM.
+nonisolated struct MeetingMuteTransitionState {
+    private(set) var state = MeetingMicrophoneMuteState.unmuted
+    private(set) var latestEvidenceAt: UInt64 = 0
     private(set) var held = false
     private(set) var possiblePTT = false
-    private(set) var releaseFence: UInt64?
-    private(set) var excludedThrough: UInt64 = 0
+    private(set) var temporaryUnmute = false
+    private(set) var historicalReleaseUnmuteAt: UInt64?
+    private var persistentState = MeetingMicrophoneMuteState.unmuted
+    private var lastVisibleState: MeetingMicrophoneMuteState?
+    private var lastUnmuteFromMutedAt: UInt64?
+    private var lastRenderedMuteAt: UInt64?
+    private var lastRenderedUnmuteAt: UInt64?
+    private var excludedThrough: UInt64 = 0
+    private var hudVisible = false
+    private var temporaryObservedDuringHold = false
+    private var awaitingMutedAfterRelease = false
 
     static func releaseBoundary(eventTime: UInt64?, processedAt now: UInt64) -> (fence: UInt64, unsafeStart: UInt64) {
         guard let eventTime, eventTime > 0, eventTime <= now else { return (now, 0) }
         return (eventTime, eventTime)
     }
 
-    mutating func keyDown(at eventTime: UInt64?, persistentlyUnmuted: Bool, latestObservation: UInt64) {
-        guard !self.held else { return }
-        self.held = true
-        self.possiblePTT = !persistentlyUnmuted || eventTime == nil || (eventTime ?? 0) < latestObservation
+    /// Returns true only for a newly observed visible transition which changes effective state.
+    @discardableResult
+    mutating func observe(_ visible: MeetingMicrophoneMuteState?, at time: UInt64) -> Bool {
+        guard let visible, visible == .muted || visible == .unmuted, time >= self.latestEvidenceAt else { return false }
+        guard visible != .unmuted || (time > self.excludedThrough && !self.awaitingMutedAfterRelease) else { return false }
+        if visible == .muted, time > self.excludedThrough { self.awaitingMutedAfterRelease = false }
+        self.latestEvidenceAt = time
+        if visible == .muted { self.lastRenderedMuteAt = time }
+        guard visible != self.lastVisibleState else { return false }
+        if visible == .unmuted { self.lastRenderedUnmuteAt = time }
+        self.lastVisibleState = visible
+        if visible == .muted {
+            self.persistentState = .muted
+            self.temporaryUnmute = false
+            self.lastUnmuteFromMutedAt = nil
+        } else if (self.held && self.possiblePTT) || self.temporaryUnmute {
+            self.temporaryUnmute = true
+            self.temporaryObservedDuringHold = true
+        } else {
+            self.lastUnmuteFromMutedAt = self.persistentState == .muted ? time : nil
+            self.persistentState = .unmuted
+        }
+        return self.change(to: visible)
     }
 
+    /// The HUD is a separate visible source. Only a new appearance can grant temporary unmute;
+    /// disappearance merely rearms its next appearance and never invents a mute transition.
     @discardableResult
-    mutating func release(at now: UInt64) -> Bool {
-        defer { self.held = false; self.possiblePTT = false }
-        guard self.held, self.possiblePTT else { return false }
-        self.releaseFence = max(self.releaseFence ?? 0, now)
+    mutating func observeTemporaryHUD(_ visible: Bool?, at time: UInt64, corroboratedUnmute: Bool = false) -> Bool {
+        guard let visible, time >= self.latestEvidenceAt else { return false }
+        guard visible != self.hudVisible else { return false }
+        self.hudVisible = visible
+        guard visible, time > self.excludedThrough, !self.awaitingMutedAfterRelease,
+              self.held || corroboratedUnmute else { return false }
+        self.latestEvidenceAt = time
+        self.lastVisibleState = .unmuted
+        self.lastRenderedUnmuteAt = time
+        self.persistentState = .muted
+        self.temporaryUnmute = true
+        self.temporaryObservedDuringHold = true
+        return self.change(to: .unmuted)
+    }
+
+    mutating func keyDown(at eventTime: UInt64?) {
+        guard !self.held else { return }
+        self.held = true
+        let delayedPTT = eventTime.flatMap { event in self.lastUnmuteFromMutedAt.map { event <= $0 } } ?? false
+        self.possiblePTT = self.persistentState == .muted || self.temporaryUnmute || delayedPTT || self.lastVisibleState == nil
+        if self.possiblePTT, let eventTime, eventTime > self.excludedThrough { self.awaitingMutedAfterRelease = false }
+        if delayedPTT {
+            self.persistentState = .muted
+            self.temporaryUnmute = self.state == .unmuted
+            self.temporaryObservedDuringHold = self.temporaryUnmute
+        }
+    }
+
+    /// A known temporary grant returns to its persistent muted base on the actual Space release.
+    /// True also refines an already observed mute with an earlier key boundary for PCM quarantine.
+    @discardableResult
+    mutating func keyUp(processedAt now: UInt64, releasedAt: UInt64? = nil) -> Bool {
+        self.historicalReleaseUnmuteAt = nil
+        defer { self.held = false; self.possiblePTT = false; self.temporaryObservedDuringHold = false }
+        let hadTemporaryGrant = self.temporaryUnmute || self.temporaryObservedDuringHold
+        guard (self.held && self.possiblePTT) || hadTemporaryGrant else { return false }
+        if let releasedAt, releasedAt > 0, releasedAt <= now, self.state == .unmuted,
+           let mutedAt = self.lastRenderedMuteAt, mutedAt >= releasedAt,
+           let unmutedAt = self.lastRenderedUnmuteAt, unmutedAt > mutedAt {
+            // A full rendered mute/unmute cycle after this old key release is newer evidence.
+            self.temporaryUnmute = false
+            self.persistentState = .unmuted
+            self.lastUnmuteFromMutedAt = nil
+            self.hudVisible = true
+            self.historicalReleaseUnmuteAt = unmutedAt
+            return false
+        }
+        // Fence every owned PTT release, including a press too short for a sampled grant.
+        // Otherwise its first delayed HUD/unmuted frame could open after the key is already up.
+        self.hudVisible = true
+        self.awaitingMutedAfterRelease = true
         self.excludedThrough = max(self.excludedThrough, now)
+        self.latestEvidenceAt = max(self.latestEvidenceAt, now)
+        guard hadTemporaryGrant else { return false }
+        self.temporaryUnmute = false
+        self.persistentState = .muted
+        _ = self.change(to: .muted)
         return true
     }
 
-    mutating func confirmedMuted(captureStarted: UInt64) {
-        if let fence = self.releaseFence, captureStarted >= fence { self.releaseFence = nil }
+    /// Align the reducer with the PCM gate's negative processing fence. A pending old positive
+    /// cannot make the icon green while the downstream gate still rejects that old snapshot.
+    mutating func negativeWasProcessed(at time: UInt64) {
+        self.excludedThrough = max(self.excludedThrough, time)
+        self.latestEvidenceAt = max(self.latestEvidenceAt, time)
     }
 
-    func permitsPositive(captureStarted: UInt64) -> Bool {
-        self.releaseFence == nil && captureStarted > self.excludedThrough
+    /// An unavailable key listener supplies no conference transition. Keep the rendered state.
+    mutating func keyListenerUnavailable() { self.held = false; self.possiblePTT = false }
+
+    private mutating func change(to state: MeetingMicrophoneMuteState) -> Bool {
+        guard self.state != state else { return false }
+        self.state = state
+        return true
     }
 }
 
