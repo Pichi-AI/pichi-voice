@@ -62,6 +62,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     private let chunkDuration: TimeInterval
     private let eventHandler: EventHandler
     private let diagnosticSampleObserver: (@Sendable (CMSampleBuffer, UInt64) -> Void)?
+    private let sampleAdmission: (@Sendable (CMSampleBuffer) -> Bool)?
     private let encoder: JSONEncoder
     private let ledger: MeetingAudioChunkLedgerStore
 
@@ -110,7 +111,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         // queue bounded, but allow roughly 1.3 seconds of capture jitter at a 48 kHz/10 ms tap
         // cadence while the filesystem drains a burst.
         pendingSlotLimit: Int = 128,
-        diagnosticSampleObserver: (@Sendable (CMSampleBuffer, UInt64) -> Void)? = nil
+        diagnosticSampleObserver: (@Sendable (CMSampleBuffer, UInt64) -> Void)? = nil,
+        sampleAdmission: (@Sendable (CMSampleBuffer) -> Bool)? = nil
     ) throws {
         self.trackID = track.id
         self.track = track
@@ -122,6 +124,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         self.chunkDuration = max(60, chunkDuration)
         self.eventHandler = eventHandler
         self.diagnosticSampleObserver = diagnosticSampleObserver
+        self.sampleAdmission = sampleAdmission
         self.ledger = MeetingAudioChunkLedgerStore(sessionDirectory: sessionDirectory)
         self.queue = DispatchQueue(
             label: "com.fluidvoice.meeting.writer.\(track.kind.rawValue)",
@@ -383,6 +386,9 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     }
 
     private func consume(_ sourceSampleBuffer: CMSampleBuffer, producerEpoch: UInt64) {
+        // Intentional privacy exclusion is neither a hardware failure nor writer backpressure.
+        // Recheck here because a producer or normalization queue can outlive an observation.
+        guard self.sampleAdmission?(sourceSampleBuffer) != false else { return }
         self.diagnosticSampleObserver?(sourceSampleBuffer, producerEpoch)
         guard CMSampleBufferIsValid(sourceSampleBuffer), CMSampleBufferDataIsReady(sourceSampleBuffer) else {
             self.recordDroppedSample(detail: "Capture delivered an invalid audio sample.")

@@ -574,6 +574,8 @@ fileprivate final class BrowserCaptureEvents: @unchecked Sendable {
                 XCTFail("Ordinary continuity capture must not arm diagnostic recording")
             case .microphoneEchoProtectionChanged:
                 break // Presentation status cannot change continuity counters or persisted interruptions.
+            case .microphoneMuteStateChanged:
+                break // Mute observations are ephemeral and do not change the audio source epoch.
             case .trackHealth: self.counts.trackHealthEvents += 1
             case .chunkFinalized: self.counts.finalizedChunkEvents += 1
             case let .captureMethodChanged(_, _, ack):

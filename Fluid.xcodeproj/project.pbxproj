@@ -773,6 +773,7 @@
 		E5EC000000000000000000B2 /* MeetingVoiceProcessingProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000B1 /* MeetingVoiceProcessingProbeTests.swift */; };
 		E5EC000000000000000000C2 /* MeetingSCKPairedDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000C1 /* MeetingSCKPairedDiagnosticsTests.swift */; };
 		F1A000000000000000000002 /* MeetingAudioChunkSinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000001 /* MeetingAudioChunkSinkTests.swift */; };
+		C70B00000000000000000002 /* MeetingMicrophoneMuteMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C70B00000000000000000001 /* MeetingMicrophoneMuteMonitorTests.swift */; };
 		F1A000000000000000000004 /* MeetingAudioAssetCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000003 /* MeetingAudioAssetCompatibilityTests.swift */; };
 		F1A000000000000000000006 /* MeetingAudioChunkLedgerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000005 /* MeetingAudioChunkLedgerTests.swift */; };
 		F1A000000000000000000008 /* MeetingAudioChunkLedgerRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000007 /* MeetingAudioChunkLedgerRecoveryTests.swift */; };
@@ -1003,6 +1004,7 @@
 		E5EC000000000000000000B1 /* MeetingVoiceProcessingProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingVoiceProcessingProbeTests.swift; sourceTree = "<group>"; };
 		E5EC000000000000000000C1 /* MeetingSCKPairedDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSCKPairedDiagnosticsTests.swift; sourceTree = "<group>"; };
 		F1A000000000000000000001 /* MeetingAudioChunkSinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioChunkSinkTests.swift; sourceTree = "<group>"; };
+		C70B00000000000000000001 /* MeetingMicrophoneMuteMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingMicrophoneMuteMonitorTests.swift; sourceTree = "<group>"; };
 		F1A000000000000000000003 /* MeetingAudioAssetCompatibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioAssetCompatibilityTests.swift; sourceTree = "<group>"; };
 		F1A000000000000000000005 /* MeetingAudioChunkLedgerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioChunkLedgerTests.swift; sourceTree = "<group>"; };
 		F1A000000000000000000007 /* MeetingAudioChunkLedgerRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioChunkLedgerRecoveryTests.swift; sourceTree = "<group>"; };
@@ -1318,6 +1320,7 @@
 				E5EC000000000000000000B1 /* MeetingVoiceProcessingProbeTests.swift */,
 				E5EC000000000000000000C1 /* MeetingSCKPairedDiagnosticsTests.swift */,
 				F1A000000000000000000001 /* MeetingAudioChunkSinkTests.swift */,
+				C70B00000000000000000001 /* MeetingMicrophoneMuteMonitorTests.swift */,
 				F1A000000000000000000003 /* MeetingAudioAssetCompatibilityTests.swift */,
 				F1A000000000000000000005 /* MeetingAudioChunkLedgerTests.swift */,
 				F1A000000000000000000007 /* MeetingAudioChunkLedgerRecoveryTests.swift */,
@@ -1775,6 +1778,7 @@
 				E5EC000000000000000000B2 /* MeetingVoiceProcessingProbeTests.swift in Sources */,
 				E5EC000000000000000000C2 /* MeetingSCKPairedDiagnosticsTests.swift in Sources */,
 				F1A000000000000000000002 /* MeetingAudioChunkSinkTests.swift in Sources */,
+				C70B00000000000000000002 /* MeetingMicrophoneMuteMonitorTests.swift in Sources */,
 				F1A000000000000000000004 /* MeetingAudioAssetCompatibilityTests.swift in Sources */,
 				F1A000000000000000000006 /* MeetingAudioChunkLedgerTests.swift in Sources */,
 				F1A000000000000000000008 /* MeetingAudioChunkLedgerRecoveryTests.swift in Sources */,

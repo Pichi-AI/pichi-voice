@@ -6,6 +6,7 @@ struct MeetingRecordingCanvas: View {
     let trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth]
     let liveTranscript: MeetingLiveTranscriptSnapshot
     var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
+    var microphoneMuteState: MeetingMicrophoneMuteState = .notApplicable
     let isStopping: Bool
     let onStop: () -> Void
 
@@ -130,7 +131,11 @@ struct MeetingRecordingCanvas: View {
         if self.session.mode == .onlineCall {
             MeetingTrackHealthRow(title: PichiLocalization.text(self.session.effectiveApplicationAudioScope == .systemAudio ? "System audio" : "Meeting audio"), systemImage: "macwindow", health: self.trackHealth[.applicationAudio] ?? .waiting)
         }
-        MeetingTrackHealthRow(title: PichiLocalization.text("Microphone"), systemImage: "mic", health: self.trackHealth[.microphone] ?? .waiting)
+        MeetingTrackHealthRow(
+            title: PichiLocalization.text("Microphone"), systemImage: "mic",
+            health: self.trackHealth[.microphone] ?? .waiting,
+            microphoneMuteState: self.session.mode == .onlineCall ? self.microphoneMuteState : .notApplicable
+        )
     }
 
     private var sourceSummary: String {
@@ -1240,16 +1245,29 @@ private struct MeetingTrackHealthRow: View {
     let title: String
     let systemImage: String
     let health: MeetingTrackHealth
+    var microphoneMuteState: MeetingMicrophoneMuteState = .notApplicable
 
     @Environment(\.theme) private var theme
     @Environment(\.locale) private var locale
 
+    private var language: PichiInterfaceLanguage { PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language }
+    private var mutePresentation: MeetingMicrophoneMutePresentation { .init(state: self.microphoneMuteState) }
     private var statusText: String {
-        self.health.localizedStatusText(language: PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language)
+        self.mutePresentation.blocksMicrophone
+            ? self.mutePresentation.title(language: self.language)
+            : self.health.localizedStatusText(language: self.language)
+    }
+    private var helpText: String {
+        guard self.mutePresentation.isMonitored else { return "\(self.title): \(self.statusText)" }
+        let detail = self.mutePresentation.detail(language: self.language)
+        return self.mutePresentation.blocksMicrophone ? detail : detail + "\n" + self.statusText
     }
 
     private var statusColor: Color {
-        switch self.health.status {
+        if self.microphoneMuteState == .muted { return self.theme.palette.readableText(Color(nsColor: .systemRed)) }
+        if self.microphoneMuteState == .unknown { return self.theme.palette.readableText(self.theme.palette.warning) }
+        if self.microphoneMuteState == .checking { return self.theme.palette.secondaryText }
+        return switch self.health.status {
         case .healthy: self.theme.palette.success
         case .degraded, .unavailable: self.theme.palette.warning
         case .waiting, .stopped: self.theme.palette.secondaryText
@@ -1257,7 +1275,10 @@ private struct MeetingTrackHealthRow: View {
     }
 
     private var statusIcon: String {
-        switch self.health.status {
+        if self.microphoneMuteState == .muted { return "lock.circle.fill" }
+        if self.microphoneMuteState == .unknown { return "questionmark.circle.fill" }
+        if self.microphoneMuteState == .checking { return "ellipsis.circle" }
+        return switch self.health.status {
         case .healthy: "checkmark.circle.fill"
         case .degraded, .unavailable: "exclamationmark.circle.fill"
         case .waiting: "ellipsis.circle"
@@ -1268,11 +1289,19 @@ private struct MeetingTrackHealthRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
             HStack(spacing: self.theme.metrics.spacing.sm) {
-                Label(self.title, systemImage: self.systemImage)
+                Label {
+                    Text(self.title)
+                } icon: {
+                    if self.mutePresentation.isMonitored {
+                        MeetingMicrophoneMuteIndicator(state: self.microphoneMuteState)
+                    } else {
+                        Image(systemName: self.systemImage)
+                    }
+                }
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize()
-                ProgressView(value: min(max(Double(self.health.level), 0), 1))
+                ProgressView(value: self.mutePresentation.blocksMicrophone ? 0 : min(max(Double(self.health.level), 0), 1))
                     .progressViewStyle(.linear)
                     .frame(width: 44)
                     .accessibilityLabel("\(self.title) level")
@@ -1281,7 +1310,7 @@ private struct MeetingTrackHealthRow: View {
                     .foregroundStyle(self.statusColor)
                     .accessibilityLabel(self.statusText)
             }
-            if self.health.status == .degraded || self.health.status == .unavailable {
+            if !self.mutePresentation.blocksMicrophone, self.health.status == .degraded || self.health.status == .unavailable {
                 Text(self.statusText)
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.warning)
@@ -1289,7 +1318,7 @@ private struct MeetingTrackHealthRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .help("\(self.title): \(self.statusText)")
+        .help(self.helpText)
     }
 }
 

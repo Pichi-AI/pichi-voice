@@ -20,6 +20,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         var writers: [MeetingAudioChunkWriter]
         var memoryConsumer: (any MeetingMemoryAudioConsuming)?
         var comparisonProbe: MeetingAudioComparisonProbe?
+        var privacyGate: MeetingMicrophonePrivacyGate?
+        var muteMonitor: MeetingMicrophoneMuteMonitor?
     }
 
     private var activeCapture: ActiveCapture?
@@ -83,10 +85,42 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             comparisonProbe = nil
         }
         if let comparisonProbe { eventHandler(.audioComparisonProbeStarted(comparisonProbe)) }
+        let privacyGate = configuration.mode == .onlineCall ? MeetingMicrophonePrivacyGate() : nil
+        let muteMonitor: MeetingMicrophoneMuteMonitor?
+        if let privacyGate {
+            var application = configuration.effectiveApplicationAudioScope == .selectedApplication
+                ? configuration.application : nil
+            // Audio follows the selected process. Discovery must find its current unique call,
+            // rather than requiring a stale home-window hint saved during setup.
+            application?.windowID = nil
+            muteMonitor = MeetingMicrophoneMuteMonitor(application: application) { observation in
+                let admitted = observation.state == .unmuted
+                privacyGate.setAdmitted(
+                    admitted,
+                    observedAtHostTime: observation.observedAtHostTime,
+                    unsafeStartHostTime: admitted ? nil : observation.unsafeStartHostTime ?? observation.observedAtHostTime
+                )
+                eventHandler(.microphoneMuteStateChanged(observation.state))
+            }
+            eventHandler(.microphoneMuteStateChanged(.checking))
+            muteMonitor?.start()
+        } else {
+            muteMonitor = nil
+            eventHandler(.microphoneMuteStateChanged(.notApplicable))
+        }
+        let admittedLiveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)? = liveAudioHandler.map { handler in
+            { kind, sample in
+                guard kind != .microphone || privacyGate?.permitsReleasedSample(sample) != false else { return }
+                handler(kind, sample)
+            }
+        }
+        var startingWriters: [MeetingAudioChunkWriter] = []
+        var startingMemoryConsumer: (any MeetingMemoryAudioConsuming)?
+        var startingRuntime: (any MeetingCaptureRuntime)?
         do {
             let tracks = Self.makeTracks(session: session, configuration: configuration)
-            let writers = try tracks.map { track in
-                try MeetingAudioChunkWriter(
+            for track in tracks {
+                let writer = try MeetingAudioChunkWriter(
                     track: track,
                     sessionDirectory: sessionDirectory,
                     chunkDuration: configuration.chunkDuration,
@@ -94,16 +128,21 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                     diagnosticSampleObserver: comparisonProbe.map { probe in
                         let stage: MeetingAudioComparisonProbe.Stage = track.kind == .microphone ? .microphoneOutput : .browser
                         return { sample, epoch in probe.offer(sample, stage: stage, producerEpoch: epoch) }
-                    }
+                    },
+                    sampleAdmission: track.kind == .microphone ? privacyGate.map { gate in
+                        { sample in gate.permitsReleasedSample(sample) }
+                    } : nil
                 )
+                startingWriters.append(writer)
             }
+            let writers = startingWriters
             let writersByKind = Dictionary(uniqueKeysWithValues: zip(tracks.map(\.kind), writers))
 
             var memoryConsumer: (any MeetingMemoryAudioConsuming)?
             if configuration.effectiveSpeakerProcessingMode == .streaming, let memoryConsumerFactory,
                let microphoneTrack = tracks.first(where: { $0.kind == .microphone }) {
-                do { memoryConsumer = try await memoryConsumerFactory(session, configuration, microphoneTrack, eventHandler) }
-                catch { _ = await Self.stopWriters(writers); throw error }
+                memoryConsumer = try await memoryConsumerFactory(session, configuration, microphoneTrack, eventHandler)
+                startingMemoryConsumer = memoryConsumer
             }
             let runtime: any MeetingCaptureRuntime
             switch configuration.mode {
@@ -119,7 +158,9 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 #else
                 let forcePairedScreenCaptureKit = false
                 #endif
-                let preferDirectAEC3 = MeetingDirectAEC3Gate.enabled()
+                // Direct AEC's short render history cannot align a quarantined microphone.
+                // Use the existing VPIO path; a SCK fallback retains honest unfiltered metadata.
+                let preferDirectAEC3 = privacyGate == nil && MeetingDirectAEC3Gate.enabled()
                 let decision = MeetingCapturePathDecider.decide(
                     mode: configuration.mode,
                     microphone: configuration.microphone,
@@ -160,56 +201,42 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                         audioSource: audioSource,
                         microphone: configuration.microphone,
                         includeMicrophone: true,
+                        privacyGate: privacyGate,
                         comparisonProbe: comparisonProbe,
                         microphoneEchoProtection: .unprotected,
                         applicationWriter: applicationWriter,
                         microphoneWriter: microphoneWriter,
                         eventHandler: eventHandler,
-                        liveAudioHandler: liveAudioHandler
+                        liveAudioHandler: admittedLiveAudioHandler
                     )
                 case .voiceProcessing:
                     runtime = try await VoiceProcessingMeetingRuntime.make(
                         audioSource: audioSource,
                         microphone: configuration.microphone,
+                        privacyGate: privacyGate,
                         applicationWriter: applicationWriter,
                         microphoneWriter: microphoneWriter,
                         eventHandler: eventHandler,
-                        liveAudioHandler: liveAudioHandler
+                        liveAudioHandler: admittedLiveAudioHandler
                     )
                 }
             case .inRoom:
                 guard let microphoneWriter = writersByKind[.microphone] else {
                     throw MeetingCaptureError.microphoneUnavailable
                 }
-                do {
-                    runtime = try InRoomMicrophoneCaptureRuntime(
+                runtime = try InRoomMicrophoneCaptureRuntime(
                         microphone: configuration.microphone,
                         writer: microphoneWriter,
                         memoryConsumer: memoryConsumer,
                         eventHandler: eventHandler,
-                        liveAudioHandler: liveAudioHandler
+                        liveAudioHandler: admittedLiveAudioHandler
                     )
-                } catch {
-                    _ = await Self.stopWriters(writers)
-                    try? await memoryConsumer?.finish()
-                    throw error
-                }
             }
-
-            do {
-                try await runtime.start()
-            } catch {
-                try? await runtime.stop()
-                _ = await Self.stopWriters(writers)
-                try? await memoryConsumer?.finish()
-                throw error
-            }
+            startingRuntime = runtime
+            try await runtime.start()
 
             // The actor is reentrant across the awaits above; termination may have arrived meanwhile.
             if self.terminating {
-                try? await runtime.stop()
-                _ = await Self.stopWriters(writers)
-                try? await memoryConsumer?.finish()
                 throw MeetingCaptureError.captureStartFailed("The app is shutting down.")
             }
             self.displaySleepAssertionID = Self.acquireDisplaySleepAssertion()
@@ -218,7 +245,9 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 runtime: runtime,
                 writers: writers,
                 memoryConsumer: memoryConsumer,
-                comparisonProbe: comparisonProbe
+                comparisonProbe: comparisonProbe,
+                privacyGate: privacyGate,
+                muteMonitor: muteMonitor
             )
             // Re-snapshot: a VPIO commit during start() promotes provenance on the writer's own track.
             let settledTracks = await withTaskGroup(of: MeetingAudioTrack.self, returning: [MeetingAudioTrack].self) { group in
@@ -237,6 +266,12 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 captureScope: runtime.captureScope
             )
         } catch {
+            privacyGate?.close()
+            await muteMonitor?.stop()
+            await privacyGate?.stop()
+            try? await startingRuntime?.stop()
+            _ = await Self.stopWriters(startingWriters)
+            try? await startingMemoryConsumer?.finish()
             if let comparisonProbe { await comparisonProbe.stop() }
             throw error
         }
@@ -254,6 +289,10 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         }
 
         let task = Task<MeetingCaptureStopResult, Error> {
+            // Freeze the last confirmed interval, then join approved delayed PCM while the
+            // producing runtime and writers still exist. Uncertain tail audio is discarded.
+            await activeCapture.muteMonitor?.stop()
+            await activeCapture.privacyGate?.stop()
             #if DEBUG
             AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .runtimeStop)
             #endif
@@ -647,6 +686,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     @unchecked Sendable
 {
     private let comparisonProbe: MeetingAudioComparisonProbe?
+    private let privacyGate: MeetingMicrophonePrivacyGate?
     private let microphonePCMNormalizer = MeetingMicrophonePCMNormalizer()
     /// Echo setup may wait for a stable route; valid captured speech continues as unfiltered.
     private static let rawRouteSettleSeconds: Double = 0.75
@@ -729,6 +769,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         requestedMicrophone: MeetingMicrophoneIdentity,
         activeMicrophone: MeetingMicrophoneIdentity,
         includeMicrophone: Bool,
+        privacyGate: MeetingMicrophonePrivacyGate? = nil,
         comparisonProbe: MeetingAudioComparisonProbe?,
         microphoneEchoProtection: MeetingMicrophoneEchoProtection,
         applicationWriter: MeetingAudioChunkWriter,
@@ -737,6 +778,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) {
         self.comparisonProbe = comparisonProbe
+        self.privacyGate = privacyGate
         self.stream = stream
         self.scope = scope
         self.audioSource = audioSource
@@ -761,6 +803,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         audioSource: MeetingApplicationAudioSource,
         microphone: MeetingMicrophoneIdentity,
         includeMicrophone: Bool = true,
+        privacyGate: MeetingMicrophonePrivacyGate? = nil,
         comparisonProbe: MeetingAudioComparisonProbe? = nil,
         microphoneEchoProtection: MeetingMicrophoneEchoProtection = .unprotected,
         applicationWriter: MeetingAudioChunkWriter,
@@ -794,6 +837,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             requestedMicrophone: microphone,
             activeMicrophone: resolvedMicrophone,
             includeMicrophone: includeMicrophone,
+            privacyGate: privacyGate,
             comparisonProbe: comparisonProbe,
             microphoneEchoProtection: microphoneEchoProtection,
             applicationWriter: applicationWriter,
@@ -1055,8 +1099,19 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
         of outputType: SCStreamOutputType
     ) {
+        self.consumeStreamSample(stream, sampleBuffer: sampleBuffer, outputType: outputType)
+    }
+
+    private func consumeStreamSample(
+        _ stream: SCStream,
+        sampleBuffer: CMSampleBuffer,
+        outputType: SCStreamOutputType,
+        privacyPassed: Bool = false,
+        expectedGeneration: UInt64? = nil
+    ) {
         let callbackState = self.stateLock.withLock {
             () -> (MeetingAECActivationState, MeetingAECPipeline?, MeetingAECStreamToken)? in
+            guard expectedGeneration == nil || expectedGeneration == self.streamGeneration else { return nil }
             guard MeetingScreenCaptureRecoveryPolicy.mayAdmitSample(
                 stopping: self.stopping,
                 rebuilding: self.rebuilding,
@@ -1071,6 +1126,14 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             )
         }
         guard let (aecState, pipeline, streamToken) = callbackState else { return }
+        if outputType == .microphone, !privacyPassed, let privacyGate = self.privacyGate {
+            privacyGate.submit(sampleBuffer, deliveryQueue: self.callbackQueue) { [weak self, weak stream] approved in
+                guard let stream else { return }
+                self?.consumeStreamSample(stream, sampleBuffer: approved, outputType: .microphone,
+                    privacyPassed: true, expectedGeneration: streamToken.generation)
+            }
+            return
+        }
         switch outputType {
         case .audio:
             #if DEBUG
@@ -1305,7 +1368,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
 
     private func installAECForSupportedSpeaker(revision: UInt64) async throws {
         // Release must never construct or install direct AEC3; Debug honours the kill switch.
-        guard Self.directAEC3Available else { return }
+        guard Self.directAEC3Available, self.privacyGate == nil else { return }
         // Construction is bound to one precise producer: object identity, stream generation, and
         // the route revision that authorized it. Everything below re-checks that exact triple.
         let reserved = self.stateLock.withLock { () -> (ownership: MeetingCaptureStreamOwnership, token: UInt64)? in
@@ -2464,6 +2527,8 @@ final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
     AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable
 {
     private let microphonePCMNormalizer = MeetingMicrophonePCMNormalizer()
+    private let privacyGate: MeetingMicrophonePrivacyGate?
+    private let sampleQueue = DispatchQueue(label: "com.fluidvoice.meeting.avcapture.samples", qos: .userInteractive)
     private static let interruptionEndedWaitSeconds: Double = 3
 
     let deviceUID: String?
@@ -2485,6 +2550,7 @@ final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
 
     init(
         microphone: MeetingMicrophoneIdentity,
+        privacyGate: MeetingMicrophonePrivacyGate? = nil,
         onSample: @escaping @Sendable (CMSampleBuffer) -> Void,
         onTerminalStop: @escaping @Sendable (String) -> Void
     ) throws {
@@ -2513,6 +2579,7 @@ final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
                 session.commitConfiguration()
             }
         )
+        self.privacyGate = privacyGate
         self.deviceUID = microphone.coreAudioUID
         self.deviceName = microphone.displayName
         self.onSample = onSample
@@ -2534,7 +2601,7 @@ final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
         self.session.addOutput(self.output)
         self.output.setSampleBufferDelegate(
             self,
-            queue: DispatchQueue(label: "com.fluidvoice.meeting.avcapture.samples", qos: .userInteractive)
+            queue: self.sampleQueue
         )
         self.observeSessionLifecycle()
     }
@@ -2581,6 +2648,9 @@ final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
         waiters.forEach { $0.resume(()) }
 
         await self.lifecycle.stop()
+        await withCheckedContinuation { continuation in
+            self.sampleQueue.async { continuation.resume() }
+        }
         let observers = self.stateLock.withLock { () -> [NSObjectProtocol] in
             defer { self.observers.removeAll() }
             return self.observers
@@ -2610,6 +2680,17 @@ final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
         if shouldAccept { self.deliveredSampleCount &+= 1 }
         self.stateLock.unlock()
         guard shouldAccept else { return }
+        if let privacyGate = self.privacyGate {
+            privacyGate.submit(sampleBuffer, deliveryQueue: self.sampleQueue) { [weak self] approved in
+                self?.deliverMicrophoneSample(approved)
+            }
+        } else {
+            self.deliverMicrophoneSample(sampleBuffer)
+        }
+    }
+
+    private func deliverMicrophoneSample(_ sampleBuffer: CMSampleBuffer) {
+        guard self.stateLock.withLock({ !self.stopping }) else { return }
         self.onSample(self.microphonePCMNormalizer.normalize(sampleBuffer))
     }
 
@@ -4373,6 +4454,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
 
     private let audioSource: MeetingApplicationAudioSource
     private let originalMicrophone: MeetingMicrophoneIdentity
+    private let privacyGate: MeetingMicrophonePrivacyGate?
     private let applicationWriter: MeetingAudioChunkWriter
     private let microphoneWriter: MeetingAudioChunkWriter
     private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
@@ -4416,6 +4498,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     private init(
         audioSource: MeetingApplicationAudioSource,
         microphone: MeetingMicrophoneIdentity,
+        privacyGate: MeetingMicrophonePrivacyGate? = nil,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
@@ -4423,6 +4506,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     ) {
         self.audioSource = audioSource
         self.originalMicrophone = microphone
+        self.privacyGate = privacyGate
         self.applicationWriter = applicationWriter
         self.microphoneWriter = microphoneWriter
         self.eventHandler = eventHandler
@@ -4438,6 +4522,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     static func make(
         audioSource: MeetingApplicationAudioSource,
         microphone: MeetingMicrophoneIdentity,
+        privacyGate: MeetingMicrophonePrivacyGate? = nil,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
@@ -4446,6 +4531,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         VoiceProcessingMeetingRuntime(
             audioSource: audioSource,
             microphone: microphone,
+            privacyGate: privacyGate,
             applicationWriter: applicationWriter,
             microphoneWriter: microphoneWriter,
             eventHandler: eventHandler,
@@ -4507,6 +4593,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 audioSource: self.audioSource,
                 microphone: self.originalMicrophone,
                 includeMicrophone: true,
+                privacyGate: self.privacyGate,
                 microphoneEchoProtection: fallbackProtection,
                 applicationWriter: self.applicationWriter,
                 microphoneWriter: self.microphoneWriter,
@@ -4528,6 +4615,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         let capture = self.stateLock.withLock { self.micCapture }
         let outcome = try await capture.start(
             microphone: self.originalMicrophone,
+            privacyGate: self.privacyGate,
             onSample: { sample in
                 guard fence.beginSample() else { return }
                 defer { fence.endSample() }
@@ -4555,6 +4643,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             audioSource: self.audioSource,
             microphone: self.originalMicrophone,
             includeMicrophone: false,
+            privacyGate: self.privacyGate,
             applicationWriter: self.applicationWriter,
             microphoneWriter: self.microphoneWriter,
             eventHandler: self.eventHandler,
@@ -5048,6 +5137,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         do {
             component = try MeetingAVCaptureMicrophoneComponent(
                 microphone: elected.identity,
+                privacyGate: self.privacyGate,
                 onSample: { sample in
                     guard newFence.beginSample() else { return }
                     defer { newFence.endSample() }
@@ -5398,6 +5488,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             do {
                 candidate = try MeetingAVCaptureMicrophoneComponent(
                     microphone: candidateElection.identity,
+                    privacyGate: self.privacyGate,
                     onSample: { sample in
                         guard candidateFence.beginSample() else { return }
                         defer { candidateFence.endSample() }
@@ -5706,6 +5797,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         do {
             outcome = try await candidateMicCapture.start(
                 microphone: elected.identity,
+                privacyGate: self.privacyGate,
                 onSample: { sample in
                     guard candidateFence.beginSample() else { return }
                     defer { candidateFence.endSample() }
@@ -6033,6 +6125,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             outcome = try await candidate!.start(
                 microphone: elected.identity,
                 authorizationPreflighted: true,
+                privacyGate: self.privacyGate,
                 onSample: { sample in
                     guard candidateFence.beginSample() else { return }
                     defer { candidateFence.endSample() }
@@ -6246,6 +6339,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         do {
             component = try MeetingAVCaptureMicrophoneComponent(
                 microphone: elected.identity,
+                privacyGate: self.privacyGate,
                 onSample: { sample in
                     guard fence.beginSample() else { return }
                     defer { fence.endSample() }
