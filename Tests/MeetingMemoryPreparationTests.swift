@@ -32,7 +32,9 @@ nonisolated struct MeetingProbeTime: Sendable {
     let timescale: Int32
     var seconds: Double { Double(value) / Double(timescale) }
 }
+nonisolated struct MeetingProbeNativeTiming: Sendable { let start: Double; let end: Double }
 nonisolated struct MeetingProbeSegment: Sendable {
+    var nativeTiming: MeetingProbeNativeTiming?
     var start: MeetingProbeTime
     var end: MeetingProbeTime
 }

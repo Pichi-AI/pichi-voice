@@ -3095,6 +3095,46 @@ extension MeetingParakeetNemotronBackendTests {
             "Earlier stored recordings retain their original minimum-chunk clock")
     }
 
+    func testOnlineStreamingPhysicalClockNativeEnvelopePassesTheActualStore() async throws {
+        let fixture = try self.onlinePipelineFixture(service: OnlinePipelineService(), runtime: OnlinePipelineRuntime())
+        let store = MeetingSessionStore(rootDirectory: fixture.directory)
+        fixture.publication.persistentStore = store
+        try await store.create(fixture.publication.session)
+        let tracks = fixture.session.audioTracks
+        let consumers = try await tracks.asyncOnlineMap { track in
+            try await fixture.pipeline.memoryConsumer(for: fixture.session.id, track: track, eventHandler: { _ in })
+        }
+        for index in 0..<42 {
+            for source in consumers.indices {
+                let prefix = source == 0 ? 2 * 16_000 : 4 * 16_000
+                XCTAssertTrue(consumers[source].enqueue(try Self.onlinePCM(frames: 8_000, startFrame: prefix + index * 8_000)))
+            }
+        }
+        try await Self.onlineWait { fixture.publication.session.transcriptSegments.count >= 80 }
+        async let first: Void = consumers[0].finish()
+        async let second: Void = consumers[1].finish()
+        _ = try await (first, second)
+        let result = try await fixture.pipeline.process(session: fixture.publication.session,
+            sessionDirectory: fixture.directory, progress: { _ in })
+        var completed = fixture.publication.session
+        completed.state = .completed
+        completed.transcriptSegments = result.segments
+        completed.speakers = result.speakers
+        try await store.save(completed)
+        let loaded = try await store.load(id: completed.id)
+        let restored = try XCTUnwrap(loaded)
+        XCTAssertEqual(restored.transcriptSegments.count, 84)
+        for (source, track) in tracks.enumerated() {
+            let words = restored.transcriptSegments.filter { $0.sourceTrackID == track.id }
+            XCTAssertEqual(try XCTUnwrap(words.first?.nativeTiming?.start), source == 0 ? 2 : 4, accuracy: 0.000_001)
+            for word in words {
+                XCTAssertEqual(try XCTUnwrap(word.nativeTiming?.start), word.start.seconds, accuracy: 0.000_001)
+                XCTAssertEqual(try XCTUnwrap(word.nativeTiming?.end), word.end.seconds, accuracy: 0.000_001)
+                XCTAssertEqual(word.nativeSpeakerAssignment?.tokens.first?.analysisEpochID.trackID, track.id)
+            }
+        }
+    }
+
     func testOnlineStreamingRetiresSourceSpansAfterProtectedPublication() async throws {
         let service = OnlinePipelineService(), runtime = OnlinePipelineRuntime()
         let fixture = try self.onlinePipelineFixture(service: service, runtime: runtime)
@@ -3315,7 +3355,7 @@ extension MeetingParakeetNemotronBackendTests {
         let publication = OnlinePipelinePublication(session)
         let attempt = MeetingMemoryProcessingAttempt(request: request, descriptor: descriptor, runtime: runtime,
             archive: try MeetingMemoryAudioArchive(), redactor: nil,
-            checkpoint: { try publication.apply($0) }, preview: { kind, partial in
+            checkpoint: { try await publication.apply($0) }, preview: { kind, partial in
                 publication.previewSources.insert(kind)
                 publication.preview[kind] = partial
             })
@@ -3376,8 +3416,9 @@ private final class OnlinePipelinePublication {
     var session: MeetingSession
     var preview: [MeetingAudioTrackKind: MeetingLivePartial] = [:]
     var previewSources = Set<MeetingAudioTrackKind>()
+    var persistentStore: MeetingSessionStore?
     init(_ session: MeetingSession) { self.session = session }
-    func apply(_ batch: MeetingPCMTranscriptBatch) throws {
+    func apply(_ batch: MeetingPCMTranscriptBatch) async throws {
         var indices = Dictionary(uniqueKeysWithValues: session.transcriptSegments.enumerated().map { ($0.element.id, $0.offset) })
         for segment in batch.segments {
             if let index = indices[segment.id] { session.transcriptSegments[index] = segment }
@@ -3392,6 +3433,9 @@ private final class OnlinePipelinePublication {
         }
         session.speakers = batch.mergingSpeakers(into: session.speakers)
         session.transcriptIsComplete = session.transcriptIsComplete != false && batch.isComplete
+        session.transcriptTimeDomain = .meetingRelative
+        try session.validateTranscriptStructure()
+        if let persistentStore { try await persistentStore.save(session) }
     }
 }
 

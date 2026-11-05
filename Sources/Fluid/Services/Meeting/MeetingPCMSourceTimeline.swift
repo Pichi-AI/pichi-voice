@@ -1,8 +1,9 @@
 import Foundation
 
 /// Bounded scalar correspondence between compact inference PCM and measured meeting time.
-/// Missing source packets are unknown time, never synthetic silence. Native evidence stays on
-/// its original compact sample clock; publication and source VAD explicitly map its intervals.
+/// Missing source packets are unknown time, never synthetic silence. Inference stays on its
+/// compact sample clock; publication maps native envelopes into the existing presentation-time
+/// contract, while source VAD queries only measured contiguous intervals.
 final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
     enum Failure: Error, Equatable { case invalidConfiguration, invalidTimestamp, nonContiguousInput, spanBudgetExceeded }
     enum BoundarySide { case start, end }

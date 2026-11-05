@@ -94,12 +94,17 @@ final class MeetingMemoryProcessingAttempt {
         guard let track = input.sourceTrack, let timeline = sourceTimelines[track.id] else { return input }
         var batch = input
         for index in batch.segments.indices {
-            guard let start = timeline.mapTime(batch.segments[index].start.seconds),
-                  let end = timeline.mapEndTime(batch.segments[index].end.seconds), end > start else {
+            let native = batch.segments[index].nativeTiming
+            guard let start = timeline.mapTime(native?.start ?? batch.segments[index].start.seconds),
+                  let end = timeline.mapEndTime(native?.end ?? batch.segments[index].end.seconds), end > start else {
                 throw MeetingPCMSourceTimeline.Failure.invalidTimestamp
             }
             batch.segments[index].start = .init(value: Int64((start * 1_000_000).rounded()), timescale: 1_000_000)
             batch.segments[index].end = .init(value: Int64((end * 1_000_000).rounded()), timescale: 1_000_000)
+            // The stored native envelope is defined in meeting presentation time, as
+            // in canonical assembly. Keep full precision while mapping the genuine bounds;
+            // inference state/activity retain their unchanged compact source clock.
+            if native != nil { batch.segments[index].nativeTiming = .init(start: start, end: end) }
         }
         batch.livePreview = try projectedPreview(batch.livePreview, trackID: track.id)
         if let through = batch.protectedSourceThroughSample {
