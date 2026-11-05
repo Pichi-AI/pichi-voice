@@ -288,6 +288,7 @@ builds/
 !/scripts/dev/check-transcribe-sdk.py
 !/scripts/dev/check-diarization-repeatability.py
 !/scripts/dev/check-xcode-build-settings.py
+!/scripts/dev/lint-changed.py
 !/scripts/dev/mobile-framework-metadata.py
 !/scripts/dev/capture-mobile-frames.py
 !/scripts/dev/mobile-screen-stream.swift
