@@ -1,0 +1,958 @@
+[
+ {
+  "class": "AppSearchServiceTests",
+  "test": "testOptInNativeSearchSidebarStatesAtCompactWidth()",
+  "environment": [
+   "FLUIDVOICE_SEARCH_UI_PROOF"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Supply an external output directory for the native search sidebar proof",
+  "layer": "L1-visual"
+ },
+ {
+  "class": "ClockDomainProbeTests",
+  "test": "testScreenCaptureAudioClockAgainstMachHostTime()",
+  "environment": [
+   "FLUIDVOICE_CLOCK_PROBE"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "FLUIDVOICE_CLOCK_PROBE not set",
+  "layer": "L4-hardware-or-manual"
+ },
+ {
+  "class": "CustomDictionaryManualEntryTests",
+  "test": "testEdgeMatchingRealAudioReplay()",
+  "environment": [
+   "FV_EDGE_REPLAY_DIR"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Local-only audio replay requires FV_EDGE_REPLAY_DIR",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "CustomDictionaryManualEntryTests",
+  "test": "testParakeetFamilySavedAudioReplay()",
+  "environment": [
+   "FV_DICTIONARY_FAMILY_REPLAY"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set FV_DICTIONARY_FAMILY_REPLAY=1 to replay local dictionary audio",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "CustomDictionaryManualEntryTests",
+  "test": "testTrainingCaptureRetainsAudioWithoutChangingTheEmbedding()",
+  "environment": [
+   "FV_INSPECTION_AUDIO"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Opt-in local replay requires FV_INSPECTION_AUDIO and cached Parakeet v2",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "DictationE2ETests",
+  "test": "testApprovedCorrectionLearnsOriginalRealAudioThroughExistingSession()",
+  "environment": [
+   "FLUIDVOICE_PRONUNCIATION_AUDIO"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set the public speech fixture and Parakeet model paths",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "DictationE2ETests",
+  "test": "testDictionaryLearningRealAudioRoundTrip()",
+  "environment": [
+   "FLUIDVOICE_PRONUNCIATION_AUDIO"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set the public real-speech fixture and local Parakeet model path",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "DictationE2ETests",
+  "test": "testPronunciationStreamingTwoMinuteRealAudio()",
+  "environment": [
+   "FLUIDVOICE_PRONUNCIATION_AUDIO"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set FLUIDVOICE_PRONUNCIATION_AUDIO to the public real-speech fixture",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "DictationE2ETests",
+  "test": "testSharedFeatureDictionaryCorpusReplay()",
+  "environment": [
+   "FLUIDVOICE_SHARED_DICTIONARY_FIXTURE"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set FLUIDVOICE_SHARED_DICTIONARY_FIXTURE to the private local regression corpus",
+  "layer": "manual-private-data"
+ },
+ {
+  "class": "FileExportTests",
+  "test": "testConcurrentDocumentsKeepTheirOwnPayloads()",
+  "environment": [
+   "FLUID_EXPORT_TEST_SANDBOX_TEMP"
+  ],
+  "runner": ".github/workflows/build.yml",
+  "documentedIn": "",
+  "reason": "Use a disposable test account or runner and set FLUID_EXPORT_TEST_SANDBOX_TEMP to its Foundation temporary directory",
+  "layer": "L2-needs-runner"
+ },
+ {
+  "class": "FileExportTests",
+  "test": "testExportLeavesExistingTemporaryFilesUntouched()",
+  "environment": [
+   "FLUID_EXPORT_TEST_SANDBOX_TEMP"
+  ],
+  "runner": ".github/workflows/build.yml",
+  "documentedIn": "",
+  "reason": "Use a disposable test account or runner and set FLUID_EXPORT_TEST_SANDBOX_TEMP to its Foundation temporary directory",
+  "layer": "L2-needs-runner"
+ },
+ {
+  "class": "GigaAMEncoderDictionaryLiveTests",
+  "test": "testSavedDictionaryThroughActualNativeProviderWhenEnabled()",
+  "environment": [
+   "PICHI_ENCODER_DICTIONARY_PLAN",
+   "PICHI_ENCODER_DICTIONARY_RESULTS",
+   "PICHI_GIGAAM_MODEL_DIR",
+   "PICHI_RUN_ENCODER_DICTIONARY_LIVE"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/gigaam-dictionary.md",
+  "reason": "Local encoder dictionary replay is opt-in",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "MeetingAnalysisManifestTests",
+  "test": "testOptInSavedRecordingManifestWithoutChangingSession()",
+  "environment": [
+   "FLUIDVOICE_MEETING_MANIFEST_SESSION"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set FLUIDVOICE_MEETING_MANIFEST_SESSION for read-only real-recording validation.",
+  "layer": "manual-private-data"
+ },
+ {
+  "class": "MeetingAudioComparisonProbeTests",
+  "test": "testOptInReplaySavedMicrophoneThroughAECAndFallback()",
+  "environment": [
+   "FLUIDVOICE_AEC_REPLAY_INPUT",
+   "FLUIDVOICE_AEC_REPLAY_OUTPUT"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set saved PCM input/output paths for a local diagnostic replay.",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "MeetingAutoDetectorTests",
+  "test": "testLiveAudioProcessOwnershipProbe()",
+  "environment": [
+   "FV_DETECTOR_LIVE_PROBE"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Opt-in read-only live Core Audio ownership probe",
+  "layer": "L4-hardware-or-manual"
+ },
+ {
+  "class": "MeetingBrowserAudioHardwareTests",
+  "test": "testSelectedBrowserSpeechIsSavedInApplicationTrackWhenEnabled()",
+  "environment": [
+   "PICHI_BROWSER_CAPTURE_CONSENT"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set PICHI_BROWSER_CAPTURE_CONSENT=1 and explicit target/root/run ID for browser capture.",
+  "layer": "L4-hardware-or-manual"
+ },
+ {
+  "class": "MeetingDesktopTranscriptParagraphTests",
+  "test": "testNativeReadingPreviewForExplicitLongTranscript()",
+  "environment": [
+   "PICHI_INTERFACE_LANGUAGE",
+   "PICHI_TRANSCRIPT_READING_FIXTURE",
+   "PICHI_TRANSCRIPT_READING_HOLD_SECONDS",
+   "PICHI_TRANSCRIPT_READING_OUTPUT"
+  ],
+  "runner": "scripts/dev/macos-regression.py",
+  "documentedIn": "docs/development/codex.md|docs/development/localization.md",
+  "reason": "Opt-in native transcript preview requires an explicit local fixture and output directory",
+  "layer": "L1-visual"
+ },
+ {
+  "class": "MeetingExistingAudioReplayTests",
+  "test": "testOptInRepeatedProductionMeetingsAndDictationMemory()",
+  "environment": [
+   "FLUIDVOICE_RESIDENCY_DICTATION_AUDIO",
+   "FLUIDVOICE_RESIDENCY_REPLAY_CYCLES",
+   "FLUIDVOICE_RESIDENCY_REPLAY_DIRS",
+   "FLUIDVOICE_RESIDENCY_REPLAY_FLUID",
+   "FLUIDVOICE_RESIDENCY_REPLAY_OUTPUT"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set retained-meeting residency replay inputs to run the memory regression",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "MeetingExistingAudioReplayTests",
+  "test": "testRetainedMeetingsReplayThroughCurrentPipeline()",
+  "environment": [
+   "FLUIDVOICE_REPLAY_MEETING_DIRS",
+   "FLUIDVOICE_REPLAY_MEETING_MANIFEST",
+   "FLUIDVOICE_REPLAY_REPORT_DIR"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "No retained-meeting replay input was provided",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "MeetingFallbackEchoProbeTests",
+  "test": "testNamedTurnsAgainstSignalScorer()",
+  "environment": [
+   "FLUIDVOICE_ECHO_PROBE",
+   "FLUIDVOICE_ECHO_PROBE_TURNS"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "probe env not set",
+  "layer": "L4-hardware-or-manual"
+ },
+ {
+  "class": "MeetingFallbackEchoProbeTests",
+  "test": "testWholeChunkFallbackVerdictOnRealSession()",
+  "environment": [
+   "FLUIDVOICE_ECHO_PROBE"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "FLUIDVOICE_ECHO_PROBE not set",
+  "layer": "L4-hardware-or-manual"
+ },
+ {
+  "class": "MeetingLiveReplayTests",
+  "test": "testCompareBeforeAndAfterCancellationWithFinalASR()",
+  "environment": [
+   "FLUIDVOICE_COMPARISON_CLIPS",
+   "FLUIDVOICE_COMPARISON_EXPECTED_",
+   "FLUIDVOICE_COMPARISON_REPLAY",
+   "FLUIDVOICE_COMPARISON_TDT_MODELS"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set FLUIDVOICE_COMPARISON_REPLAY=1 and explicit comparison inputs to run this experiment.",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "MeetingLiveReplayTests",
+  "test": "testReplayDirectRecognizerWithoutForcedResets()",
+  "environment": [
+   "FLUIDVOICE_DIRECT_LIVE_MODELS",
+   "FLUIDVOICE_DIRECT_LIVE_REPLAY",
+   "FLUIDVOICE_DIRECT_LIVE_SECONDS",
+   "FLUIDVOICE_DIRECT_PAD_FINISH"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set FLUIDVOICE_DIRECT_LIVE_REPLAY=1 and explicit replay inputs to run this experiment.",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "MeetingLiveReplayTests",
+  "test": "testReplayRealMeetingThroughLiveCoordinator()",
+  "environment": [
+   "FLUIDVOICE_LIVE_REPLAY",
+   "FLUIDVOICE_LIVE_REPLAY_COLD_START",
+   "FLUIDVOICE_LIVE_REPLAY_LANGUAGE",
+   "FLUIDVOICE_LIVE_REPLAY_MODEL_ID"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set FLUIDVOICE_LIVE_REPLAY=1 to run the live-transcription replay harness.",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "MeetingLiveSilenceEndpointTests",
+  "test": "testEndpointerFiresOnSustainedDigitalSilence()",
+  "environment": [
+   "FLUIDVOICE_SILENCE_EOU"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "FLUIDVOICE_SILENCE_EOU not set",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MeetingMicrophoneCaptureTests",
+  "test": "testPhase1HardwareGate()",
+  "environment": [
+   "FLUIDVOICE_MIC_PHASE1"
+  ],
+  "runner": "scripts/dev/macos-regression.py",
+  "documentedIn": "docs/development/codex.md|docs/development/system-audio-continuity-test.md",
+  "reason": "FLUIDVOICE_MIC_PHASE1 not set",
+  "layer": "L4-hardware-or-manual"
+ },
+ {
+  "class": "MeetingNemotronModelLocatorTests",
+  "test": "testPublishedPackageInstallPersistsForFreshLocatorAndReplacement()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Published model fixture is not available",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MeetingNemotronModelLocatorTests",
+  "test": "testSilenceEmbeddingInstallCreatesFreshParentAndPreservesExistingFiles()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Published silence embedding fixture is not available",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MeetingNemotronModelLocatorTests",
+  "test": "testSuppliedDevelopmentPackageIsStructurallyValid()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "the supplied Nemotron package is not present in this checkout",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MeetingNemotronRealModelSmokeTests",
+  "test": "testProductionDiarizerSegmentsForParity()",
+  "environment": [
+   "FLUIDVOICE_NEMOTRON_PARITY_",
+   "FLUIDVOICE_NEMOTRON_PARITY_AUDIO",
+   "FLUIDVOICE_NEMOTRON_PARITY_BOUNDED_REPLAY",
+   "FLUIDVOICE_NEMOTRON_PARITY_MODEL",
+   "FLUIDVOICE_NEMOTRON_PARITY_OUT"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "set the FLUIDVOICE_NEMOTRON_PARITY_* variables to run the parity probe",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "MeetingNemotronRealModelSmokeTests",
+  "test": "testRealNemotronModelDiarizesWithFreshStatePerEpoch()",
+  "environment": [
+   "FLUIDVOICE_NEMOTRON_SMOKE_TEST"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "set FLUIDVOICE_NEMOTRON_SMOKE_TEST=1 to run the real-model smoke test",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MeetingNemotronRealModelSmokeTests",
+  "test": "testVoiceProfilesAcrossEpochsForThresholdProbe()",
+  "environment": [
+   "FLUIDVOICE_NEMOTRON_PARITY_MODEL",
+   "FLUIDVOICE_VOICE_PROBE_",
+   "FLUIDVOICE_VOICE_PROBE_OUT",
+   "FLUIDVOICE_VOICE_PROBE_SPEC"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "set the FLUIDVOICE_VOICE_PROBE_* variables to run the voice probe",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "MeetingProviderOptionsTests",
+  "test": "testOptInGermanV3AudioProducesOriginalLanguageAndWordTimings()",
+  "environment": [
+   "FLUIDVOICE_MEETING_GERMAN_FIXTURE"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set FLUIDVOICE_MEETING_GERMAN_FIXTURE to a 16 kHz mono German WAV for model verification",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MeetingProviderOptionsTests",
+  "test": "testOptInMeetingLanguageSettingsSnapshot()",
+  "environment": [
+   "FLUIDVOICE_MEETING_SETTINGS_SNAPSHOT"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set FLUIDVOICE_MEETING_SETTINGS_SNAPSHOT for a settings visual check",
+  "layer": "L1-visual"
+ },
+ {
+  "class": "MeetingRecoveryTests",
+  "test": "testRetainedRecoveryCanvasNativeVisuals()",
+  "environment": [
+   "PICHI_INTERFACE_LANGUAGE",
+   "PICHI_RETAINED_RECOVERY_VISUAL_DIR"
+  ],
+  "runner": "scripts/dev/macos-regression.py",
+  "documentedIn": "docs/development/codex.md|docs/development/localization.md",
+  "reason": "Opt-in native retained recovery visual check",
+  "layer": "L1-visual"
+ },
+ {
+  "class": "MeetingRecoveryTests",
+  "test": "testTranscriptEditorRendersWithoutInvokingSaveOrCancel()",
+  "environment": [
+   "FLUIDVOICE_MEETING_EDIT_SNAPSHOT"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Opt-in transcript editor visual check",
+  "layer": "L1-visual"
+ },
+ {
+  "class": "MeetingSCKPairedHardwareTests",
+  "test": "testSelectedApplicationPairedSCKMetadataOnly()",
+  "environment": [
+   "FLUIDVOICE_C2_DIAGNOSTICS",
+   "FLUIDVOICE_C2_HARDWARE",
+   "FLUIDVOICE_C2_TARGET_BUNDLE_ID"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set FLUIDVOICE_C2_DIAGNOSTICS=1, FLUIDVOICE_C2_HARDWARE=1, and FLUIDVOICE_C2_TARGET_BUNDLE_ID to run the one-shot C2 probe.",
+  "layer": "L4-hardware-or-manual"
+ },
+ {
+  "class": "MeetingSpeakerVoiceMatcherTests",
+  "test": "testLocalVoiceEncoderOnOptInAudio()",
+  "environment": [
+   "FLUIDVOICE_VOICE_MATCH_AUDIO"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set FLUIDVOICE_VOICE_MATCH_AUDIO to a local 24-second 16 kHz mono WAV.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MeetingSpeakerVoiceMatcherTests",
+  "test": "testOptInWholeMeetingContinuousPassAndMemory()",
+  "environment": [
+   "FLUIDVOICE_WHOLE_MEETING_OUTPUT",
+   "FLUIDVOICE_WHOLE_MEETING_PREWARM_FLUID",
+   "FLUIDVOICE_WHOLE_MEETING_SESSION"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set the whole-meeting session and output directory to run this experiment.",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "MeetingSummaryProviderTests",
+  "test": "testLiveCustomTemplateCanOverrideRussianTranscriptLanguageWhenEnabled()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Opt-in template-language regression. Uses invented text and an already installed loopback Ollama model.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MeetingSummaryProviderTests",
+  "test": "testLiveDetailedTemplateKeepsRussianTranscriptLanguageWhenEnabled()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Opt-in template-language regression. Uses invented text and an already installed loopback Ollama model.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MeetingSummaryProviderTests",
+  "test": "testLiveExecutiveTemplateKeepsRussianTranscriptLanguageWhenEnabled()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Opt-in template-language regression. Uses invented text and an already installed loopback Ollama model.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MeetingSystemAudioContinuityHardwareTests",
+  "test": "testAppServicesSystemAudioSurvivesExternalBrowserRestartWhenEnabled()",
+  "environment": [
+   "PICHI_SYSTEM_CAPTURE_COORDINATOR_CONSENT",
+   "PICHI_SYSTEM_CAPTURE_VERIFY_ASR"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set PICHI_SYSTEM_CAPTURE_COORDINATOR_CONSENT=1 for the real AppServices coordinator probe.",
+  "layer": "L4-hardware-or-manual"
+ },
+ {
+  "class": "MeetingSystemAudioContinuityHardwareTests",
+  "test": "testSystemAudioSurvivesExternalBrowserRestartWhenEnabled()",
+  "environment": [
+   "PICHI_SYSTEM_CAPTURE_CONSENT"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/system-audio-continuity-test.md",
+  "reason": "Set PICHI_SYSTEM_CAPTURE_CONSENT=1 and explicit private ROOT/RUN_ID.",
+  "layer": "L4-hardware-or-manual"
+ },
+ {
+  "class": "MeetingTimelineDriftProbeTests",
+  "test": "testCrossPathClockDrift()",
+  "environment": [
+   "FLUIDVOICE_DRIFT_PROBE"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "FLUIDVOICE_DRIFT_PROBE not set",
+  "layer": "L4-hardware-or-manual"
+ },
+ {
+  "class": "MobileRegisteredModelInferenceTests",
+  "test": "testDefaultEightSecondSpeakerWindowsForAllRegisteredModels()",
+  "environment": [
+   "PICHI_MOBILE_INFERENCE_ASSETS"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/nemotron-fp16-diagnostic.md",
+  "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MobileRegisteredModelInferenceTests",
+  "test": "testGigaAMSustainedSixtySecondPacedBufferedCaptions()",
+  "environment": [
+   "PICHI_MOBILE_GIGA_SUSTAINED"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set PICHI_MOBILE_GIGA_SUSTAINED=1 for the bounded sixty-second GigaAM benchmark",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "MobileRegisteredModelInferenceTests",
+  "test": "testOriginalBufferedCaptionEngineUsesEachRegisteredPublicArtifact()",
+  "environment": [
+   "PICHI_MOBILE_INFERENCE_ASSETS"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/nemotron-fp16-diagnostic.md",
+  "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MobileRegisteredModelInferenceTests",
+  "test": "testPinnedNemotronAndLocalWeSpeakerSeparateTwoSyntheticVoicesAcrossPCMWindows()",
+  "environment": [
+   "PICHI_MOBILE_INFERENCE_ASSETS"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/nemotron-fp16-diagnostic.md",
+  "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MobileRegisteredModelInferenceTests",
+  "test": "testPublicMobileArtifactsRecognizeRUENMixedAndPreserveStreamingTiming()",
+  "environment": [
+   "PICHI_MOBILE_INFERENCE_ASSETS"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/nemotron-fp16-diagnostic.md",
+  "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MobileRegisteredModelInferenceTests",
+  "test": "testRegisteredStrictPCMWindowsCreateTranscriptWithoutAudioFiles()",
+  "environment": [
+   "PICHI_MOBILE_INFERENCE_ASSETS"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/nemotron-fp16-diagnostic.md",
+  "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "MobileRegisteredModelInferenceTests",
+  "test": "testStrictGigaAMWindowCadenceBenchmark()",
+  "environment": [
+   "PICHI_STRICT_CADENCE_PROBE"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Enable the public-model strict cadence measurement explicitly",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "MobileRegisteredModelInferenceTests",
+  "test": "testWhisperTinyKnownRussianAndEnglishQuality()",
+  "environment": [
+   "PICHI_TEST_REVISION",
+   "PICHI_TINY_GROUNDTRUTH_E2E"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/automatic-recording-titles.md|docs/development/mobile-release-ui-verification.md",
+  "reason": "Explicitly stage the approved Tiny groundtruth fixtures",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "ParakeetCompactModelDemoTests",
+  "test": "testOptInNativeOnboardingAndSettingsReview()",
+  "environment": [
+   "FLUIDVOICE_COMPACT_MODEL_AUDIO",
+   "FLUIDVOICE_COMPACT_MODEL_DEMO"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Explicitly enable the native model review with an English test WAV",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "ParakeetCompactModelSmokeTests",
+  "test": "testHostedCompactModelsDownloadLoadTranscribeAndExtractDictionaryFrames()",
+  "environment": [
+   "FLUIDVOICE_COMPACT_MODEL_AUDIO"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set FLUIDVOICE_COMPACT_MODEL_AUDIO to an English test recording for the hosted model check",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "ParakeetCompactModelSmokeTests",
+  "test": "testHostedOldWeightsStayUsableUntilExplicitValidatedUpdate()",
+  "environment": [
+   "FLUIDVOICE_COMPACT_MODEL_AUDIO"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Explicitly enable hosted compact model runtime checks",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "PichiGigaAMIntegrationTests",
+  "test": "testRealLocalAudioThroughProviderFilesAndAPIWhenEnabled()",
+  "environment": [
+   "PICHI_GIGAAM_APP_TEST_AUDIO",
+   "PICHI_GIGAAM_APP_TEST_MODEL_DIR"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/codex.md",
+  "reason": "Set local model and approved audio paths to run real inference.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "PichiGigaAMIntegrationTests",
+  "test": "testSyntheticRussianGigaAMAndS1DefaultPipelineWhenEnabled()",
+  "environment": [
+   "PICHI_GIGAAM_CHAIN_AUDIO",
+   "PICHI_GIGAAM_CHAIN_MODEL_DIR",
+   "PICHI_S1_MINI_MODEL_PATH"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set isolated GigaAM, S1-mini and synthetic audio paths for the native pipeline.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "PichiMeetingSummaryTests",
+  "test": "testLiveConditionalProposalAbilityQuestionAndPredictionStayUnacceptedWhenEnabled()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Opt-in semantic regression using public synthetic text and an installed local model.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "PichiMeetingSummaryTests",
+  "test": "testLiveExplicitAnswerResolvesOnlyItsMatchingQuestionAndRemainsAvailableWhenEnabled()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Opt-in semantic regression using public synthetic text and an installed local model.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "PichiMeetingSummaryTests",
+  "test": "testLivePronominalAcceptanceAndCompletionPreserveOriginalTaskAcrossChunksWhenEnabled()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Opt-in semantic regression using public synthetic text and an installed local model.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "PichiMeetingSummaryTests",
+  "test": "testLiveRussianSummaryWithOllamaWhenEnabled()",
+  "environment": [
+   "PICHI_MEETING_SUMMARY_LIVE",
+   "PICHI_MEETING_SUMMARY_LIVE_MODEL_ID"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/russian-meetings.md",
+  "reason": "Opt-in local inference check. Requires an installed local model in Ollama.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "PichiMeetingSummaryTests",
+  "test": "testLiveSavedSessionSummaryWhenExplicitlyEnabled()",
+  "environment": [
+   "PICHI_MEETING_SUMMARY_LIVE_MODEL_ID",
+   "PICHI_MEETING_SUMMARY_LIVE_SESSION_PATH"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/russian-meetings.md",
+  "reason": "Opt-in local verification of an explicitly authorized private saved session.",
+  "layer": "manual-private-data"
+ },
+ {
+  "class": "PichiMeetingSummaryTests",
+  "test": "testLiveSeparateCommitmentsKeepLiteralDeadlinesAndRelevantCitationsWhenEnabled()",
+  "environment": [
+   "PICHI_MEETING_SUMMARY_LIVE",
+   "PICHI_MEETING_SUMMARY_LIVE_MODEL_ID"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/russian-meetings.md",
+  "reason": "Opt-in semantic regression. Uses invented text and an already installed local Ollama model.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "PichiMeetingSummaryTests",
+  "test": "testLiveTrueCancellationRetainsEveryOriginalDecisionAndTaskAsHistoryWhenEnabled()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Opt-in semantic regression using public synthetic text and an installed local model.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "PichiMeetingSummaryTests",
+  "test": "testLiveUnansweredQuestionCannotBeResolvedByUnrelatedLaterStatusWhenEnabled()",
+  "environment": [
+   "PICHI_MEETING_SUMMARY_LIVE",
+   "PICHI_MEETING_SUMMARY_LIVE_MODEL_ID"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/russian-meetings.md",
+  "reason": "Opt-in semantic regression using synthetic speech, never a private recording.",
+  "layer": "manual-private-data"
+ },
+ {
+  "class": "PichiTextModelEvalTests",
+  "test": "testRussianTextModelEvaluationWhenExplicitlyEnabled()",
+  "environment": [
+   "PICHI_TEXT_MODEL_EVAL_PLAN"
+  ],
+  "runner": "",
+  "documentedIn": "docs/development/text-model-evals.md",
+  "reason": "Opt-in local model evaluation; no model download or server call in normal CI.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "S1MiniProviderTests",
+  "test": "testOptInPrivateDictationsThroughService()",
+  "environment": [
+   "PICHI_PRIVATE_DICTATION_FIXTURES",
+   "PICHI_S1_MINI_MODEL_PATH"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set model and private local fixture paths for consented dictation replay.",
+  "layer": "manual-private-data"
+ },
+ {
+  "class": "S1MiniProviderTests",
+  "test": "testRealS1MiniEnglishAndRussianCleanup()",
+  "environment": [
+   "PICHI_S1_MINI_MODEL_PATH"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set PICHI_S1_MINI_MODEL_PATH to the pinned official GGUF for native inference.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "S1MiniProviderTests",
+  "test": "testRealS1MiniLongRussianDictationThroughService()",
+  "environment": [
+   "PICHI_S1_MINI_MODEL_PATH"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set PICHI_S1_MINI_MODEL_PATH for real long-dictation inference.",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "SearchIndexTests",
+  "test": "testOptInCopiedRealHistoryReopenBenchmark()",
+  "environment": [
+   "FLUIDVOICE_SEARCH_BENCHMARK_EXPORT_PREPARED_INDEX",
+   "FLUIDVOICE_SEARCH_BENCHMARK_OUTPUT",
+   "FLUIDVOICE_SEARCH_BENCHMARK_RECORDS",
+   "FLUIDVOICE_SEARCH_BENCHMARK_SOURCE_INDEX",
+   "FLUIDVOICE_SEARCH_BENCHMARK_VARIANT"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Supply private record JSON and a report directory to run the search reopen benchmark",
+  "layer": "manual-private-data"
+ },
+ {
+  "class": "SearchIndexTests",
+  "test": "testOptInSequentialDictationMemoryGrowth()",
+  "environment": [
+   "FLUIDVOICE_SEARCH_APPEND_MEMORY_REPORT"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Supply an external JSON report path for the incremental memory simulation",
+  "layer": "diagnostic-tool"
+ },
+ {
+  "class": "UpdateBundleValidatorTests",
+  "test": "testDeveloperIDReleaseAcceptsApprovedSigningTeams()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "A valid Developer ID Application: signing identity is required for signed bundle fixtures.",
+  "layer": "L4-signed-release"
+ },
+ {
+  "class": "UpdateInstallationPipelineTests",
+  "test": "testCancelledTaskBeforePreparationDoesNotTouchOriginalStageOrBackup()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di",
+  "layer": "L4-signed-release"
+ },
+ {
+  "class": "UpdateInstallationPipelineTests",
+  "test": "testDevelopmentCandidateIsRejectedAsReleaseButAcceptedAsRollbackAndRetained()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di",
+  "layer": "L4-signed-release"
+ },
+ {
+  "class": "UpdateInstallationPipelineTests",
+  "test": "testInstalledBuildChangedSinceApprovalRejectsPreparation()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di",
+  "layer": "L4-signed-release"
+ },
+ {
+  "class": "UpdateInstallationPipelineTests",
+  "test": "testInstalledVersionChangedSinceApprovalRejectsPreparation()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di",
+  "layer": "L4-signed-release"
+ },
+ {
+  "class": "UpdateInstallationPipelineTests",
+  "test": "testPreexistingBackupDestinationIsPreservedAndOriginalIsUntouched()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di",
+  "layer": "L4-signed-release"
+ },
+ {
+  "class": "UpdateInstallationPipelineTests",
+  "test": "testRegularFileAtBackupParentAbortsWithoutReplacingOriginal()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di",
+  "layer": "L4-signed-release"
+ },
+ {
+  "class": "UpdateInstallationPipelineTests",
+  "test": "testReleaseInstallationHasVerifiedBackupAndCanRecoverWithoutConsumingSource()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di",
+  "layer": "L4-signed-release"
+ },
+ {
+  "class": "UpdateInstallationPipelineTests",
+  "test": "testReleaseWithoutApprovedVersionIsRejectedBeforeAnyStagingOrBackup()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di",
+  "layer": "L4-signed-release"
+ },
+ {
+  "class": "UpdateInstallationPipelineTests",
+  "test": "testTamperedCandidateCannotReplaceOriginalOrCreateBackup()",
+  "environment": [],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di",
+  "layer": "L4-signed-release"
+ },
+ {
+  "class": "VoiceProcessingAsrQualityTests",
+  "test": "testVpioEffectOnOwnVoiceTranscription()",
+  "environment": [
+   "FLUIDVOICE_ASR_AB"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "FLUIDVOICE_ASR_AB not set",
+  "layer": "L3-real-model"
+ },
+ {
+  "class": "VoiceProcessingDuckingProbeTests",
+  "test": "testVoiceProcessingDuckingEffectOnScreenCaptureAudio()",
+  "environment": [
+   "FLUIDVOICE_VPIO_PROBE"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "FLUIDVOICE_VPIO_PROBE not set",
+  "layer": "L4-hardware-or-manual"
+ },
+ {
+  "class": "VoiceProcessingSpeechDuckingTests",
+  "test": "testDuckingAgainstSpeechAndClockDrift()",
+  "environment": [
+   "FLUIDVOICE_VPIO_SPEECH"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "FLUIDVOICE_VPIO_SPEECH not set",
+  "layer": "L4-hardware-or-manual"
+ },
+ {
+  "class": "WhisperLanguageSelectionTests",
+  "test": "testQwenTranscribesFixtureFromExistingModelAndPreservesWhisperCache()",
+  "environment": [
+   "FLUIDVOICE_QWEN_MODEL_PATH"
+  ],
+  "runner": "",
+  "documentedIn": "",
+  "reason": "Set FLUIDVOICE_QWEN_MODEL_PATH to an existing Qwen GGUF for the local inference check.",
+  "layer": "L3-real-model"
+ }
+]
