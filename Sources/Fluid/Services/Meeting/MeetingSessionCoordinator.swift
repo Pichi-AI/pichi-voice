@@ -763,7 +763,17 @@ final class MeetingSessionCoordinator: ObservableObject {
         await self.pendingSpeechTeardownTask?.value
         self.pendingSpeechTeardownTask = nil
         let captureOrigin = MeetingLiveOriginBox()
-        let liveTranscriptionCoordinator = MeetingLiveTranscriptionCoordinator(originBox: captureOrigin) { [weak self] snapshot in
+        let liveTranscriptionCoordinator = MeetingLiveTranscriptionCoordinator(originBox: captureOrigin,
+            onEmptyRecognition: { [weak self] source, start, end in
+                CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+                    MainActor.assumeIsolated {
+                        guard let self, generation == self.captureGeneration,
+                              let capture = self.pendingSpeechCapture else { return }
+                        self.pendingSpeech = capture.acknowledgeEmptyRecognition(source: source, start: start, end: end)
+                    }
+                }
+                CFRunLoopWakeUp(CFRunLoopGetMain())
+            }) { [weak self] snapshot in
             // Common-modes trampoline, not the main dispatch queue: the queue is starved while the
             // user drags a window (event-tracking mode), which froze live captions mid-drag.
             CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {

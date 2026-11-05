@@ -672,6 +672,15 @@ nonisolated struct MeetingPendingSpeechProjection {
         emit(.processedCoverage, source: source, transcriptRevision: transcriptRevision, start: start, end: end)
     }
 
+    /// A retained-file caption worker successfully decoded this interval without text.
+    /// Unlike a cleared partial or silence observation, this is completed processing.
+    /// It cannot advance a source prefix across earlier queued or privacy-held speech.
+    mutating func acknowledgeEmptyRecognition(source: MeetingLiveSpeaker, start: Double, end: Double) {
+        guard snapshot.isCapturing, start.isFinite, end.isFinite, start >= 0, end > start else { return }
+        applyCoverage(source: source, start: start, end: end, captionID: nil, visibleUTF16: 0)
+        emit(.processedCoverage, source: source, start: start, end: end)
+    }
+
     private mutating func observeCadence(source: MeetingLiveSpeaker, start: Double, end: Double, text: String) {
         guard var track = self.tracks[source], end.isFinite, start.isFinite, end > start,
               track.cadenceObservedThrough.map({ end > $0 + 0.000_001 }) != false else { return }
@@ -905,6 +914,13 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         return self.lock.withLock {
             self.projection.acknowledgeProtectedSource(source: source, throughSample: throughSample,
                 transcriptRevision: transcriptRevision)
+            return self.projection.snapshot
+        }
+    }
+
+    func acknowledgeEmptyRecognition(source: MeetingLiveSpeaker, start: Double, end: Double) -> MeetingPendingSpeechSnapshot {
+        self.lock.withLock {
+            self.projection.acknowledgeEmptyRecognition(source: source, start: start, end: end)
             return self.projection.snapshot
         }
     }

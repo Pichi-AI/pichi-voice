@@ -59,6 +59,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     private var microphoneCaptureMethod: MeetingAudioTrackCaptureMethod?
     private let originBox: MeetingLiveOriginBox
     private let onUpdate: @Sendable (MeetingLiveTranscriptSnapshot) -> Void
+    private let onEmptyRecognition: (@Sendable (MeetingLiveSpeaker, TimeInterval, TimeInterval) -> Void)?
 
     private var bufferedMicrophoneEngine: PichiMeetingBufferedTrackEngine?
     private var bufferedApplicationEngine: PichiMeetingBufferedTrackEngine?
@@ -72,8 +73,11 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     private var applicationEngine: MeetingLiveTrackEngine?
     #endif
 
-    init(originBox: MeetingLiveOriginBox = MeetingLiveOriginBox(), onUpdate: @escaping @Sendable (MeetingLiveTranscriptSnapshot) -> Void) {
+    init(originBox: MeetingLiveOriginBox = MeetingLiveOriginBox(),
+         onEmptyRecognition: (@Sendable (MeetingLiveSpeaker, TimeInterval, TimeInterval) -> Void)? = nil,
+         onUpdate: @escaping @Sendable (MeetingLiveTranscriptSnapshot) -> Void) {
         self.originBox = originBox
+        self.onEmptyRecognition = onEmptyRecognition
         self.onUpdate = onUpdate
     }
 
@@ -346,6 +350,21 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         let startSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: start, origin: origin)
         let endSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: end, origin: origin)
         let speaker = Self.speaker(for: kind)
+
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let updated: MeetingLiveTranscriptSnapshot? = self.stateLock.withLock {
+                guard !self.isStopped else { return nil }
+                self.snapshot = self.snapshot.settingPartial(nil, for: speaker).markingFinalized(id)
+                self.snapshot.revision &+= 1
+                return self.snapshot
+            }
+            guard let updated else { return }
+            // No text enters privacy publication here. A successful empty final is
+            // processing evidence for its own source interval, never for queued audio.
+            self.onEmptyRecognition?(speaker, startSeconds, endSeconds)
+            self.onUpdate(updated)
+            return
+        }
 
         self.recordProbe("utterance-before-filter", kind: kind, pts: startSeconds, text: text)
         let updated: MeetingLiveTranscriptSnapshot = self.stateLock.withLock {

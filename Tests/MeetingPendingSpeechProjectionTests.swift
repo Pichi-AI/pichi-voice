@@ -94,6 +94,29 @@ struct MeetingPendingSpeechProjectionTests {
             && bounded.snapshot.tokens[0].start == 40 && bounded.snapshot.tokens[0].end > 59,
             "Partial progress must preserve the unprocessed suffix of a coalesced range")
         print("PASS20s speech/20s quiet protected-prefix retirement, trim, stale/source guards, delayed VAD and64-token coalescing")
+        var emptyFinal = MeetingPendingSpeechProjection()
+        confirmedSpeech(&emptyFinal, from: 0, seconds: 4)
+        feed(&emptyFinal, duration: 4, source: .them, rms: Self.speech)
+        let beforeEmptyFinal = emptyFinal.snapshot.tokens
+        emptyFinal.acknowledgeEmptyRecognition(source: .you, start: 0.6, end: 2.2)
+        let remainingEmptyFinal = emptyFinal.snapshot.tokens
+        try require(remainingEmptyFinal.filter { $0.source == .them } == beforeEmptyFinal.filter { $0.source == .them },
+                    "A completed empty microphone decode cannot retire meeting audio")
+        try require(remainingEmptyFinal.filter { $0.source == .you }.map(\.id)
+                    == beforeEmptyFinal.filter { $0.source == .you && !($0.start >= 0.6 && $0.end <= 2.2) }.map(\.id),
+                    "Only estimates fully inside the completed empty interval disappear")
+        try require(remainingEmptyFinal.contains { $0.source == .you && abs($0.end - 0.6) < 0.000_001 }
+                    && remainingEmptyFinal.contains { $0.source == .you && abs($0.start - 2.2) < 0.000_001 },
+                    "Boundary estimates retain their unprocessed edges")
+        let emptyFinalRevision = emptyFinal.snapshot.revision
+        emptyFinal.acknowledgeEmptyRecognition(source: .you, start: .nan, end: 4)
+        emptyFinal.acknowledgeEmptyRecognition(source: .you, start: -1, end: 4)
+        emptyFinal.acknowledgeEmptyRecognition(source: .you, start: 4, end: 3)
+        try require(emptyFinal.snapshot.revision == emptyFinalRevision, "Invalid empty completion cannot change waiting audio")
+        emptyFinal.acknowledgeEmptyRecognition(source: .you, start: 0, end: 4)
+        try require(emptyFinal.snapshot.tokens.allSatisfy { $0.source == .them },
+                    "Successful empty completion clears its waves without requiring invented transcript words")
+        print("PASS empty final interval retirement, boundary preservation, source isolation and invalid coverage")
         func timedProjection(spacing: Double) -> (MeetingPendingSpeechProjection, MeetingLiveTranscriptSnapshot) {
             var projection = MeetingPendingSpeechProjection()
             confirmedSpeech(&projection, from: 0, seconds: 8)

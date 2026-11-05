@@ -151,6 +151,31 @@ final class MeetingLiveTimeConversionTests: XCTestCase {
 }
 
 final class MeetingLiveTranscriptSnapshotTests: XCTestCase {
+    func testSuccessfulEmptyFinalReportsSourceCoverageWithoutPublishingEmptyWords() async {
+        let origin = MeetingLiveOriginBox()
+        origin.establish(CMTime(seconds: 100, preferredTimescale: 16_000))
+        let completed = expectation(description: "Successful empty final supplies exact source coverage")
+        completed.assertForOverFulfill = true
+        let coordinator = MeetingLiveTranscriptionCoordinator(originBox: origin,
+            onEmptyRecognition: { source, start, end in
+                XCTAssertEqual(source, .them)
+                XCTAssertEqual(start, 2, accuracy: 0.0001)
+                XCTAssertEqual(end, 4, accuracy: 0.0001)
+                completed.fulfill()
+            }, onUpdate: { snapshot in
+                XCTAssertTrue(snapshot.utterances.isEmpty, "An empty decode must not become a transcript row")
+                XCTAssertTrue(snapshot.partials.isEmpty)
+            })
+        let turnID = UUID()
+        coordinator.handleUtterance(kind: .applicationAudio, id: turnID, text: " \n ",
+            start: CMTime(seconds: 102, preferredTimescale: 16_000), end: CMTime(seconds: 104, preferredTimescale: 16_000))
+        await fulfillment(of: [completed], timeout: 1)
+        XCTAssertTrue(coordinator.latestSnapshot().finalizedTurnIDs.contains(turnID))
+        await coordinator.stop()
+        coordinator.handleUtterance(kind: .applicationAudio, text: "",
+            start: CMTime(seconds: 102, preferredTimescale: 16_000), end: CMTime(seconds: 104, preferredTimescale: 16_000))
+    }
+
     func testDeliveryRejectsStoppedPreviousAndDuplicateSessionUpdates() {
         let generation = UUID()
         var current = MeetingLiveTranscriptSnapshot.empty
@@ -747,6 +772,35 @@ final class MeetingLiveStartupCancellationTests: XCTestCase {
 
 @MainActor
 final class PichiMeetingBufferedCaptionsTests: XCTestCase {
+    private actor EmptyRecognizer: PichiMeetingCaptionRecognizing {
+        func prepare() {}
+        func recognize(_ samples: [Float]) -> PichiMeetingCaptionRecognition {
+            .init(text: " \n ", endOfUtteranceProbability: nil)
+        }
+        func unload() {}
+    }
+
+    func testSuccessfulEmptyFinalCompletesAudioButResetDoesNot() async throws {
+        let recognizer = EmptyRecognizer()
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        let events = Events()
+        self.addTeardownBlock { await engine.stop(); await recognizer.unload() }
+        await self.configure(engine, events: events)
+        await engine.start()
+        try self.offer(engine, start: 0, packets: 10, value: 0.1)
+        try self.offer(engine, start: 1, packets: 8, value: 0)
+        let complete = await self.waitForUtterances(1, events: events)
+        XCTAssertTrue(complete, "A successful empty decode must retire captured progress")
+        let final = try XCTUnwrap(events.utterances.first)
+        XCTAssertEqual(final.2, "")
+        XCTAssertEqual(final.3, 0, accuracy: 0.0001)
+        XCTAssertEqual(final.4, 1.7, accuracy: 0.0001)
+        XCTAssertTrue(events.degraded.isEmpty)
+        await engine.reset()
+        await engine.stop()
+        XCTAssertEqual(events.utterances.count, 1, "Reset and stop cannot manufacture completed processing")
+    }
+
     @MainActor private final class CaptionProvider: TranscriptionProvider {
         let name = "Unknown caption provider fixture"
         let isAvailable = true
