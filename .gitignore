@@ -285,6 +285,7 @@ builds/
 /scripts/dev/*
 !/scripts/dev/*.sh
 !/scripts/dev/check-localization.py
+!/scripts/dev/check-test-policy.py
 !/scripts/dev/check-transcribe-sdk.py
 !/scripts/dev/check-diarization-repeatability.py
 !/scripts/dev/check-xcode-build-settings.py

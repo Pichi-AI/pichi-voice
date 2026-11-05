@@ -194,6 +194,10 @@ The frozen ad-hoc-signed `912bff48` copy has a different code identity from the 
 
 The bounded-context `qwen3.5:4b` adapter was measured at approximately 3.15 GiB of model memory with an 8192-token context and released the model after the request. Physical Intel and 8 GB devices remain untested. Summary semantic regressions and external Accessibility typing still require verification. Signing for distribution, notarization, a Pichi update feed and a distributable optimized-model destination are separate release work. The installed FluidVoice application and its recordings were not modified. These local results do not establish current published CI or Codex Cloud readiness.
 
+## Test exceptions
+
+`Tests/quarantine.json` lists known failures, each with an owner, a reason and an expiry date. `Tests/skip-registry.json` gives every skipped test a reason and the layer that should run it. `scripts/dev/check-test-policy.py` runs in `check.sh`, so an expired quarantine fails the repository check. With `--skipped <list.json>` it also fails on a skip that is not registered.
+
 ## CI and cleanup
 
 [Pichi Voice CI](../../.github/workflows/pichi-ci.yml) runs portable checks. For macOS testing, manually dispatch the workflow with `run_macos` selected. To enable macOS testing on every code change, set the repository variable `PICHI_VOICE_MACOS_CI` to `true` after reviewing runner usage and the baseline results.
