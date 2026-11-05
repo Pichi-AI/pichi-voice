@@ -49,10 +49,17 @@ if [[ "$pichi_action" == "regression" ]]; then
         printf '%s\n' 'Working tree: clean' >> "$pichi_run/run.txt"
     fi
     printf 'Regression artifacts: %s\n' "$pichi_run"
+    case "$pichi_root" in
+        "$HOME"/Documents/*)
+            printf '%s\n' 'Warning: this worktree is under ~/Documents. macOS can block the test host in open() here.' \
+                'If the host hangs, use a worktree outside ~/Documents.' >&2
+            ;;
+    esac
     touch "$pichi_run/build-start"
     # Debug is required for the existing test-host launch and language overrides.
     pichi_build_status=0
-    xcodebuild "${pichi_args[@]}" -configuration Debug \
+    # Tests write settings and caches under their bundle identity. Keep them away from manual Debug builds.
+    xcodebuild "${pichi_args[@]}" -configuration Debug PICHI_BUNDLE_IDENTIFIER=ai.pichi.voice.regression \
         -resultBundlePath "$pichi_run/build.xcresult" build-for-testing \
         2>&1 | tee "$pichi_run/build.log" || pichi_build_status=$?
     if [[ "$pichi_build_status" -ne 0 ]]; then
@@ -62,11 +69,20 @@ if [[ "$pichi_action" == "regression" ]]; then
     fi
     pichi_xctestrun="$(python3 -S scripts/dev/macos-regression.py configure \
         "$pichi_root/.build/Xcode/Build/Products" "$pichi_run/build-start" "$pichi_run_id")"
+    pichi_preferences="$HOME/Library/Preferences"
+    # Without this record the sweep cannot tell this run's files from older ones, so it stays off.
+    python3 -S scripts/dev/macos-regression.py remember-preferences "$pichi_preferences" "$pichi_run/preferences-before.txt" \
+        || printf '%s\n' 'Warning: preference domains were not recorded, so this run removes none.' >&2
     pichi_test_status=0
     xcodebuild -xctestrun "$pichi_xctestrun" -destination "$pichi_destination" \
+        -derivedDataPath "$pichi_root/.build/Xcode" \
         -resultBundlePath "$pichi_run/tests.xcresult" -parallel-testing-enabled NO \
         "${pichi_test_args[@]}" test-without-building 2>&1 | tee "$pichi_run/test.log" \
         || pichi_test_status=$?
+    if [[ -f "$pichi_run/preferences-before.txt" ]]; then
+        python3 -S scripts/dev/macos-regression.py sweep-preferences "$pichi_preferences" "$pichi_run/preferences-before.txt" \
+            || printf '%s\n' 'Warning: disposable preference domains were not removed.' >&2
+    fi
     # Extract the actual report even when xcodebuild failed. Missing results fail closed.
     pichi_summary_status=0
     xcrun xcresulttool get test-results summary --path "$pichi_run/tests.xcresult" \
