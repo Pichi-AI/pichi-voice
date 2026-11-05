@@ -562,8 +562,11 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
             let host = try CaptionNativeHost(rows: rows, scheme: scheme)
             defer { host.close() }
             host.model.height = min(480, host.window.bounds.height - 160)
-            let scroll = try await captionScroll(in: host)
-            try await settle(host, "Both caption sources must finish native layout") { scroll.contentSize.height > 0 }
+            try await settle(host, "Both caption sources must finish native layout") {
+                self.scrollViews(in: host.controller.view).contains {
+                    $0.window === host.window && $0.bounds.height > 0 && $0.contentSize.height > 0
+                }
+            }
             capture(host, step: "source-labels", scheme: scheme)
         }
     }
