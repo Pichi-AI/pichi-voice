@@ -269,18 +269,68 @@ final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
         XCTAssertEqual(state.state, .unmuted)
         XCTAssertFalse(state.temporaryUnmute)
         XCTAssertEqual(state.historicalReleaseUnmuteAt, 140, "The old PCM boundary refines history before this newer unmute")
+        XCTAssertEqual(state.historicalReleaseUntilAt, 130, "Only the first muted period bounds the old temporary epoch")
         XCTAssertFalse(state.observe(.unmuted, at: 180))
         XCTAssertEqual(state.state, .unmuted)
     }
 
-    func testFreshRenderedMuteCorrectsLingeringHUDWithoutWaitingForKeyUp() {
+    func testHistoricalReleaseScopePreservesLaterLegitimateClosedEpochs() {
+        for delayedHUDGrant in [false, true] {
+            var state = MeetingMuteTransitionState()
+            XCTAssertTrue(state.observe(.muted, at: 90))
+            state.keyDown(at: 100)
+            if delayedHUDGrant { XCTAssertTrue(state.observeTemporaryHUD(true, at: 125)) }
+            else { XCTAssertTrue(state.observe(.unmuted, at: 110)) }
+            XCTAssertEqual(state.observe(.muted, at: 130), !delayedHUDGrant)
+            XCTAssertEqual(state.observe(.unmuted, at: 135), !delayedHUDGrant)
+            XCTAssertTrue(state.observe(.muted, at: 137))
+            XCTAssertTrue(state.observe(.unmuted, at: 140))
+            XCTAssertFalse(state.keyUp(processedAt: 170, releasedAt: 120))
+            XCTAssertEqual(state.state, .unmuted)
+            XCTAssertEqual(state.historicalReleaseUnmuteAt, 140)
+            XCTAssertEqual(state.historicalReleaseUntilAt, 130, "The 135..137 epoch is newer than the historical scope")
+        }
+    }
+
+    func testHistoricalReleaseInsideAnObservedMutedPeriodUsesItsLastObservation() {
         var state = MeetingMuteTransitionState()
-        XCTAssertTrue(state.observe(.muted, at: 100))
-        state.keyDown(at: 110)
-        XCTAssertTrue(state.observeTemporaryHUD(true, at: 120))
-        XCTAssertTrue(state.observe(.muted, at: 130))
-        XCTAssertFalse(state.observeTemporaryHUD(true, at: 130))
-        XCTAssertEqual(state.state, .muted)
+        XCTAssertTrue(state.observe(.muted, at: 90))
+        state.keyDown(at: 100)
+        XCTAssertFalse(state.observe(.muted, at: 130))
+        XCTAssertTrue(state.observe(.unmuted, at: 140))
+        XCTAssertFalse(state.keyUp(processedAt: 170, releasedAt: 120))
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertEqual(state.historicalReleaseUntilAt, 130)
+    }
+
+    func testMutedHistoryIsBoundedAndDoesNotGuessAcrossRetiredPeriods() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 10))
+        state.keyDown(at: 11)
+        XCTAssertTrue(state.observe(.unmuted, at: 12))
+        for index in UInt64(0)..<70 {
+            XCTAssertTrue(state.observe(.muted, at: 20 + index * 2))
+            XCTAssertTrue(state.observe(.unmuted, at: 21 + index * 2))
+        }
+        XCTAssertEqual(state.retainedMutedSegmentCount, 64)
+        XCTAssertFalse(state.keyUp(processedAt: 200, releasedAt: 15))
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertNil(state.historicalReleaseUnmuteAt)
+        XCTAssertNil(state.historicalReleaseUntilAt, "An evicted old boundary cannot truncate unrelated later epochs")
+    }
+
+    func testHUDDoesNotRewriteIndependentRenderedStateHistory() {
+        for sawRenderedUnmute in [false, true] {
+            var state = MeetingMuteTransitionState()
+            XCTAssertTrue(state.observe(.muted, at: 100))
+            state.keyDown(at: 110)
+            XCTAssertTrue(state.observeTemporaryHUD(true, at: 120))
+            if sawRenderedUnmute { XCTAssertFalse(state.observe(.unmuted, at: 125)) }
+            XCTAssertEqual(state.observe(.muted, at: 130), sawRenderedUnmute,
+                "Only an actual new rendered mute transition can cancel the temporary grant")
+            XCTAssertFalse(state.observeTemporaryHUD(true, at: 130))
+            XCTAssertEqual(state.state, sawRenderedUnmute ? .muted : .unmuted)
+        }
     }
 
     func testZoomRenderedStatusRejectsDisplayNameTextAndAcceptsStatusOnlyMetadata() {

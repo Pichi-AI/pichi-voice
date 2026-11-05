@@ -70,6 +70,7 @@ nonisolated struct MeetingMuteTransitionState {
     private(set) var possiblePTT = false
     private(set) var temporaryUnmute = false
     private(set) var historicalReleaseUnmuteAt: UInt64?
+    private(set) var historicalReleaseUntilAt: UInt64?
     private var persistentState = MeetingMicrophoneMuteState.unmuted
     private var lastVisibleState: MeetingMicrophoneMuteState?
     private var lastUnmuteFromMutedAt: UInt64?
@@ -79,6 +80,11 @@ nonisolated struct MeetingMuteTransitionState {
     private var hudVisible = false
     private var temporaryObservedDuringHold = false
     private var awaitingMutedAfterRelease = false
+    private struct MutedSegment { var first: UInt64; var last: UInt64 }
+    private var mutedSegments: [MutedSegment] = []
+    private var mutedHistoryRetiredThrough: UInt64 = 0
+    private static let maximumMutedSegments = 64
+    var retainedMutedSegmentCount: Int { self.mutedSegments.count }
 
     static func releaseBoundary(eventTime: UInt64?, processedAt now: UInt64) -> (fence: UInt64, unsafeStart: UInt64) {
         guard let eventTime, eventTime > 0, eventTime <= now else { return (now, 0) }
@@ -92,7 +98,17 @@ nonisolated struct MeetingMuteTransitionState {
         guard visible != .unmuted || (time > self.excludedThrough && !self.awaitingMutedAfterRelease) else { return false }
         if visible == .muted, time > self.excludedThrough { self.awaitingMutedAfterRelease = false }
         self.latestEvidenceAt = time
-        if visible == .muted { self.lastRenderedMuteAt = time }
+        if visible == .muted {
+            self.lastRenderedMuteAt = time
+            if self.lastVisibleState == .muted, !self.mutedSegments.isEmpty {
+                self.mutedSegments[self.mutedSegments.count - 1].last = time
+            } else {
+                self.mutedSegments.append(MutedSegment(first: time, last: time))
+                if self.mutedSegments.count > Self.maximumMutedSegments {
+                    self.mutedHistoryRetiredThrough = self.mutedSegments.removeFirst().last
+                }
+            }
+        }
         guard visible != self.lastVisibleState else { return false }
         if visible == .unmuted { self.lastRenderedUnmuteAt = time }
         self.lastVisibleState = visible
@@ -120,8 +136,6 @@ nonisolated struct MeetingMuteTransitionState {
         guard visible, time > self.excludedThrough, !self.awaitingMutedAfterRelease,
               self.held || corroboratedUnmute else { return false }
         self.latestEvidenceAt = time
-        self.lastVisibleState = .unmuted
-        self.lastRenderedUnmuteAt = time
         self.persistentState = .muted
         self.temporaryUnmute = true
         self.temporaryObservedDuringHold = true
@@ -146,6 +160,7 @@ nonisolated struct MeetingMuteTransitionState {
     @discardableResult
     mutating func keyUp(processedAt now: UInt64, releasedAt: UInt64? = nil) -> Bool {
         self.historicalReleaseUnmuteAt = nil
+        self.historicalReleaseUntilAt = nil
         defer { self.held = false; self.possiblePTT = false; self.temporaryObservedDuringHold = false }
         let hadTemporaryGrant = self.temporaryUnmute || self.temporaryObservedDuringHold
         guard (self.held && self.possiblePTT) || hadTemporaryGrant else { return false }
@@ -157,7 +172,11 @@ nonisolated struct MeetingMuteTransitionState {
             self.persistentState = .unmuted
             self.lastUnmuteFromMutedAt = nil
             self.hudVisible = true
-            self.historicalReleaseUnmuteAt = unmutedAt
+            if releasedAt > self.mutedHistoryRetiredThrough,
+               let firstMute = self.mutedSegments.first(where: { $0.last >= releasedAt && $0.first < unmutedAt }) {
+                self.historicalReleaseUnmuteAt = unmutedAt
+                self.historicalReleaseUntilAt = firstMute.first >= releasedAt ? firstMute.first : firstMute.last
+            }
             return false
         }
         // Fence every owned PTT release, including a press too short for a sampled grant.

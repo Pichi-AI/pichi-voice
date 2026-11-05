@@ -13,6 +13,9 @@ nonisolated struct MeetingMicrophoneMuteObservation: Sendable {
     /// A passive key event can arrive after a newer frame. Its acquisition boundary must
     /// narrow earlier approvals independently of observation freshness. Zero revokes all.
     var unsafeStartHostTime: UInt64? = nil
+    /// Historical PTT refinement ends at the first rendered muted period after that release,
+    /// so later legitimate closed epochs are not clipped by an old keyboard event.
+    var refinementUntilHostTime: UInt64? = nil
 }
 
 /// Best-effort observation of the selected conference's actual microphone control. It never
@@ -293,12 +296,12 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
     }
 
     private func publish(_ state: MeetingMicrophoneMuteState, at time: UInt64,
-        unsafeStart: UInt64? = nil, refineBoundary: Bool = false) {
+        unsafeStart: UInt64? = nil, refinementUntil: UInt64? = nil, refineBoundary: Bool = false) {
         guard self.running,
               self.lastPublishedState != state || refineBoundary else { return }
         self.lastPublishedState = state
         self.handler(MeetingMicrophoneMuteObservation(state: state, observedAtHostTime: time,
-            generation: self.generation, unsafeStartHostTime: unsafeStart))
+            generation: self.generation, unsafeStartHostTime: unsafeStart, refinementUntilHostTime: refinementUntil))
         // The synchronous capture handler installs its negative fence before returning.
         if state == .muted { self.transition.negativeWasProcessed(at: mach_absolute_time()) }
     }
@@ -320,9 +323,11 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
                     eventTime: timestamp.map(Self.hostTime(nanoseconds:)), processedAt: now)
                 if self.transition.keyUp(processedAt: now, releasedAt: boundary.unsafeStart > 0 ? boundary.unsafeStart : nil) {
                     self.publish(.muted, at: now, unsafeStart: boundary.unsafeStart, refineBoundary: true)
-                } else if let newerUnmute = self.transition.historicalReleaseUnmuteAt {
+                } else if let newerUnmute = self.transition.historicalReleaseUnmuteAt,
+                          let scopeEnd = self.transition.historicalReleaseUntilAt {
                     // Narrow the old temporary epoch without overriding a newer rendered unmute.
-                    self.publish(.unmuted, at: newerUnmute, unsafeStart: boundary.unsafeStart, refineBoundary: true)
+                    self.publish(.unmuted, at: newerUnmute, unsafeStart: boundary.unsafeStart,
+                        refinementUntil: scopeEnd, refineBoundary: true)
                 }
             }
         }
