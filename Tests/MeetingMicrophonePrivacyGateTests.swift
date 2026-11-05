@@ -142,6 +142,7 @@ private enum Fixture {
             try await self.delayedWatchdogCannotFillGap(checks)
             try await self.confirmedPrefixAndStop(checks)
             try await self.lateUnsafeBoundary(checks)
+            try await self.unsafeBoundaryIncludesAcquisitionSafety(checks)
             try await self.contiguousFractionalRate(checks)
             try await self.planarPCM(checks)
             try await self.boundedApprovalHistory(checks)
@@ -329,6 +330,30 @@ private enum Fixture {
         clock.set(1_002); gate.checkFreshnessAndDrain(); sink.joined()
         try checks.require(sink.snapshot.0.isEmpty && !gate.permitsReleasedSample(latePrivate), "late boundary after reopen rescued unsafe PCM")
         await gate.stop()
+    }
+
+    static func unsafeBoundaryIncludesAcquisitionSafety(_ checks: Checks) async throws {
+        for alreadyClosed in [false, true] {
+            let clock = HostClock(), sink = Sink()
+            let gate = MeetingMicrophonePrivacyGate(hostTime: { clock.now() }, automaticWatchdog: false)
+            gate.setAdmitted(true, observedAtHostTime: clock.now())
+            clock.set(1_000.25)
+            let confirmed = try Fixture.sample(101, at: 1_000.08)
+            let nearRelease = try Fixture.sample(102, at: 1_000.18)
+            try checks.require(gate.submit(confirmed, deliveryQueue: sink.queue, delivery: sink.receive), "safe boundary setup missing")
+            try checks.require(gate.submit(nearRelease, deliveryQueue: sink.queue, delivery: sink.receive), "near boundary setup missing")
+            self.refresh(gate, clock, at: [1_000.4])
+            if alreadyClosed {
+                clock.set(1_000.45); gate.setAdmitted(false, observedAtHostTime: clock.now())
+                clock.set(1_000.46); gate.setAdmitted(true, observedAtHostTime: clock.now())
+            }
+            clock.set(1_000.5)
+            gate.setAdmitted(false, observedAtHostTime: clock.now(), unsafeStartHostTime: HostClock.ticks(1_000.2))
+            clock.set(1_002); gate.checkFreshnessAndDrain(); sink.joined()
+            try checks.require(sink.snapshot.0 == [101], "near-release PCM bypassed acquisition clock safety margin")
+            try checks.require(!gate.permitsReleasedSample(nearRelease), "writer rescued a block inside release safety margin")
+            await gate.stop()
+        }
     }
 
     static func contiguousFractionalRate(_ checks: Checks) async throws {

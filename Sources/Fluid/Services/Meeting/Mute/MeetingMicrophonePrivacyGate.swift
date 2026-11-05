@@ -268,9 +268,12 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
     }
 
     private func closeEpochLocked(at now: UInt64, unsafeStart: UInt64? = nil, preserveConfirmedPrefix: Bool = true) {
-        if let unsafeStart {
+        // The adapter permits bounded canonical/acquisition clock divergence. Apply the same
+        // safety margin to real key-up boundaries, including already closed prefix grants.
+        let safeBoundary = unsafeStart.map { $0 > self.prefixSafetyTicks ? $0 - self.prefixSafetyTicks : 0 }
+        if let safeBoundary {
             self.approvedIntervals = self.approvedIntervals.compactMap { interval in
-                let end = min(interval.end, unsafeStart)
+                let end = min(interval.end, safeBoundary)
                 return end > interval.start ? (interval.start, end) : nil
             }
         }
@@ -279,7 +282,7 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
             var end = observed - self.prefixSafetyTicks
             // A key-up or another early close boundary may narrow a grant; it can never extend
             // conference proof beyond the last positive visual observation.
-            if let unsafeStart { end = min(end, unsafeStart) }
+            if let safeBoundary { end = min(end, safeBoundary) }
             if end > start {
                 self.approvedIntervals.append((start, end))
                 if self.approvedIntervals.count > Self.maximumApprovedIntervals { self.approvedIntervals.removeFirst() }
