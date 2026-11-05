@@ -45,6 +45,14 @@
             {
               "titleKey": "License text",
               "file": "ONNXRuntime-LICENSE.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 1 of 2)",
+              "file": "ONNXRuntime-ThirdPartyNotices-1.txt"
+            },
+            {
+              "titleKey": "Third-party notices (part 2 of 2)",
+              "file": "ONNXRuntime-ThirdPartyNotices-2.txt"
             }
           ]
         },

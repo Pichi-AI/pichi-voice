@@ -66569,6 +66569,40 @@
           }
         }
       }
+    },
+    "Third-party notices (part 1 of 2)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Third-party notices (part 1 of 2)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Уведомления сторонних компонентов (часть 1 из 2)"
+          }
+        }
+      }
+    },
+    "Third-party notices (part 2 of 2)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Third-party notices (part 2 of 2)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Уведомления сторонних компонентов (часть 2 из 2)"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
