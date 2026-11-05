@@ -62,7 +62,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
                 let snapshot = try XCTUnwrap(snapshot)
                 let configuration = try snapshot.configuration(applications: loaded.applications, microphones: [self.mic])
                 XCTAssertEqual(configuration.mode, mode)
-                XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, mode == .inRoom ? .streaming : .afterRecording)
+                XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, .streaming)
                 XCTAssertEqual(configuration.audioStorageMode, .retainedFiles)
                 XCTAssertEqual(configuration.piiRedactionEnabled, true)
                 XCTAssertEqual(configuration.languageCode, "ru")
