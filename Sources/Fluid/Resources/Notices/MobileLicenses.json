@@ -1,0 +1,254 @@
+{
+  "formatVersion": 1,
+  "groups": [
+    {
+      "id": "application",
+      "titleKey": "Application components",
+      "components": [
+        {
+          "id": "fluidvoice",
+          "name": "FluidVoice",
+          "license": "GPL-3.0",
+          "documents": [
+            {
+              "titleKey": "Attribution",
+              "file": "FluidVoice-NOTICE.txt"
+            },
+            {
+              "titleKey": "License text",
+              "file": "FluidVoice-LICENSE.txt"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "libraries",
+      "titleKey": "Libraries",
+      "components": [
+        {
+          "id": "fluidaudio",
+          "name": "FluidAudio",
+          "license": "Apache-2.0",
+          "documents": [
+            {
+              "titleKey": "License text",
+              "file": "FluidAudio-LICENSE.txt"
+            }
+          ]
+        },
+        {
+          "id": "onnx",
+          "name": "ONNX Runtime",
+          "license": "MIT",
+          "documents": [
+            {
+              "titleKey": "License text",
+              "file": "ONNXRuntime-LICENSE.txt"
+            }
+          ]
+        },
+        {
+          "id": "transcribecpp",
+          "name": "TranscribeCpp / CTranscribe",
+          "license": "MIT",
+          "documents": [
+            {
+              "titleKey": "License text",
+              "file": "TranscribeCpp-LICENSE.txt"
+            }
+          ]
+        },
+        {
+          "id": "ggml",
+          "name": "ggml",
+          "license": "MIT",
+          "documents": [
+            {
+              "titleKey": "License text",
+              "file": "llama.cpp-LICENSE.txt"
+            }
+          ]
+        },
+        {
+          "id": "miniz",
+          "name": "miniz",
+          "license": "MIT",
+          "documents": [
+            {
+              "titleKey": "License text",
+              "file": "miniz-LICENSE.txt"
+            }
+          ]
+        },
+        {
+          "id": "fastcluster",
+          "name": "fastcluster",
+          "license": "BSD-2-Clause",
+          "documents": [
+            {
+              "titleKey": "License text",
+              "file": "fastcluster-LICENSE.txt"
+            }
+          ]
+        },
+        {
+          "id": "vbx",
+          "name": "VBx",
+          "license": "Apache-2.0",
+          "documents": [
+            {
+              "titleKey": "License text",
+              "file": "VBx-LICENSE.txt"
+            }
+          ]
+        },
+        {
+          "id": "morphology",
+          "name": "libmorph / moonycode",
+          "license": "MIT",
+          "documents": [
+            {
+              "titleKey": "License and attribution",
+              "file": "RussianMorphology-NOTICE.txt"
+            }
+          ]
+        },
+        {
+          "id": "nemotron-runtime",
+          "name": "Nemotron Swift runtime",
+          "license": "Apache-2.0",
+          "documents": [
+            {
+              "titleKey": "License and attribution",
+              "file": "FluidAudio-Nemotron3.txt"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "models",
+      "titleKey": "Optional models",
+      "footerKey": "Model files are downloaded separately. These notices do not indicate which models are installed.",
+      "components": [
+        {
+          "id": "gigaam",
+          "name": "GigaAM v3",
+          "license": "MIT",
+          "documents": [
+            {
+              "titleKey": "Attribution",
+              "file": "GigaAM-Model-NOTICE.txt"
+            },
+            {
+              "titleKey": "License text",
+              "file": "GigaAM-LICENSE.txt"
+            }
+          ]
+        },
+        {
+          "id": "whisper",
+          "name": "Whisper Tiny",
+          "license": "MIT",
+          "documents": [
+            {
+              "titleKey": "Attribution",
+              "file": "Whisper-Model-NOTICE.txt"
+            },
+            {
+              "titleKey": "License text",
+              "file": "Whisper-LICENSE.txt"
+            }
+          ]
+        },
+        {
+          "id": "parakeet",
+          "name": "Parakeet TDT v3",
+          "license": "CC-BY-4.0",
+          "documents": [
+            {
+              "titleKey": "Attribution",
+              "file": "Parakeet-Model-NOTICE.txt"
+            },
+            {
+              "titleKey": "License text",
+              "file": "CC-BY-4.0-LICENSE.txt"
+            }
+          ]
+        },
+        {
+          "id": "a1",
+          "name": "A1 Russian PII",
+          "license": "Apache-2.0",
+          "documents": [
+            {
+              "titleKey": "Attribution",
+              "file": "A1-TextPrivacy-NOTICE.txt"
+            },
+            {
+              "titleKey": "License text",
+              "file": "A1-TextPrivacy-LICENSE.txt"
+            },
+            {
+              "titleKey": "Data provenance",
+              "file": "A1-TextPrivacy-DATA-PROVENANCE.txt"
+            }
+          ]
+        },
+        {
+          "id": "rubert",
+          "name": "RuBERT tiny news",
+          "license": "MIT",
+          "documents": [
+            {
+              "titleKey": "Attribution",
+              "file": "RuBERT-TextPrivacy-NOTICE.txt"
+            }
+          ]
+        },
+        {
+          "id": "silero",
+          "name": "Silero VAD",
+          "license": "MIT",
+          "documents": [
+            {
+              "titleKey": "License and attribution",
+              "file": "SileroVAD.txt"
+            }
+          ]
+        },
+        {
+          "id": "wespeaker",
+          "name": "WeSpeaker owner-voice model",
+          "license": "CC-BY-4.0",
+          "documents": [
+            {
+              "titleKey": "Attribution",
+              "file": "WeSpeaker-Model-NOTICE.txt"
+            },
+            {
+              "titleKey": "License text",
+              "file": "CC-BY-4.0-LICENSE.txt"
+            }
+          ]
+        },
+        {
+          "id": "nemotron",
+          "name": "Nemotron 3 Diarization",
+          "license": "OpenMDW-1.1",
+          "documents": [
+            {
+              "titleKey": "Attribution",
+              "file": "Nemotron3-Model-NOTICE.txt"
+            },
+            {
+              "titleKey": "License text",
+              "file": "OpenMDW-1.1-LICENSE.txt"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

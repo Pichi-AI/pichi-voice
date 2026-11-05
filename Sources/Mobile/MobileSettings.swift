@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 /// Settings routes belong to the Settings stack, rather than to the selected app section.
 enum MobileSettingsDestination: Hashable {
-    case recording, participants, models, privacy, account, kiosk
+    case recording, participants, models, privacy, account, kiosk, licenses
 }
 
 /// The mobile subset keeps the desktop destinations and their existing preference owner.
@@ -96,8 +96,13 @@ struct MobileSettingsRoot: View {
                     MobileSettingsFooter(PichiLocalization.text("Your recordings, models and voice profile are kept."))
                 }
             }
-            if let privacyPolicyURL = AppBrand.privacyPolicyURL {
-                Section {
+            Section {
+                NavigationLink(value: MobileSettingsDestination.licenses) {
+                    MobileSettingsRowLabel(PichiLocalization.text("Licenses"),
+                        summary: PichiLocalization.text("Components and model notices"), systemImage: "doc.text.magnifyingglass")
+                }
+                .accessibilityIdentifier("settings.licenses")
+                if let privacyPolicyURL = AppBrand.privacyPolicyURL {
                     Link(destination: privacyPolicyURL) {
                         MobileSettingsRowLabel(PichiLocalization.text("Privacy Policy"), systemImage: "doc.text.fill")
                     }
@@ -110,11 +115,13 @@ struct MobileSettingsRoot: View {
                 if destination == .account {
                     MobileAccountSettings(session: accountSession, interaction: accountInteraction,
                         cloudPublication: cloudPublication, cloudInteraction: cloudInteraction)
+                } else if destination == .licenses {
+                    MobileLicensesSettings()
                 } else if !privateProfile.isPrivateDataVisible {
                     Text(PichiLocalization.text("account.profile.unavailable"))
                 } else {
                     switch destination {
-                    case .account: EmptyView()
+                    case .account, .licenses: EmptyView()
                     case .recording: MobileRecordingSettings(microphones: microphones)
                     case .participants:
                         MobileParticipantSettings(required: required,

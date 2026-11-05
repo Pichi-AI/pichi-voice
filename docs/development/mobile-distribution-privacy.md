@@ -40,3 +40,10 @@ records the large asset-catalog icon rejection.
 Metadata changes produce a new source revision and require a fresh archive.
 They do not validate an existing archive, signing, TestFlight acceptance or
 the runtime behavior of the newly packaged revision.
+
+Mobile Settings also exposes an offline Licenses list for guests and signed-in
+users. `Notices/MobileLicenses.json` supplies versioned component groups and their
+bundled documents; the generic viewer keeps original license and attribution
+text selectable. Optional model notices do not indicate model installation.
+The notices identify included components and do not establish App Store
+distribution permission or a complete transitive license audit.
