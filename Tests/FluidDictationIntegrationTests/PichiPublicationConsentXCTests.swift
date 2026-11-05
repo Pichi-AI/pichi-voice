@@ -3,10 +3,16 @@ import Darwin
 import Foundation
 import XCTest
 
+@MainActor
 final class PichiPublicationConsentXCTests: XCTestCase {
     /// Synthetic fixtures live next to this folder: Tests/Fixtures/PichiAccountSyncV1.
-    static let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/PichiAccountSyncV1", isDirectory: true)
+    /// PICHI_TEST_FIXTURES overrides the Tests/Fixtures root (needed where the repository path is not readable by the test host).
+    static let fixtures: URL = {
+        let root = ProcessInfo.processInfo.environment["PICHI_TEST_FIXTURES"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Fixtures", isDirectory: true)
+        return root.appendingPathComponent("PichiAccountSyncV1", isDirectory: true)
+    }()
 
     func testConsentStoreAndPublicationWire() async throws {
         continueAfterFailure = false

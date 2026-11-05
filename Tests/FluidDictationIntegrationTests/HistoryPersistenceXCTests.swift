@@ -34,7 +34,7 @@ final class HistoryPersistenceXCTests: XCTestCase {
     }
 
     func testMigrationAndWriteBoundary() async throws {
-        let root = self.root, defaults = self.defaults
+        let root: URL = self.root, defaults: UserDefaults = self.defaults
         let key = "TranscriptionHistoryEntries"
         let audio = Self.audio
         let legacy = (0..<8400).map { index in
