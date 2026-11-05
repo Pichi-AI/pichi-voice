@@ -532,11 +532,26 @@ dictionary_chrome = input_part(input_paths[2], 'private struct DictionaryInputCh
 dictionary_preview = input_part(input_paths[2], 'private struct DictionaryReplacementPreview: View {', '// MARK: - Edit Entry Sheet')
 dictionary_parser = input_part(input_paths[2], 'enum CustomDictionaryManualEntry {', 'nonisolated enum DictionaryPronunciationRevisionPolicy {')
 meeting_actions = input_part(input_paths[3], '/// Pointer-only feedback;', 'enum MeetingDocumentSection:')
+# The retranscription language sheet in the transcript root uses these two production types.
+# VoiceEngineLanguage is exact; MeetingRetranscriptionLanguage is exact except `choices`, whose
+# real body drags in the provider factory and model catalogue. It is inert here (no choices).
+language_text = Path('Sources/Fluid/Persistence/VoiceEngineLanguageCatalog.swift').read_text()
+language_struct = language_text[language_text.index('struct VoiceEngineLanguage: Identifiable'):language_text.index('struct VoiceEngineLanguageRoute')]
+retranscription_text = Path('Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift').read_text()
+retranscription = retranscription_text[retranscription_text.index('enum MeetingRetranscriptionLanguage {'):retranscription_text.index('/// Inert value snapshot of live-caption ASR configuration')]
+choices_start = retranscription.index('    static var choices: [VoiceEngineLanguage] {')
+choices_end = retranscription.index('    static func displayName(for languageCode')
+# failedAttemptLanguage needs MeetingSession and is not used by the language sheet.
+retranscription = retranscription[:retranscription.index('    /// The language an empty meeting should try again.')].rstrip() + '\n}\n'
+choices_start = retranscription.index('    static var choices: [VoiceEngineLanguage] {')
+choices_end = retranscription.index('    static func displayName(for languageCode')
+retranscription = retranscription[:choices_start] + '    static var choices: [VoiceEngineLanguage] { [] }\n\n' + retranscription[choices_end:]
 metadata = Path('Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift').read_text()
 first = metadata.index('    nonisolated struct CustomDictionaryEntry:')
 metadata = metadata[first:metadata.index('\n    var customDictionaryEntries:', first)]
 Path(sys.argv[1]).with_name('ProductionNativeInputPresentations.swift').write_text('import AppKit\nimport SwiftUI\n'
     + 'extension SettingsStore {\n' + metadata + '\n}\n'
+    + language_struct + '\n' + retranscription + '\n'
     + 'struct ProductionWPMEditor: View {\n @Environment(\\.theme) private var theme\n'
       ' @State private var editingWPM = "55"\n @State private var showWPMEditor = true\n'
       ' private let settings = SettingsStore.shared\n' + wpm_root + '\n}\n'
