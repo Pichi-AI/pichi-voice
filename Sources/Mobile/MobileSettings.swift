@@ -96,6 +96,15 @@ struct MobileSettingsRoot: View {
                     MobileSettingsFooter(PichiLocalization.text("Your recordings, models and voice profile are kept."))
                 }
             }
+            if let privacyPolicyURL = AppBrand.privacyPolicyURL {
+                Section {
+                    Link(destination: privacyPolicyURL) {
+                        MobileSettingsRowLabel(PichiLocalization.text("Privacy Policy"), systemImage: "doc.text.fill")
+                    }
+                    .buttonStyle(.automatic)
+                    .accessibilityIdentifier("settings.privacyPolicy")
+                }
+            }
         }.listStyle(.insetGrouped).mobileSettingsPage().accessibilityIdentifier("settings.root")
             .navigationDestination(for: MobileSettingsDestination.self) { destination in
                 if destination == .account {
