@@ -1,5 +1,19 @@
 import Foundation
 
+// Timeline tracing is disabled in this model-free runner. Keep its private profile
+// dependency synthetic so the harness cannot follow the user's active app identity.
+nonisolated struct PrivateProfileSnapshot: Sendable {
+    let id = "synthetic-runtime-probe"
+    let generation: UUID
+    let isReadable = false
+    let isGuest = true
+    func directory(_ component: String) -> URL { URL(fileURLWithPath: "/synthetic-runtime-probe").appendingPathComponent(component) }
+}
+nonisolated enum PrivateProfileStorage {
+    static let current = PrivateProfileSnapshot(generation: UUID())
+}
+
+
 // A model-free typecheck of the actual prepared adapter plus the actual progressive ASR loop.
 // ASR and speaker model witnesses record ownership and return synthetic timed words. Canonical
 // assembly itself is covered by its existing actual-source word-attribution contract suite.
@@ -447,6 +461,28 @@ private actor EOFDeferredOwnerDiarizer: MeetingIncrementalNemotronDiarizerSessio
     }
 }
 
+/// Reentrant inference witness exposes overlap if the production gate releases early.
+private actor NativeAdmissionProbe: MeetingParakeetASRSession {
+    private var active = 0
+    private var maximumActive = 0
+    private var calls = 0
+    private var held = false
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func transcribeWithTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+        active += 1; calls += 1; maximumActive = max(maximumActive, active)
+        defer { active -= 1 }
+        if held { await withCheckedContinuation { releaseWaiter = $0 } }
+        for _ in 0..<20 { await Task.yield() }
+        if samples.first == -1 { throw FixtureFailure.inference }
+        return (.init(text: "synthetic"), [])
+    }
+
+    func hold() { held = true }
+    func release() { held = false; releaseWaiter?.resume(); releaseWaiter = nil }
+    var counts: (calls: Int, maximumActive: Int) { (calls, maximumActive) }
+}
+
 @main struct MeetingPreparedStreamingRuntimeTests {
     private nonisolated static func make(_ recorder: Recorder, silence: Bool = false, fail: Bool = false, invalid: Bool = false,
                                 refuseProgress: Bool = false) -> MeetingPreparedStreamingRuntime {
@@ -491,6 +527,7 @@ private actor EOFDeferredOwnerDiarizer: MeetingIncrementalNemotronDiarizerSessio
     }
 
     static func main() async throws {
+        try await multipleSourceScopeAndNativeAdmission()
         try await integerClockOwnsTranscriptOffsets()
         try await shortAndEmptyFinalizationMatrix()
         try await asyncNonSpeechAdmission()
@@ -618,7 +655,7 @@ private actor EOFDeferredOwnerDiarizer: MeetingIncrementalNemotronDiarizerSessio
         try await inconclusiveMeasuredRefreshRetainsFullProof()
         try await continuityProductionRecipeAndMeasuredRival()
         try await ownerEOFCancellationJoins(policy: .streamingV4, preserveUnavailableEvidence: true)
-        print("38 prepared streaming runtime contract groups passed")
+        print("39 prepared streaming runtime contract groups passed")
     }
 
     private nonisolated static var ownerDecisionLines: [String] {
@@ -1020,6 +1057,78 @@ private actor EOFDeferredOwnerDiarizer: MeetingIncrementalNemotronDiarizerSessio
             "A measured close rival revokes confirmation; later missing rival evidence and returning speech cannot restore it")
         await adapter.cleanup()
         print("PASS exact continuity leaf, frozen old recipe, complete rival ranking and no stale re-promotion")
+    }
+
+    private static func multipleSourceScopeAndNativeAdmission() async throws {
+        let sourceA = UUID(), sourceB = UUID()
+        let scope = StreamingScopeFixture()
+        let runtime = MeetingParakeetNemotronRuntime(scope: scope)
+        var configuration = MeetingFinalProcessingConfiguration()
+        configuration.diarizationFingerprint = "synthetic-legacy-anonymous"
+        let frozen = configuration
+        let progress = Recorder()
+        try await runtime.withPreparedStreamingPCMTracks(trackIDs: [sourceA, sourceB], attemptID: UUID(),
+            configuration: frozen, onProgress: { source, observation in
+                try require(observation.activity.allSatisfy { $0.token.analysisEpochID.trackID == source },
+                    "Source progress must retain its own acoustic epoch")
+                progress.event(source.uuidString)
+            }, body: { sessions in
+                try require(sessions.count == 2, "The shared scope cannot drop a source")
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    for (source, session) in sessions {
+                        group.addTask {
+                            let frames = source == sourceA ? 16 : 31
+                            let batch = try await session.recognize(window: .fixture(samples: [Float](repeating: 0.1, count: frames), final: true), offset: 0, preview: nil)
+                            try require(batch.acceptedThroughSample == frames,
+                                "Independent source clocks cannot consume another source's samples")
+                            try await session.recordWindowProcessing(.init(sourceStartSample: 0, sourceFrameCount: frames,
+                                chargedPendingFrames: 0, maximumPendingFrames: 960_000))
+                            let final = try await session.finishStreaming()
+                            try require(final.isFinal && final.acceptedThroughSample == frames,
+                                "Each source drains its own exact final tail")
+                        }
+                    }
+                    try await group.waitForAll()
+                }
+            })
+        try require(scope.snapshot == ["asr-scope-open", "speaker-scope-open", "speaker-scope-closed", "asr-scope-closed"],
+            "Two sources must open and close one prepared ASR and one speaker-weight scope")
+        try require(Set(progress.snapshot) == Set([sourceA.uuidString, sourceB.uuidString]),
+            "Both source identities reach the same scoped progress operation")
+        for tracks in [[], [sourceA, sourceA], [sourceA, sourceB, UUID()]] {
+            do {
+                try await runtime.withPreparedStreamingPCMTracks(trackIDs: tracks, attemptID: UUID(),
+                    configuration: frozen, onProgress: { _, _ in }, body: { _ in throw FixtureFailure.invalid })
+                throw FixtureFailure.invalid
+            } catch MeetingPCMInputError.unsupportedRuntime {}
+        }
+        let native = NativeAdmissionProbe()
+        let gate = MeetingStreamingInferenceGate()
+        let asr = MeetingSerializedParakeetASRSession(session: native, gate: gate)
+        async let a = asr.transcribeWithTimings([1])
+        async let b = asr.transcribeWithTimings([2])
+        _ = try await (a, b)
+        let successful = await native.counts
+        try require(successful.calls == 2 && successful.maximumActive == 1,
+            "Different source calls must never overlap in the prepared native provider")
+        do { _ = try await asr.transcribeWithTimings([-1]); throw FixtureFailure.invalid }
+        catch FixtureFailure.inference {}
+        _ = try await asr.transcribeWithTimings([3])
+        await native.hold()
+        let admitted = Task { try await asr.transcribeWithTimings([4]) }
+        while await native.counts.calls < 5 { await Task.yield() }
+        let cancelled = Task { try await asr.transcribeWithTimings([5]) }
+        for _ in 0..<20 { await Task.yield() }
+        cancelled.cancel()
+        do { _ = try await cancelled.value; throw FixtureFailure.invalid } catch is CancellationError {}
+        try require(await native.counts.calls == 5, "Cancelled queued inference must not enter native work")
+        await native.release()
+        _ = try await admitted.value
+        _ = try await asr.transcribeWithTimings([6])
+        let counts = await native.counts
+        try require(counts.calls == 6 && counts.maximumActive == 1,
+            "Failure and queued cancellation must return the native permit exactly once")
+        print("PASS two-source production scope, independent clocks, bounded topology, serialized native ASR and queued cancellation")
     }
 
     private static func integerClockOwnsTranscriptOffsets() async throws {

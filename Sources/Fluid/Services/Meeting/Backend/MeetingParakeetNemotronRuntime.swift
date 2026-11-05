@@ -168,6 +168,14 @@ protocol MeetingParakeetNemotronRunning: Sendable {
         onProgress: @escaping @Sendable (MeetingStreamingPCMObservation) async throws -> Void,
         body: @escaping @Sendable (any MeetingPreparedStreamingPCMProcessing) async throws -> Void
     ) async throws
+    /// One prepared pair serves the bounded source set. Each source has its own acoustic
+    /// state and clock; the caller joins all per-source commands before the body returns.
+    nonisolated func withPreparedStreamingPCMTracks(
+        trackIDs: [MeetingAudioTrackID], attemptID: UUID,
+        configuration: MeetingFinalProcessingConfiguration,
+        onProgress: @escaping @Sendable (MeetingAudioTrackID, MeetingStreamingPCMObservation) async throws -> Void,
+        body: @escaping @Sendable ([MeetingAudioTrackID: any MeetingPreparedStreamingPCMProcessing]) async throws -> Void
+    ) async throws
     nonisolated var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? { get }
     nonisolated func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
                                  trackID: MeetingAudioTrackID, attemptID: UUID,
@@ -217,6 +225,21 @@ extension MeetingParakeetNemotronRunning {
         body: @escaping @Sendable (any MeetingPreparedStreamingPCMProcessing) async throws -> Void
     ) async throws {
         throw MeetingPCMInputError.unsupportedRuntime
+    }
+    nonisolated func withPreparedStreamingPCMTracks(
+        trackIDs: [MeetingAudioTrackID], attemptID: UUID,
+        configuration: MeetingFinalProcessingConfiguration,
+        onProgress: @escaping @Sendable (MeetingAudioTrackID, MeetingStreamingPCMObservation) async throws -> Void,
+        body: @escaping @Sendable ([MeetingAudioTrackID: any MeetingPreparedStreamingPCMProcessing]) async throws -> Void
+    ) async throws {
+        // Existing injected and platform runtimes preserve their actual single-source
+        // capability. A default implementation cannot silently discard a second track.
+        guard trackIDs.count == 1, let trackID = trackIDs.first else {
+            throw MeetingPCMInputError.unsupportedRuntime
+        }
+        try await self.withPreparedStreamingPCM(trackID: trackID, attemptID: attemptID,
+            configuration: configuration, onProgress: { try await onProgress(trackID, $0) },
+            body: { try await body([trackID: $0]) })
     }
     nonisolated var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? { nil }
 
