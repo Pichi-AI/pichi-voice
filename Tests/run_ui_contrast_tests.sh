@@ -539,8 +539,6 @@ language_text = Path('Sources/Fluid/Persistence/VoiceEngineLanguageCatalog.swift
 language_struct = language_text[language_text.index('struct VoiceEngineLanguage: Identifiable'):language_text.index('struct VoiceEngineLanguageRoute')]
 retranscription_text = Path('Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift').read_text()
 retranscription = retranscription_text[retranscription_text.index('enum MeetingRetranscriptionLanguage {'):retranscription_text.index('/// Inert value snapshot of live-caption ASR configuration')]
-choices_start = retranscription.index('    static var choices: [VoiceEngineLanguage] {')
-choices_end = retranscription.index('    static func displayName(for languageCode')
 # failedAttemptLanguage needs MeetingSession and is not used by the language sheet.
 retranscription = retranscription[:retranscription.index('    /// The language an empty meeting should try again.')].rstrip() + '\n}\n'
 choices_start = retranscription.index('    static var choices: [VoiceEngineLanguage] {')
@@ -568,7 +566,8 @@ Path(sys.argv[1]).with_name('NativeInputPresentationProductionSource.json').writ
     'adapters': ['WPM property renamed body, inert settings/state initialized to synthetic 55',
                  'Exact dictionary metadata/parser; inert dictation delivery and physical input monitor; closed practice inference branch fails if entered',
                  'Complete transcript and dictionary roots, input chrome and replacement preview',
-                 'Complete shared meeting hover and glass action implementations'],
+                 'Complete shared meeting hover and glass action implementations',
+                 'Exact retranscription language types, except an empty choices list that keeps the provider factory and model catalogue out'],
     'outsideTheme': 'environment(theme) only', 'nativeReachability': 'SKIP: parent-owned frozen app required',
 }, indent=2) + '\n')
 

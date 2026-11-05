@@ -5,19 +5,7 @@ task_test_dir="$PWD/.build/meeting-session-store-tests"
 mkdir -p "$task_test_dir"
 # The raw executable has no compiled app catalog. Supply this real catalog entry
 # at Bundle.main's resource root so the persisted Russian snapshot is tested too.
-python3 -B - "$task_test_dir" <<'PY_TITLE_RESOURCE'
-from pathlib import Path
-import json, sys
-catalog = json.loads(Path('Sources/Fluid/Localization/Localizable.xcstrings').read_text())
-for language in ['en', 'ru']:
-    folder = Path(sys.argv[1]) / (language + '.lproj')
-    folder.mkdir(exist_ok=True)
-    values = []
-    for key in ['Discussion of questions', 'Audio recording']:
-        value = catalog['strings'][key]['localizations'][language]['stringUnit']['value']
-        values.append(json.dumps(key, ensure_ascii=False) + ' = ' + json.dumps(value, ensure_ascii=False) + ';\n')
-    (folder / 'Localizable.strings').write_text(''.join(values))
-PY_TITLE_RESOURCE
+python3 -B Tests/Support/write_localized_title_resources.py "$task_test_dir" "Discussion of questions" "Audio recording"
 # The complete store and production persisted codecs compile unchanged. This bounded test
 # never supplies a canonical sidecar, so make accidental migration reads fail loudly instead
 # of linking inference/runtime orchestration or launching the application.

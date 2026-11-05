@@ -38,15 +38,17 @@ combined = combined.replace("// ACTUAL_TRANSCRIPTION_PROVIDER_SOURCE", audio_evi
 
 # These checks bind the runtime declarations to the production start/stop/readiness paths.
 start = between("    func start(\n", "    func cancelPendingPronunciationTrainingStart()")
-# Admission is stricter than "before the first await": 7a37d314 and 6487bbc9 made start() acquire the
-# lease through acquireForegroundActivity (its only suspension), then revalidate and admit synchronously.
+# start() suspends only inside acquireForegroundActivity. After that it revalidates and admits without
+# another suspension, so a start that went stale while waiting for the lease cannot reach admission.
 acquire = "captureLease = try await self.acquireForegroundActivity(.dictation)"
 admit = "try self.admitDictationTranscription(captureLease)"
 assert start.count(acquire) == 1 and start.count(admit) == 1
 assert start.index("await ") == start.index(acquire) + len("captureLease = try ")
 assert start.index(acquire) < start.index("startGeneration == self.audioCaptureStartGeneration, !self.isTerminating") < start.index(admit)
-assert "PrivateProfileStorage.current == profile" in start[start.index(acquire):start.index(admit)]
-assert "self.releaseExclusiveActivity(captureLease)" in start[start.index(acquire):start.index(admit)]
+for condition in ("!Task.isCancelled", "self.isPronunciationTrainingStartCurrent", "PrivateProfileStorage.acceptsNewWork",
+                  "PrivateProfileStorage.isReadable(profile)", "PrivateProfileStorage.current == profile",
+                  "self.releaseExclusiveActivity(captureLease)"):
+    assert condition in start[start.index(acquire):start.index(admit)], condition
 assert "await " not in start[start.index(acquire) + len(acquire):start.index(admit)]
 ensure = between("    func ensureAsrReady(\n        source:", "    private func modelArtifactsExist")
 assert ensure.index("let transcriptionAdmission = self.admittedTranscription") < ensure.index("await ")
