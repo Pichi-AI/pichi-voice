@@ -646,6 +646,100 @@ extension MeetingMicrophoneCaptureTests {
         }
         XCTAssertEqual(pts.seconds, 9.0, accuracy: 1.0 / 48_000)
     }
+
+    func testPrivacyTimingChecksEveryTapInsideAccumulationWindow() {
+        let start = Self.privacyHostTime(1_000)
+        XCTAssertTrue(MeetingMicrophonePrivacyTiming.acceptsTap(hostTime: start,
+            windowHostTime: nil, accumulatedFrameCount: 0))
+        XCTAssertTrue(MeetingMicrophonePrivacyTiming.acceptsTap(hostTime: Self.privacyHostTime(1_000.010),
+            windowHostTime: start, accumulatedFrameCount: 480))
+        XCTAssertTrue(MeetingMicrophonePrivacyTiming.acceptsTap(hostTime: Self.privacyHostTime(1_000.011),
+            windowHostTime: start, accumulatedFrameCount: 480), "Normal one-millisecond jitter stays usable")
+        XCTAssertFalse(MeetingMicrophonePrivacyTiming.acceptsTap(hostTime: Self.privacyHostTime(1_003.010),
+            windowHostTime: start, accumulatedFrameCount: 480), "A gap inside one accumulated block must retire its earlier PCM")
+        XCTAssertFalse(MeetingMicrophonePrivacyTiming.acceptsTap(hostTime: Self.privacyHostTime(999.010),
+            windowHostTime: start, accumulatedFrameCount: 480), "A backwards acquisition clock also retires the window")
+        XCTAssertTrue(MeetingMicrophonePrivacyTiming.acceptsTap(hostTime: Self.privacyHostTime(1_003.010),
+            windowHostTime: nil, accumulatedFrameCount: 0), "A valid discontinuous tap may begin a new window after reset")
+    }
+
+    func testPrivacyTimingRejectsInvalidHostTimeAtWindowStartAndInsideWindow() {
+        XCTAssertFalse(MeetingMicrophonePrivacyTiming.acceptsTap(hostTime: nil, windowHostTime: nil, accumulatedFrameCount: 0))
+        XCTAssertFalse(MeetingMicrophonePrivacyTiming.acceptsTap(hostTime: nil,
+            windowHostTime: Self.privacyHostTime(1_000), accumulatedFrameCount: 480))
+        XCTAssertFalse(MeetingMicrophonePrivacyTiming.acceptsTap(hostTime: Self.privacyHostTime(1_000.01),
+            windowHostTime: nil, accumulatedFrameCount: 480))
+    }
+
+    func testPrivacyTimingRejectsOldCanonicalPTSAndAllowsRealReset() {
+        var clock = MeetingMicrophonePTSClock()
+        _ = clock.stamp(hostTime: Self.privacyHostTime(1_000), frameCount: 4_800)
+        let actualAcquisition = Self.privacyHostTime(1_003)
+        let stale = clock.stamp(hostTime: actualAcquisition, frameCount: 4_800)
+        guard case let .emitted(pts, synthesized, _, _) = stale else { return XCTFail("Expected the canonical clock's normal output") }
+        XCTAssertEqual(pts.seconds, 1_000.1, accuracy: 1.0 / 48_000)
+        XCTAssertFalse(synthesized, "A valid input timestamp alone does not prove canonical PTS equals acquisition")
+        XCTAssertFalse(MeetingMicrophonePrivacyTiming.acceptsEmission(stale, acquisitionHostTime: actualAcquisition))
+        clock.requestTimelineReset()
+        let fresh = clock.stamp(hostTime: actualAcquisition, frameCount: 4_800)
+        XCTAssertTrue(MeetingMicrophonePrivacyTiming.acceptsEmission(fresh, acquisitionHostTime: actualAcquisition))
+    }
+
+    func testPrivacyTimingNeverApprovesSynthesizedOrUnprovenEmission() {
+        let host = Self.privacyHostTime(1_000)
+        let actual = CMClockMakeHostTimeFromSystemUnits(host)
+        let normal = MeetingMicrophonePTSClock.Outcome.emitted(pts: actual + CMTime(seconds: 0.019, preferredTimescale: 48_000),
+            synthesized: false, anchorCorrected: false, resynced: false)
+        XCTAssertTrue(MeetingMicrophonePrivacyTiming.acceptsEmission(normal, acquisitionHostTime: host))
+        let divergent = MeetingMicrophonePTSClock.Outcome.emitted(pts: actual + CMTime(seconds: 0.021, preferredTimescale: 48_000),
+            synthesized: false, anchorCorrected: false, resynced: false)
+        XCTAssertFalse(MeetingMicrophonePrivacyTiming.acceptsEmission(divergent, acquisitionHostTime: host))
+        let synthesized = MeetingMicrophonePTSClock.Outcome.emitted(pts: actual, synthesized: true, anchorCorrected: false, resynced: false)
+        XCTAssertFalse(MeetingMicrophonePrivacyTiming.acceptsEmission(synthesized, acquisitionHostTime: host))
+        XCTAssertFalse(MeetingMicrophonePrivacyTiming.acceptsEmission(normal, acquisitionHostTime: nil))
+        XCTAssertFalse(MeetingMicrophonePrivacyTiming.acceptsEmission(.droppedPostCap, acquisitionHostTime: host))
+    }
+
+    func testPrivacyAcquisitionProofExcludesFreshPrivateMarkerWithOldCanonicalPTS() throws {
+        let hostClock = PrivacyHostClock()
+        let gate = MeetingMicrophonePrivacyGate(hostTime: { hostClock.now() }, automaticWatchdog: false)
+        defer { gate.close() }
+        gate.setAdmitted(true, observedAtHostTime: hostClock.now())
+        var ptsClock = MeetingMicrophonePTSClock()
+        _ = ptsClock.stamp(hostTime: Self.privacyHostTime(1_000), frameCount: 4_800)
+        for step in 1...6 {
+            hostClock.set(1_000 + Double(step) * 0.5)
+            gate.setAdmitted(true, observedAtHostTime: hostClock.now())
+        }
+        let actualAcquisition = hostClock.now()
+        let outcome = ptsClock.stamp(hostTime: actualAcquisition, frameCount: 480)
+        guard case let .emitted(oldPTS, _, _, _) = outcome else { return XCTFail("Expected canonical output after the host gap") }
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false))
+        let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 480))
+        pcm.frameLength = 480
+        try XCTUnwrap(pcm.floatChannelData?[0]).initialize(repeating: -0.75, count: 480)
+        let privateMarker = try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(from: pcm, presentationTime: oldPTS))
+        XCTAssertTrue(gate.permitsReleasedSample(privateMarker), "Reproduce the old-PTS hazard: sink freshness alone cannot know acquisition time")
+        XCTAssertFalse(MeetingMicrophonePrivacyTiming.acceptsEmission(outcome, acquisitionHostTime: actualAcquisition),
+            "The production tap's independent acquisition proof rejects the fresh private marker before quarantine")
+        XCTAssertEqual(gate.statistics.retainedBuffers, 0)
+        XCTAssertEqual(gate.statistics.deliveredBuffers, 0)
+    }
+
+    private final nonisolated class PrivacyHostClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var hostTime = CMClockConvertHostTimeToSystemUnits(CMTime(seconds: 1_000, preferredTimescale: 1_000_000_000))
+        func now() -> UInt64 { self.lock.withLock { self.hostTime } }
+        func set(_ seconds: Double) {
+            self.lock.withLock {
+                self.hostTime = CMClockConvertHostTimeToSystemUnits(CMTime(seconds: seconds, preferredTimescale: 1_000_000_000))
+            }
+        }
+    }
+
+    private static func privacyHostTime(_ seconds: Double) -> UInt64 {
+        CMClockConvertHostTimeToSystemUnits(CMTime(seconds: seconds, preferredTimescale: 1_000_000_000))
+    }
 }
 
 // MARK: - Bidirectional route-following mic: capture-side unit tests (no real engines/sessions)

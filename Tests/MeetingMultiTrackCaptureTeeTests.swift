@@ -38,6 +38,27 @@ private final nonisolated class MultiTrackSink: MeetingMemoryAudioConsuming, @un
     var measuredEnd: Double? { lock.withLock { end.map(CMTimeGetSeconds) } }
 }
 
+private final nonisolated class MultiTrackAdmissionProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var microphoneChecks = 0
+    private var microphoneLiveFrames = 0
+    private var applicationLiveFrames = 0
+    func admits(_ kind: MeetingAudioTrackKind) -> Bool {
+        lock.withLock {
+            guard kind == .microphone else { return true }
+            microphoneChecks += 1
+            return microphoneChecks == 1
+        }
+    }
+    func live(_ kind: MeetingAudioTrackKind, sample: CMSampleBuffer) {
+        lock.withLock {
+            if kind == .microphone { microphoneLiveFrames += CMSampleBufferGetNumSamples(sample) }
+            else { applicationLiveFrames += CMSampleBufferGetNumSamples(sample) }
+        }
+    }
+    var snapshot: (Int, Int, Int) { lock.withLock { (microphoneChecks, microphoneLiveFrames, applicationLiveFrames) } }
+}
+
 extension MeetingCapturePCMTransportTests {
     static func testMultiTrackCaptureTee() async throws {
         let barrier = MultiTrackFinishBarrier()
@@ -102,6 +123,21 @@ extension MeetingCapturePCMTransportTests {
         do { try await rejected.finish(); try require(false, "A rejected accepted source cannot complete") }
         catch MeetingCapturePCMError.transcriptionStopped { }
         try require(rejectedSink.snapshot.3 == 1, "Rejected input still joins the shared consumer")
+        let revokedMicrophone = MultiTrackSink(), continuingApplication = MultiTrackSink()
+        let admission = MultiTrackAdmissionProbe()
+        let privacy = try MeetingMultiTrackCaptureTee(
+            consumers: [.microphone: revokedMicrophone, .applicationAudio: continuingApplication], originHostTime: origin,
+            eventHandler: { _ in }, liveAudioHandler: { kind, sample in admission.live(kind, sample: sample) },
+            sampleAdmission: { kind, _ in admission.admits(kind) })
+        privacy.offer(kind: .microphone, sample: try input(start: 0.25, frames: 1_600))
+        privacy.offer(kind: .applicationAudio, sample: try input(start: 0.5, frames: 1_600))
+        try await privacy.finish()
+        try require(admission.snapshot.0 >= 2 && revokedMicrophone.snapshot.0 == 0 && admission.snapshot.1 == 0,
+            "A revoked microphone grant is rechecked after conversion before ASR and source VAD")
+        try require(continuingApplication.snapshot.0 == 1_600 && admission.snapshot.2 == 1_600,
+            "Revoked microphone input never blocks the application source")
+        try require(revokedMicrophone.snapshot.3 == 1 && continuingApplication.snapshot.3 == 1,
+            "Privacy exclusion still joins both consumers")
         print("Desktop multi-track PCM: common clock, source gaps, opening/final speech, concurrent Stop, bounded rejection and joined cleanup passed.")
     }
 }

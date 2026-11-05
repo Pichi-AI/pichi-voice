@@ -352,10 +352,20 @@ struct MeetingRecordingPillContent: View {
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.locale) private var locale
     @State private var isStopping = false
 
     private var microphoneLevel: Float {
-        self.coordinator.trackHealth[.microphone]?.level ?? 0
+        guard !self.mutePresentation.blocksMicrophone else { return 0 }
+        return self.coordinator.trackHealth[.microphone]?.level ?? 0
+    }
+
+    private var mutePresentation: MeetingMicrophoneMutePresentation {
+        .init(state: self.coordinator.activeSession?.mode == .onlineCall ? self.coordinator.microphoneMuteState : .notApplicable)
+    }
+
+    private var interfaceLanguage: PichiInterfaceLanguage {
+        PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language
     }
 
     private var isRecordingActive: Bool {
@@ -392,8 +402,13 @@ struct MeetingRecordingPillContent: View {
 
     private var compactPill: some View {
         HStack(spacing: 7) {
-            MeetingRecordingLevelBars(level: self.microphoneLevel, animated: !self.reduceMotion)
-                .frame(width: 20, height: 11)
+            if self.mutePresentation.isMonitored {
+                MeetingMicrophoneMuteIndicator(state: self.coordinator.microphoneMuteState)
+                    .frame(width: 20, height: 20)
+            } else {
+                MeetingRecordingLevelBars(level: self.microphoneLevel, animated: !self.reduceMotion)
+                    .frame(width: 20, height: 11)
+            }
 
             self.stopButton
         }
@@ -410,6 +425,8 @@ struct MeetingRecordingPillContent: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(self.coordinator.activeSession?.isLocalContentConcealed == true
             ? PichiLocalization.text("recording.protection.concealed.title") : PichiLocalization.text("Show live captions"))
+        .accessibilityValue(self.mutePresentation.isMonitored
+            ? self.mutePresentation.title(language: self.interfaceLanguage) : "")
         .accessibilityAction(named: "Show Captions") {
             self.pill.expand()
         }
