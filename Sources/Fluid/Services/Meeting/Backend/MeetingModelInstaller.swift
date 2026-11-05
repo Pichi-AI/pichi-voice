@@ -61,7 +61,7 @@ nonisolated enum MeetingModelInstaller {
             throw InstallError.wrongPackage
         }
         return stride(from: 0, to: data.count, by: MemoryLayout<UInt32>.size).map { offset in
-            Float(bitPattern: UInt32(littleEndian: data.subdata(in: offset..<offset + 4).withUnsafeBytes { $0.load(as: UInt32.self) }))
+            Float(bitPattern: UInt32(littleEndian: data.subdata(in: offset..<offset + 4).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }))
         }
     }
 
