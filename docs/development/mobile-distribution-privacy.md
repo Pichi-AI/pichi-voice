@@ -18,8 +18,19 @@ sources and the local `PichiGigaAM` source package. It found no active-keyboard
 API use in these sources. The source review does not establish all privacy
 practices of resolved third-party binaries. Their manifests, the archived app
 privacy report and App Store Connect declarations still need distribution
-review. This narrowly scoped manifest does not declare tracking or collected
-data categories.
+review.
+
+The app also declares seven collected data categories for its optional account
+and cloud features and their server-side operation: name, email address, user
+ID, other user content, product interaction, performance data and other diagnostic
+data. Each is linked to the user and used for app functionality, without
+tracking. These declarations include server login activity and API/security logs;
+local-only audio, voice profiles and location do not by themselves establish
+developer collection. The corresponding App Store Connect answers must remain
+consistent with the actual service configuration. Apple's
+[TN3184](https://developer.apple.com/documentation/technotes/tn3184-adding-data-collection-details-to-your-privacy-manifest)
+describes these manifest entries. Metadata declarations do not enable optional
+features or change runtime consent.
 
 Apple's [required API categories and approved reasons](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype)
 define these codes. [Required reason API policy](https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api)
