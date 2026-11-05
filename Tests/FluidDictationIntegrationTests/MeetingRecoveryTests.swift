@@ -1973,6 +1973,41 @@ final class MeetingRecoveryTests: XCTestCase {
         }
     }
 
+    func testSilenceWatchdogStaysOffWhileTheMicrophoneIsMuted() async throws {
+        for muteState in [MeetingMicrophoneMuteState.muted, .manuallyMuted] {
+            let dir = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let capture = StubCaptureController()
+            var microphone = self.makeMicrophoneTrack(chunks: [])
+            microphone.health.status = .healthy
+            microphone.health.silentForSeconds = 0
+            var applicationAudio = self.makeMicrophoneTrack(chunks: [])
+            applicationAudio.kind = .applicationAudio
+            applicationAudio.health.status = .healthy
+            applicationAudio.health.silentForSeconds = 0
+            capture.startResult = MeetingCaptureStartResult(tracks: [microphone, applicationAudio], firstPresentationTime: nil)
+            let coordinator = MeetingSessionCoordinator(
+                store: MeetingSessionStore(rootDirectory: dir),
+                capture: capture,
+                processing: StubProcessingController(),
+                audioArbiter: StubArbiter()
+            )
+            var configuration = self.makeConfiguration()
+            configuration.mode = .onlineCall
+            configuration.application = MeetingApplicationIdentity(bundleIdentifier: "us.zoom.xos", displayName: "Zoom")
+            let started = try await coordinator.startRecording(configuration: configuration)
+            capture.emit(.microphoneMuteStateChanged(muteState))
+            await self.drainCaptureEvents()
+            var silentHealth = applicationAudio.health
+            silentHealth.silentForSeconds = 100
+            capture.emit(.trackHealth(trackID: applicationAudio.id, health: silentHealth))
+            await self.drainCaptureEvents()
+            XCTAssertEqual(coordinator.state, .recording(started.id), "\(muteState)")
+            XCTAssertEqual(coordinator.trackHealth[.applicationAudio]?.status, .healthy, "\(muteState)")
+            await coordinator.shutdownForTermination()
+        }
+    }
+
     private func drainCaptureEvents() async {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async { continuation.resume() }
