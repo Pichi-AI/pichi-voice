@@ -243,6 +243,10 @@ final nonisolated class MeetingMuteControlLocator {
         var found: [Cache] = []
         for processID in Set(windows.map(\.processID)).sorted() {
             let application = AXUIElementCreateApplication(processID)
+            // Chromium lazily exposes native accessibility after its application role is read.
+            // Descendant role reads then activate only the web-content bridge needed here.
+            // Use the existing bounded reader rather than enabling global screen-reader mode.
+            if platform == .googleMeet { _ = try reader.value(application, kAXRoleAttribute as String) }
             let appWindows = try reader.elements(application, kAXWindowsAttribute as String)
             guard appWindows.count <= 16 else { throw ReadFailure.budget }
             for window in appWindows {
