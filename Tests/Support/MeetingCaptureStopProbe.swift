@@ -89,6 +89,7 @@ actor MeetingDesktopCaptureStopProbe {
         let writers: [MeetingCaptureStopWriterProbe]
         let memoryConsumer: MeetingCaptureStopConsumerProbe?
         let comparisonProbe: ComparisonProbe? = nil
+        let streamingTee: MeetingMultiTrackCaptureTee? = nil
     }
     private var activeCapture: ActiveCapture?
     private var stopTask: Task<MeetingCaptureStopResult, Error>?

@@ -390,8 +390,8 @@ extension SettingsStore {
         set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingSpeakerLabelsEnabled) }
     }
 
-    /// Settings displays the in-room preference. Capture admission passes its actual topology
-    /// below so an absent preference cannot enable a single-source runtime for an online call.
+    /// Settings displays the in-room preference. Capture admission checks its actual topology
+    /// below, including explicit multi-track capability for an online call.
     var meetingSpeakerProcessingMode: MeetingSpeakerProcessingMode {
         get { self.meetingSpeakerProcessingMode(for: .inRoom) }
         set { objectWillChange.send(); self.defaults.set(newValue.rawValue, forKey: Keys.meetingSpeakerProcessingMode) }
@@ -405,8 +405,9 @@ extension SettingsStore {
             return (stored as? String).flatMap(MeetingSpeakerProcessingMode.init(rawValue:)) ?? .afterRecording
         }
         let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.selectedSpeechModel.rawValue)
-        return mode == .inRoom && descriptor?.supportedSpeakerProcessingModes.contains(.streaming) == true
-            ? .streaming : .afterRecording
+        let input: MeetingBackendInputKind = mode == .onlineCall ? .boundedMultiTrackPCM : .boundedMicrophonePCM
+        return descriptor?.supportedSpeakerProcessingModes.contains(.streaming) == true
+            && descriptor?.supportedInputs.contains(input) == true ? .streaming : .afterRecording
     }
 
     var meetingPIIRedactionEnabled: Bool {

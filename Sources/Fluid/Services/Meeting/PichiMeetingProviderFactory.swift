@@ -60,7 +60,7 @@ enum PichiMeetingProviderFactory {
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
                 allowsTranscriptOnlyOnUnsupportedHardware: true,
-                supportedInputs: [.recordedChunks, .boundedMicrophonePCM],
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM, .boundedMultiTrackPCM],
                 supportedSpeakerProcessingModes: [.afterRecording, .streaming]
             ),
             onboardingPriority: 0,
@@ -101,7 +101,7 @@ enum PichiMeetingProviderFactory {
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
                 allowsTranscriptOnlyOnUnsupportedHardware: true,
-                supportedInputs: [.recordedChunks, .boundedMicrophonePCM],
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM, .boundedMultiTrackPCM],
                 pcmObservationPolicy: .init(initialSeconds: 3, intervalSeconds: 3),
                 supportedSpeakerProcessingModes: [.afterRecording, .streaming]
             ),
@@ -151,7 +151,7 @@ enum PichiMeetingProviderFactory {
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
                 allowsTranscriptOnlyOnUnsupportedHardware: true,
-                supportedInputs: [.recordedChunks, .boundedMicrophonePCM],
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM, .boundedMultiTrackPCM],
                 supportedSpeakerProcessingModes: [.afterRecording, .streaming]
             ),
             onboardingPriority: 1,
