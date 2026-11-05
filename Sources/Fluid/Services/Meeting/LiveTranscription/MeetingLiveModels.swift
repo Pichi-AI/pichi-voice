@@ -223,8 +223,8 @@ nonisolated enum MeetingLiveBubbleComposer {
 
         var labelIndex = rows.startIndex
         for index in rows.indices {
-            rows[index].showsLabel = rows[index].hasReadableParticipant
-                && (index == rows.startIndex || !rows[index].hasSameSpeaker(as: rows[index - 1]))
+            // A source header is useful before participant identification is available.
+            rows[index].showsLabel = index == rows.startIndex || !rows[index].hasSameSpeaker(as: rows[index - 1])
             if rows[index].showsLabel { labelIndex = index }
             // The visible header belongs to the complete continuous reading turn, even
             // when long text is divided into several layout paragraphs below that header.

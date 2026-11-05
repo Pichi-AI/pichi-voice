@@ -106,9 +106,16 @@ nonisolated enum MeetingLiveCaptionParagraphs {
 
 extension MeetingLiveBubbleComposer.Row {
     var captionLabel: String? {
-        guard self.hasReadableParticipant, let participant else { return nil }
+        self.captionLabel(language: PichiLocalization.language)
+    }
+
+    func captionLabel(language: PichiInterfaceLanguage) -> String {
+        // Capture provenance is available even when no participant has been identified.
+        let source = PichiLocalization.text(self.speaker == .you ? "Microphone" : "Meeting audio",
+            language: language, bundle: .main)
+        guard self.hasReadableParticipant, let participant else { return source }
         return MeetingTranscriptExporter.timestampText(self.readingTurnStart) + " "
-            + MeetingTranscriptExporter.speakerLabel(for: participant, language: PichiLocalization.language)
+            + MeetingTranscriptExporter.speakerLabel(for: participant, language: language) + " · " + source
     }
 }
 

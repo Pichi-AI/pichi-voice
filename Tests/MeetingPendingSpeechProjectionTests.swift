@@ -282,14 +282,14 @@ struct MeetingPendingSpeechProjectionTests {
         }
         let initial = snapshot([nil, unknown, candidates])
         let initialRows = MeetingLiveBubbleComposer.rows(for: initial)
-        try require(initialRows.allSatisfy { !$0.showsLabel && !$0.hasReadableParticipant }
+        try require(initialRows.allSatisfy { $0.showsLabel && !$0.hasReadableParticipant }
                     && initialRows.map { $0.participant?.identity } == [nil, unknown.identity, candidates.identity],
                     "Initial unresolved text retains internal metadata without a fake participant header")
         for participants in [[first, unknown, first], [first, nil, first], [first, candidates, first]] {
             let value = snapshot(participants)
             let original = value
             let rows = MeetingLiveBubbleComposer.rows(for: value)
-            try require(rows.map(\.showsLabel) == [true, false, true]
+            try require(rows.map(\.showsLabel) == [true, true, true]
                         && rows.map { $0.participant?.identity } == participants.map { $0?.identity },
                         "The composer cannot infer a participant solely from the capture source")
             try require(!rows[1].hasReadableParticipant,
@@ -309,7 +309,7 @@ struct MeetingPendingSpeechProjectionTests {
         value.partials[.you] = .init(id: partialID, text: "продолжение", start: 3, end: 3.5)
         let original = value
         let rows = MeetingLiveBubbleComposer.rows(for: value)
-        try require(rows.map(\.showsLabel) == [true, false, true, false]
+        try require(rows.map(\.showsLabel) == [true, true, true, true]
                     && rows.map { $0.participant?.identity } == [first.identity, unknown.identity, second.identity, nil],
                     "Known participant switches remain distinct and source-only partials do not claim ownership")
         try require(rows.last?.id == partialID && rows.last?.isPartial == true && value == original,
@@ -332,7 +332,7 @@ struct MeetingPendingSpeechProjectionTests {
         ]
         let before = MeetingLiveBubbleComposer.rows(for: value)
         try require(before.map { $0.participant?.identity } == [first.identity, unknown.identity, nil, second.identity]
-                    && before.map(\.showsLabel) == [true, false, false, true],
+                    && before.map(\.showsLabel) == [true, true, true, true],
                     "Unresolved ownership never leaks across capture sources or collapses distinct equal-name identities")
         try require(before[2].readingTurnStart == 9 && before[3].readingTurnStart == 10,
                     "Unassigned source text retains its own time; a known participant uses its actual first word")
@@ -374,7 +374,7 @@ struct MeetingPendingSpeechProjectionTests {
         let after = MeetingLiveBubbleComposer.rows(for: value)
         try require(before.map(\.readingTurnStart) == [7.8, 7.8, 50]
                     && after.map(\.readingTurnStart) == [7.8, 7.8, 50]
-                    && after.map(\.showsLabel) == [true, false, false],
+                    && after.map(\.showsLabel) == [true, false, true],
                     "Layout and pending growth preserve actual participant turn time without attaching source-only partials")
         print("PASS finite elapsed timestamp boundaries and stable first-word turn anchors")
     }
