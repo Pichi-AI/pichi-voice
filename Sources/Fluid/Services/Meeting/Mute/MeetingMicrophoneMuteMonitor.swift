@@ -36,6 +36,8 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
     private var pending: PendingRequest?
     private var content: SCShareableContent?
     private var lastMetadataAttempt = -Double.infinity
+    private var lastUnboundGeometryRefresh = -Double.infinity
+    private var unboundGeometry: [UInt32: (frame: CGRect, title: String?)] = [:]
     private var boundWindowID: UInt32?
     private var boundDocumentURL: String?
     private var geometryRevision: UInt64?
@@ -129,6 +131,7 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
                 self.activationObserver = nil
                 self.pending = nil
                 self.content = nil
+                self.unboundGeometry.removeAll()
                 self.locator.invalidate()
                 self.lastPositiveAt = nil
                 if wasRunning { self.publish(.unknown, at: mach_absolute_time(), whileStopped: true) }
@@ -213,24 +216,61 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
               let application = self.application, let pid = application.processID else { return nil }
         let selectedID = self.boundWindowID ?? application.windowID
         var currentFrame: CGRect?
+        var currentTitle: String?
         if let id = selectedID,
            let record = (CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]])?.first,
+           (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
            let bounds = record[kCGWindowBounds as String] as? [String: Any] {
             currentFrame = CGRect(dictionaryRepresentation: bounds as CFDictionary)
+            currentTitle = record[kCGWindowName as String] as? String
+        } else if selectedID == nil {
+            self.refreshUnboundGeometryIfNeeded(processID: pid)
         }
         let windows = content.windows.compactMap { window -> MeetingMuteControlLocator.WindowDescriptor? in
             guard let owner = window.owningApplication, owner.processID == pid,
                   owner.bundleIdentifier == application.bundleIdentifier,
                   selectedID == nil || window.windowID == selectedID else { return nil }
-            if self.boundWindowID != nil, currentFrame == nil { return nil }
+            let geometry: (frame: CGRect, title: String?)
+            if selectedID != nil {
+                guard let currentFrame else { return nil }
+                geometry = (currentFrame, currentTitle ?? window.title)
+            } else {
+                // A stale SCK rectangle must not prevent first binding after a move or resize.
+                // Missing current geometry remains unknown until the next bounded refresh.
+                guard let current = self.unboundGeometry[window.windowID] else { return nil }
+                geometry = current
+            }
             return .init(windowID: window.windowID, processID: pid, bundleIdentifier: owner.bundleIdentifier,
-                frame: window.windowID == selectedID ? (currentFrame ?? window.frame) : window.frame)
+                frame: geometry.frame, title: geometry.title ?? window.title)
         }
         guard let control = self.locator.resolve(platform: platform, windows: windows) else { return nil }
         if self.boundWindowID != nil, control.documentURL != self.boundDocumentURL { return nil }
         self.boundWindowID = control.windowID
         self.boundDocumentURL = control.documentURL
         return control
+    }
+
+    private func refreshUnboundGeometryIfNeeded(processID: Int32) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - self.lastUnboundGeometryRefresh >= 1 else { return }
+        self.lastUnboundGeometryRefresh = now
+        self.unboundGeometry.removeAll(keepingCapacity: true)
+        let allowedIDs = Set(self.content?.windows.compactMap { window -> UInt32? in
+            guard let owner = window.owningApplication, owner.processID == processID,
+                  owner.bundleIdentifier == self.application?.bundleIdentifier else { return nil }
+            return window.windowID
+        } ?? [])
+        guard !allowedIDs.isEmpty, allowedIDs.count <= 64 else { return }
+        guard let records = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
+              records.count <= 4_096 else { return }
+        for record in records {
+            guard (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == processID,
+                  let id = (record[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+                  allowedIDs.contains(id),
+                  let bounds = record[kCGWindowBounds as String] as? [String: Any],
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { continue }
+            self.unboundGeometry[id] = (frame, record[kCGWindowName as String] as? String)
+        }
     }
 
     private func requestImage(_ control: MeetingMuteControlLocator.LocatedControl, began: UInt64) {

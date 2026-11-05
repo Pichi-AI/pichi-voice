@@ -22,6 +22,16 @@ final nonisolated class MeetingMuteControlLocator {
         let processID: Int32
         let bundleIdentifier: String
         let frame: CGRect
+        /// Transient identity evidence for overlapping windows, never persisted or logged.
+        let title: String?
+
+        init(windowID: UInt32, processID: Int32, bundleIdentifier: String, frame: CGRect, title: String? = nil) {
+            self.windowID = windowID
+            self.processID = processID
+            self.bundleIdentifier = bundleIdentifier
+            self.frame = frame
+            self.title = title
+        }
     }
 
     struct LocatedControl: Sendable {
@@ -239,7 +249,8 @@ final nonisolated class MeetingMuteControlLocator {
                 if platform == .zoom,
                    try reader.string(window, kAXIdentifierAttribute as String) != "zm.meeting.window.main" { continue }
                 guard let frame = try reader.frame(window),
-                      let descriptor = windows.only(where: { $0.processID == processID && Self.sameWindow(frame, $0.frame) }) else { continue }
+                      let descriptor = Self.matchingWindow(processID: processID, frame: frame,
+                        title: try reader.string(window, kAXTitleAttribute as String), windows: windows) else { continue }
                 if platform == .zoom {
                     let buttons = try self.paths(root: window, find: { element, role, reader in
                         guard role == "AXButton" else { return false }
@@ -309,6 +320,15 @@ final nonisolated class MeetingMuteControlLocator {
 
     static func isMeetMicrophoneControlLabel(_ value: String) -> Bool {
         MeetingMuteUISemantics.isMeetMicrophoneLabel(value)
+    }
+
+    /// Geometry is sufficient when unique. Home and call windows can have identical maximized
+    /// bounds, so only an exact, unique title match may disambiguate that collision.
+    static func matchingWindow(processID: Int32, frame: CGRect, title: String?, windows: [WindowDescriptor]) -> WindowDescriptor? {
+        let candidates = windows.filter { $0.processID == processID && Self.sameWindow(frame, $0.frame) }
+        if candidates.count == 1 { return candidates[0] }
+        guard let title, !title.isEmpty else { return nil }
+        return candidates.only { $0.title == title }
     }
 
     static func isMeetCallURL(_ value: String) -> Bool {

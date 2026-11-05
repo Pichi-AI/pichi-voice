@@ -3,6 +3,39 @@ import XCTest
 @testable import FluidVoice_Debug
 
 final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
+    func testOverlappingSourceWindowsRequireUniqueExactTitle() {
+        let frame = CGRect(x: 0, y: 25, width: 1_400, height: 900)
+        let home = MeetingMuteControlLocator.WindowDescriptor(windowID: 10, processID: 42,
+            bundleIdentifier: "us.zoom.xos", frame: frame, title: "Zoom Workplace")
+        let call = MeetingMuteControlLocator.WindowDescriptor(windowID: 11, processID: 42,
+            bundleIdentifier: "us.zoom.xos", frame: frame, title: "Zoom Meeting")
+        XCTAssertEqual(MeetingMuteControlLocator.matchingWindow(processID: 42, frame: frame,
+            title: "Zoom Meeting", windows: [home, call])?.windowID, 11)
+        XCTAssertNil(MeetingMuteControlLocator.matchingWindow(processID: 42, frame: frame,
+            title: nil, windows: [home, call]))
+        XCTAssertNil(MeetingMuteControlLocator.matchingWindow(processID: 42, frame: frame,
+            title: "zoom meeting", windows: [home, call]))
+        let duplicate = MeetingMuteControlLocator.WindowDescriptor(windowID: 12, processID: 42,
+            bundleIdentifier: "us.zoom.xos", frame: frame, title: "Zoom Meeting")
+        XCTAssertNil(MeetingMuteControlLocator.matchingWindow(processID: 42, frame: frame,
+            title: "Zoom Meeting", windows: [home, call, duplicate]))
+    }
+
+    func testUniqueGeometryDoesNotRequireTitleButUsesCurrentFrameAndProcess() {
+        let oldFrame = CGRect(x: 0, y: 25, width: 1_400, height: 900)
+        let movedFrame = CGRect(x: 130, y: 80, width: 800, height: 600)
+        let stale = MeetingMuteControlLocator.WindowDescriptor(windowID: 11, processID: 42,
+            bundleIdentifier: "us.zoom.xos", frame: oldFrame)
+        let current = MeetingMuteControlLocator.WindowDescriptor(windowID: 11, processID: 42,
+            bundleIdentifier: "us.zoom.xos", frame: movedFrame)
+        XCTAssertNil(MeetingMuteControlLocator.matchingWindow(processID: 42, frame: movedFrame,
+            title: "Zoom Meeting", windows: [stale]))
+        XCTAssertEqual(MeetingMuteControlLocator.matchingWindow(processID: 42, frame: movedFrame,
+            title: nil, windows: [current])?.windowID, 11)
+        XCTAssertNil(MeetingMuteControlLocator.matchingWindow(processID: 43, frame: movedFrame,
+            title: nil, windows: [current]))
+    }
+
     func testDelayedReleaseUsesEventBoundaryAndInvalidTimesRevokeAll() {
         let delayed = MeetingMutePTTState.releaseBoundary(eventTime: 100, processedAt: 200)
         XCTAssertEqual(delayed.fence, 100)
