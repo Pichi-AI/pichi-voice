@@ -82,6 +82,9 @@ def main() -> None:
             factory = factory.replace(clause + ",", "").replace(clause, "")
     factory = factory.replace(declaration(factory, "    static func registeredModelsExistOnDisk("), "")
     factory = factory.replace(declaration(factory, "    private nonisolated static var whisperArtifactDirectory:"), "")
+    # Retranscription model choices (not read by setup restoration) pull in the Parakeet
+    # provider options and the full model catalogue; omit that one list.
+    factory = factory.replace(declaration(factory, "    nonisolated static var retranscriptionModels:"), "")
     # Runtime profile wiring is not read by setup/default-language restoration.
     # Keep descriptor capabilities below, without importing inference model locators.
     factory = "\n".join(line for line in factory.splitlines()
@@ -181,6 +184,12 @@ final class Coordinator { var isQuiescent = true; var activeLanguage = "en" }
     var isPrivateDataVisible = true
     var isTransitioning = false
     func register(_ participant: any PrivateProfileTransitionParticipant) {}
+}
+// The real source prompt (80ac6e4a) is a floating panel with capture-catalogue loading. These
+// handlers only hand the draft microphone to its shortcut entry point, so keep that entry inert.
+@MainActor final class MeetingRecordingSourcePromptController {
+    static let shared = MeetingRecordingSourcePromptController()
+    func handleShortcut(foreground: MeetingApplicationIdentity? = nil, restoring selection: Any? = nil, microphoneID: String? = nil) {}
 }
 typealias MeetingSessionID = UUID
 struct MeetingSession { let id: MeetingSessionID }
