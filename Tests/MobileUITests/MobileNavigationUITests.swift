@@ -62,7 +62,7 @@ final class MobileNavigationUITests: XCTestCase {
             let language = name.contains("testSharedGuestHistoryAcrossAccountProfiles") ? "ru" : "en"
             app.launchArguments += ["-PichiInterfaceLanguage", language]
         }
-        if !productionDownload {
+        if !productionSmoke {
             app.launchArguments += ["-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
         }
         if name.contains("testSharedGuestHistoryAcrossAccountProfiles") {
