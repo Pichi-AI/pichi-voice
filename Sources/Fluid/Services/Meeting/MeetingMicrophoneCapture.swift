@@ -158,6 +158,30 @@ nonisolated struct MeetingMicrophonePTSClock {
     }
 }
 
+/// Privacy admission needs acquisition evidence, independently of the writer's intentionally
+/// sample-count-based timeline. A host-clock gap must never turn fresh private PCM into old PCM.
+nonisolated enum MeetingMicrophonePrivacyTiming {
+    static let maximumDivergenceSeconds: Double = 0.020
+
+    static func acceptsTap(hostTime: UInt64?, windowHostTime: UInt64?, accumulatedFrameCount: Int) -> Bool {
+        guard let hostTime, accumulatedFrameCount >= 0 else { return false }
+        guard accumulatedFrameCount > 0 else { return windowHostTime == nil }
+        guard let windowHostTime else { return false }
+        let actualDelta = CMTimeSubtract(CMClockMakeHostTimeFromSystemUnits(hostTime),
+            CMClockMakeHostTimeFromSystemUnits(windowHostTime)).seconds
+        let expectedDelta = Double(accumulatedFrameCount) / Double(MeetingMicrophonePTSClock.timescale)
+        return actualDelta.isFinite && abs(actualDelta - expectedDelta) <= Self.maximumDivergenceSeconds
+    }
+
+    static func acceptsEmission(_ outcome: MeetingMicrophonePTSClock.Outcome, acquisitionHostTime: UInt64?) -> Bool {
+        guard let acquisitionHostTime, case let .emitted(pts, synthesized, _, _) = outcome,
+              !synthesized, pts.isNumeric else { return false }
+        let actual = CMClockMakeHostTimeFromSystemUnits(acquisitionHostTime)
+        let divergence = CMTimeSubtract(pts, actual).seconds
+        return divergence.isFinite && abs(divergence) <= Self.maximumDivergenceSeconds
+    }
+}
+
 // MARK: - Binding
 
 /// Pure decision table, unit-testable headless.
@@ -621,6 +645,21 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
         self.consumePendingResetIfNeeded()
         self.checkSequenceContinuity(time: time, frameCount: Int(buffer.frameLength))
 
+        if self.privacyGate != nil {
+            let hostTime = time.isHostTimeValid ? time.hostTime : nil
+            if !MeetingMicrophonePrivacyTiming.acceptsTap(hostTime: hostTime,
+                windowHostTime: self.windowHostTime, accumulatedFrameCount: self.accumulated.count) {
+                self.accumulated.removeAll(keepingCapacity: true)
+                self.windowHostTime = nil
+                self.windowHostTimeValid = false
+                self.clock.requestTimelineReset()
+                // Converter history belongs to the retired acquisition interval as well.
+                self.converter = nil
+                self.converterSourceFormat = nil
+                guard hostTime != nil else { return }
+            }
+        }
+
         let converted = self.convertToMono(buffer)
         guard let mono = converted, !mono.isEmpty else {
             if converted == nil { self.statsBox.mutate { $0.conversionFailures += 1 } }
@@ -640,11 +679,18 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
 
     private func flush() {
         let frameCount = self.accumulated.count
-        let outcome = self.clock.stamp(hostTime: self.windowHostTimeValid ? self.windowHostTime : nil, frameCount: frameCount)
+        let acquisitionHostTime = self.windowHostTimeValid ? self.windowHostTime : nil
+        let outcome = self.clock.stamp(hostTime: acquisitionHostTime, frameCount: frameCount)
         let samples = self.accumulated
         self.accumulated.removeAll(keepingCapacity: true)
         self.windowHostTime = nil
         self.windowHostTimeValid = false
+
+        if self.privacyGate != nil,
+           !MeetingMicrophonePrivacyTiming.acceptsEmission(outcome, acquisitionHostTime: acquisitionHostTime) {
+            self.clock.requestTimelineReset()
+            return
+        }
 
         guard case let .emitted(pts, synthesized, anchorCorrected, resynced) = outcome else {
             self.statsBox.mutate { $0.droppedPostCapCount += 1 }
