@@ -134,5 +134,6 @@ Measure Russian transcription on consented or public recordings with human-check
 
 - [Development setup](codex.md)
 - [Agent instructions](../../AGENTS.md)
+- [Least-change refactoring review](least-change-refactoring.md)
 - [Upstream FluidVoice](https://github.com/altic-dev/FluidVoice)
 - [License](../../LICENSE)

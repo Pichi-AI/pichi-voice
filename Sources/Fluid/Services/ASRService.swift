@@ -1,4 +1,3 @@
-#if os(macOS)
 import Accelerate
 import AVFoundation
 import Combine
@@ -9088,5 +9087,3 @@ final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         return mono
     }
 }
-
-#endif

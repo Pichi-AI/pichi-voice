@@ -32,7 +32,6 @@ Sources/Fluid/Persistence/SettingsStore+NemotronLanguage.swift
 Sources/Fluid/Persistence/SettingsStore.swift
 Sources/Fluid/Persistence/SettingsStoreKeys.swift
 Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift
-Sources/Fluid/Persistence/SettingsStoreSpeechModels.swift
 Sources/Fluid/Persistence/VoiceEngineLanguageCatalog.swift
 Sources/Fluid/Services/ASRActivityLease.swift
 Sources/Fluid/Services/ASRService+iOS.swift
@@ -113,7 +112,6 @@ Sources/Fluid/Services/Meeting/MeetingAudioComparisonProbe.swift
 Sources/Fluid/Services/Meeting/MeetingAudioChunkLedger.swift
 Sources/Fluid/Services/Meeting/MeetingAudioChunkWriter.swift
 Sources/Fluid/Services/Meeting/MeetingAudioExporter.swift
-Sources/Fluid/Services/Meeting/MeetingAudioRetentionPolicy.swift
 Sources/Fluid/Services/Meeting/MeetingCaptureControlling.swift
 Sources/Fluid/Services/Meeting/MeetingEchoDetector.swift
 Sources/Fluid/Services/Meeting/MeetingEchoSignalScorer.swift

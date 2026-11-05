@@ -164,9 +164,9 @@ extension MeetingSessionStoreCheckpointTests {
         var unchanged = named
         unchanged.title = original.title; unchanged.automaticTitle = nil
         check(unchanged == original, "Automatic naming changes no transcript, speaker, timing, location or privacy evidence")
-        check(!named.displayTitle(language: .english).contains(" · ") && !named.displayTitleIncludesStart,
+        check(!named.displayTitle(language: .english).contains(" · "),
               "Generated names contain no recording date or time; separate metadata owns the start")
-        check(!original.displayTitle(language: .english).contains(" · ") && !original.displayTitleIncludesStart,
+        check(!original.displayTitle(language: .english).contains(" · "),
               "Default automatic names also leave their start out of the visible title")
         var online = original
         online.mode = .onlineCall; online.defaultTitleBase = "Synthetic call"

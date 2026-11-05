@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 import TranscribeCpp
 #if os(iOS)
 import Darwin
@@ -824,14 +823,7 @@ final class WhisperProvider: TranscriptionProvider {
               (attributes[.size] as? NSNumber)?.int64Value == expectedBytes,
               attributes[.type] as? FileAttributeType == .typeRegular
         else { return nil }
-        let input = try FileHandle(forReadingFrom: url)
-        defer { try? input.close() }
-        var digest = SHA256()
-        while let bytes = try input.read(upToCount: 1_048_576), !bytes.isEmpty {
-            try Task.checkCancellation()
-            digest.update(data: bytes)
-        }
-        return "sha256:" + digest.finalize().map { String(format: "%02x", $0) }.joined()
+        return try "sha256:" + ParakeetArchiveInstaller.sha256(of: url)
     }
 
     func modelsExistOnDisk() -> Bool {

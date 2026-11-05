@@ -117,7 +117,8 @@ selection = source[source.index('nonisolated struct MeetingSummarySelection:'):s
 route = source[source.index('nonisolated struct MeetingSummaryRoute {'):source.index('/// Uses a dedicated session')]
 # Grounded generation is tested elsewhere; this executable tests the exact
 # resolver plus actual legacy RemoteService/LLMClient request admission.
-route = route[:route.index('    /// Provider selection is shared;')] + '}\n'
+if '    /// Provider selection is shared;' in route:
+    route = route[:route.index('    /// Provider selection is shared;')] + '}\n'
 remote = source[source.index('/// Uses a dedicated session'):]
 kind_source = Path('Sources/Fluid/Services/Meeting/MeetingSavedSummary.swift').read_text()
 kind = declaration(kind_source, 'nonisolated enum MeetingSummaryKind:') + '\n'

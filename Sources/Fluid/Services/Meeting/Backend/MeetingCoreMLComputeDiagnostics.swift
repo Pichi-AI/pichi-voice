@@ -7,7 +7,7 @@ import CoreML
 /// Core ML's anticipated placement, not a measurement of GPU use or elapsed op time.
 /// It never changes the inference configuration or retains a plan through inference.
 nonisolated enum MeetingCoreMLComputeDiagnostics {
-    nonisolated enum Role: String, Sendable { case diarizer, voiceEncoder }
+    nonisolated enum Role: String, Sendable { case diarizer }
     nonisolated enum Device: String, Codable, CaseIterable, Hashable, Sendable {
         case cpu, gpu, neuralEngine, unknown
     }

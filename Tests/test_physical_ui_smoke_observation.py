@@ -1,7 +1,7 @@
 """Portable wiring guards for the physical-only, test-runner observation loop.
 
-The independent Swift schedule test exercises time progression. These guards
-ensure real XCTest queries remain behind that schedule and retain final gates.
+These guards ensure real XCTest queries remain behind the observation schedule
+and retain final gates.
 No app, device, microphone, model, native capture or Xcode build is started.
 """
 import pathlib

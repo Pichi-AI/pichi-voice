@@ -6,7 +6,7 @@ import Foundation
 nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Sendable {
     static let defaultASRModel = "parakeet-tdt-v2"
     static let defaultLanguageCode = "en"
-    /// Share the immutable version across frozen requests and persisted attempts.
+    /// One shared immutable version keeps frozen requests and saved attempts consistent.
     static let defaultPipelineVersion = MeetingProcessingPipeline.pipelineVersion
 
     let asrModel: String

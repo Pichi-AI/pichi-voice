@@ -587,7 +587,6 @@ final class TranscriptionHistoryStore: ObservableObject {
         !self.transitioning && !self.retired && self.profile.map(PrivateProfileStorage.isReadable) != false
     }
     private var recordingWrites: [UUID: DictationHistoryWriteAdmission] = [:]
-    private var recordingJoinWaiters: [CheckedContinuation<Void, Never>] = []
     var admittedRecordingWriteCount: Int { self.recordingWrites.count }
     private var retainedEntries: [TranscriptionHistoryEntry] = []
     private var loadTask: Task<Void, Never>?
@@ -776,10 +775,6 @@ final class TranscriptionHistoryStore: ObservableObject {
         if self.recordingWrites[admission.entryID] === admission {
             self.recordingWrites.removeValue(forKey: admission.entryID)
         }
-        if self.recordingWrites.isEmpty {
-            let waiters = self.recordingJoinWaiters; self.recordingJoinWaiters.removeAll()
-            for waiter in waiters { waiter.resume() }
-        }
     }
 
     fileprivate func retryRecordingWrite(_ admission: DictationHistoryWriteAdmission) async throws {
@@ -818,11 +813,6 @@ final class TranscriptionHistoryStore: ObservableObject {
     /// Retries only retained failed recording payloads under their original capabilities.
     func retryAdmittedRecordingWrites() async throws {
         for admission in Array(self.recordingWrites.values) { try await self.retryRecordingWrite(admission) }
-    }
-
-    func joinAdmittedRecordingWrites() async {
-        guard !self.recordingWrites.isEmpty else { return }
-        await withCheckedContinuation { self.recordingJoinWaiters.append($0) }
     }
 
     private func writeAdmitted(_ entry: TranscriptionHistoryEntry, admission: DictationHistoryWriteAdmission) {

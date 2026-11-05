@@ -75,10 +75,10 @@
 | `MeetingSetupCanvas` | Те же заголовок, краткий план микрофонной записи и «Начать запись». Нет новой анкеты названия, выбора языка или повторных значков хранения. |
 | `MeetingRecordingSettingsSheet` | «Запись» содержит «Источники звука» и «Метки говорящих». «Распознавание речи» и пользовательская «Приватность» остаются в настройках приложения. |
 | `MeetingModelSettingsSection` | Используются «Определять участников по голосу» и «О модели». Nemotron является существующей зависимостью определения участников, а не четвёртым ASR-провайдером. Готовность не подменяется личным голосовым профилем. |
-| `MeetingAudioRetentionPolicy` | Те же четыре значения, по умолчанию 7 дней. Неизменённый enum выделен в отдельный portable файл и напрямую компилируется прототипом. Срок хранения применим к прошлым аудиозаписям. |
+| `MeetingAudioRetentionPolicy` | Те же четыре значения, по умолчанию 7 дней. Срок хранения применим к прошлым аудиозаписям. |
 | Strict audio OFF | Отдельная запрошенная политика для новых встреч. В макете она фиксируется на старте; наличие аудио старой встречи определяется самой встречей. Она не заменяет удаление после расшифровки. |
 | Новая встреча | Доступна после результата, скрыта при записи и обработке, как в оригинале. |
-| Live UI | Исходные composer/renderer и аудиоанимация. Pause/replay, поворот и технические пояснения относятся к Mac-host прототипа и документации. |
+| Live UI | Исходные composer/renderer и аудиоанимация. |
 | Необязательные новые функции | Постоянный «Мой голос», место и переключатель диаризации требуют отдельных подтверждённых расширений существующих операций; сейчас не выдаются за готовые возможности оригинала. |
 
 Онлайн-источники, автоматическое обнаружение Zoom/Teams, browser detection, AI-итоги и интеграции не входят в текущий мобильный сценарий. Отдельные Visit/OfflineMeeting, mobile store, installer и parallel pipeline не нужны. Универсальный iOS target должен вызывать те же сервисы, которые описаны ниже.
@@ -137,7 +137,7 @@ Whisper Tiny уже имеет общий provider, но ещё требует �
 
 Порядок extraction: общие values/contracts -> model catalog/preferences и общий lifecycle owner -> существующий coordinator/pipeline/store -> общие SwiftUI компоненты -> iOS capture. Первый функциональный milestone должен завершить синтетическую встречу на Mac и iOS Simulator через **одни и те же классы** coordinator/store/pipeline. Аппаратные capture/inference/background milestones идут затем.
 
-Анимированный прототип уже проверяет небольшую часть этой схемы: девять production-файлов компилируются для macOS и iOS SDK, включая исходный renderer текста и общий renderer диктовки. Canvas/Timeline и неизменённая spring simulation выделены из `BottomWaveformView` в `AudioWaveformBars`; исходная панель использует тот же компонент. Desktop state, настройки и shimmer остаются в её wrapper. Theme bridge и synthetic replay остаются только в `Prototypes/`; они не заменяют сервисы приложения. Общие contract tests должны защищать preparation ownership, residency restoration, provider options, canonical publication, recovery/retention и live-row identity.
+Canvas/Timeline и неизменённая spring simulation выделены из `BottomWaveformView` в `AudioWaveformBars`; исходная панель использует тот же компонент. Desktop state, настройки и shimmer остаются в её wrapper. Общие contract tests должны защищать preparation ownership, residency restoration, provider options, canonical publication, recovery/retention и live-row identity.
 
 ## Мобильный набор моделей
 
@@ -220,7 +220,7 @@ Speaker matching использует проверенные similarity threshol
 
 Отдельное родительское рабочее дерево: `/Users/sabbah/.codex/worktrees/ipad-voice-design/pichi-voice`, ветка `codex/ipad-voice-design`. Источник дизайна: существующий versioned brand package. Production-приложение на этом этапе не меняется.
 
-`bash scripts/dev/setup.sh` выполнен в этом worktree: portable checks и 6 проверок String Catalog прошли. Установлен Xcode 27.0 с iOS/macOS SDK. Simulator runtimes отсутствуют. UI-прототип можно скомпилировать под iOS SDK и смотреть как native SwiftUI preview на Mac; это не запуск на iPad и не проверка background microphone capture. Подробные команды и итоговая визуальная проверка находятся в `Prototypes/iPadMeetingConcepts/README.md`.
+`bash scripts/dev/setup.sh` выполнен в этом worktree: portable checks и 6 проверок String Catalog прошли. Установлен Xcode 27.0 с iOS/macOS SDK. Simulator runtimes отсутствуют.
 
 Вариант A выбран пользователем и уточняется анимацией записи. Функциональные capture/inference сервисы на этом этапе остаются неподключёнными.
 

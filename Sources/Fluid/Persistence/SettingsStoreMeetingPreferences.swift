@@ -90,7 +90,8 @@ extension SettingsStore {
         }
     }
 
-    /// Custom dictionary entries for word replacement
+    /// Reuses finalized Parakeet windows so long recordings only process their remaining tail at stop.
+    /// Experimental and enabled by default; users can fall back to full-buffer finalization.
     var experimentalParakeetUnifiedFinalEnabled: Bool {
         get { self.defaults.object(forKey: Keys.experimentalParakeetUnifiedFinalEnabled) as? Bool ?? true }
         set {
@@ -98,8 +99,6 @@ extension SettingsStore {
             self.defaults.set(newValue, forKey: Keys.experimentalParakeetUnifiedFinalEnabled)
         }
     }
-
-    /// Opt in to restoring the field captured at recording start.
 
     enum AccentColorOption: String, CaseIterable, Identifiable, Codable {
         case brand = "Brand"
