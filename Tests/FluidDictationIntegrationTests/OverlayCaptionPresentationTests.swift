@@ -176,6 +176,7 @@ final class OverlayCaptionPresentationTests: XCTestCase {
             state.isProcessing = previousProcessing
         }
         settings.overlayPosition = .bottom
+        var sizesOffScreen: [SettingsStore.OverlaySize] = []
         func shimmers(in view: NSView) -> [CompositorShimmerSweepView] {
             (view as? CompositorShimmerSweepView).map { [$0] } ?? view.subviews.flatMap { shimmers(in: $0) }
         }
@@ -195,9 +196,25 @@ final class OverlayCaptionPresentationTests: XCTestCase {
             }
             let waitingViews = shimmers(in: host)
             XCTAssertFalse(waitingViews.isEmpty, "Exercise the real waiting view for \(size): \(self.visibilityState(host)), processing=\(state.isProcessing), muted=\(state.isDictationMuted)")
+            // WindowServer reports occlusion asynchronously and may never show a test host's window.
+            func isAnimating() -> Bool {
+                waitingViews.contains { $0.layer?.sublayers?.first?.animation(forKey: "fluid.shimmer.locations") != nil }
+            }
+            let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            let deadline = Date().addingTimeInterval(3)
+            while !reduceMotion, !isAnimating(), Date() < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
             let visibility = waitingViews.map { self.visibilityState($0) }.joined(separator: "; ")
-            let hasAnimation = waitingViews.contains { $0.layer?.sublayers?.first?.animation(forKey: "fluid.shimmer.locations") != nil }
-            XCTAssertEqual(hasAnimation, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, "Processing must respect Reduce Motion for \(size): \(visibility)")
+            // Only the animation depends on the window server. Everything the app controls stays asserted.
+            let window = try XCTUnwrap(host.window)
+            XCTAssertTrue(window.isVisible, "The overlay must be ordered in for \(size): \(visibility)")
+            XCTAssertGreaterThan(window.alphaValue, 0, "The overlay must not stay transparent for \(size)")
+            XCTAssertFalse(host.isHiddenOrHasHiddenAncestor, "The overlay must not stay hidden for \(size)")
+            let reachedScreen = window.occlusionState.contains(.visible)
+            sizesOffScreen += reachedScreen ? [] : [size]
+            let hasAnimation = isAnimating()
+            XCTAssertEqual(hasAnimation, reachedScreen && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, "Processing must respect Reduce Motion for \(size): \(visibility)")
             XCTAssertTrue(state.isProcessing, "A previous presentation must not clear this processing state")
             if let output = ProcessInfo.processInfo.environment["CAPTION_TEST_OUTPUT"] {
                 let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
@@ -210,12 +227,17 @@ final class OverlayCaptionPresentationTests: XCTestCase {
             XCTAssertFalse(state.isBottomOverlayPresented)
             XCTAssertTrue(waitingViews.allSatisfy { $0.layer?.sublayers?.first?.animationKeys()?.isEmpty != false }, "No waiting shimmer may survive dismissal for \(size)")
         }
+        try XCTSkipIf(sizesOffScreen.count == 4, "The overlay never reached the screen, so its animation stayed unverified")
     }
 
     /// xcodebuild test hosts may never reach the active Space, so WindowServer
     /// occlusion is not a test input. Ordering, alpha and hiding remain real.
     private final class AssumedVisibleWindow: NSWindow {
-        override var occlusionState: NSWindow.OcclusionState { self.isVisible ? .visible : [] }
+        var isOccluded = false {
+            didSet { NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: self) }
+        }
+
+        override var occlusionState: NSWindow.OcclusionState { self.isVisible && !self.isOccluded ? .visible : [] }
     }
 
     func testWaitingShimmerStopsWhenItsViewOrWindowIsHidden() async throws {
@@ -232,6 +254,10 @@ final class OverlayCaptionPresentationTests: XCTestCase {
         window.alphaValue = 0
         XCTAssertNil(gradient.animation(forKey: "fluid.shimmer.locations"), "A cached alpha-zero panel must stop immediately")
         window.alphaValue = 1
+        XCTAssertNotNil(gradient.animation(forKey: "fluid.shimmer.locations"))
+        window.isOccluded = true
+        XCTAssertNil(gradient.animation(forKey: "fluid.shimmer.locations"), "A fully occluded window must stop the shimmer")
+        window.isOccluded = false
         XCTAssertNotNil(gradient.animation(forKey: "fluid.shimmer.locations"))
         view.isHidden = true
         XCTAssertNil(gradient.animation(forKey: "fluid.shimmer.locations"), "A retained hidden view must stop its infinite shimmer")
