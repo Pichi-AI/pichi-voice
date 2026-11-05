@@ -1,4 +1,5 @@
 import Combine
+import CoreMedia
 import Darwin
 import Foundation
 
@@ -763,6 +764,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         await self.pendingSpeechTeardownTask?.value
         self.pendingSpeechTeardownTask = nil
         let captureOrigin = MeetingLiveOriginBox()
+        if configuration.mode == .onlineCall, Self.usesPCMProcessing(configuration) {
+            let seconds = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
+                / Double(timebase.machTimebaseDenominator) / 1_000_000_000
+            _ = captureOrigin.establish(CMTime(seconds: seconds, preferredTimescale: 1_000_000_000))
+        }
         let liveTranscriptionCoordinator = MeetingLiveTranscriptionCoordinator(originBox: captureOrigin,
             onEmptyRecognition: { [weak self] source, start, end in
                 CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
@@ -801,7 +807,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         } else { pendingDiagnostics = nil }
         await MeetingTimelineTrace.shared?.claimSession(session.id.uuidString)
         let pendingSpeechCapture = MeetingPendingSpeechCapture(originBox: captureOrigin,
-            activityModel: self.speechActivityModel, diagnostics: pendingDiagnostics) { [weak self] snapshot in
+            activityModel: self.speechActivityModel,
+            activitySources: configuration.mode == .onlineCall ? [.you, .them] : [.you], diagnostics: pendingDiagnostics) { [weak self] snapshot in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 guard self.captureGeneration == generation,
@@ -847,10 +854,11 @@ final class MeetingSessionCoordinator: ObservableObject {
                     session: session, sessionDirectory: sessionDirectory, privacyRedactor: recordingRedactor, checkpoint: { [weak self] batch in
                     guard let self, self.memoryCheckpointGeneration == generation else { throw CancellationError() }
                     try await self.checkpointMemoryTranscript(batch, sessionID: session.id, generation: generation)
-                }, preview: { [weak self] partial in
+                }, trackPreview: { [weak self] kind, partial in
                     guard let self, self.memoryCheckpointGeneration == generation,
                           self.activeSession?.id == session.id else { throw CancellationError() }
-                    self.liveTranscript = self.liveTranscript.settingPartial(partial, for: .you)
+                    let source: MeetingLiveSpeaker = kind == .microphone ? .you : .them
+                    self.liveTranscript = self.liveTranscript.settingPartial(partial, for: source)
                     self.liveTranscript.revision += 1
                     self.liveTranscript.availability = .available
                     self.reconcilePendingSpeech()
@@ -858,16 +866,17 @@ final class MeetingSessionCoordinator: ObservableObject {
                     // rendered frame. Optional chaining also avoids metadata work when off.
                     MeetingTimelineTrace.shared?.record("protected_live_publication", fields: [
                         "sessionID": session.id.uuidString, "generation": generation.uuidString,
-                        "stage": "pcm-protected-preview", "source": "you",
+                        "stage": "pcm-protected-preview", "source": source == .you ? "you" : "them",
                         "transcriptRevision": String(self.liveTranscript.revision),
-                        "partialPresent": String(self.liveTranscript.partials[.you] != nil),
-                        "partialID": self.liveTranscript.partials[.you]?.id.uuidString ?? "unavailable",
-                        "sourceStartSeconds": self.liveTranscript.partials[.you].map { String($0.start) } ?? "unavailable",
-                        "sourceEndSeconds": self.liveTranscript.partials[.you]?.end.map { String($0) } ?? "unavailable",
-                        "utf16Count": String(self.liveTranscript.partials[.you]?.text.utf16.count ?? 0),
+                        "partialPresent": String(self.liveTranscript.partials[source] != nil),
+                        "partialID": self.liveTranscript.partials[source]?.id.uuidString ?? "unavailable",
+                        "sourceStartSeconds": self.liveTranscript.partials[source].map { String($0.start) } ?? "unavailable",
+                        "sourceEndSeconds": self.liveTranscript.partials[source]?.end.map { String($0) } ?? "unavailable",
+                        "utf16Count": String(self.liveTranscript.partials[source]?.text.utf16.count ?? 0),
                         "publicationScope": "accepted-coordinator-assignment-not-render-frame"])
-                }, confidentlyNonSpeech: { [weak pendingSpeechCapture] start, end in
-                    await pendingSpeechCapture?.awaitConfidentNonSpeech(start: start, end: end) ?? false
+                }, trackConfidentlyNonSpeech: { [weak pendingSpeechCapture] kind, start, end in
+                    await pendingSpeechCapture?.awaitConfidentNonSpeech(source: kind == .microphone ? .you : .them,
+                        start: start, end: end) ?? false
                 })
             }
             captureStartAttempted = true
@@ -2398,6 +2407,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func performStopAndTranscribe(generation: UUID) async throws -> MeetingSession {
+        let stopClock = ContinuousClock.now
         let profileBegan = MeetingPCMRuntimeDiagnostics.beginDetailed(.stopTotal)
         var profileSucceeded = false
         defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.stopTotal, since: profileBegan, succeeded: profileSucceeded) }
@@ -2486,6 +2496,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         #if DEBUG && os(macOS)
         diagnosticsStopSucceeded = true
         #endif
+        let elapsed = stopClock.duration(to: .now).components
+        let milliseconds = Double(elapsed.seconds) * 1_000 + Double(elapsed.attoseconds) / 1_000_000_000_000_000
+        self.processingLogger("Meeting stop_to_ready session=\(processed.id) mode=\(processed.effectiveSpeakerProcessingMode.rawValue) tracks=\(processed.audioTracks.count) elapsedMs=\(Int(milliseconds)) transcriptComplete=\(processed.transcriptIsComplete == true) resourcesHandedBack=true")
         return processed
     }
 
@@ -2561,25 +2574,28 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Construct the contextual projection away from the UI executor; only this already
     /// privacy-filtered value may be handed to the caption renderer.
     nonisolated static func protectedLiveHistory(session: MeetingSession, revision: UInt64,
-                                 preview: MeetingLivePartial?) async throws -> MeetingLiveTranscriptSnapshot {
+                                 preview: MeetingLivePartial?, previewSource: MeetingLiveSpeaker = .you,
+                                 otherPartials: [MeetingLiveSpeaker: MeetingLivePartial] = [:]) async throws -> MeetingLiveTranscriptSnapshot {
         let projection = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
             let reading = MeetingTranscriptExporter.speakerPresentations(in: session)
             var result = MeetingLiveTranscriptSnapshot.empty
             result.revision = revision
+            let kinds = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.id, $0.kind) })
+            result.partials = otherPartials
             result.utterances = session.transcriptSegments.enumerated().filter {
                 !$0.element.isEcho && reading[$0.element.id] != nil
             }.sorted {
                 ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
             }.map { _, segment in
-                MeetingLiveUtterance(id: segment.id, speaker: .you, text: segment.text,
+                MeetingLiveUtterance(id: segment.id, speaker: kinds[segment.sourceTrackID] == .applicationAudio ? .them : .you, text: segment.text,
                     start: segment.start.seconds, end: segment.end.seconds,
                     participant: reading[segment.id])
             }
             let readablePreview = preview.flatMap { value in
                 MeetingTranscriptSegment.textContainsLexicalContent(value.text) || value.containsPrivacyReplacement ? value : nil
             }
-            result = result.settingPartial(readablePreview, for: .you)
+            result = result.settingPartial(readablePreview, for: previewSource)
             result.availability = .available
             try Task.checkCancellation()
             return result
@@ -2631,7 +2647,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         // recording. Projection is pure and joined off the main actor.
         let revisionBeforeProjection = self.liveTranscript.revision
         var snapshot = try await Self.protectedLiveHistory(
-            session: session, revision: revisionBeforeProjection + 1, preview: batch.livePreview)
+            session: session, revision: revisionBeforeProjection + 1, preview: batch.livePreview,
+            previewSource: batch.sourceTrack?.kind == .applicationAudio ? .them : .you,
+            otherPartials: self.liveTranscript.partials)
         guard self.memoryCheckpointGeneration == generation, self.activeSession?.id == sessionID else {
             throw CancellationError()
         }
@@ -2651,11 +2669,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         // attribution and privacy have admitted it. Publish that protected history
         // first; acoustic progress or a provisional preview cannot retire waves.
         if let through = batch.protectedSourceThroughSample,
-           let track = batch.sourceTrack, track.kind == .microphone,
+           let track = batch.sourceTrack,
            self.activeSession?.audioTracks.contains(where: { $0.id == track.id }) == true,
            let capture = self.pendingSpeechCapture {
             self.pendingSpeech = capture.acknowledgeProtectedSource(
-                source: .you, throughSample: through, transcriptRevision: snapshot.revision)
+                source: track.kind == .microphone ? .you : .them, throughSample: through, transcriptRevision: snapshot.revision)
         }
     }
 

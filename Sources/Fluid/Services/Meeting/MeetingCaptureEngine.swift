@@ -6646,12 +6646,14 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
 /// both consumers, whose shared prepared model owner cannot retire until both tracks finish.
 final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
     private final nonisolated class Track: @unchecked Sendable {
+        let kind: MeetingAudioTrackKind
         let consumer: any MeetingMemoryAudioConsuming
         let gate = MeetingPCMIntakeGate()
         var converter: MeetingCapturePCMConverter
         var expectedNativeEnd: CMTime?
         var emittedFrames = 0
-        init(_ consumer: any MeetingMemoryAudioConsuming) throws {
+        init(kind: MeetingAudioTrackKind, consumer: any MeetingMemoryAudioConsuming) throws {
+            self.kind = kind
             self.consumer = consumer
             self.converter = try MeetingCapturePCMConverter()
         }
@@ -6669,7 +6671,9 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
     init(consumers: [MeetingAudioTrackKind: any MeetingMemoryAudioConsuming], originHostTime: UInt64,
          eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
          liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?) throws {
-        self.tracks = try consumers.mapValues { try Track($0) }
+        self.tracks = try Dictionary(uniqueKeysWithValues: consumers.map { kind, consumer in
+            (kind, try Track(kind: kind, consumer: consumer))
+        })
         self.origin = CMTime(seconds: AVAudioTime.seconds(forHostTime: originHostTime), preferredTimescale: 1_000_000_000)
         self.eventHandler = eventHandler
         self.liveAudioHandler = liveAudioHandler
@@ -6678,7 +6682,6 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
     /// Called only after the original audio writer and microphone transcript gate admitted PCM.
     func offer(kind: MeetingAudioTrackKind, sample: CMSampleBuffer) {
         var failure: Error?
-        var admitted = false
         self.lock.withLock {
             guard self.accepting, self.terminalError == nil, let track = self.tracks[kind] else { return }
             let frames = CMSampleBufferGetNumSamples(sample)
@@ -6700,9 +6703,7 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
                     try self.deliver(owned.buffer, pts: owned.pts, track: track)
                 } catch { self.fail(error) }
             }
-            admitted = true
         }
-        if admitted { self.liveAudioHandler?(kind, sample) }
         if let failure { self.fail(failure) }
     }
 
@@ -6745,16 +6746,21 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
 
     private func enqueue(_ sample: CMSampleBuffer, track: Track) throws {
         guard let owned = MeetingLiveSampleCopy.copy(sample) else { throw MeetingCapturePCMError.invalidBuffer }
-        try self.enqueueBuffer(owned.buffer, track: track)
+        let measured = try self.enqueueBuffer(owned.buffer, track: track)
+        // Feed the existing source VAD only actual normalized capture, never synthesized
+        // timeline padding. Missing coverage stays unknown and cannot suppress recognition.
+        self.liveAudioHandler?(track.kind, measured)
     }
 
-    private func enqueueBuffer(_ buffer: AVAudioPCMBuffer, track: Track) throws {
+    @discardableResult
+    private func enqueueBuffer(_ buffer: AVAudioPCMBuffer, track: Track) throws -> CMSampleBuffer {
         let pts = self.origin + CMTime(value: Int64(track.emittedFrames), timescale: 16_000)
         let sample = try MeetingCapturePCMConverter.sampleBuffer(buffer: buffer, presentationTime: pts)
         guard track.consumer.enqueue(sample) else {
             throw track.consumer.rejectionReason.map(MeetingCapturePCMError.transcriptionRejected) ?? .transcriptionStopped
         }
         track.emittedFrames += Int(buffer.frameLength)
+        return sample
     }
 
     private func fail(_ error: Error) {

@@ -20,6 +20,11 @@ protocol MeetingProcessingControlling: AnyObject {
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
                             preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
                             confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            privacyRedactor: (any TranscriptTextRedacting)?,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            trackPreview: @escaping @MainActor @Sendable (MeetingAudioTrackKind, MeetingLivePartial?) async throws -> Void,
+                            trackConfidentlyNonSpeech: MeetingTrackConfidentNonSpeechQuery?) async throws
     func cancelMemoryAudio(sessionID: MeetingSessionID) async
     func process(
         session: MeetingSession,
@@ -29,6 +34,17 @@ protocol MeetingProcessingControlling: AnyObject {
 }
 
 extension MeetingProcessingControlling {
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            privacyRedactor: (any TranscriptTextRedacting)?,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            trackPreview: @escaping @MainActor @Sendable (MeetingAudioTrackKind, MeetingLivePartial?) async throws -> Void,
+                            trackConfidentlyNonSpeech: MeetingTrackConfidentNonSpeechQuery?) async throws {
+        try await self.prepareMemoryAudio(session: session, sessionDirectory: sessionDirectory,
+            privacyRedactor: privacyRedactor, checkpoint: checkpoint,
+            preview: { try await trackPreview(.microphone, $0) },
+            confidentlyNonSpeech: trackConfidentlyNonSpeech.map { query in { start, end in await query(.microphone, start, end) } })
+    }
+
     /// Recording admission can pass its exact privacy capability through async model
     /// preparation. Older controllers keep their existing preparation implementation.
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,

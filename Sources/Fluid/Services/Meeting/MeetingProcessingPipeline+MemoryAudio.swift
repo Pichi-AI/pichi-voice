@@ -5,6 +5,7 @@ import Foundation
 /// True requires complete, measured non-speech coverage on the original capture clock.
 /// Missing, stale or uncertain activity evidence must return false and preserve recognition.
 typealias MeetingConfidentNonSpeechQuery = @Sendable (TimeInterval, TimeInterval) async -> Bool
+typealias MeetingTrackConfidentNonSpeechQuery = @Sendable (MeetingAudioTrackKind, TimeInterval, TimeInterval) async -> Bool
 
 extension MeetingProcessingPipeline {
     /// PCM input is another input capability of the existing pipeline, not another meeting

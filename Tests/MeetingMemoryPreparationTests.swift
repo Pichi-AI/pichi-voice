@@ -2,6 +2,28 @@ import Foundation
 
 // These inert resource types let the probe compile the complete production attempt owner.
 // It runs no speech model, microphone, file store or personal transcript.
+nonisolated struct MeetingBackendID: Sendable { let rawValue = "synthetic" }
+nonisolated struct MeetingFinalProcessingConfiguration: Sendable {
+    let identityFingerprint = "synthetic"
+    var asrArtifactDirectory: URL? { nil }
+}
+nonisolated protocol MeetingIdlePreparedResource: Sendable {
+    var configurationIdentity: String { get }
+    func cleanup() async
+}
+nonisolated enum MeetingConfigFingerprintEncoding {
+    static func encode(_ values: [(String, String)]) -> String { "synthetic" }
+}
+typealias MeetingTrackConfidentNonSpeechQuery = @Sendable (MeetingAudioTrackKind, TimeInterval, TimeInterval) async -> Bool
+typealias MeetingAudioTrackID = UUID
+nonisolated struct MeetingAudioTrack: Sendable {}
+nonisolated enum MeetingAudioTrackKind: Sendable { case microphone, applicationAudio }
+nonisolated struct MeetingStreamingPCMObservation: Sendable {}
+nonisolated enum MeetingStreamingPCMControllerError: Error { case invalidScope }
+actor MeetingProcessingSerializationGate {
+    func acquire() async throws {}
+    func release() {}
+}
 nonisolated struct MeetingBackendRequest: Sendable {}
 nonisolated struct MeetingBackendDescriptor: Sendable {}
 nonisolated protocol MeetingParakeetNemotronRunning: Sendable {}

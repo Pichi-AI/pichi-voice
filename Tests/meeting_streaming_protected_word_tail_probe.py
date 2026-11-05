@@ -97,6 +97,19 @@ def section(path, start, end):
     return source[source.index(start):source.index(end, source.index(start))]
 
 full = "import Foundation\n"
+# Tracing remains disabled and cannot follow the user's active private profile.
+full += """
+nonisolated struct PrivateProfileSnapshot: Sendable {
+    let id = "synthetic-streaming-state"
+    let generation: UUID
+    let isReadable = false
+    let isGuest = true
+    func directory(_ component: String) -> URL { URL(fileURLWithPath: "/synthetic-streaming-state").appendingPathComponent(component) }
+}
+nonisolated enum PrivateProfileStorage {
+    static let current = PrivateProfileSnapshot(generation: UUID())
+}
+"""
 pipeline = (meeting / "MeetingProcessingPipeline.swift").read_text()
 version = re.search(r"^    (?:nonisolated )?(static let pipelineVersion = [^\n]+)", pipeline, re.M).group(1)
 full += "nonisolated enum MeetingProcessingPipeline { " + version + " }\n"
@@ -117,17 +130,34 @@ full += "nonisolated enum MeetingAssemblyError: Error { case invalidCoverageRece
 # Compile the actual observation contract so additive runtime metadata cannot drift.
 full += declaration((meeting / "MeetingStreamingPCMController.swift").read_text(),
                     "struct MeetingStreamingPCMObservation")
+full += declaration((meeting / "MeetingProcessingConfiguration.swift").read_text(), "struct MeetingFinalProcessingConfiguration")
+full += """
+nonisolated enum SettingsStore { enum SpeechModel: String { case synthetic } }
+nonisolated enum MeetingProviderOptions {
+    static func preferredModel(for language: String, selected: SettingsStore.SpeechModel?) -> SettingsStore.SpeechModel { .synthetic }
+}
+"""
 (BUILD / "StreamingStateContracts.swift").write_text(full)
+morphology = BUILD / "morphology"
+subprocess.run(["swift", "build", "--package-path", str(ROOT / "Vendor/RussianMorphology"),
+                "--scratch-path", str(morphology), "--jobs", "2"], cwd=ROOT, check=True)
+products = morphology / "out/Products/Debug"
+modulemap = morphology / "out/Intermediates.noindex/GeneratedModuleMaps/CRussianMorphology.modulemap"
 state_command = [
     "xcrun", "swiftc", "-O", "-swift-version", "6", "-strict-concurrency=complete",
     "-default-isolation", "MainActor", "-parse-as-library", "-module-cache-path", str(BUILD / "ModuleCache"),
+    "-I", str(products), "-L", str(products), "-lPichiRussianMorphology", "-lc++",
+    "-Xcc", "-fmodule-map-file=" + str(modulemap),
+    "-Xcc", "-I" + str(ROOT / "Vendor/RussianMorphology/Sources/CRussianMorphology/include"),
     str(BUILD / "StreamingStateContracts.swift"), str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
     str(meeting / "MeetingModels.swift"), str(meeting / "MeetingSpeakerPresentation.swift"),
     str(meeting / "MeetingAudioAsset.swift"), str(meeting / "MeetingPersistedMetadata.swift"),
     str(meeting / "Backend/MeetingCanonicalEvidenceTypes.swift"), str(meeting / "Backend/MeetingSpeakerAttribution.swift"),
-    str(meeting / "MeetingProcessingConfiguration.swift"), str(meeting / "MeetingPCMTranscriptBatch.swift"),
+    str(meeting / "MeetingPCMTranscriptBatch.swift"),
     str(ROOT / "Sources/Fluid/Services/Privacy/TranscriptTextRedacting.swift"),
     str(ROOT / "Sources/Fluid/Services/Privacy/TranscriptSensitiveDictionary.swift"),
+    str(ROOT / "Sources/Fluid/Services/Privacy/SensitiveBusinessGroupCatalog.swift"),
+    str(ROOT / "Sources/Fluid/Services/Privacy/SensitiveTopicClassifier.swift"),
     str(meeting / "MeetingTranscriptPrivacyPolicy.swift"),
     str(BUILD / "PCMAssembly.swift"), str(meeting / "Backend/MeetingStreamingProtectedWordTail.swift"),
     str(meeting / "MeetingTimelineTrace.swift"),

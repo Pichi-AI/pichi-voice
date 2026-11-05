@@ -586,6 +586,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         #endif
     }
 
+    var supportsMultiTrackStreamingPCMProcessing: Bool { self.supportsStreamingPCMProcessing }
+
     /// The registered installed-provider capability rejects unsupported or missing ASR
     /// selections before preparation. Existing native open scopes retain the actual weights.
     func prepareIdleResources(configuration: MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)? {

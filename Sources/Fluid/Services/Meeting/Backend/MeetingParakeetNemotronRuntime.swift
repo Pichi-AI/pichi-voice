@@ -162,6 +162,7 @@ protocol MeetingParakeetNemotronRunning: Sendable {
     /// Optional continuous speaker processing. The caller owns one outer residency grant;
     /// the body must finish or cancel its joined worker before this resource scope returns.
     nonisolated var supportsStreamingPCMProcessing: Bool { get }
+    nonisolated var supportsMultiTrackStreamingPCMProcessing: Bool { get }
     nonisolated func withPreparedStreamingPCM(
         trackID: MeetingAudioTrackID, attemptID: UUID,
         configuration: MeetingFinalProcessingConfiguration,
@@ -218,6 +219,7 @@ extension MeetingParakeetNemotronRunning {
         configuration: MeetingFinalProcessingConfiguration) async throws { throw MeetingModelResidencyError.unsupportedProvider }
     nonisolated var supportsProgressivePCMInput: Bool { false }
     nonisolated var supportsStreamingPCMProcessing: Bool { false }
+    nonisolated var supportsMultiTrackStreamingPCMProcessing: Bool { false }
     nonisolated func withPreparedStreamingPCM(
         trackID: MeetingAudioTrackID, attemptID: UUID,
         configuration: MeetingFinalProcessingConfiguration,
