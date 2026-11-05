@@ -81,6 +81,7 @@ xcrun swiftc -parse-as-library -swift-version 6 \
     Sources/Fluid/Services/Meeting/MeetingMicrophonePCMNormalizer.swift \
     Sources/Fluid/Services/Meeting/Platform/MeetingCapturePCMTransport.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingPipeline+MemoryAudio.swift \
+    Sources/Fluid/Services/Meeting/MeetingPCMSourceTimeline.swift \
     Sources/Fluid/Services/Meeting/MeetingStreamingPCMController.swift \
     "$task_test_dir/Contracts.swift" "$task_test_dir/SampleCopy.swift" "$task_test_dir/MacCaptureTee.swift" "$task_test_dir/CaptureStop.swift" \
     Tests/MeetingMultiTrackCaptureTeeTests.swift Tests/MeetingCapturePCMTransportTests.swift -o "$task_test_dir/tests"

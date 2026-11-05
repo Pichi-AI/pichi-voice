@@ -6651,7 +6651,6 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
         let gate = MeetingPCMIntakeGate()
         var converter: MeetingCapturePCMConverter
         var expectedNativeEnd: CMTime?
-        var emittedFrames = 0
         init(kind: MeetingAudioTrackKind, consumer: any MeetingMemoryAudioConsuming) throws {
             self.kind = kind
             self.consumer = consumer
@@ -6718,49 +6717,20 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
             if gap > 1.0 / 16_000 {
                 if let tail = try track.converter.finish() { try self.enqueue(tail, track: track) }
                 track.converter = try MeetingCapturePCMConverter()
-                try self.pad(track, through: max(0, Int((start * 16_000).rounded())))
             }
-        } else {
-            try self.pad(track, through: max(0, Int((start * 16_000).rounded())))
         }
         track.expectedNativeEnd = pts + CMTime(seconds: Double(buffer.frameLength) / buffer.format.sampleRate,
                                                preferredTimescale: 1_000_000_000)
         if let converted = try track.converter.convert(buffer, presentationTime: pts) { try self.enqueue(converted, track: track) }
     }
 
-    /// Short admission gaps preserve source time. Long gaps fail explicitly rather than create
-    /// an unbounded silence archive or a hidden replay of the complete recording.
-    private func pad(_ track: Track, through frame: Int) throws {
-        let missing = frame - track.emittedFrames
-        guard missing <= 60 * 16_000 else { throw MeetingCapturePCMError.timelineDiscontinuity }
-        while track.emittedFrames < frame {
-            let count = min(16_000, frame - track.emittedFrames)
-            let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
-            guard let silence = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)),
-                  let samples = silence.floatChannelData?[0] else { throw MeetingCapturePCMError.invalidBuffer }
-            silence.frameLength = AVAudioFrameCount(count)
-            samples.initialize(repeating: 0, count: count)
-            try self.enqueueBuffer(silence, track: track)
-        }
-    }
-
     private func enqueue(_ sample: CMSampleBuffer, track: Track) throws {
-        guard let owned = MeetingLiveSampleCopy.copy(sample) else { throw MeetingCapturePCMError.invalidBuffer }
-        let measured = try self.enqueueBuffer(owned.buffer, track: track)
-        // Feed the existing source VAD only actual normalized capture, never synthesized
-        // timeline padding. Missing coverage stays unknown and cannot suppress recognition.
-        self.liveAudioHandler?(track.kind, measured)
-    }
-
-    @discardableResult
-    private func enqueueBuffer(_ buffer: AVAudioPCMBuffer, track: Track) throws -> CMSampleBuffer {
-        let pts = self.origin + CMTime(value: Int64(track.emittedFrames), timescale: 16_000)
-        let sample = try MeetingCapturePCMConverter.sampleBuffer(buffer: buffer, presentationTime: pts)
         guard track.consumer.enqueue(sample) else {
             throw track.consumer.rejectionReason.map(MeetingCapturePCMError.transcriptionRejected) ?? .transcriptionStopped
         }
-        track.emittedFrames += Int(buffer.frameLength)
-        return sample
+        // Preserve the converter's measured source PTS for both timeline mapping and VAD.
+        // Source absence never creates PCM, model work or non-speech evidence.
+        self.liveAudioHandler?(track.kind, sample)
     }
 
     private func fail(_ error: Error) {
