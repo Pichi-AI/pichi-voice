@@ -3067,3 +3067,336 @@ private func XCTAssertAsyncThrowsError<T>(
         errorHandler(error)
     }
 }
+
+// The transport, stream controller, protected attribution state and final pipeline are real.
+// Only native ASR/diarization and application resource participants are synthetic here.
+@MainActor
+extension MeetingParakeetNemotronBackendTests {
+    func testOnlineStreamingPipelineAccumulatesBothSourcesAndFinishesWithoutReplay() async throws {
+        let service = OnlinePipelineService()
+        let runtime = OnlinePipelineRuntime()
+        let fixture = try self.onlinePipelineFixture(service: service, runtime: runtime)
+        let microphone = try await fixture.pipeline.memoryConsumer(for: fixture.session.id,
+            track: fixture.session.audioTracks[0], eventHandler: { _ in })
+        let application = try await fixture.pipeline.memoryConsumer(for: fixture.session.id,
+            track: fixture.session.audioTracks[1], eventHandler: { _ in })
+        for index in 0..<42 {
+            XCTAssertTrue(microphone.enqueue(try Self.onlinePCM(frames: 8_000, startFrame: index * 8_000)))
+            XCTAssertTrue(application.enqueue(try Self.onlinePCM(frames: 8_000, startFrame: index * 8_000)))
+        }
+        try await Self.onlineWait { fixture.publication.session.transcriptSegments.count >= 80 }
+        XCTAssertEqual(fixture.publication.previewSources, Set([.microphone, .applicationAudio]),
+                       "Each physical source publishes through its own preview route")
+        XCTAssertEqual(service.residencyEntries, 1)
+        XCTAssertEqual(service.residencyExits, 0, "Both continuous sources still own the same prepared resource stack")
+        XCTAssertEqual(runtime.evidence.count("scope-open"), 1)
+        XCTAssertEqual(Set(fixture.publication.session.transcriptSegments.map(\.sourceTrackID)),
+                       Set(fixture.session.audioTracks.map(\.id)))
+        XCTAssertEqual(Set(fixture.publication.session.transcriptSegments.compactMap(\.speakerID)).count, 4,
+                       "Two native voices in each source remain four source-scoped participants")
+        XCTAssertEqual(fixture.attempt.archive.totalSampleCount, 0, "Streaming cannot hide a full-audio RAM replay")
+        async let stopMicrophone: Void = microphone.finish()
+        async let stopApplication: Void = application.finish()
+        _ = try await (stopMicrophone, stopApplication)
+        XCTAssertEqual(service.residencyExits, 1, "Both Stop tails joined model handback before final publication")
+        let result = try await fixture.pipeline.process(session: fixture.publication.session,
+            sessionDirectory: fixture.directory, progress: { _ in })
+        XCTAssertEqual(result.segments.count, 84, "The final one-second tail of both physical sources is retained")
+        XCTAssertTrue(result.isComplete)
+        XCTAssertEqual(Set(result.segments.map(\.id)).count, 84)
+        for track in fixture.session.audioTracks {
+            let words = result.segments.filter { $0.sourceTrackID == track.id }
+            XCTAssertEqual(words.first?.nativeTiming?.start, 0)
+            XCTAssertEqual(words.last?.nativeTiming?.end, 20.9)
+        }
+        XCTAssertEqual(runtime.evidence.count("scope-open"), 1)
+        XCTAssertEqual(runtime.evidence.count("scope-cleaned"), 1)
+        XCTAssertEqual(runtime.evidence.count("replay"), 0)
+        XCTAssertNil(fixture.pipeline.memoryAttempts[fixture.session.id])
+    }
+
+    func testOnlineStreamingPipelineCancellationJoinsTheOtherPhysicalSource() async throws {
+        let service = OnlinePipelineService(), runtime = OnlinePipelineRuntime()
+        let fixture = try self.onlinePipelineFixture(service: service, runtime: runtime)
+        let microphone = try await fixture.pipeline.memoryConsumer(for: fixture.session.id,
+            track: fixture.session.audioTracks[0], eventHandler: { _ in })
+        _ = try await fixture.pipeline.memoryConsumer(for: fixture.session.id,
+            track: fixture.session.audioTracks[1], eventHandler: { _ in })
+        XCTAssertTrue(microphone.enqueue(try Self.onlinePCM(frames: 8_000, startFrame: 0)))
+        try await Self.onlineWait { runtime.evidence.count("recognize-entered") == 1 }
+        await fixture.pipeline.cancelMemoryAudio(sessionID: fixture.session.id)
+        XCTAssertEqual(service.residencyEntries, 1)
+        XCTAssertEqual(service.residencyExits, 1)
+        XCTAssertEqual(runtime.evidence.count("scope-cleaned"), 1,
+                       "The sibling waiting for its first command cannot keep native ownership orphaned")
+        XCTAssertEqual(runtime.evidence.count("replay"), 0)
+        XCTAssertNil(fixture.pipeline.memoryAttempts[fixture.session.id])
+    }
+
+    /// Explicit local replay of synthetic speech through the same online consumer boundary.
+    /// This is actual-model evidence with paced file input, not a physical capture/UI test.
+    func testOnlineStreamingRealModelsWithPacedSyntheticSources() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_ONLINE_STREAMING_REAL_MODELS"] == "1" else {
+            throw XCTSkip("Set PICHI_ONLINE_STREAMING_REAL_MODELS=1 with two attested synthetic mono16k WAVs")
+        }
+        guard environment["PICHI_ONLINE_STREAMING_SYNTHETIC_AUDIO"] == "1",
+              let microphonePath = environment["PICHI_ONLINE_STREAMING_MIC_WAV"],
+              let applicationPath = environment["PICHI_ONLINE_STREAMING_APP_WAV"] else {
+            throw OnlinePipelineFailure.invalidInput
+        }
+        let sources = try [microphonePath, applicationPath].map(Self.onlineSyntheticWAV)
+        guard sources[0].count == sources[1].count, (336_000...2_880_000).contains(sources[0].count) else {
+            throw OnlinePipelineFailure.invalidInput
+        }
+        let model = try XCTUnwrap(SettingsStore.SpeechModel(rawValue:
+            environment["PICHI_ONLINE_STREAMING_ASR"] ?? SettingsStore.SpeechModel.gigaam.rawValue))
+        let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue))
+        let language = environment["PICHI_ONLINE_STREAMING_LANGUAGE"] ?? "ru"
+        let configuration = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: descriptor.id,
+            languageCode: language, diarizationEnabled: true, speakerProcessingMode: .streaming)
+        try await PichiMeetingProviderFactory.prepareSpeakerResources(for: configuration)
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        let lease = try service.acquireExclusiveActivity(.meeting)
+        defer { service.releaseExclusiveActivity(lease) }
+        let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: { service },
+            modelLocator: try PichiMeetingProviderFactory.modelLocator(for: configuration))
+        let fixture = try self.onlinePipelineFixture(service: service, runtime: runtime,
+            configuration: configuration, descriptor: descriptor)
+        let consumers = try await fixture.session.audioTracks.asyncOnlineMap { track in
+            try await fixture.pipeline.memoryConsumer(for: fixture.session.id, track: track, eventHandler: { _ in })
+        }
+        let clock = ContinuousClock(), began = ContinuousClock.now
+        for start in stride(from: 0, to: sources[0].count, by: 4_000) {
+            let end = min(sources[0].count, start + 4_000)
+            for index in consumers.indices {
+                XCTAssertTrue(consumers[index].enqueue(try Self.onlinePCM(samples: Array(sources[index][start..<end]), startFrame: start)))
+            }
+            try await clock.sleep(until: began.advanced(by: .seconds(Double(end) / 16_000)))
+        }
+        let duringCapture = fixture.publication.session.transcriptSegments.count
+        let stopped = ContinuousClock.now
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for consumer in consumers { group.addTask { try await consumer.finish() } }
+            while try await group.next() != nil {}
+        }
+        let result = try await fixture.pipeline.process(session: fixture.publication.session,
+            sessionDirectory: fixture.directory, progress: { _ in })
+        let elapsed = stopped.duration(to: .now).components
+        let milliseconds = Double(elapsed.seconds) * 1_000 + Double(elapsed.attoseconds) / 1_000_000_000_000_000
+        XCTAssertGreaterThan(duringCapture, 0, "Recognition must accumulate before Stop")
+        XCTAssertTrue(result.isComplete)
+        for track in fixture.session.audioTracks { XCTAssertTrue(result.segments.contains { $0.sourceTrackID == track.id }) }
+        XCTAssertNil(fixture.pipeline.memoryAttempts[fixture.session.id])
+        let report: [String: Any] = ["schema": 1, "realModels": true, "input": "paced-synthetic-mono16k-sources",
+            "physicalCapture": false, "uiAcceptance": false, "duringCaptureWords": duringCapture,
+            "finalWords": result.segments.count, "sourceCount": 2, "sourceFrames": sources[0].count,
+            "stopToResultMilliseconds": milliseconds, "complete": result.isComplete,
+            "asrModel": configuration.asrModel, "pipelineVersion": configuration.pipelineVersion]
+        if let path = environment["PICHI_ONLINE_STREAMING_REPORT"] {
+            try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+                .write(to: URL(fileURLWithPath: path), options: .atomic)
+        }
+        print("ONLINE_STREAMING_REAL_MODELS stopToResultMs=\(milliseconds) duringCaptureWords=\(duringCapture) finalWords=\(result.segments.count)")
+    }
+
+    private func onlinePipelineFixture(service: any MeetingASRServicing, runtime: any MeetingParakeetNemotronRunning,
+        configuration: MeetingFinalProcessingConfiguration? = nil, descriptor: MeetingBackendDescriptor? = nil) throws
+        -> (pipeline: MeetingProcessingPipeline, session: MeetingSession, attempt: MeetingMemoryProcessingAttempt,
+            publication: OnlinePipelinePublication, directory: URL) {
+        let tracks = [self.makeMicTrack(chunks: [], eraStart: 0), self.makeAppTrack(chunks: [])]
+        var session = self.makeSession(mode: .onlineCall, tracks: tracks)
+        session.speakerLabelsEnabled = true
+        session.speakerProcessingMode = .streaming
+        session.transcriptIsComplete = true
+        let configuration = configuration ?? MeetingFinalProcessingConfiguration(asrModel: "synthetic-streaming",
+            languageCode: "en", diarizationFingerprint: "synthetic-speaker-state", speakerProcessingMode: .streaming)
+        session.languageCode = configuration.languageCode
+        let descriptor = descriptor ?? MeetingBackendDescriptor(id: .init(rawValue: "synthetic-online-stream"), version: "1",
+            execution: .local, supportedLanguageCodes: [configuration.languageCode], supportedTrackKinds: [.microphone, .applicationAudio],
+            supportedFinalPrecisions: [.word], resultContract: .canonicalEvidence, knownLimits: [], analysisSampleRate: 16_000,
+            supportedInputs: [.boundedMultiTrackPCM], supportedSpeakerProcessingModes: [.streaming])
+        let directory = try self.makeTempSessionDirectory()
+        let request = MeetingBackendRequest(attemptID: UUID(), session: session, sessionDirectory: directory, configuration: configuration)
+        let publication = OnlinePipelinePublication(session)
+        let attempt = MeetingMemoryProcessingAttempt(request: request, descriptor: descriptor, runtime: runtime,
+            archive: try MeetingMemoryAudioArchive(), redactor: nil,
+            checkpoint: { try publication.apply($0) }, preview: { kind, partial in
+                publication.previewSources.insert(kind)
+                publication.preview[kind] = partial
+            })
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: { service }, managesModelResidency: true,
+            serializationGate: MeetingProcessingSerializationGate(), meetingRuntimeFactory: { _ in runtime })
+        pipeline.memoryAttempts[session.id] = attempt
+        addTeardownBlock { await pipeline.cancelMemoryAudio(sessionID: session.id) }
+        return (pipeline, session, attempt, publication, directory)
+    }
+
+    private static func onlineWait(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !condition() {
+            guard ContinuousClock.now < deadline else { throw OnlinePipelineFailure.timeout }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    private static func onlinePCM(frames: Int, startFrame: Int) throws -> CMSampleBuffer {
+        try onlinePCM(samples: [Float](repeating: 0.1, count: frames), startFrame: startFrame)
+    }
+    private static func onlinePCM(samples: [Float], startFrame: Int) throws -> CMSampleBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)))
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+        samples.withUnsafeBufferPointer { channel.update(from: $0.baseAddress!, count: samples.count) }
+        return try MeetingCapturePCMConverter.sampleBuffer(buffer: buffer,
+            presentationTime: CMTime(value: Int64(startFrame), timescale: 16_000))
+    }
+    private static func onlineSyntheticWAV(_ path: String) throws -> [Float] {
+        guard path.hasPrefix("/") else { throw OnlinePipelineFailure.invalidInput }
+        let file = try AVAudioFile(forReading: URL(fileURLWithPath: path))
+        guard file.processingFormat.sampleRate == 16_000, file.processingFormat.channelCount == 1,
+              (1...2_880_000).contains(file.length) else { throw OnlinePipelineFailure.invalidInput }
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: buffer)
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+        return Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+    }
+}
+
+private enum OnlinePipelineFailure: Error { case unexpected, invalidInput, timeout }
+
+@MainActor
+private final class OnlinePipelinePublication {
+    var session: MeetingSession
+    var preview: [MeetingAudioTrackKind: MeetingLivePartial] = [:]
+    var previewSources = Set<MeetingAudioTrackKind>()
+    init(_ session: MeetingSession) { self.session = session }
+    func apply(_ batch: MeetingPCMTranscriptBatch) throws {
+        var indices = Dictionary(uniqueKeysWithValues: session.transcriptSegments.enumerated().map { ($0.element.id, $0.offset) })
+        for segment in batch.segments {
+            if let index = indices[segment.id] { session.transcriptSegments[index] = segment }
+            else { indices[segment.id] = session.transcriptSegments.count; session.transcriptSegments.append(segment) }
+        }
+        for revision in batch.speakerRevisions {
+            guard let index = indices[revision.segmentID] else { throw OnlinePipelineFailure.unexpected }
+            try revision.apply(to: &session.transcriptSegments[index])
+        }
+        session.speakers = batch.mergingSpeakers(into: session.speakers)
+        session.transcriptIsComplete = session.transcriptIsComplete != false && batch.isComplete
+    }
+}
+
+@MainActor
+private final class OnlinePipelineService: MeetingASRServicing {
+    var residencyEntries = 0
+    var residencyExits = 0
+    var isRunning: Bool { false }
+    var fileTranscriptionProvider: any TranscriptionProvider { fatalError("Unused synthetic provider") }
+    func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease { .init(id: UUID(), activity: activity) }
+    func releaseExclusiveActivity(_ lease: ASRActivityLease) {}
+    func prepareMeetingAudioHandoff(_ lease: ASRActivityLease) async throws {}
+    func completeMeetingAudioHandback(_ lease: ASRActivityLease) async {}
+    func ensureAsrReady() async throws { throw OnlinePipelineFailure.unexpected }
+    func meetingResidencyParticipant() -> MeetingModelParticipant {
+        .init(owner: "synthetic", snapshot: { nil }, suspend: {}, restore: { _ in })
+    }
+    func withMeetingModelResidency<T>(attemptID: UUID, acceptsCompletedCancellation: (T) -> Bool,
+        work: () async throws -> T) async throws -> T {
+        guard residencyEntries == residencyExits else { throw OnlinePipelineFailure.unexpected }
+        residencyEntries += 1
+        defer { residencyExits += 1 }
+        return try await work()
+    }
+    func withPreparedMeetingASR<T>(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+        body: @escaping (any TranscriptionProvider) async throws -> T) async throws -> T { throw OnlinePipelineFailure.unexpected }
+    func transcribeMeetingSamples(_ samples: [Float], provider: any TranscriptionProvider, languageCode: String) async throws -> ASRTranscriptionResult { throw OnlinePipelineFailure.unexpected }
+    func transcribeMeetingSamplesWithTimings(_ samples: [Float], provider: any TranscriptionProvider) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) { throw OnlinePipelineFailure.unexpected }
+    func transcribeMeetingFile(at fileURL: URL, provider: any TranscriptionProvider) async throws -> ASRTranscriptionResult { throw OnlinePipelineFailure.unexpected }
+}
+
+private final nonisolated class OnlinePipelineEvidence: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [String] = []
+    func record(_ event: String) { lock.withLock { events.append(event) } }
+    func count(_ event: String) -> Int { lock.withLock { events.filter { $0 == event }.count } }
+}
+
+private final nonisolated class OnlinePipelineRuntime: MeetingParakeetNemotronRunning, @unchecked Sendable {
+    let evidence = OnlinePipelineEvidence()
+    var supportsStreamingPCMProcessing: Bool { true }
+    var supportsMultiTrackStreamingPCMProcessing: Bool { true }
+    func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws { evidence.record("prepare") }
+    func withPreparedStreamingPCMTracks(trackIDs: [UUID], attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+        onProgress: @escaping @Sendable (UUID, MeetingStreamingPCMObservation) async throws -> Void,
+        body: @escaping @Sendable ([UUID: any MeetingPreparedStreamingPCMProcessing]) async throws -> Void) async throws {
+        evidence.record("scope-open")
+        defer { evidence.record("scope-cleaned") }
+        let sessions = Dictionary(uniqueKeysWithValues: trackIDs.map { track in
+            (track, OnlinePipelinePrepared(track: track, attempt: attemptID, evidence: evidence,
+                progress: { try await onProgress(track, $0) }) as any MeetingPreparedStreamingPCMProcessing)
+        })
+        try await body(sessions)
+    }
+    func withNemotronDiarization(artifact: MeetingNemotronModelArtifact,
+        _ body: @escaping @Sendable (any MeetingNemotronDiarizerFactory) async throws -> MeetingNemotronPhaseResult) async throws -> MeetingNemotronPhaseResult {
+        evidence.record("replay"); throw OnlinePipelineFailure.unexpected
+    }
+    func withPreparedASR(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+        body: @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult) async throws -> MeetingParakeetPhaseResult {
+        evidence.record("replay"); throw OnlinePipelineFailure.unexpected
+    }
+}
+
+private actor OnlinePipelinePrepared: MeetingPreparedStreamingPCMProcessing {
+    let track: UUID
+    let attempt: UUID
+    let evidence: OnlinePipelineEvidence
+    let progress: @Sendable (MeetingStreamingPCMObservation) async throws -> Void
+    var accepted = 0
+    init(track: UUID, attempt: UUID, evidence: OnlinePipelineEvidence,
+        progress: @escaping @Sendable (MeetingStreamingPCMObservation) async throws -> Void) {
+        self.track = track; self.attempt = attempt; self.evidence = evidence; self.progress = progress
+    }
+    func recognize(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
+        preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingStreamingPCMObservation {
+        evidence.record("recognize-entered")
+        let start = Int((offset * 16_000).rounded())
+        while let update = try await window.next() {
+            accepted = start + update.totalFrames
+            try await progress(observation(batch: .init(segments: []), final: false))
+        }
+        let words = stride(from: start, to: accepted, by: 8_000).map { frame in
+            let start = Double(frame) / 16_000, end = min(Double(accepted) / 16_000, start + 0.4)
+            return MeetingTranscriptSegment(id: UUID(), start: .init(value: Int64(frame), timescale: 16_000),
+                end: .init(value: Int64((end * 16_000).rounded()), timescale: 16_000), sourceTrackID: track,
+                speakerID: nil, text: "synthetic-\(frame)", revision: 0, status: .final, overlap: .none, completeness: .complete,
+                attributionState: .unassigned, nativePrecision: .word, nativeUnitID: "\(track)-\(frame)",
+                nativeSpeakerAssignment: .unassigned, nativeTiming: .init(start: start, end: end))
+        }
+        let batch = MeetingPCMTranscriptBatch(segments: words)
+        if let preview { try await preview(batch) }
+        return observation(batch: batch, final: false, asrStable: accepted)
+    }
+    func finishStreaming() async throws -> MeetingStreamingPCMObservation {
+        observation(batch: .init(segments: []), final: true, asrStable: accepted)
+    }
+    func discardActivity(beforeSample: Int) async throws {}
+    private func observation(batch: MeetingPCMTranscriptBatch, final: Bool, asrStable: Int? = nil) -> MeetingStreamingPCMObservation {
+        let end = Double(accepted) / 16_000
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        var activity: [MeetingBackendSpeakerActivity] = []
+        if end > 0 { activity.append(.init(token: .init(analysisEpochID: epoch, label: "a"), start: 0, end: min(10, end))) }
+        if end > 10 { activity.append(.init(token: .init(analysisEpochID: epoch, label: "b"), start: 10, end: end)) }
+        return .init(batch: batch, activity: activity, acceptedThroughSample: accepted, processedThroughSample: accepted,
+            retainedFromSample: 0, isFinal: final, asrStableThroughSample: asrStable)
+    }
+}
+
+private extension Array where Element == MeetingAudioTrack {
+    @MainActor func asyncOnlineMap<T>(_ transform: (Element) async throws -> T) async throws -> [T] {
+        var output: [T] = []
+        for element in self { output.append(try await transform(element)) }
+        return output
+    }
+}
