@@ -83,12 +83,17 @@ actor MeetingDesktopCaptureStopProbe {
     struct ComparisonProbe: Sendable {
         func stop() async { fatalError("Audio comparison recording is outside this probe") }
     }
+    struct MicrophoneMuteAdmission: Sendable {
+        func stop() async { fatalError("Observed mute admission is outside this probe") }
+    }
     private struct ActiveCapture {
         let sessionID: MeetingSessionID
         let runtime: MeetingCaptureStopRuntimeProbe
         let writers: [MeetingCaptureStopWriterProbe]
         let memoryConsumer: MeetingCaptureStopConsumerProbe?
         let comparisonProbe: ComparisonProbe? = nil
+        let muteMonitor: MicrophoneMuteAdmission? = nil
+        let privacyGate: MicrophoneMuteAdmission? = nil
     }
     private var activeCapture: ActiveCapture?
     private var stopTask: Task<MeetingCaptureStopResult, Error>?
