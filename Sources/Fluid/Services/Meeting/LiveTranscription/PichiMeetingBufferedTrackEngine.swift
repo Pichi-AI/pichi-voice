@@ -517,7 +517,9 @@ actor PichiMeetingBufferedTrackEngine {
                         "carried_samples=\(carriedSamples) words=\(wordCount) timed_evidence_valid=\(timedEvidenceValid)"
                 }
             }
-            if !text.isEmpty { self.onUtterance?(self.kind, turnID, text, startPTS, boundary) }
+            // A successful empty decode still completes this exact input interval. Reset,
+            // failure and cancellation only clear partials; they never emit this completion.
+            self.onUtterance?(self.kind, turnID, text, startPTS, boundary)
             self.clearTurn()
             if !retained.isEmpty {
                 self.turnID = UUID()
