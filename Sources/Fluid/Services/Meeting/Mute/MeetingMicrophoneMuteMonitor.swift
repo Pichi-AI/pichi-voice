@@ -10,6 +10,9 @@ nonisolated struct MeetingMicrophoneMuteObservation: Sendable {
     /// Raw mach_absolute_time units. Positive freshness starts before AX and native capture.
     let observedAtHostTime: UInt64
     let generation: UInt64
+    /// A passive key event can arrive after a newer frame. Its acquisition boundary must
+    /// narrow earlier approvals independently of observation freshness. Zero revokes all.
+    var unsafeStartHostTime: UInt64? = nil
 }
 
 /// Best-effort observation of the selected conference's actual microphone control. It never
@@ -274,12 +277,14 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         }
     }
 
-    private func publish(_ state: MeetingMicrophoneMuteState, at time: UInt64, whileStopped: Bool = false) {
+    private func publish(_ state: MeetingMicrophoneMuteState, at time: UInt64,
+        unsafeStart: UInt64? = nil, whileStopped: Bool = false) {
         guard self.running || whileStopped else { return }
         self.lastState = state
         self.lastObservationAt = time
         self.lastPositiveAt = state == .unmuted ? time : nil
-        self.handler(MeetingMicrophoneMuteObservation(state: state, observedAtHostTime: time, generation: self.generation))
+        self.handler(MeetingMicrophoneMuteObservation(state: state, observedAtHostTime: time,
+            generation: self.generation, unsafeStartHostTime: unsafeStart))
     }
 
     private func handlePTT(_ event: MeetingMutePTTListener.Event) {
@@ -287,7 +292,7 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         let now = mach_absolute_time()
         switch event {
         case .disabled:
-            if self.ptt.release(at: now) { self.publish(.unknown, at: now) }
+            if self.ptt.release(at: now) { self.publish(.unknown, at: now, unsafeStart: 0) }
         case let .key(held, timestamp):
             if held {
                 guard let pid = self.application?.processID,
@@ -295,8 +300,12 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
                       self.locator.ownsFocusedWindow(processID: pid) else { return }
                 self.ptt.keyDown(at: timestamp.map(Self.hostTime(nanoseconds:)),
                     persistentlyUnmuted: self.lastState == .unmuted, latestObservation: self.lastObservationAt)
-            } else if self.ptt.release(at: now) {
-                self.publish(.unknown, at: now)
+            } else {
+                let boundary = MeetingMutePTTState.releaseBoundary(
+                    eventTime: timestamp.map(Self.hostTime(nanoseconds:)), processedAt: now)
+                if self.ptt.release(at: boundary.fence) {
+                    self.publish(.unknown, at: now, unsafeStart: boundary.unsafeStart)
+                }
             }
         }
     }
@@ -306,7 +315,8 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         guard let pid = self.application?.processID,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
               self.locator.ownsFocusedWindow(processID: pid) else {
-            if self.ptt.release(at: mach_absolute_time()) { self.publish(.unknown, at: mach_absolute_time()) }
+            let now = mach_absolute_time()
+            if self.ptt.release(at: now) { self.publish(.unknown, at: now, unsafeStart: 0) }
             return
         }
     }

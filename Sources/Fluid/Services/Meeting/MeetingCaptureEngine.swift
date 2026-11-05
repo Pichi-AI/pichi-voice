@@ -98,7 +98,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 privacyGate.setAdmitted(
                     admitted,
                     observedAtHostTime: observation.observedAtHostTime,
-                    unsafeStartHostTime: admitted ? nil : observation.observedAtHostTime
+                    unsafeStartHostTime: admitted ? nil : observation.unsafeStartHostTime ?? observation.observedAtHostTime
                 )
                 eventHandler(.microphoneMuteStateChanged(observation.state))
             }

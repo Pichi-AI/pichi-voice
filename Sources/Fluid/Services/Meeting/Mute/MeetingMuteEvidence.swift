@@ -68,6 +68,11 @@ nonisolated struct MeetingMutePTTState {
     private(set) var releaseFence: UInt64?
     private(set) var excludedThrough: UInt64 = 0
 
+    static func releaseBoundary(eventTime: UInt64?, processedAt now: UInt64) -> (fence: UInt64, unsafeStart: UInt64) {
+        guard let eventTime, eventTime > 0, eventTime <= now else { return (now, 0) }
+        return (eventTime, eventTime)
+    }
+
     mutating func keyDown(at eventTime: UInt64?, persistentlyUnmuted: Bool, latestObservation: UInt64) {
         guard !self.held else { return }
         self.held = true

@@ -3,6 +3,17 @@ import XCTest
 @testable import FluidVoice_Debug
 
 final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
+    func testDelayedReleaseUsesEventBoundaryAndInvalidTimesRevokeAll() {
+        let delayed = MeetingMutePTTState.releaseBoundary(eventTime: 100, processedAt: 200)
+        XCTAssertEqual(delayed.fence, 100)
+        XCTAssertEqual(delayed.unsafeStart, 100)
+        for missingOrInvalid in [nil, UInt64(0), UInt64(201)] {
+            let boundary = MeetingMutePTTState.releaseBoundary(eventTime: missingOrInvalid, processedAt: 200)
+            XCTAssertEqual(boundary.fence, 200)
+            XCTAssertEqual(boundary.unsafeStart, 0)
+        }
+    }
+
     func testZoomActionAndHelpMustAgree() {
         XCTAssertEqual(MeetingMuteUISemantics.zoom(title: nil, description: "Mute my audio", help: "Noise removal is on. Mute my audio (shortcut)"), .unmuted)
         XCTAssertEqual(MeetingMuteUISemantics.zoom(title: nil, description: "Unmute my audio", help: "Press a shortcut to unmute or hold Space to temporarily unmute."), .muted)
