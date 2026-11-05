@@ -28,6 +28,8 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
 @MainActor final class RewriteDouble {
     var originalText = "original"
     var rewrittenText = ""
+    // Nil keeps the earlier no-result path; a model failure message would route to showEditModeFailure.
+    var lastErrorMessage: String?
     var requests = 0
     var clears = 0
     var respond: CheckedContinuation<Void, Never>?
@@ -99,6 +101,8 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
 
     func showTextDeliveryFailure(_: DeliveryFailure, transcript:String) { self.failures += 1; self.failedTranscript=transcript }
     func hideOverlayAfterOutput() { self.hides += 1 }
+    var editModeFailures: [String] = []
+    func showEditModeFailure(_ message: String) { self.editModeFailures.append(message) }
 }
 
 @main enum VoiceEditCancellationTests {
