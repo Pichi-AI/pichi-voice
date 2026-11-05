@@ -410,6 +410,20 @@ extension SettingsStore {
             && descriptor?.supportedInputs.contains(input) == true ? .streaming : .afterRecording
     }
 
+    /// Freeze the current recording policy when a platform has resolved its sources.
+    /// Capture admission owns encryption requirements; applying preferences must preserve
+    /// that explicit requirement as well as the selected sources and backend override.
+    func applyingMeetingRecordingPreferences(to configuration: MeetingCaptureConfiguration) -> MeetingCaptureConfiguration {
+        var configured = configuration
+        let speakerLabelsEnabled = self.meetingSpeakerLabelsEnabled
+        configured.audioStorageMode = self.meetingSaveAudio ? .retainedFiles : .memoryOnly
+        configured.speakerLabelsEnabled = speakerLabelsEnabled
+        configured.speakerProcessingMode = speakerLabelsEnabled
+            && self.meetingSpeakerProcessingMode(for: configuration.mode) == .streaming ? .streaming : nil
+        configured.piiRedactionEnabled = self.meetingPIIRedactionEnabled
+        return configured
+    }
+
     var meetingPIIRedactionEnabled: Bool {
         get { self.defaults.bool(forKey: Keys.meetingPIIRedactionEnabled) }
         set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingPIIRedactionEnabled) }

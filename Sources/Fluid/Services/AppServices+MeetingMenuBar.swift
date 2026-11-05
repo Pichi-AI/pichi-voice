@@ -25,13 +25,14 @@ extension AppServices {
             if let target, target != self.meetingAutomaticTarget {
                 throw MeetingCaptureError.applicationUnavailable(target.bundleIdentifier)
             }
-            return try Self.menuBarMeetingConfiguration(
+            let configuration = try Self.menuBarMeetingConfiguration(
                 defaults: defaults,
                 target: target,
                 microphones: microphones,
                 applications: applications,
                 preferredInputUID: preferredInputUID
             )
+            return SettingsStore.shared.applyingMeetingRecordingPreferences(to: configuration)
         }
         guard SettingsStore.shared.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
         // Capture admission belongs to the coordinator after discovery work has joined.
