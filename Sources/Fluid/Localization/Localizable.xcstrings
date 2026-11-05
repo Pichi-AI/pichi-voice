@@ -66365,6 +66365,142 @@
           }
         }
       }
+    },
+    "Checking meeting mute": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking meeting mute"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка микрофона встречи"
+          }
+        }
+      }
+    },
+    "Microphone unmuted in meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone unmuted in meeting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон включён во встрече"
+          }
+        }
+      }
+    },
+    "Mute detected in meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mute detected in meeting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон выключен во встрече"
+          }
+        }
+      }
+    },
+    "Meeting mute state unknown": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting mute state unknown"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Состояние микрофона встречи неизвестно"
+          }
+        }
+      }
+    },
+    "Meeting mute is being checked. Your microphone is not being recorded.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting mute is being checked. Your microphone is not being recorded."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверяем, выключен ли микрофон во встрече. Ваш микрофон пока не записывается."
+          }
+        }
+      }
+    },
+    "The meeting microphone is unmuted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The meeting microphone is unmuted."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон во встрече включён."
+          }
+        }
+      }
+    },
+    "Meeting mute detected. Your microphone is not being recorded.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting mute detected. Your microphone is not being recorded."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон выключен в приложении встречи. Ваш микрофон не записывается."
+          }
+        }
+      }
+    },
+    "Meeting mute could not be determined. Your microphone is not being recorded.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting mute could not be determined. Your microphone is not being recorded."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось определить, включён ли микрофон во встрече. Ваш микрофон не записывается."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
