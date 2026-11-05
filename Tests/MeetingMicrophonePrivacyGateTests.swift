@@ -151,6 +151,7 @@ private enum Fixture {
             try await self.latchedTransitionsSurviveHiddenControls(checks)
             try await self.latchedReleaseBoundaryAndOrdinaryStop(checks)
             try await self.latchedLateBoundaryNarrowsClosedPrefix(checks)
+            try await self.supersededReleasePreservesNewerUnmute(checks)
             try await self.latchedQuotaDoesNotInventMute(checks)
             print("MeetingMicrophonePrivacyGate: \(checks.count) assertions passed; synthetic PCM only, no hardware or files")
         } catch { fputs("\(error.localizedDescription)\n", stderr); exit(1) }
@@ -538,6 +539,61 @@ private enum Fixture {
             clock.set(1_002); gate.checkFreshnessAndDrain(); await gate.stop(); sink.joined()
             try checks.require(sink.snapshot.0.isEmpty && !gate.permitsReleasedSample(privateSpeech), "late latched boundary rescued unsafe PCM")
         }
+    }
+
+    static func supersededReleasePreservesNewerUnmute(_ checks: Checks) async throws {
+        for stopBeforeRefinement in [false, true] {
+            let clock = HostClock(), sink = Sink()
+            let gate = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions),
+                hostTime: { clock.now() }, automaticWatchdog: false)
+            gate.setAdmitted(true, observedAtHostTime: clock.now())
+            clock.set(1_000.4)
+            let privateAfterRelease = try Fixture.sample(801, at: 1_000.25)
+            try checks.require(gate.submit(privateAfterRelease, deliveryQueue: sink.queue, delivery: sink.receive), "superseded release setup missing")
+            clock.set(1_000.6); gate.setAdmitted(false, observedAtHostTime: clock.now())
+            clock.set(1_000.7); gate.setAdmitted(true, observedAtHostTime: clock.now())
+            clock.set(1_000.8)
+            let laterClosedSpeech = try Fixture.sample(802, at: 1_000.75)
+            try checks.require(gate.submit(laterClosedSpeech, deliveryQueue: sink.queue, delivery: sink.receive), "later closed epoch setup missing")
+            clock.set(1_000.9); gate.setAdmitted(false, observedAtHostTime: clock.now())
+            clock.set(1_001); gate.setAdmitted(true, observedAtHostTime: clock.now())
+            clock.set(1_001.1)
+            let newerSpeech = try Fixture.sample(803, at: 1_001.05)
+            try checks.require(gate.submit(newerSpeech, deliveryQueue: sink.queue, delivery: sink.receive), "newer permanent unmute setup missing")
+            if stopBeforeRefinement { clock.set(1_001.15); gate.finishInput() }
+            clock.set(1_001.2)
+            gate.refineClosedPrefixes(unsafeStartHostTime: HostClock.ticks(1_000.2), before: HostClock.ticks(1_000.6))
+            clock.set(1_002.2); gate.checkFreshnessAndDrain(); sink.joined()
+            try checks.require(sink.snapshot.0 == [802, 803], "historical release leaked old PCM or erased later closed/current speech")
+            try checks.require(!gate.permitsReleasedSample(privateAfterRelease)
+                && gate.permitsReleasedSample(laterClosedSpeech) && gate.permitsReleasedSample(newerSpeech), "writer history ignored scoped release refinement")
+            if !stopBeforeRefinement {
+                clock.set(1_003.2)
+                let continuingSpeech = try Fixture.sample(804, at: 1_003.1)
+                try checks.require(gate.submit(continuingSpeech, deliveryQueue: sink.queue, delivery: sink.receive), "historical key-up closed current intake")
+                clock.set(1_004.3); gate.checkFreshnessAndDrain(); sink.joined()
+                try checks.require(sink.snapshot.0 == [802, 803, 804], "newer unmute stopped without a current mute transition")
+            }
+            await gate.stop()
+            try checks.require(gate.statistics.retainedBuffers == 0, "historical refinement left queued work")
+        }
+        // A lagging HUD may first open in the same poll as the first intervening mute.
+        // Its epoch starts exactly at the old-epoch cutoff, which must be inclusive.
+        let clock = HostClock(), sink = Sink()
+        let gate = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions),
+            hostTime: { clock.now() }, automaticWatchdog: false)
+        gate.setAdmitted(true, observedAtHostTime: clock.now())
+        clock.set(1_000.1); gate.setAdmitted(false, observedAtHostTime: clock.now())
+        clock.set(1_000.6); gate.setAdmitted(true, observedAtHostTime: clock.now())
+        clock.set(1_000.7)
+        let equalCutoffPrivate = try Fixture.sample(811, at: 1_000.65)
+        try checks.require(gate.submit(equalCutoffPrivate, deliveryQueue: sink.queue, delivery: sink.receive), "inclusive cutoff setup missing")
+        clock.set(1_000.8); gate.setAdmitted(false, observedAtHostTime: clock.now())
+        clock.set(1_001); gate.setAdmitted(true, observedAtHostTime: clock.now())
+        gate.refineClosedPrefixes(unsafeStartHostTime: HostClock.ticks(1_000.2), before: HostClock.ticks(1_000.6))
+        clock.set(1_002); gate.checkFreshnessAndDrain(); sink.joined()
+        try checks.require(sink.snapshot.0.isEmpty && !gate.permitsReleasedSample(equalCutoffPrivate), "an epoch equal to the historical cutoff leaked private PCM")
+        await gate.stop()
     }
 
     static func latchedQuotaDoesNotInventMute(_ checks: Checks) async throws {

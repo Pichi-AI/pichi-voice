@@ -716,6 +716,46 @@ extension MeetingAudioChunkSinkTests {
 /// Synthetic PCM crosses the actual quarantine and writer, including the writer's second
 /// admission check. No microphone, meeting application, model or shared preferences are used.
 final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
+    func testLatchedTransitionsKeepRecordingWithoutVisibleControlsAndExcludeMuteTail() async throws {
+        let fixture = try Fixture(admissionPolicy: .latchedTransitions)
+        defer { fixture.gate.close(); fixture.removeDirectory() }
+        let gate = fixture.gate, clock = fixture.clock
+        gate.setAdmitted(true, observedAtHostTime: clock.now())
+
+        // Ten minutes without another frame must preserve the initial enabled state.
+        clock.set(1_600.2)
+        let first = try self.sample(marker: 0.25, at: 1_600.1)
+        XCTAssertTrue(gate.submit(first, deliveryQueue: fixture.deliveryQueue) { fixture.writer.enqueue($0) })
+        clock.set(1_601.2); gate.checkFreshnessAndDrain(); fixture.deliveryQueue.sync {}
+        _ = await fixture.writer.snapshot()
+        XCTAssertEqual(fixture.observations.markers, [0.25])
+
+        clock.set(1_601.49)
+        let privateTail = try self.sample(marker: -0.75, at: 1_601.47)
+        XCTAssertTrue(gate.submit(privateTail, deliveryQueue: fixture.deliveryQueue) { fixture.writer.enqueue($0) })
+        clock.set(1_601.5)
+        gate.setAdmitted(false, observedAtHostTime: clock.now(), unsafeStartHostTime: Clock.ticks(1_601.48))
+        clock.set(2_200.2)
+        XCTAssertFalse(gate.submit(privateTail, deliveryQueue: fixture.deliveryQueue) { fixture.writer.enqueue($0) })
+        XCTAssertTrue(fixture.writer.enqueue(privateTail), "Final writer admission must exclude even a bypassed private block")
+
+        gate.setAdmitted(true, observedAtHostTime: clock.now())
+        clock.set(2_200.3)
+        let resumed = try self.sample(marker: -0.375, at: 2_200.25)
+        XCTAssertTrue(gate.submit(resumed, deliveryQueue: fixture.deliveryQueue) { fixture.writer.enqueue($0) })
+        clock.set(2_201.4); gate.checkFreshnessAndDrain(); fixture.deliveryQueue.sync {}
+        await gate.stop()
+        let result = await fixture.writer.stop()
+        XCTAssertEqual(fixture.observations.markers, [0.25, -0.375])
+        XCTAssertEqual(fixture.observations.writerFailures, 0)
+        XCTAssertEqual(result.chunks.reduce(0) { $0 + ($1.captureAnalysisAsset?.frameCount ?? 0) }, 960)
+        let persisted = try self.readSamples(result, in: fixture.directory)
+        XCTAssertEqual(Array(persisted.prefix(480)), [Float](repeating: 0.25, count: 480))
+        XCTAssertEqual(Array(persisted.suffix(480)), [Float](repeating: -0.375, count: 480))
+        XCTAssertFalse(persisted.contains(-0.75))
+        XCTAssertEqual(gate.statistics.retainedBytes, 0)
+    }
+
     func testMutePreservesConfirmedSpeechButExcludesPrivateTailAndDiagnostics() async throws {
         let fixture = try Fixture()
         defer { fixture.gate.close(); fixture.removeDirectory() }
@@ -841,12 +881,15 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
     }
 
     private func readSamples(_ track: MeetingAudioTrack, in directory: URL) throws -> [Float] {
-        let chunk = try XCTUnwrap(track.chunks.first)
-        let file = try AVAudioFile(forReading: directory.appendingPathComponent(chunk.relativeFilePath),
-            commonFormat: .pcmFormatFloat32, interleaved: false)
-        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
-        try file.read(into: buffer)
-        return Array(UnsafeBufferPointer(start: try XCTUnwrap(buffer.floatChannelData?[0]), count: Int(buffer.frameLength)))
+        var samples: [Float] = []
+        for chunk in track.chunks {
+            let file = try AVAudioFile(forReading: directory.appendingPathComponent(chunk.relativeFilePath),
+                commonFormat: .pcmFormatFloat32, interleaved: false)
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+            try file.read(into: buffer)
+            samples.append(contentsOf: UnsafeBufferPointer(start: try XCTUnwrap(buffer.floatChannelData?[0]), count: Int(buffer.frameLength)))
+        }
+        return samples
     }
 
     private final nonisolated class Clock: @unchecked Sendable {
@@ -886,12 +929,13 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
         let deliveryQueue = DispatchQueue(label: "meeting.writer-privacy.tests.delivery")
         let writer: MeetingAudioChunkWriter
 
-        init() throws {
+        init(admissionPolicy: MeetingMicrophonePrivacyGate.Configuration.AdmissionPolicy = .freshObservations) throws {
             self.directory = FileManager.default.temporaryDirectory.appendingPathComponent("FluidVoice-WriterPrivacy-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: false,
                 attributes: [.posixPermissions: NSNumber(value: Int16(0o700))])
             let clock = self.clock
-            let gate = MeetingMicrophonePrivacyGate(hostTime: { clock.now() }, automaticWatchdog: false)
+            let gate = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: admissionPolicy),
+                hostTime: { clock.now() }, automaticWatchdog: false)
             self.gate = gate
             let observations = self.observations
             let track = MeetingAudioTrack(id: UUID(), kind: .microphone,

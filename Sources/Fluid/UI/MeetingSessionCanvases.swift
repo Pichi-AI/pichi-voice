@@ -1265,8 +1265,6 @@ private struct MeetingTrackHealthRow: View {
 
     private var statusColor: Color {
         if self.microphoneMuteState == .muted { return self.theme.palette.readableText(Color(nsColor: .systemRed)) }
-        if self.microphoneMuteState == .unknown { return self.theme.palette.readableText(self.theme.palette.warning) }
-        if self.microphoneMuteState == .checking { return self.theme.palette.secondaryText }
         return switch self.health.status {
         case .healthy: self.theme.palette.success
         case .degraded, .unavailable: self.theme.palette.warning
@@ -1276,8 +1274,6 @@ private struct MeetingTrackHealthRow: View {
 
     private var statusIcon: String {
         if self.microphoneMuteState == .muted { return "lock.circle.fill" }
-        if self.microphoneMuteState == .unknown { return "questionmark.circle.fill" }
-        if self.microphoneMuteState == .checking { return "ellipsis.circle" }
         return switch self.health.status {
         case .healthy: "checkmark.circle.fill"
         case .degraded, .unavailable: "exclamationmark.circle.fill"

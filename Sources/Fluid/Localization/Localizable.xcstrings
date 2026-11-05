@@ -66501,6 +66501,57 @@
           }
         }
       }
+    },
+    "Microphone recording enabled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone recording enabled"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись микрофона включена"
+          }
+        }
+      }
+    },
+    "Microphone recording stays enabled until a mute transition is detected.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone recording stays enabled until a mute transition is detected."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись микрофона включена до обнаружения переключения на мьют."
+          }
+        }
+      }
+    },
+    "Mute detected. Microphone recording stays paused until an unmute transition is detected.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mute detected. Microphone recording stays paused until an unmute transition is detected."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обнаружен мьют. Запись микрофона приостановлена до обнаружения его включения."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

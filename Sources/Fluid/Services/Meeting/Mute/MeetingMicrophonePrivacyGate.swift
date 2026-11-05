@@ -215,6 +215,35 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
         }
     }
 
+    /// A delayed PTT release can arrive after a newer permanent unmute. The caller supplies
+    /// the first intervening muted period as the inclusive old-epoch cutoff, so subsequent
+    /// legitimate closed epochs and current admission stay unchanged.
+    func refineClosedPrefixes(unsafeStartHostTime: UInt64, before oldEpochCutoffHostTime: UInt64) {
+        let now = self.hostTime()
+        guard oldEpochCutoffHostTime > 0, oldEpochCutoffHostTime <= now,
+              unsafeStartHostTime <= oldEpochCutoffHostTime else { return }
+        let safeEnd = unsafeStartHostTime > self.prefixSafetyTicks ? unsafeStartHostTime - self.prefixSafetyTicks : 0
+        self.lock.withLock {
+            self.approvedIntervals = self.approvedIntervals.compactMap { interval in
+                guard interval.start <= oldEpochCutoffHostTime else { return interval }
+                let end = min(interval.end, safeEnd)
+                return end > interval.start ? (interval.start, end) : nil
+            }
+            let items = self.pending
+            self.pending.removeAll(keepingCapacity: true)
+            for item in items {
+                if !item.approvedClosedPrefix || self.isApprovedLocked(item.metadata) {
+                    self.pending.append(item)
+                } else if item.state == .copying {
+                    item.state = .cancelledCopy
+                } else {
+                    self.releaseLocked(item, rejected: true)
+                }
+            }
+            self.drainLocked(now: now)
+        }
+    }
+
     /// Defense for writer/live sinks which receive late buffered AEC or fallback output. It does
     /// not replace ingress quarantine, because diagnostics must never see unadmitted raw PCM.
     func permitsReleasedSample(_ sampleBuffer: CMSampleBuffer) -> Bool {
