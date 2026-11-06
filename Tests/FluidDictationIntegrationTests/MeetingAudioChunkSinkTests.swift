@@ -760,6 +760,10 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
         control.setManuallyMuted(true)
         await gate.stop()
         let track = await writer.stop()
+        XCTAssertEqual(fixture.observations.writerFailures, 0, fixture.observations.failureDetails.joined(separator: "\n"))
+        guard track.chunks.allSatisfy({ $0.finalizationState == .finalized }) else {
+            return XCTFail("Synthetic writer did not finalize: \(fixture.observations.failureDetails)")
+        }
         let samples = try self.readSamples(track, in: fixture.directory)
         XCTAssertEqual(live.markers, [0.25, 0.5, 0.75])
         XCTAssertEqual(fixture.observations.markers, [0.25, 0.5, 0.75])
@@ -961,6 +965,8 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
         private let lock = NSLock()
         private var observedMarkers: [Float] = []
         private var failures = 0
+        private var details: [String] = []
+        var failureDetails: [String] { self.lock.withLock { self.details } }
         var markers: [Float] { self.lock.withLock { self.observedMarkers } }
         var writerFailures: Int { self.lock.withLock { self.failures } }
         func observe(_ sample: CMSampleBuffer) {
@@ -972,7 +978,9 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
             if status == noErr { self.lock.withLock { self.observedMarkers.append(marker) } }
         }
         func record(_ event: MeetingCaptureEvent) {
-            if case .interrupted(.writerFailure, _, _) = event { self.lock.withLock { self.failures += 1 } }
+            if case let .interrupted(.writerFailure, _, detail) = event {
+                self.lock.withLock { self.failures += 1; self.details.append(detail ?? "unspecified") }
+            }
         }
     }
 

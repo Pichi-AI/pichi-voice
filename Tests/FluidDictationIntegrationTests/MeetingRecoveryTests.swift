@@ -18,10 +18,16 @@ final class MeetingRecoveryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let capture = StubCaptureController()
         capture.usesMicrophoneControl = true
+        let microphone = self.makeMicrophoneTrack(chunks: [])
+        var application = self.makeMicrophoneTrack(chunks: [])
+        application.kind = .applicationAudio
+        capture.startResult = .init(tracks: [microphone, application], firstPresentationTime: nil)
         let coordinator = MeetingSessionCoordinator(store: MeetingSessionStore(rootDirectory: dir), capture: capture,
             processing: StubProcessingController(), audioArbiter: StubArbiter())
         var configuration = self.makeConfiguration()
         configuration.mode = .onlineCall
+        // Exercise controls without starting the upstream English caption model.
+        configuration.languageCode = "es"
         configuration.application = .init(bundleIdentifier: "us.zoom.xos", displayName: "Synthetic Zoom")
         let session = try await coordinator.startRecording(configuration: configuration)
         await self.drainCaptureEvents()
