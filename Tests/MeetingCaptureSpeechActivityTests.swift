@@ -2,6 +2,11 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
+nonisolated enum PichiLocalization {
+    static func text(_ value: String) -> String { value }
+    static func format(_ value: String, _ args: CVarArg...) -> String { String(format: value, arguments: args) }
+}
+
 typealias SessionSpeakerID = UUID
 nonisolated enum MeetingAudioTrackKind: Sendable { case microphone, applicationAudio }
 nonisolated enum MeetingEchoDetector {
@@ -56,24 +61,40 @@ struct MeetingCaptureSpeechActivityTests {
     static func require(_ value: Bool, _ text: String) throws {
         if !value { throw NSError(domain: "CaptureVAD", code: 1, userInfo: [NSLocalizedDescriptionKey: text]) }
     }
-    static func wait(_ events: Events, count: Int) async throws {
+    static func wait(_ events: Events, count: Int, context: String = "") async throws {
         for _ in 0..<2000 {
             if events.values.count >= count { return }
             try await Task.sleep(for: .milliseconds(1))
         }
-        throw CocoaError(.coderReadCorrupt)
+        throw NSError(domain: "CaptureVADTimeout", code: 1, userInfo: [NSLocalizedDescriptionKey:
+            "\(context): expected \(count) callbacks, got \(events.values.count), tail \(events.values.suffix(4))"])
     }
-    static func input(_ value: Float, start: Double, count: Int = 4096) throws -> CMSampleBuffer {
-        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
+    static func input(_ value: Float, start: Double, count: Int = 4096,
+                      sampleRate: Double = 16_000, channels: AVAudioChannelCount = 1,
+                      interleaved: Bool = false, signal: ((Int) -> Float)? = nil) throws -> CMSampleBuffer {
+        let tag = channels == 1 ? kAudioChannelLayoutTag_Mono :
+            (channels == 2 ? kAudioChannelLayoutTag_Stereo : kAudioChannelLayoutTag_DiscreteInOrder | channels)
+        let layout = AVAudioChannelLayout(layoutTag: tag)!
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+            interleaved: interleaved, channelLayout: layout)
         let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count))!
         pcm.frameLength = AVAudioFrameCount(count)
-        pcm.floatChannelData![0].initialize(repeating: value, count: count)
+        if interleaved { pcm.floatChannelData![0].initialize(repeating: value, count: count * Int(channels)) }
+        else { for channel in 0..<Int(channels) { pcm.floatChannelData![channel].initialize(repeating: value, count: count) } }
+        if let signal {
+            for frame in 0..<count {
+                let value = signal(frame)
+                for channel in 0..<Int(channels) {
+                    pcm.floatChannelData![interleaved ? 0 : channel][interleaved ? frame * Int(channels) + channel : frame] = value
+                }
+            }
+        }
         var description: CMAudioFormatDescription?
         try require(CMAudioFormatDescriptionCreate(allocator: kCFAllocatorDefault, asbd: format.streamDescription,
             layoutSize: 0, layout: nil, magicCookieSize: 0, magicCookie: nil, extensions: nil,
             formatDescriptionOut: &description) == noErr, "format")
-        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 16_000),
-            presentationTimeStamp: CMTime(seconds: start, preferredTimescale: 16_000), decodeTimeStamp: .invalid)
+        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: Int32(sampleRate)),
+            presentationTimeStamp: CMTime(seconds: start, preferredTimescale: 1_000_000_000), decodeTimeStamp: .invalid)
         var result: CMSampleBuffer?
         try require(CMSampleBufferCreate(allocator: kCFAllocatorDefault, dataBuffer: nil, dataReady: false,
             makeDataReadyCallback: nil, refcon: nil, formatDescription: description, sampleCount: count,
@@ -85,6 +106,12 @@ struct MeetingCaptureSpeechActivityTests {
         return result!
     }
     static func main() async throws {
+        try await nativeCaptureFormats()
+        try await sourceIsolation()
+        if let model = ProcessInfo.processInfo.environment["PICHI_ACTIVITY_TEST_MODEL"],
+           let speech = ProcessInfo.processInfo.environment["PICHI_ACTIVITY_TEST_SYNTHETIC_SPEECH"] {
+            try await realModelAcceptance(model: URL(fileURLWithPath: model), speech: URL(fileURLWithPath: speech))
+        }
         try await budgetRecovery()
         try await delayedRightTail()
         let events = Events()
@@ -99,6 +126,9 @@ struct MeetingCaptureSpeechActivityTests {
         try require(!worker.confidentlyNonSpeech(start: 0, end: 0.512), "warmup fails open")
         try require(!worker.confidentlyNonSpeech(start: 0.256, end: 0.6), "unknown coverage fails open")
         try require(!worker.confidentlyNonSpeech(start: 0.256, end: 20), "unprocessed tail fails open")
+        try require(!worker.confidentlyNonSpeech(start: 0, end: 0.000_000_1)
+                    && !worker.confidentlyNonSpeech(start: 20, end: 20.000_000_1),
+                    "Sub-microsecond unknown/unscored ranges cannot manufacture silence through rounding tolerance")
         worker.offer(try input(0, start: 5), start: 5)
         try await wait(events, count: 7)
         try require(events.values.last!.2 == .unknown, "capture gap resets model warmup")
@@ -186,6 +216,130 @@ struct MeetingCaptureSpeechActivityTests {
         projection.observeSpeechActivity(source: .you, start: 0.512, end: 0.768, activity: .nonSpeech)
         try require(projection.snapshot.tokens == prior && projection.snapshot.animatedTokenIDs.isEmpty, "pause stops animation and retains pending speech")
         print("PASS actual aggregate activity projection and quiet pause")
+    }
+
+    static func nativeCaptureFormats() async throws {
+        for (rate, channels, interleaved) in [(16_000.0, 1, false), (44_100, 1, false),
+                                             (48_000, 2, true), (48_000, 3, false)] {
+            let script = Script([])
+            let events = Events()
+            let worker = MeetingCaptureSpeechActivityWorker(factory: { ScriptedModel(script: script) }, publish: events.add)
+            let packet = Int(rate * 0.256)
+            for index in 0..<8 {
+                let start = 2 + Double(index * packet) / rate
+                worker.offer(try input(0.02, start: 600 + start, count: packet,
+                    sampleRate: rate, channels: AVAudioChannelCount(channels), interleaved: interleaved), start: start)
+                // Feed faster than real time without deliberately saturating the bounded
+                // intake. The separate overflow probe owns saturation/unknown semantics.
+                if index > 0 { try await wait(events, count: index) }
+            }
+            try await wait(events, count: rate == 16_000 ? 8 : 7, context: "native \(rate)/\(channels)/\(interleaved)")
+            try require(abs(events.values[0].0 - 2) < 0.000_001,
+                        "Native normalization preserves capture-relative clock rather than host PTS")
+            try require(events.values[0].2 == .unknown && events.values.dropFirst().allSatisfy { $0.2 == .nonSpeech },
+                        "Every native format reaches the existing detector after one warmup")
+            try require(worker.confidentlyNonSpeech(start: 2.256, end: 3.5), "Resampled evidence stays on the original source timeline")
+            let prior = events.values.count
+            let nativeEnd = 2 + Double(8 * packet) / rate
+            worker.offer(try input(0, start: 600 + nativeEnd, sampleRate: 16_000), start: nativeEnd)
+            try await wait(events, count: prior + 1)
+            if rate != 16_000 || channels != 1 {
+                try require(events.values.last!.2 == .unknown && script.resetFlags.last == true,
+                            "A contiguous native format change resets recurrent and resampling state")
+            }
+            worker.stop(); await worker.join()
+        }
+        print("PASS native 16/44.1/48k, mono/stereo/three-channel planar/interleaved, source PTS and format reset")
+    }
+
+    static func sourceIsolation() async throws {
+        let capture = MeetingPendingSpeechCapture(originBox: MeetingLiveOriginBox(), activityModel: { Fake() }, onUpdate: { _ in })
+        for index in 0..<8 {
+            let start = Double(index) * 0.256
+            capture.offer(kind: .microphone, sampleBuffer: try input(0.02, start: 600 + start))
+            capture.offer(kind: .applicationAudio, sampleBuffer: try input(0.99, start: 600 + start))
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        var snapshot = capture.reconcile(visible: .empty)
+        for _ in 0..<2000 {
+            snapshot = capture.reconcile(visible: .empty)
+            if snapshot.activityBySource[.you] == .nonSpeech && snapshot.tokens.contains(where: { $0.source == .them }) { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        try require(snapshot.activityBySource[.you] == .nonSpeech && !snapshot.tokens.isEmpty
+                    && snapshot.tokens.allSatisfy { $0.source == .them },
+                    "Quiet microphone cannot inherit application speech or mint waves through the scalar fallback")
+        try require(capture.confidentlyNonSpeech(start: 0.256, end: 1.5),
+                    "Application speech does not contaminate microphone-only negative evidence")
+        await capture.stopAndWait()
+        try require(capture.reconcile(visible: .empty).tokens.isEmpty, "Both source workers join and close with the capture")
+        print("PASS independent source models, quiet microphone, application speech and joined source teardown")
+    }
+
+    /// Opt-in real model check. Inputs are the pinned public VAD and locally synthesized
+    /// speech only; it never opens the microphone or the user's recording/history store.
+    static func realModelAcceptance(model: URL, speech: URL) async throws {
+        func run(_ values: [Float], rate: Double) async throws -> [(Double, Double, MeetingSpeechActivity)] {
+            let events = Events(), loaded = Events()
+            let worker = MeetingCaptureSpeechActivityWorker(factory: {
+                let result = try MeetingLocalSileroActivityModel(modelURL: model)
+                loaded.add(0, 0, .unknown)
+                return result
+            }, publish: events.add)
+            do {
+                try await wait(loaded, count: 1)
+                let packet = Int(rate * 0.256)
+                for offset in stride(from: 0, to: values.count, by: packet) {
+                    let count = min(packet, values.count - offset)
+                    worker.offer(try input(0, start: 600 + Double(offset) / rate, count: count,
+                        sampleRate: rate, channels: 2, interleaved: true, signal: { values[offset + $0] }),
+                        start: Double(offset) / rate)
+                    // The final native packet and converter tail may be shorter than a
+                    // complete real model window. Never pad it or wait for a fake score.
+                    let complete = max(0, Int((Double(offset + count) / rate / 0.256).rounded(.down)) - 1)
+                    if complete > 0 { try await wait(events, count: complete) }
+                }
+                worker.stop(); await worker.join()
+                return events.values
+            } catch { worker.stop(); await worker.join(); throw error }
+        }
+        var random: UInt64 = 19
+        var lowPass: Float = 0
+        let noise: [Float] = (0..<192_000).map { frame in
+            random = random &* 6_364_136_223_846_793_005 &+ 1
+            let white = Float((random >> 40) & 0xFF_FFFF) / Float(0xFF_FFFF) * 2 - 1
+            lowPass = 0.85 * lowPass + 0.15 * white
+            let t = Double(frame) / 48_000
+            // A modulated mechanical tone plus seeded filtered noise, with no speech.
+            return 0.04 * lowPass + Float((0.025 + 0.015 * sin(t * 6 * .pi)) * sin(t * 440 * .pi))
+        }
+        let legacy = MeetingPendingSpeechCapture(originBox: MeetingLiveOriginBox(), onUpdate: { _ in })
+        for offset in stride(from: 0, to: noise.count, by: 960) {
+            legacy.offer(kind: .microphone, sampleBuffer: try input(0, start: Double(offset) / 48_000,
+                count: 960, sampleRate: 48_000, channels: 2, interleaved: true, signal: { noise[offset + $0] }))
+        }
+        try require(!legacy.reconcile(visible: .empty).tokens.isEmpty, "Negative control reproduces false waves from modulated mechanical noise")
+        await legacy.stopAndWait()
+        let noiseEvents = try await run(noise, rate: 48_000)
+        try require(noiseEvents.count >= 12 && !noiseEvents.contains { $0.2 == .speech },
+                    "The actual VAD rejects noise that triggers the old heuristic")
+        let file = try AVAudioFile(forReading: speech)
+        try require(file.length > 0 && Double(file.length) / file.processingFormat.sampleRate <= 30,
+                    "Synthetic speech fixture is bounded to thirty seconds")
+        var speechSamples: [Float] = []
+        while file.framePosition < file.length {
+            let pcm = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096)!
+            try file.read(into: pcm, frameCount: 4096)
+            let mono = try MeetingCapturePCMConverter.ownedMonoCopy(of: pcm)
+            speechSamples.append(contentsOf: UnsafeBufferPointer(start: mono.floatChannelData![0], count: Int(mono.frameLength)))
+        }
+        for attenuation: Float in [1, 0.25] {
+            let input = speechSamples.map { $0 * attenuation } + [Float](repeating: 0, count: Int(file.processingFormat.sampleRate * 2))
+            let events = try await run(input, rate: file.processingFormat.sampleRate)
+            try require(events.contains { $0.2 == .speech }, "Real VAD keeps ordinary and four-times-attenuated synthetic speech")
+            try require(events.suffix(3).allSatisfy { $0.2 == .nonSpeech }, "Real VAD stops activity after speech gives way to silence")
+        }
+        print("PASS real pinned VAD: legacy noise false-positive reproduced and rejected, ordinary/quiet synthetic speech retained, trailing silence inactive")
     }
 
     static func budgetRecovery() async throws {
