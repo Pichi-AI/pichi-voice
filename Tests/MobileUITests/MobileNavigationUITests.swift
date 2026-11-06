@@ -104,6 +104,13 @@ final class MobileNavigationUITests: XCTestCase {
                 "-MeetingPIIRedactionEnabled", "NO", "-MeetingPIIRedactionRequested", "NO",
                 "-MeetingSpeakerProcessingMode", "afterRecording"]
         }
+        let ownsPresentationLaunch = ["testLegacyAccountLogin", "testSensitivePolicySettings",
+            "testOwnerVoiceSettings", "testRussianSettingsAndModels"].contains(where: name.contains)
+        #if targetEnvironment(simulator)
+        if ownsPresentationLaunch {
+            app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
+        }
+        #endif
         if startsOverRecovery {
             // Speech comes from the DEBUG file input staged in the app's Application Support/DebugAudioInput.
             app.launchEnvironment["PICHI_DEBUG_AUDIO_INPUT"] = "1"
@@ -127,8 +134,8 @@ final class MobileNavigationUITests: XCTestCase {
                 throw NSError(domain: "ProductionUISmoke", code: 1,
                               userInfo: [NSLocalizedDescriptionKey: "Cannot safely attach to the existing AUT state"])
             }
-        } else { app.launch() }
-        if !productionDownload { waitForOrientation(portrait: true) }
+        } else if !ownsPresentationLaunch { app.launch() }
+        if !productionDownload && !ownsPresentationLaunch { waitForOrientation(portrait: true) }
     }
 
     /// The parent preserves storage and independently verifies downloaded artifact hashes.
@@ -627,11 +634,16 @@ final class MobileNavigationUITests: XCTestCase {
         #endif
     }
 
-    func testLegacyAccountLoginInBothLanguagesAndThemes() throws {
+    func testLegacyAccountLoginEnglishLight() throws { try assertLegacyAccountLogin(language: "en", appearance: "light") }
+    func testLegacyAccountLoginEnglishDark() throws { try assertLegacyAccountLogin(language: "en", appearance: "dark") }
+    func testLegacyAccountLoginRussianLight() throws { try assertLegacyAccountLogin(language: "ru", appearance: "light") }
+    func testLegacyAccountLoginRussianDark() throws { try assertLegacyAccountLogin(language: "ru", appearance: "dark") }
+
+    private func assertLegacyAccountLogin(language: String, appearance: String) throws {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Legacy login presentation review uses an owned simulator and no account credentials")
         #else
-        for (language, appearance) in [("en", "light"), ("en", "dark"), ("ru", "light"), ("ru", "dark")] {
+        do {
             app.terminate()
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
                 "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
@@ -652,7 +664,7 @@ final class MobileNavigationUITests: XCTestCase {
             capture("legacy-\(language)-\(appearance)-email")
             if ProcessInfo.processInfo.environment["PICHI_LEGACY_PROMPT_REVIEW_ONLY"] == "1" {
                 app.terminate()
-                continue
+                return
             }
             password.tap(); password.typeText("synthetic-only\n")
             XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
@@ -672,7 +684,11 @@ final class MobileNavigationUITests: XCTestCase {
         #endif
     }
 
-    func testSensitivePolicySettingsInBothLanguagesAndThemes() throws {
+    func testSensitivePolicySettingsRussianLight() throws { try assertSensitivePolicySettings(language: "ru", appearance: "light") }
+    func testSensitivePolicySettingsRussianDark() throws { try assertSensitivePolicySettings(language: "ru", appearance: "dark") }
+    func testSensitivePolicySettingsEnglishLight() throws { try assertSensitivePolicySettings(language: "en", appearance: "light") }
+
+    private func assertSensitivePolicySettings(language: String, appearance: String) throws {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Staged privacy settings review requires an owned simulator")
         #else
@@ -688,7 +704,7 @@ final class MobileNavigationUITests: XCTestCase {
             }
             XCTAssertTrue(element.exists && element.isHittable)
         }
-        for (language, appearance) in [("ru", "light"), ("ru", "dark"), ("en", "light")] {
+        do {
             app.terminate()
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
                 "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
@@ -915,7 +931,8 @@ final class MobileNavigationUITests: XCTestCase {
     func testOwnerVoiceSettingsUseNativeRecordingStructureInBothLanguages() throws {
         for (language, settingsTitle, appearance) in [("en", "Settings", "light"), ("ru", "Настройки", "dark")] {
             app.terminate()
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
             XCUIDevice.shared.orientation = .portrait
             app.launch()
             waitForOrientation(portrait: true)
@@ -1072,7 +1089,8 @@ final class MobileNavigationUITests: XCTestCase {
 
     func testRussianSettingsAndModelsInDarkAppearance() throws {
         app.terminate()
-        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark"]
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark",
+            "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
         app.launch()
         waitForOrientation(portrait: true)
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
@@ -2171,9 +2189,16 @@ final class MobileNavigationUITests: XCTestCase {
         let sidebar = app.buttons["navigation.\(identifier)"]
         if sidebar.exists && sidebar.isHittable { sidebar.tap() }
         else {
-            let tab = app.tabBars.buttons[title]
-            XCTAssertTrue(tab.waitForExistence(timeout: 5) && tab.isHittable,
-                          "Navigation must target a visible sidebar or tab control")
+            // Native tabs may expose the SF Symbol while their text label is
+            // temporarily non-hittable after a section transition.
+            let symbol = identifier == "settings" ? "gearshape" : "waveform"
+            let candidates = app.tabBars.buttons.matching(NSPredicate(format: "label IN %@", [title, symbol]))
+            let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                candidates.allElementsBoundByIndex.contains(where: \.isHittable)
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 5), .completed,
+                           "Navigation must target a visible sidebar or native tab control")
+            guard let tab = candidates.allElementsBoundByIndex.first(where: \.isHittable) else { return }
             tab.tap()
         }
         capture("navigation-\(identifier)")

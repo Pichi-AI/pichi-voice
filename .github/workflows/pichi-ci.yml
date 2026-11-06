@@ -94,7 +94,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.ios == 'true'
     runs-on: xcode-27
-    timeout-minutes: 25
+    timeout-minutes: 37
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
       CI_ROOT: ${{ github.workspace }}/.build/pichi-coverage
@@ -106,6 +106,7 @@ jobs:
           persist-credentials: false
       - run: git worktree add --detach "$CI_ROOT" HEAD
       - working-directory: ${{ env.CI_ROOT }}
+        timeout-minutes: 35
         run: python3 -S scripts/dev/coverage-ci.py native --scope ios --output .build/coverage
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
