@@ -330,6 +330,10 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         self.refreshCoverageAfterVariantRemoval()
     }
 
+    private var ownsTrainingEndpoint: Bool {
+        self.activeCaptureToken.map { self.asr.dictionaryCaptureToken == $0 } ?? false
+    }
+
     func cancel() {
         self.isCancelled = true
         self.undoTask?.cancel()
@@ -337,7 +341,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         self.trainingGeneration = nil
         self.discardCurrentCapture = true
         self.isAutomaticCaptureEnabled = false
-        DictionaryTrainingEndpointMonitor.shared.stop()
+        if self.ownsTrainingEndpoint { DictionaryTrainingEndpointMonitor.shared.stop() }
         switch self.capturePhase {
         case .starting:
             self.stopRequestedDuringStart = true
@@ -355,7 +359,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         self.trainingGeneration = nil
         self.discardCurrentCapture = true
         self.isAutomaticCaptureEnabled = false
-        DictionaryTrainingEndpointMonitor.shared.stop()
+        if self.ownsTrainingEndpoint { DictionaryTrainingEndpointMonitor.shared.stop() }
         if self.capturePhase == .starting {
             self.stopRequestedDuringStart = true
             Task { await self.asr.cancelPendingPronunciationTrainingStart() }

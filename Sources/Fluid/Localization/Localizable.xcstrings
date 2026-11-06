@@ -66858,6 +66858,23 @@
           }
         }
       }
+    },
+    "Time to undo": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Time to undo"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Время для отмены"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

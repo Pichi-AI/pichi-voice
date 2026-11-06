@@ -5381,38 +5381,26 @@ extension DictationE2ETests {
         XCTAssertFalse(repeated.confirmsAppliedText(rejectedWriteEdit, differenceFromExpected: rejected?.oldRange))
     }
 
-    func testCorrectionOverlayQueuesSecondAndThirdSuggestions() async {
+    func testCorrectionOverlayShowsAllCorrectionsAndDismissesOnlyChosenRow() {
         let controller = DictionaryCorrectionOverlayController()
         defer { controller.concealPrivatePresentation() }
         let first = AutomaticDictionaryCorrectionCandidate(heardText: "Alhpa", correctedText: "Alpha")
         let second = AutomaticDictionaryCorrectionCandidate(heardText: "Btea", correctedText: "Beta")
         let third = AutomaticDictionaryCorrectionCandidate(heardText: "Gmma", correctedText: "Gamma")
-        let secondShown = expectation(description: "Second correction shown after first dismissal")
-        let thirdShown = expectation(description: "Third correction shown after second dismissal")
-        let closed = expectation(description: "Last popup dismissed")
-        var shown: [UUID] = []
-        controller.onPresentation = { session in
-            shown.append(session.candidate.id)
-            if session.candidate.id == second.id { secondShown.fulfill() }
-            if session.candidate.id == third.id { thirdShown.fulfill() }
-        }
-        controller.onDismissal = { if shown.last == third.id { closed.fulfill() } }
         controller.show(candidate: first) { _ in }
         controller.show(candidate: second) { _ in }
         controller.show(candidate: third) { _ in }
-        XCTAssertEqual(controller.presentedCandidateID, first.id)
+        XCTAssertEqual(controller.presentedCandidateIDs, [first.id, second.id, third.id])
+        let deadline = controller.displayDeadline, generation = controller.progressGeneration
+        controller.dismiss(id: second.id)
+        XCTAssertEqual(controller.presentedCandidateIDs, [first.id, third.id])
+        XCTAssertEqual(controller.displayDeadline, deadline)
+        XCTAssertEqual(controller.progressGeneration, generation)
         controller.dismiss()
-        await fulfillment(of: [secondShown], timeout: 2)
-        XCTAssertEqual(controller.presentedCandidateID, second.id)
-        controller.dismiss()
-        await fulfillment(of: [thirdShown], timeout: 2)
-        XCTAssertEqual(shown, [first.id, second.id, third.id])
-        controller.dismiss()
-        await fulfillment(of: [closed], timeout: 2)
-        controller.onPresentation = nil; controller.onDismissal = nil
+        XCTAssertTrue(controller.presentedCandidateIDs.isEmpty)
     }
 
-    func testCorrectionOverlayReplacesQueuedIntermediateSpellingForSameOccurrence() async {
+    func testCorrectionOverlayReplacesIntermediateSpellingInPlace() {
         let controller = DictionaryCorrectionOverlayController()
         defer { controller.concealPrivatePresentation() }
         let first = AutomaticDictionaryCorrectionCandidate(heardText: "Alhpa", correctedText: "Alpha")
@@ -5420,25 +5408,38 @@ extension DictationE2ETests {
         intermediate.observationID = "synthetic-recording:12:4"
         var final = AutomaticDictionaryCorrectionCandidate(heardText: "Btea", correctedText: "Beta")
         final.observationID = intermediate.observationID
-        let finalShown = expectation(description: "Only final version of queued occurrence shown")
-        let closed = expectation(description: "Final popup dismissed")
-        var shown: [UUID] = []
-        controller.onPresentation = { session in
-            shown.append(session.candidate.id)
-            if session.candidate.id == final.id { finalShown.fulfill() }
-        }
-        controller.onDismissal = { if shown.last == final.id { closed.fulfill() } }
         controller.show(candidate: first) { _ in }
         controller.show(candidate: intermediate) { _ in }
         controller.show(candidate: final) { _ in }
+        XCTAssertEqual(controller.presentedCandidateIDs, [first.id, final.id])
         controller.withdrawSuggestion(final.id)
-        controller.show(candidate: final) { _ in }
-        controller.dismiss()
-        await fulfillment(of: [finalShown], timeout: 2)
-        XCTAssertEqual(shown, [first.id, final.id])
-        controller.dismiss()
-        await fulfillment(of: [closed], timeout: 2)
-        controller.onPresentation = nil; controller.onDismissal = nil
+        XCTAssertEqual(controller.presentedCandidateIDs, [first.id])
+    }
+
+    func testGroupedCorrectionCountdownRestartsOnlyOnNewWord() {
+        var now = ContinuousClock.now
+        let initial = now
+        let controller = DictionaryCorrectionOverlayController(now: { now })
+        defer { controller.concealPrivatePresentation() }
+        let first = AutomaticDictionaryCorrectionCandidate(heardText: "Alhpa", correctedText: "Alpha")
+        let second = AutomaticDictionaryCorrectionCandidate(heardText: "Btea", correctedText: "Beta")
+        controller.show(candidate: first) { _ in }
+        XCTAssertEqual(controller.displayDeadline, initial.advanced(by: .seconds(10)))
+        now = now.advanced(by: .seconds(8))
+        controller.expireIfDue()
+        XCTAssertEqual(controller.presentedCandidateIDs, [first.id])
+        controller.show(candidate: second) { _ in }
+        let deadline = initial.advanced(by: .seconds(18)), generation = controller.progressGeneration
+        XCTAssertEqual(controller.displayDeadline, deadline)
+        controller.dismiss(id: first.id)
+        XCTAssertEqual(controller.displayDeadline, deadline)
+        XCTAssertEqual(controller.progressGeneration, generation)
+        now = initial.advanced(by: .seconds(11))
+        controller.expireIfDue()
+        XCTAssertEqual(controller.presentedCandidateIDs, [second.id])
+        now = deadline
+        controller.expireIfDue()
+        XCTAssertTrue(controller.presentedCandidateIDs.isEmpty)
     }
 
     func testIdempotentAudioCorrectionStillAcknowledgesWithoutUndoingEarlierSample() async throws {
@@ -5474,8 +5475,8 @@ extension DictationE2ETests {
                 }))
         }
         await fulfillment(of: [acknowledged], timeout: 5)
-        controller.dismiss()
         await fulfillment(of: [repeatedNoticeShown], timeout: 2)
+        XCTAssertEqual(controller.presentedSessions.count, 2)
         XCTAssertEqual(receipts.count, 2)
         if receipts.count == 2 {
             XCTAssertFalse(receipts[0].wasAlreadyPresent)
@@ -5485,6 +5486,51 @@ extension DictationE2ETests {
         }
         let profiles = await store.allProfiles()
         XCTAssertEqual(profiles.first?.enrollments.count, 1)
+        await worker.prepareForPrivateProfileTransition()
+    }
+}
+
+extension DictationE2ETests {
+    func testGroupedUndoRemovesOnlyChosenSaveWithoutRestartingSharedProgress() async throws {
+        let settings = SettingsStore.shared
+        let previousEntries = settings.customDictionaryEntries, previousEnabled = settings.automaticDictionaryLearningEnabled
+        defer { settings.customDictionaryEntries = previousEntries; settings.automaticDictionaryLearningEnabled = previousEnabled }
+        settings.automaticDictionaryLearningEnabled = true
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let worker = DictionaryAudioLearningService(store: store,
+            extract: { evidence in PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: evidence.modelKey) },
+            canProcess: { true })
+        let controller = DictionaryCorrectionOverlayController(audioLearning: worker)
+        defer { controller.concealPrivatePresentation() }
+        let recording = UUID(), saved = expectation(description: "Both saves visible in one panel")
+        saved.expectedFulfillmentCount = 2
+        for (index, word) in ["GroupedAlphaE2E", "GroupedBetaE2E"].enumerated() {
+            let evidence = DictionaryLearningAudioEvidence(recordingID: recording, modelKey: "parakeet-v3", observedText: "mistyped",
+                sourceWordRange: index..<(index + 1), sourceSampleRange: 0..<2, focalSampleRange: index..<(index + 1), samples: [0, 0])
+            XCTAssertTrue(worker.learnCorrection(candidate: .init(heardText: "mistyped", correctedText: word), evidence: evidence,
+                isValid: { true }, didSave: { controller.showSavedCorrection($0); saved.fulfill() }))
+        }
+        await fulfillment(of: [saved], timeout: 5)
+        XCTAssertEqual(controller.presentedSessions.count, 2)
+        let first = try XCTUnwrap(controller.presentedSessions.first)
+        let second = try XCTUnwrap(controller.presentedSessions.last)
+        let firstReceipt = try XCTUnwrap(first.savedCorrection), secondReceipt = try XCTUnwrap(second.savedCorrection)
+        let deadline = controller.displayDeadline, generation = controller.progressGeneration
+        let undone = expectation(description: "Chosen row Undo finished")
+        let originalSuccess = first.onSuccess
+        first.onSuccess = { originalSuccess?(); undone.fulfill() }
+        first.undoSavedCorrection()
+        await fulfillment(of: [undone], timeout: 2)
+        XCTAssertTrue(first.didUndoSavedCorrection)
+        XCTAssertFalse(second.didUndoSavedCorrection)
+        XCTAssertEqual(controller.presentedSessions.count, 2)
+        XCTAssertEqual(controller.displayDeadline, deadline)
+        XCTAssertEqual(controller.progressGeneration, generation)
+        let profiles = await store.allProfiles()
+        XCTAssertFalse(profiles.contains { $0.dictionaryEntryID == firstReceipt.entry.id })
+        XCTAssertTrue(profiles.contains { $0.dictionaryEntryID == secondReceipt.entry.id })
         await worker.prepareForPrivateProfileTransition()
     }
 }

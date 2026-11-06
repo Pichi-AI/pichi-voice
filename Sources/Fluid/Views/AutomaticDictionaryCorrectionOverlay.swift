@@ -3,368 +3,259 @@ import Combine
 import QuartzCore
 import SwiftUI
 
+/// SwiftUI observes the collection while each row retains its existing session.
+@MainActor
+private final class DictionaryCorrectionOverlayState: ObservableObject {
+    @Published var sessions: [AutomaticDictionaryTrainingSession] = []
+    @Published var progressGeneration: UInt64 = 0
+    @Published var maximumListHeight: CGFloat = 420
+}
+
 @MainActor
 final class DictionaryCorrectionOverlayController {
     static let shared = DictionaryCorrectionOverlayController()
-
-    private static let displayDurationNanoseconds: UInt64 = 10_000_000_000
-    private static let successDurationNanoseconds: UInt64 = 1_400_000_000
-    private static let presentationDuration: TimeInterval = 0.05
-    private static let dismissalDuration: TimeInterval = 0.05
-
+    private static let displayDuration: Duration = .seconds(10)
+    private let now: () -> ContinuousClock.Instant
+    private let audioLearning: DictionaryAudioLearningService?
+    private let state = DictionaryCorrectionOverlayState()
+    private var deadline: ContinuousClock.Instant?
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<PichiLocalizedContent<AutomaticDictionaryCorrectionOverlayView>>?
+    private var hostingView: NSHostingView<PichiLocalizedContent<DictionaryCorrectionOverlayGroupView>>?
     private var profileCancellable: AnyCancellable?
     private var languageCancellable: AnyCancellable?
-    private var session: AutomaticDictionaryTrainingSession?
-    private var sessionCancellable: AnyCancellable?
+    private var rowCancellables: [UUID: AnyCancellable] = [:]
+    private var outcomes: [UUID: (AutomaticDictionarySuggestionOutcome) -> Void] = [:]
     private var dismissTask: Task<Void, Never>?
-    private var outcomeHandler: ((AutomaticDictionarySuggestionOutcome) -> Void)?
     private var generation: UInt64 = 0
-    private enum Notice {
-        case saved(DictionaryAudioLearningService.SavedCorrection)
-        case suggestion(AutomaticDictionaryCorrectionCandidate, PrivateProfileSnapshot, (AutomaticDictionarySuggestionOutcome) -> Void)
-    }
-    private var notices: [Notice] = []
 
     #if DEBUG
-    var presentedCandidateID: UUID? { self.session?.candidate.id }
+    var presentedCandidateIDs: [UUID] { self.state.sessions.map(\.candidate.id) }
+    var presentedSessions: [AutomaticDictionaryTrainingSession] { self.state.sessions }
+    var presentedCandidateID: UUID? { self.state.sessions.first?.candidate.id }
+    var displayDeadline: ContinuousClock.Instant? { self.deadline }
+    var progressGeneration: UInt64 { self.state.progressGeneration }
     var onPresentation: ((AutomaticDictionaryTrainingSession) -> Void)?
     var onDismissal: (() -> Void)?
     #endif
 
-    init() {
-        profileCancellable = NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)
+    init(now: @escaping () -> ContinuousClock.Instant = { .now }, audioLearning: DictionaryAudioLearningService? = nil) {
+        self.now = now
+        self.audioLearning = audioLearning
+        self.profileCancellable = NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated { self?.concealPrivatePresentation() }
             }
     }
 
-    /// Hide the independent panel synchronously without cancelling its admitted recorder.
+    /// The admitted private recorder stays owned by PrivateProfileService's stop
+    /// handler. Concealment immediately releases every visible private projection.
     func concealPrivatePresentation() {
-        generation &+= 1
-        notices.removeAll()
-        let wasSavedCorrection = session?.isSavedCorrection == true
-        session?.concealSavedCorrection()
-        dismissTask?.cancel(); dismissTask = nil
-        session?.onInteraction = nil; session?.onSuccess = nil
-        session?.onOpenDictionary = nil
-        outcomeHandler = nil
-        sessionCancellable?.cancel(); sessionCancellable = nil
-        languageCancellable?.cancel(); languageCancellable = nil
-        panel?.orderOut(nil)
-        panel?.contentView = nil
-        hostingView = nil; panel = nil
-        if wasSavedCorrection { session = nil }
+        self.generation &+= 1
+        self.dismissTask?.cancel(); self.dismissTask = nil; self.deadline = nil
+        for session in self.state.sessions {
+            session.onInteraction = nil; session.onSuccess = nil; session.onOpenDictionary = nil
+            session.concealSavedCorrection()
+        }
+        self.state.sessions = []
+        self.outcomes.removeAll(); self.rowCancellables.removeAll()
+        self.languageCancellable?.cancel(); self.languageCancellable = nil
+        self.panel?.orderOut(nil); self.panel?.contentView = nil
+        self.hostingView = nil; self.panel = nil
     }
 
-    var isPresented: Bool {
-        self.panel?.isVisible == true
-    }
+    var isPresented: Bool { self.panel?.isVisible == true }
 
     func transientOverlayLayoutDidChange() {
         guard self.isPresented else { return }
         self.resizeAndPositionPanel(animated: true)
     }
 
-    /// Repeated dictation should not remove a saved notice before Undo is offered.
     func hideSuggestion() {
-        guard self.session?.isSavedCorrection != true else { return }
-        self.hide()
+        let ids = self.state.sessions.filter { !$0.isSavedCorrection }.map(\.candidate.id)
+        for id in ids { self.remove(id: id) }
     }
 
     func showSavedCorrection(_ receipt: DictionaryAudioLearningService.SavedCorrection) {
-        guard self.canPresent(receipt),
-              self.session?.savedCorrection?.id != receipt.id,
-              !self.notices.contains(where: { if case let .saved(saved) = $0 { return saved.id == receipt.id }; return false }) else { return }
-        self.notices.removeAll { !self.canPresent($0) }
-        // Receipts contain only spelling/identity metadata, never retained PCM.
-        guard self.notices.count + (self.session == nil ? 0 : 1) < 32 else { return }
-        self.notices.append(.saved(receipt))
-        self.presentNextSavedCorrection()
+        guard receipt.isCurrent, SettingsStore.shared.customDictionaryEntries.contains(receipt.entry),
+              !self.state.sessions.contains(where: { $0.savedCorrection?.id == receipt.id }) else { return }
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: receipt.heardText, correctedText: receipt.correctedText)
+        self.append(AutomaticDictionaryTrainingSession(candidate: candidate, asr: AppServices.shared.asr,
+            audioLearning: self.audioLearning, savedCorrection: receipt),
+            outcome: { _ in })
     }
 
     func withdrawSavedCorrection(_ id: UUID) {
-        self.notices.removeAll { if case let .saved(saved) = $0 { return saved.id == id }; return false }
-        if self.session?.savedCorrection?.id == id { self.hide() }
+        guard let session = self.state.sessions.first(where: { $0.savedCorrection?.id == id }) else { return }
+        self.remove(id: session.candidate.id)
     }
 
     func withdrawSuggestion(_ id: UUID) {
-        self.notices.removeAll { if case let .suggestion(candidate, _, _) = $0 { return candidate.id == id }; return false }
-        if self.session?.screen == .choice, self.session?.candidate.id == id { self.hide() }
+        guard self.state.sessions.contains(where: { $0.candidate.id == id && $0.screen == .choice }) else { return }
+        self.remove(id: id)
     }
 
-    private func canPresent(_ receipt: DictionaryAudioLearningService.SavedCorrection) -> Bool {
-        receipt.isCurrent && SettingsStore.shared.customDictionaryEntries.contains(receipt.entry)
-    }
-
-    private func canPresent(_ notice: Notice) -> Bool {
-        switch notice {
-        case let .saved(receipt): return self.canPresent(receipt)
-        case let .suggestion(_, profile, _):
-            return PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork
+    func show(candidate: AutomaticDictionaryCorrectionCandidate,
+              onOutcome: @escaping (AutomaticDictionarySuggestionOutcome) -> Void) {
+        guard PrivateProfileStorage.isReadable(PrivateProfileStorage.current), PrivateProfileStorage.acceptsNewWork else { return }
+        let retained = self.state.sessions.reduce(0) { total, session in
+            total + (session.candidate.audioEvidence.map(DictionaryAudioLearningService.retainedBytes) ?? 0)
         }
-    }
-
-    private func presentNextSavedCorrection() {
-        // A readable receipt after concealment belongs to the newly admitted
-        // profile, whose transition already joined the old profile's capture.
-        if self.panel == nil, self.hostingView == nil { self.session = nil }
-        guard self.session == nil else { return }
-        while !self.notices.isEmpty {
-            let notice = self.notices.removeFirst()
-            guard self.canPresent(notice) else { continue }
-            switch notice {
-            case let .saved(receipt):
-                let candidate = AutomaticDictionaryCorrectionCandidate(heardText: receipt.heardText, correctedText: receipt.correctedText)
-                let session = AutomaticDictionaryTrainingSession(candidate: candidate, asr: AppServices.shared.asr, savedCorrection: receipt)
-                self.present(session, onOutcome: { _ in })
-            case let .suggestion(candidate, _, outcome):
-                self.present(AutomaticDictionaryTrainingSession(candidate: candidate, asr: AppServices.shared.asr), onOutcome: outcome)
-            }
-            return
-        }
-    }
-
-    func show(
-        candidate: AutomaticDictionaryCorrectionCandidate,
-        onOutcome: @escaping (AutomaticDictionarySuggestionOutcome) -> Void
-    ) {
-        let profile = PrivateProfileStorage.current
-        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
-        if let origin = candidate.observationID {
-            self.notices.removeAll { if case let .suggestion(previous, _, _) = $0 { return previous.observationID == origin }; return false }
-            if self.session?.screen == .choice, self.session?.candidate.observationID == origin {
-                self.present(AutomaticDictionaryTrainingSession(candidate: candidate, asr: AppServices.shared.asr), onOutcome: onOutcome)
-                return
-            }
-        }
-        // Audio-unavailable and already-known corrections must queue as well.
-        guard self.notices.count + (self.session == nil ? 0 : 1) < 32 else { return }
-        let retained = self.notices.reduce(0) { total, notice in
-            if case let .suggestion(value, _, _) = notice, let audio = value.audioEvidence {
-                return total + DictionaryAudioLearningService.retainedBytes(audio)
-            }
-            return total
-        }
-        var queued = candidate
-        if let audio = queued.audioEvidence,
+        var bounded = candidate
+        if let audio = bounded.audioEvidence,
            DictionaryAudioLearningService.retainedBytes(audio) > 128 * 1024 * 1024 - retained {
-            queued.audioEvidence = nil
+            bounded.audioEvidence = nil
         }
-        self.notices.append(.suggestion(queued, profile, onOutcome))
-        self.presentNextSavedCorrection()
+        let next = AutomaticDictionaryTrainingSession(candidate: bounded, asr: AppServices.shared.asr, audioLearning: self.audioLearning)
+        if let origin = candidate.observationID,
+           let index = self.state.sessions.firstIndex(where: { $0.screen == .choice && $0.candidate.observationID == origin }) {
+            let previous = self.state.sessions[index]
+            self.release(previous)
+            self.configure(next, outcome: onOutcome)
+            self.state.sessions[index] = next
+            self.didAdd(next)
+        } else {
+            self.append(next, outcome: onOutcome)
+        }
     }
 
-    private func present(
-        _ session: AutomaticDictionaryTrainingSession,
-        onOutcome: @escaping (AutomaticDictionarySuggestionOutcome) -> Void
-    ) {
-        let profile = PrivateProfileStorage.current
-        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
-        self.generation &+= 1
-        self.dismissTask?.cancel()
-        self.session?.cancel()
-        self.outcomeHandler = onOutcome
+    private func append(_ session: AutomaticDictionaryTrainingSession,
+                        outcome: @escaping (AutomaticDictionarySuggestionOutcome) -> Void) {
+        guard self.state.sessions.count < 32 else { return }
+        self.configure(session, outcome: outcome)
+        self.state.sessions.append(session)
+        self.didAdd(session)
+    }
 
-        session.onInteraction = { [weak self] in
-            self?.keepVisible()
-        }
+    private func configure(_ session: AutomaticDictionaryTrainingSession,
+                           outcome: @escaping (AutomaticDictionarySuggestionOutcome) -> Void) {
+        let id = session.candidate.id
+        self.outcomes[id] = outcome
+        // Opening a row or undoing it never resets the shared countdown.
+        session.onInteraction = { }
         session.onSuccess = { [weak self] in
-            self?.reportOutcome(.accepted)
-            self?.scheduleSuccessDismissal()
+            self?.outcomes.removeValue(forKey: id)?(.accepted)
+            self?.rowDidChange()
         }
-        session.onOpenDictionary = { [weak self] in
-            // Opening the editor is not yet acceptance or successful persistence.
-            self?.outcomeHandler = nil
-            self?.hide()
+        session.onOpenDictionary = { [weak self] in self?.remove(id: id) }
+        self.rowCancellables[id] = session.objectWillChange.receive(on: RunLoop.main).sink { [weak self] _ in
+            DispatchQueue.main.async { self?.rowDidChange() }
         }
-        self.session = session
+    }
+
+    private func didAdd(_ session: AutomaticDictionaryTrainingSession) {
+        self.generation &+= 1
+        self.deadline = self.now().advanced(by: Self.displayDuration)
+        self.state.progressGeneration &+= 1
+        self.dismissTask?.cancel()
+        let admittedGeneration = self.generation
+        self.dismissTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: Self.displayDuration) } catch { return }
+            guard let self, self.generation == admittedGeneration else { return }
+            self.expireIfDue()
+        }
+        self.presentGroup()
         #if DEBUG
         self.onPresentation?(session)
         #endif
-
-        let rootView = AutomaticDictionaryCorrectionOverlayView(
-            session: session,
-            displayDuration: Double(Self.displayDurationNanoseconds) / 1_000_000_000,
-            onDismiss: { [weak self] in
-                self?.dismiss()
-            },
-            onIgnore: { [weak self] in
-                self?.reportOutcome(.ignored)
-                self?.hide()
-            },
-            onFrequencyChange: { [weak self] frequency in
-                guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
-                SettingsStore.shared.automaticDictionarySuggestionFrequency = frequency
-                self?.scheduleChoiceDismissal()
-            },
-            onDisableSuggestions: { [weak self] in
-                guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
-                SettingsStore.shared.automaticDictionaryLearningEnabled = false
-                self?.hide()
-            }
-        )
-
-        if let hostingView = self.hostingView {
-            hostingView.rootView = PichiLocalizedContent { rootView }
-        } else {
-            self.createPanel(rootView: rootView)
-        }
-
-        self.sessionCancellable = session.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                DispatchQueue.main.async {
-                    self?.resizeAndPositionPanel(animated: true)
-                }
-            }
-
-        guard let panel = self.panel else { return }
-        self.resizeAndPositionPanel(animated: false)
-        panel.alphaValue = 0
-        panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = Self.presentationDuration
-            context.allowsImplicitAnimation = true
-            panel.animator().alphaValue = 1
-        }
-
-        if session.isSavedCorrection {
-            self.scheduleSavedCorrectionDismissal()
-        } else {
-            self.scheduleChoiceDismissal()
-        }
     }
 
-    private func scheduleSavedCorrectionDismissal() {
-        self.keepVisible()
-        let currentGeneration = self.generation
-        self.dismissTask = Task { @MainActor [weak self] in
-            do { try await Task.sleep(nanoseconds: Self.displayDurationNanoseconds) } catch { return }
-            guard let self, !Task.isCancelled, self.generation == currentGeneration,
-                  self.session?.isSavedCorrection == true,
-                  self.session?.isUndoingSavedCorrection != true else { return }
-            self.hide()
-        }
+    /// The timer defers closing an active Undo/training operation or its error.
+    /// Its next state publication rechecks the same deadline without restarting it.
+    func expireIfDue() {
+        guard let deadline, self.now() >= deadline,
+              !self.state.sessions.contains(where: {
+                  $0.isUndoingSavedCorrection || $0.capturePhase != .idle || $0.screen == .training || $0.hasError
+              }) else { return }
+        for id in Array(self.outcomes.keys) { self.outcomes.removeValue(forKey: id)?(.timedOut) }
+        self.hide()
     }
 
-    private func scheduleChoiceDismissal() {
-        self.keepVisible()
-        let currentGeneration = self.generation
-        self.dismissTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.displayDurationNanoseconds)
-            guard !Task.isCancelled,
-                  let self,
-                  self.generation == currentGeneration,
-                  self.session?.screen == .choice
-            else {
-                return
-            }
-            self.reportOutcome(.timedOut)
-            self.hide()
-        }
+    private func rowDidChange() {
+        self.state.objectWillChange.send()
+        self.expireIfDue()
+        self.resizeAndPositionPanel(animated: true)
+    }
+
+    func dismiss(id: UUID) {
+        guard let session = self.state.sessions.first(where: { $0.candidate.id == id }), !session.isUndoingSavedCorrection else { return }
+        self.outcomes.removeValue(forKey: id)?(.dismissed)
+        self.remove(id: id)
+    }
+
+    func dismiss() {
+        guard !self.state.sessions.contains(where: \.isUndoingSavedCorrection) else { return }
+        for id in Array(self.outcomes.keys) { self.outcomes.removeValue(forKey: id)?(.dismissed) }
+        self.hide()
+    }
+
+    private func remove(id: UUID) {
+        guard let session = self.state.sessions.first(where: { $0.candidate.id == id }) else { return }
+        self.release(session)
+        self.state.sessions.removeAll { $0.candidate.id == id }
+        if self.state.sessions.isEmpty { self.hide() }
+        else { self.resizeAndPositionPanel(animated: true) }
+    }
+
+    private func release(_ session: AutomaticDictionaryTrainingSession) {
+        let id = session.candidate.id
+        self.outcomes.removeValue(forKey: id)
+        self.rowCancellables.removeValue(forKey: id)?.cancel()
+        session.onInteraction = nil; session.onSuccess = nil; session.onOpenDictionary = nil
+        session.cancel()
     }
 
     func hide() {
         self.generation &+= 1
-        let hideGeneration = self.generation
-        self.dismissTask?.cancel()
-        self.dismissTask = nil
-        self.session?.cancel()
-        guard let panel, panel.isVisible else {
-            self.clearSession()
-            return
-        }
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = Self.dismissalDuration
-            context.allowsImplicitAnimation = true
-            panel.animator().alphaValue = 0
-        } completionHandler: { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.generation == hideGeneration else { return }
-                self.panel?.orderOut(nil)
-                self.panel?.alphaValue = 1
-                self.clearSession()
-            }
-        }
-    }
-
-    func dismiss() {
-        guard self.session?.isUndoingSavedCorrection != true else { return }
-        self.reportOutcome(.dismissed)
-        self.hide()
-    }
-
-    private func keepVisible() {
-        self.dismissTask?.cancel()
-        self.dismissTask = nil
-    }
-
-    private func scheduleSuccessDismissal() {
-        self.keepVisible()
-        let successGeneration = self.generation
-        self.dismissTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.successDurationNanoseconds)
-            guard !Task.isCancelled,
-                  let self,
-                  self.generation == successGeneration
-            else {
-                return
-            }
-            self.hide()
-        }
-    }
-
-    private func clearSession() {
-        self.sessionCancellable?.cancel()
-        self.sessionCancellable = nil
-        self.session = nil
-        self.outcomeHandler = nil
+        self.dismissTask?.cancel(); self.dismissTask = nil; self.deadline = nil
+        for session in self.state.sessions { self.release(session) }
+        self.state.sessions = []
+        self.panel?.orderOut(nil)
+        self.panel?.contentView = nil
+        self.hostingView = nil; self.panel = nil
+        self.languageCancellable?.cancel(); self.languageCancellable = nil
         #if DEBUG
         self.onDismissal?()
         #endif
-        self.presentNextSavedCorrection()
     }
 
-    private func reportOutcome(_ outcome: AutomaticDictionarySuggestionOutcome) {
-        guard let outcomeHandler = self.outcomeHandler else { return }
-        self.outcomeHandler = nil
-        outcomeHandler(outcome)
+    private func presentGroup() {
+        if let screen = OverlayScreenResolver.screenForCurrentPointer() ?? NSScreen.main {
+            self.state.maximumListHeight = min(420, max(80, screen.visibleFrame.height - 100))
+        }
+        let profile = PrivateProfileStorage.current
+        let view = DictionaryCorrectionOverlayGroupView(state: self.state,
+            onDismissAll: { [weak self] in self?.dismiss() },
+            onDismissRow: { [weak self] in self?.dismiss(id: $0) },
+            onIgnore: { [weak self] id in self?.outcomes.removeValue(forKey: id)?(.ignored); self?.remove(id: id) },
+            onFrequencyChange: { frequency in
+                guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
+                SettingsStore.shared.automaticDictionarySuggestionFrequency = frequency
+            },
+            onDisableSuggestions: { [weak self] in
+                guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
+                SettingsStore.shared.automaticDictionaryLearningEnabled = false; self?.hideSuggestion()
+            },
+            onLayout: { [weak self] in DispatchQueue.main.async { self?.resizeAndPositionPanel(animated: true) } })
+        if let hostingView = self.hostingView { hostingView.rootView = PichiLocalizedContent { view } }
+        else { self.createPanel(rootView: view) }
+        self.resizeAndPositionPanel(animated: true)
+        self.panel?.alphaValue = 1
+        self.panel?.orderFrontRegardless()
     }
 
-    private func createPanel(rootView: AutomaticDictionaryCorrectionOverlayView) {
-        let panel = NSPanel(
-            contentRect: .zero,
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.isFloatingPanel = true
-        panel.level = .floating
+    private func createPanel(rootView: DictionaryCorrectionOverlayGroupView) {
+        let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isFloatingPanel = true; panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.isMovableByWindowBackground = false
-        panel.hidesOnDeactivate = false
-        panel.animationBehavior = .none
-
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
+        panel.isMovableByWindowBackground = false; panel.hidesOnDeactivate = false; panel.animationBehavior = .none
         let hostingView = NSHostingView(rootView: PichiLocalizedContent { rootView })
-        hostingView.wantsLayer = true
-        hostingView.layer?.backgroundColor = .clear
+        hostingView.wantsLayer = true; hostingView.layer?.backgroundColor = .clear
         panel.contentView = hostingView
-
-        self.panel = panel
-        self.hostingView = hostingView
-        self.languageCancellable = NotificationCenter.default.publisher(for: PichiLocalization.languageChanged)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                DispatchQueue.main.async { self?.transientOverlayLayoutDidChange() }
-            }
+        self.panel = panel; self.hostingView = hostingView
+        self.languageCancellable = NotificationCenter.default.publisher(for: PichiLocalization.languageChanged).receive(on: RunLoop.main)
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.transientOverlayLayoutDidChange() } }
     }
-
     private func resizeAndPositionPanel(animated: Bool) {
         guard let panel, let hostingView,
               let screen = OverlayScreenResolver.screenForCurrentPointer() ?? NSScreen.main
@@ -817,6 +708,94 @@ extension Notification.Name {
     static let openMicrophoneSettingsRequested = Notification.Name("OpenMicrophoneSettingsRequested")
 }
 
+private struct DictionaryCorrectionOverlayGroupView: View {
+    @ObservedObject var state: DictionaryCorrectionOverlayState
+    let onDismissAll: () -> Void
+    let onDismissRow: (UUID) -> Void
+    let onIgnore: (UUID) -> Void
+    let onFrequencyChange: (SettingsStore.AutomaticDictionarySuggestionFrequency) -> Void
+    let onDisableSuggestions: () -> Void
+    let onLayout: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.locale) private var interfaceLocale
+    @State private var heights: [UUID: CGFloat] = [:]
+    @State private var progress: CGFloat = 1
+
+    private var contentHeight: CGFloat {
+        let rows = self.state.sessions.reduce(CGFloat.zero) { total, session in
+            total + (self.heights[session.candidate.id] ?? (session.isSavedCorrection ? 52 : 108))
+        }
+        return min(self.state.maximumListHeight, rows + CGFloat(max(0, self.state.sessions.count - 1)))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "text.book.closed")
+                Text("Corrections").font(.fluidSystem(size: 12, weight: .semibold))
+                Spacer()
+                Button(action: self.onDismissAll) {
+                    Image(systemName: "xmark").font(.fluidSystem(size: 10, weight: .semibold))
+                        .frame(width: 24, height: 24).contentShape(Circle())
+                }
+                .buttonStyle(.plain).help("Dismiss")
+                .disabled(self.state.sessions.contains(where: \.isUndoingSavedCorrection))
+            }
+            .foregroundStyle(.white.opacity(0.75))
+            .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 4)
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(self.state.sessions, id: \.candidate.id) { session in
+                        AutomaticDictionaryCorrectionOverlayView(session: session, displayDuration: 10,
+                            onDismiss: { self.onDismissRow(session.candidate.id) },
+                            onIgnore: { self.onIgnore(session.candidate.id) },
+                            onFrequencyChange: self.onFrequencyChange, onDisableSuggestions: self.onDisableSuggestions,
+                            grouped: true)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("DictionaryCorrection.Row." + session.candidate.id.uuidString)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                            if self.state.sessions.contains(where: { $0.candidate.id == session.candidate.id }),
+                               self.heights[session.candidate.id] != height {
+                                self.heights[session.candidate.id] = height
+                                self.onLayout()
+                            }
+                        }
+                        if session.candidate.id != self.state.sessions.last?.candidate.id {
+                            Divider().overlay(Color.white.opacity(0.08)).padding(.horizontal, 14)
+                        }
+                    }
+                }
+            }
+            .frame(height: self.contentHeight)
+            GeometryReader { proxy in
+                Capsule().fill(Color.white.opacity(0.72))
+                    .frame(width: proxy.size.width * self.progress, height: 2)
+            }
+            .frame(height: 2).padding(.horizontal, 14).padding(.top, 3).padding(.bottom, 5)
+            .accessibilityLabel("Time to undo")
+            .accessibilityValue(self.progress.formatted(.percent.precision(.fractionLength(0)).locale(self.interfaceLocale)))
+        }
+        .frame(width: 460)
+        .background(TransientOverlayBackground())
+        .preferredColorScheme(.dark)
+        .onAppear { self.restartProgress() }
+        .onChange(of: self.state.progressGeneration) { _, _ in self.restartProgress() }
+        .onChange(of: self.state.sessions.map(\.candidate.id)) { _, ids in
+            self.heights = self.heights.filter { ids.contains($0.key) }
+        }
+    }
+
+    private func restartProgress() {
+        var transaction = Transaction(); transaction.disablesAnimations = true
+        withTransaction(transaction) { self.progress = 1 }
+        guard !self.reduceMotion else { return }
+        DispatchQueue.main.async {
+            withAnimation(.linear(duration: 10)) { self.progress = 0 }
+        }
+    }
+}
+
 private struct AutomaticDictionaryCorrectionOverlayView: View {
     @AppStorage("DictionarySharedFeatureMatcherEnabled", store: PrivateProfileDefaults.shared) private var pronunciationEnabled = DictionaryMatcherExperiment.defaultEnabled
     @ObservedObject var session: AutomaticDictionaryTrainingSession
@@ -827,6 +806,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
     let onIgnore: () -> Void
     let onFrequencyChange: (SettingsStore.AutomaticDictionarySuggestionFrequency) -> Void
     let onDisableSuggestions: () -> Void
+    var grouped = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.locale) private var interfaceLocale
@@ -858,11 +838,11 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .frame(width: 460)
-        .background(TransientOverlayBackground())
+        .frame(width: self.grouped ? nil : 460)
+        .background { if !self.grouped { TransientOverlayBackground() } }
         .overlay(alignment: .bottomLeading) {
-            if self.session.screen == .choice || (self.session.isSavedCorrection &&
-                !self.session.didUndoSavedCorrection && !self.session.isUndoingSavedCorrection && !self.session.hasError) {
+            if !self.grouped && (self.session.screen == .choice || (self.session.isSavedCorrection &&
+                !self.session.didUndoSavedCorrection && !self.session.isUndoingSavedCorrection && !self.session.hasError)) {
                 GeometryReader { proxy in
                     Capsule()
                         .fill(Color.white.opacity(0.72))
@@ -1083,7 +1063,9 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
     @ViewBuilder
     private var successContent: some View {
-        if self.session.isSavedCorrection {
+        if self.session.isSavedCorrection && self.grouped {
+            self.compactSavedContent
+        } else if self.session.isSavedCorrection {
             VStack(alignment: .leading, spacing: 10) {
                 self.header(title: self.session.successTitle, allowsBack: false)
                 self.correctionPair
@@ -1120,6 +1102,37 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
         }
     }
 
+    private var compactSavedContent: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                self.correctionPair
+                if self.session.didUndoSavedCorrection || self.session.savedCorrection?.wasAlreadyPresent == true {
+                    Text(PichiLocalization.text(self.session.successTitle, locale: self.interfaceLocale))
+                        .font(.fluidSystem(size: 10.5)).foregroundStyle(.white.opacity(0.55))
+                }
+                if self.session.hasError {
+                    Text(PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale))
+                        .font(.fluidSystem(size: 10.5)).foregroundStyle(.white.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+            if !self.session.didUndoSavedCorrection && self.session.savedCorrection?.wasAlreadyPresent != true {
+                CorrectionOverlayActionButton(title: self.session.isUndoingSavedCorrection ? "Undoing..." : "Undo save",
+                    systemImage: "arrow.uturn.backward", style: .secondary, accent: self.accent,
+                    action: self.session.undoSavedCorrection)
+                    .disabled(self.session.isUndoingSavedCorrection)
+            } else if self.session.didUndoSavedCorrection {
+                Image(systemName: "checkmark").foregroundStyle(self.accentText)
+            }
+            Button(action: self.session.openSavedDictionary) {
+                Image(systemName: "text.book.closed").font(.fluidSystem(size: 12)).frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain).foregroundStyle(.white.opacity(0.65)).help("Open Dictionary")
+            .disabled(self.session.isUndoingSavedCorrection)
+        }
+    }
+
     private var legacySuccessContent: some View {
         HStack(spacing: 12) {
             ZStack {
@@ -1147,48 +1160,51 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
         .transition(.scale(scale: 0.96).combined(with: .opacity))
     }
 
+    @ViewBuilder
     private func header(title: String, allowsBack: Bool) -> some View {
-        HStack(spacing: 7) {
-            if allowsBack {
-                Button(action: self.session.returnToChoice) {
-                    Image(systemName: "chevron.left")
-                        .font(.fluidSystem(size: 10, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.72))
+        if !self.grouped {
+            HStack(spacing: 7) {
+                if allowsBack {
+                    Button(action: self.session.returnToChoice) {
+                        Image(systemName: "chevron.left")
+                            .font(.fluidSystem(size: 10, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.72))
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(Color.white.opacity(0.06)))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(self.session.capturePhase != .idle)
+                    .opacity(self.session.capturePhase == .idle ? 1 : 0.35)
+                    .help("Back")
+                } else {
+                    Image(systemName: self.session.isSavedCorrection ? "checkmark.circle.fill" : "mic.fill")
+                        .font(.fluidSystem(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.78))
                         .frame(width: 24, height: 24)
-                        .background(Circle().fill(Color.white.opacity(0.06)))
+                }
+
+                Text(PichiLocalization.text(title, locale: self.interfaceLocale))
+                    .font(.fluidSystem(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.72))
+
+                Spacer(minLength: 8)
+
+                Button(action: self.onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.fluidSystem(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(self.isDismissHovered ? 0.95 : 0.68))
+                        .frame(width: 24, height: 24)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(self.isDismissHovered ? 0.13 : 0.06))
+                        )
                 }
                 .buttonStyle(.plain)
-                .disabled(self.session.capturePhase != .idle)
-                .opacity(self.session.capturePhase == .idle ? 1 : 0.35)
-                .help("Back")
-            } else {
-                Image(systemName: self.session.isSavedCorrection ? "checkmark.circle.fill" : "mic.fill")
-                    .font(.fluidSystem(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.78))
-                    .frame(width: 24, height: 24)
+                .disabled(self.session.isUndoingSavedCorrection)
+                .contentShape(Circle())
+                .onHover { self.isDismissHovered = $0 }
+                .help("Dismiss")
             }
-
-            Text(PichiLocalization.text(title, locale: self.interfaceLocale))
-                .font(.fluidSystem(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.72))
-
-            Spacer(minLength: 8)
-
-            Button(action: self.onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.fluidSystem(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(self.isDismissHovered ? 0.95 : 0.68))
-                    .frame(width: 24, height: 24)
-                    .background(
-                        Circle()
-                            .fill(Color.white.opacity(self.isDismissHovered ? 0.13 : 0.06))
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(self.session.isUndoingSavedCorrection)
-            .contentShape(Circle())
-            .onHover { self.isDismissHovered = $0 }
-            .help("Dismiss")
         }
     }
 
@@ -1257,7 +1273,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
     private func startProgressAnimation() {
         self.progress = 1
-        guard !self.reduceMotion else { return }
+        guard !self.grouped, !self.reduceMotion else { return }
         DispatchQueue.main.async {
             withAnimation(.linear(duration: self.displayDuration)) {
                 self.progress = 0
