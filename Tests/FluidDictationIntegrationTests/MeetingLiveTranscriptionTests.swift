@@ -158,13 +158,14 @@ final class MeetingLiveTranscriptSnapshotTests: XCTestCase {
         let coordinator = MeetingLiveTranscriptionCoordinator(originBox: origin,
             onResolvedAudioWithoutCaption: { source, start, end in
                 XCTAssertEqual(source, .you)
-                XCTAssertEqual(start, 0)
-                XCTAssertEqual(end, 1)
+                XCTAssertEqual(start, 3)
+                XCTAssertEqual(end, 5)
                 resolved.fulfill()
             }, onUpdate: { _ in })
         let text = "This is one complete synthetic sentence repeated in the microphone echo."
         coordinator.handleUtterance(kind: .applicationAudio, text: text, start: .zero, end: CMTime(seconds: 1, preferredTimescale: 1000))
-        coordinator.handleUtterance(kind: .microphone, text: text, start: .zero, end: CMTime(seconds: 1, preferredTimescale: 1000))
+        coordinator.handleUtterance(kind: .microphone, text: text,
+            start: CMTime(seconds: 3, preferredTimescale: 1000), end: CMTime(seconds: 5, preferredTimescale: 1000))
         wait(for: [resolved], timeout: 1)
         XCTAssertEqual(coordinator.latestSnapshot().utterances.count, 1)
         XCTAssertEqual(coordinator.latestSnapshot().utterances.first?.speaker, .them)
