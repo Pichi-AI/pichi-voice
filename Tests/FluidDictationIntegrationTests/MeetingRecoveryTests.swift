@@ -32,8 +32,8 @@ final class MeetingRecoveryTests: XCTestCase {
         window.contentView = host
         defer { window.contentView = nil; window.close() }
         host.layoutSubtreeIfNeeded()
-        func toggle(in element: Any) -> (any NSAccessibility)? {
-            guard let node = element as? any NSAccessibility else { return nil }
+        func toggle(in element: Any) -> (any NSAccessibilityProtocol)? {
+            guard let node = element as? any NSAccessibilityProtocol else { return nil }
             if node.accessibilityIdentifier() == "meeting.microphone.recording-toggle" { return node }
             for child in node.accessibilityChildren() ?? [] {
                 if let found = toggle(in: child) { return found }
