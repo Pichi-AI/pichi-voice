@@ -4,6 +4,14 @@ private enum PichiLocalization {
     static func text(_ key: String) -> String { key }
 }
 
+@MainActor private enum PrivateProfileStorage {
+    struct Snapshot: Equatable { let generation: Int }
+    static var current = Snapshot(generation: 0)
+    static var acceptsNewWork = true
+    static var readable = true
+    static func isReadable(_ profile: Snapshot) -> Bool { readable && current == profile }
+}
+
 private actor RestoreGate {
     private var released = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -46,8 +54,12 @@ private actor RestoreGate {
     var isOnboardingFlowVisible = true
     var ownerVoiceSpeechModelToRestore: Model? = .selected
     var ownerVoiceSpeechRestoreTask: Task<Void, Never>?
+    var ownerVoiceStartTask: Task<Void, Never>?
+    let ownerVoiceProfile = PrivateProfileStorage.current
     func restore() { restoreSpeechAfterOwnerVoiceIfNeeded() }
+    func conceal() { cancelOwnerVoiceWorkForConceal() }
     // ACTUAL_OWNER_VOICE_RESTORATION
+    // ACTUAL_OWNER_VOICE_CONCEALMENT
 }
 
 @main struct OnboardingOwnerVoiceRestorationTests {
@@ -120,6 +132,46 @@ private actor RestoreGate {
         await concealOperation.value
         precondition(!concealed.asr.showError && concealed.ownerVoiceSpeechRestoreTask == nil,
                      "An outgoing onboarding cannot publish a late error")
+
+        let retained = RestorationHost(), privateGate = RestoreGate()
+        retained.asr.gate = privateGate
+        retained.restore()
+        let retainedOperation = retained.ownerVoiceSpeechRestoreTask!
+        await started(retained)
+        PrivateProfileStorage.acceptsNewWork = false
+        PrivateProfileStorage.readable = false
+        retained.conceal()
+        precondition(retained.isOnboardingFlowVisible && retained.ownerVoiceSpeechRestoreTask != nil
+                     && retained.ownerVoiceSpeechModelToRestore == nil,
+                     "Concealment retains the mounted host but closes and cancels its owned work")
+        await privateGate.release()
+        await retainedOperation.value
+        precondition(!retained.asr.showError && retained.ownerVoiceSpeechRestoreTask == nil)
+        retained.ownerVoiceSpeechModelToRestore = .selected
+        retained.restore()
+        precondition(retained.asr.calls == 1 && retained.ownerVoiceSpeechModelToRestore == nil,
+                     "A late idle notification after conceal cannot start a new model load")
+
+        PrivateProfileStorage.acceptsNewWork = true
+        PrivateProfileStorage.readable = true
+        let switched = RestorationHost(), switchGate = RestoreGate()
+        switched.asr.gate = switchGate
+        switched.asr.shouldFail = true
+        switched.restore()
+        let switchedOperation = switched.ownerVoiceSpeechRestoreTask!
+        await started(switched)
+        PrivateProfileStorage.current = .init(generation: 1)
+        await switchGate.release()
+        await switchedOperation.value
+        precondition(!switched.asr.showError && switched.ownerVoiceSpeechRestoreTask == nil,
+                     "An earlier profile cannot publish into a readable replacement profile")
+        let queued = RestorationHost()
+        queued.restore()
+        let queuedOperation = queued.ownerVoiceSpeechRestoreTask!
+        PrivateProfileStorage.current = .init(generation: 2)
+        await queuedOperation.value
+        precondition(queued.asr.calls == 0 && queued.ownerVoiceSpeechRestoreTask == nil,
+                     "A profile switch before queued work starts cannot load the old model")
         print("PASS: actual onboarding owner-voice restoration, single-flight readiness, selection pinning, joined cancellation, retry and concealed errors")
     }
 

@@ -95,6 +95,7 @@ struct OnboardingFlowView: View {
     @State private var ownerVoiceStartTask: Task<Void, Never>?
     @State private var ownerVoiceSpeechRestoreTask: Task<Void, Never>?
     @State private var ownerVoiceSpeechModelToRestore: SettingsStore.SpeechModel?
+    @State private var ownerVoiceProfile = PrivateProfileStorage.current
     @State private var microphonePreviewGeneration: UInt64 = 0
     @State private var onboardingMicrophoneRefreshGeneration: UInt64 = 0
     @State private var isOnboardingFlowVisible = false
@@ -468,6 +469,9 @@ struct OnboardingFlowView: View {
         }
         .onChange(of: self.ownerVoice.phase) { _, _ in
             if !self.ownerVoice.isBusy { self.restoreSpeechAfterOwnerVoiceIfNeeded() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)) { _ in
+            self.cancelOwnerVoiceWorkForConceal()
         }
         .onChange(of: self.isMicrophoneReady) { _, isReady in
             guard self.step == .permissions else { return }
@@ -2320,7 +2324,8 @@ struct OnboardingFlowView: View {
     }
 
     private func startOwnerVoiceEnrollment() {
-        guard self.step == .ownerVoice, !self.isOwnerVoiceBusy else { return }
+        guard self.step == .ownerVoice, !self.isOwnerVoiceBusy,
+              PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(self.ownerVoiceProfile) else { return }
         // The permission page owns a live microphone preview. Join its stop before
         // the shared voice transaction acquires the same application audio lease.
         self.stopOnboardingMicrophonePreview()
@@ -2331,7 +2336,8 @@ struct OnboardingFlowView: View {
         self.ownerVoiceStartTask = Task { @MainActor in
             defer { self.ownerVoiceStartTask = nil }
             await previewStop?.value
-            guard !Task.isCancelled, self.isOnboardingFlowVisible, self.step == .ownerVoice else { return }
+            guard !Task.isCancelled, self.isOnboardingFlowVisible, self.step == .ownerVoice,
+                  PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(self.ownerVoiceProfile) else { return }
             self.ownerVoiceSpeechModelToRestore = self.settings.selectedSpeechModel
             self.ownerVoice.start(microphone: microphone)
         }
@@ -2343,10 +2349,19 @@ struct OnboardingFlowView: View {
         self.ownerVoice.cancel()
     }
 
+    private func cancelOwnerVoiceWorkForConceal() {
+        self.ownerVoiceStartTask?.cancel()
+        self.ownerVoiceSpeechRestoreTask?.cancel()
+        self.ownerVoiceSpeechModelToRestore = nil
+        // An admitted capture remains owned by the shared transaction and root Stop.
+    }
+
     private func restoreSpeechAfterOwnerVoiceIfNeeded() {
         guard self.ownerVoiceSpeechRestoreTask == nil, let model = self.ownerVoiceSpeechModelToRestore else { return }
+        let profile = self.ownerVoiceProfile
         guard self.isOnboardingFlowVisible, self.step == .ownerVoice,
-              self.settings.selectedSpeechModel == model else {
+              self.settings.selectedSpeechModel == model, PrivateProfileStorage.acceptsNewWork,
+              PrivateProfileStorage.isReadable(profile) else {
             self.ownerVoiceSpeechModelToRestore = nil
             return
         }
@@ -2358,13 +2373,16 @@ struct OnboardingFlowView: View {
             do {
                 try Task.checkCancellation()
                 guard self.isOnboardingFlowVisible, self.step == .ownerVoice,
-                      self.settings.selectedSpeechModel == model else { return }
+                      self.settings.selectedSpeechModel == model, PrivateProfileStorage.acceptsNewWork,
+                      PrivateProfileStorage.isReadable(profile) else { return }
                 try await self.asr.ensureAsrReady(source: .onboarding)
                 try Task.checkCancellation()
-                if self.settings.selectedSpeechModel == model { self.ownerVoiceSpeechModelToRestore = nil }
+                if self.settings.selectedSpeechModel == model, PrivateProfileStorage.acceptsNewWork,
+                   PrivateProfileStorage.isReadable(profile) { self.ownerVoiceSpeechModelToRestore = nil }
             } catch {
                 guard !Task.isCancelled, self.isOnboardingFlowVisible, self.step == .ownerVoice,
-                      self.settings.selectedSpeechModel == model else { return }
+                      self.settings.selectedSpeechModel == model, PrivateProfileStorage.acceptsNewWork,
+                      PrivateProfileStorage.isReadable(profile) else { return }
                 self.asr.errorTitle = PichiLocalization.text("Voice Model Setup Failed")
                 self.asr.errorMessage = error.localizedDescription
                 self.asr.showError = true
