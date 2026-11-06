@@ -81,7 +81,7 @@ jobs:
             destination='generic/platform=iOS Simulator'
             signing=(CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES)
           fi
-          xcodebuild -project Fluid.xcodeproj -scheme "$SCHEME" -configuration Debug             -destination "$destination" -derivedDataPath "$PWD/.build/coverage/DerivedData"             -clonedSourcePackagesDirPath "$PWD/.build/coverage/SourcePackages" -jobs 2             -enableCodeCoverage YES -resultBundlePath .build/coverage/build.xcresult             "${signing[@]}" build-for-testing 2>&1 | tee .build/coverage/reports/build.log
+          xcodebuild -project Fluid.xcodeproj -scheme "$SCHEME" -configuration Debug             -destination "$destination" -derivedDataPath "$PWD/.build/coverage/DerivedData"             -clonedSourcePackagesDirPath "$PWD/.build/coverage/SourcePackages" -jobs 2             -enableCodeCoverage YES ENABLE_CODE_COVERAGE=YES -resultBundlePath .build/coverage/build.xcresult             "${signing[@]}" build-for-testing 2>&1 | tee .build/coverage/reports/build.log
       - name: Configure existing isolated test host
         working-directory: ${{ runner.temp }}/coverage-worktree
         env:
@@ -159,6 +159,7 @@ jobs:
           xcrun simctl delete "$SIMULATOR_UDID"
   packages:
     name: Coverage Swift packages
+    if: ${{ !contains(github.event.head_commit.message, '[native-only]') }}
     runs-on: xcode-27
     timeout-minutes: 35
     steps:
