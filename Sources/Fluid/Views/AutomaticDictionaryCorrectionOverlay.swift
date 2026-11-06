@@ -774,7 +774,7 @@ private struct DictionaryCorrectionOverlayGroupView: View {
             }
             .frame(height: 2).padding(.horizontal, 14).padding(.top, 3).padding(.bottom, 5)
             .accessibilityLabel("Time to undo")
-            .accessibilityValue(self.progress.formatted(.percent.precision(.fractionLength(0)).locale(self.interfaceLocale)))
+            .accessibilityValue(Double(self.progress).formatted(.percent.precision(.fractionLength(0)).locale(self.interfaceLocale)))
         }
         .frame(width: 460)
         .background(TransientOverlayBackground())
