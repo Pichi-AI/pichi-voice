@@ -725,7 +725,8 @@ final class MeetingAutoDetector {
             return
         }
 
-        guard record.communicationCallState != .ringing, record.communicationCallState != .onHold, record.communicationCallState != .ended else { return }
+        guard record.communicationCallState != .prejoin, record.communicationCallState != .ringing,
+              record.communicationCallState != .onHold, record.communicationCallState != .ended else { return }
         let readiness = self.activityGate.preflightState()
         guard readiness != .busy else {
             self.logConfirmRejected("busy", record: record)

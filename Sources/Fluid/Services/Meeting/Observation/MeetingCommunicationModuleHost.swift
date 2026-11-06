@@ -8,6 +8,9 @@ nonisolated struct MeetingCommunicationModuleRegistration: Sendable {
     let module: any CommunicationObservationModule
     var renderedFactory: RenderedFactory? = nil
     var renderedBundleIdentifiers: [String] = []
+    /// A native adapter can prove a connected local call when its toolbar is hidden.
+    /// The host creates an attempt-local reader; it adds no polling loop or image capture.
+    var nativeCallStatusFactory: (@Sendable () -> any MeetingRenderedAudioStatusObserving)? = nil
     var allowsLegacyURLDetection = false
     var legacyWindowMatcher: (@Sendable (String?) -> Bool)? = nil
 }
@@ -17,6 +20,24 @@ nonisolated struct MeetingCommunicationModuleSnapshot: Sendable {
     let registrations: [MeetingCommunicationModuleRegistration]
     func registration(id: String) -> MeetingCommunicationModuleRegistration? {
         self.registrations.first { $0.module.descriptor.id == id }
+    }
+    func resolve(_ snapshot: CommunicationObservationSnapshot) -> CommunicationModuleEvidence? {
+        guard let evidence = self.registry.resolve(snapshot: snapshot) else { return nil }
+        guard evidence.callState == .indeterminate,
+              let registration = self.registration(id: evidence.moduleID),
+              registration.module.descriptor.nativeBundleIdentifiers.contains(snapshot.bundleIdentifier),
+              registration.module.descriptor.nativeWindowIdentifiers.isEmpty
+                || registration.module.descriptor.nativeWindowIdentifiers.contains(snapshot.windowIdentifier ?? ""),
+              let factory = registration.nativeCallStatusFactory else { return evidence }
+        let phases = registration.module.descriptor.callRules
+        let explicit = phases.connected + phases.prejoin + phases.ringing + phases.held + phases.ended
+        // A supplementary source fills missing evidence, never a deliberate conflict result.
+        guard !explicit.contains(where: { selector in snapshot.controls.contains(where: selector.matches) }) else { return evidence }
+        let status = factory().sample(processID: snapshot.processID, boundWindowID: snapshot.windowID)
+        guard status.callWindowID == snapshot.windowID, let state = status.state,
+              state == .muted || state == .unmuted else { return evidence }
+        return .init(moduleID: evidence.moduleID, callState: .inCall,
+                     microphoneState: state == .muted ? .muted : .unmuted)
     }
 }
 
@@ -82,27 +103,30 @@ nonisolated enum MeetingCommunicationProfiles {
     }
     static func registration(_ descriptor: CommunicationModuleDescriptor,
         renderedFactory: MeetingCommunicationModuleRegistration.RenderedFactory? = nil,
+        nativeCallStatusFactory: (@Sendable () -> any MeetingRenderedAudioStatusObserving)? = nil,
         legacyWindowMatcher: (@Sendable (String?) -> Bool)? = nil,
         renderedBundleIdentifiers: [String]? = nil, allowsLegacyURLDetection: Bool = false) -> MeetingCommunicationModuleRegistration? {
         do { return .init(module: try SemanticCommunicationModule(descriptor: descriptor),
-                          renderedFactory: renderedFactory, renderedBundleIdentifiers: renderedBundleIdentifiers ?? descriptor.nativeBundleIdentifiers, allowsLegacyURLDetection: allowsLegacyURLDetection, legacyWindowMatcher: legacyWindowMatcher) }
+                          renderedFactory: renderedFactory, renderedBundleIdentifiers: renderedBundleIdentifiers ?? descriptor.nativeBundleIdentifiers,
+                          nativeCallStatusFactory: nativeCallStatusFactory, allowsLegacyURLDetection: allowsLegacyURLDetection, legacyWindowMatcher: legacyWindowMatcher) }
         catch {
             DebugLogger.shared.warning("Invalid communication module: \(descriptor.id)", source: "MeetingCallObservation")
             return nil
         }
     }
     static func descriptor(id: String, name: String, native: [String] = [], hosts: [String] = [],
-        connected: [String], muted: [String], unmuted: [String], ringing: [String] = [], held: [String] = [],
-        chords: [CommunicationPushToTalkChord] = [], validation: CommunicationModuleValidation = .contractTested, allowsSubdomains: Bool = false) -> CommunicationModuleDescriptor {
+        connected: [String], muted: [String], unmuted: [String], ringing: [String] = [], held: [String] = [], prejoin: [String] = [],
+        chords: [CommunicationPushToTalkChord] = [], validation: CommunicationModuleValidation = .contractTested, allowsSubdomains: Bool = false,
+        nativeWindowIdentifiers: [String] = []) -> CommunicationModuleDescriptor {
         .init(id: id, displayName: name, nativeBundleIdentifiers: native,
             browserBundleIdentifiers: hosts.isEmpty ? [] : self.browsers,
             urlRules: hosts.map { .init(host: $0, allowsSubdomains: allowsSubdomains, excludedPathPrefixes: ["/login", "/signin", "/settings"]) },
             validation: validation,
             callRules: .init(connected: connected.map { self.button([$0]) },
                 ended: ["Rejoin", "Вернуться в звонок", "Присоединиться снова"].map { self.button([$0]) },
-                ringing: ringing.map { self.button([$0]) }, held: held.map { self.button([$0]) }),
+                ringing: ringing.map { self.button([$0]) }, held: held.map { self.button([$0]) }, prejoin: prejoin.map { self.button([$0]) }),
             microphoneRules: .init(muted: muted.map { self.button([$0]) }, unmuted: unmuted.map { self.button([$0]) }),
-            pushToTalkChords: chords)
+            pushToTalkChords: chords, nativeWindowIdentifiers: nativeWindowIdentifiers)
     }
 }
 #endif

@@ -2,6 +2,31 @@ import XCTest
 @testable import PichiCallObservation
 
 final class CommunicationObservationTests: XCTestCase {
+    func testRealPrejoinShapeDoesNotAdmitMicrophoneBeforeConnectedControls() throws {
+        // Recorded Teams web prejoin controls, 2026-11-06. Room/process identities anonymized.
+        let module = try SemanticCommunicationModule(descriptor: .init(id: "observed.teams", displayName: "Observed Teams surface",
+            browserBundleIdentifiers: ["com.google.Chrome"], urlRules: [.init(host: "teams.live.com")],
+            callRules: .init(connected: [.init(identifier: "hangup-button", labels: ["Leave"])],
+                prejoin: [.init(identifier: "prejoin-join-button", labels: ["Join now"])]),
+            microphoneRules: .init(muted: [.init(labels: ["Unmute mic"])], unmuted: [.init(labels: ["Mute mic"])])))
+        let prejoin = CommunicationObservationSnapshot(bundleIdentifier: "com.google.Chrome", processID: 42, windowID: 77,
+            documentURL: "https://teams.live.com/v2/", controls: [
+                .init(role: "AXButton", identifier: "prejoin-join-button", labels: ["Join now"]),
+                .init(role: "AXSwitch", labels: ["Unmute mic (⇧ ⌘ M)"], value: "0")])
+        XCTAssertEqual(module.evaluate(prejoin).callState, .prejoin)
+        XCTAssertEqual(module.evaluate(prejoin).microphoneState, .indeterminate)
+        let conflicting = CommunicationObservationSnapshot(bundleIdentifier: prejoin.bundleIdentifier, processID: 42, windowID: 77,
+            documentURL: prejoin.documentURL, controls: prejoin.controls + [.init(role: "AXButton", identifier: "hangup-button", labels: ["Leave"])])
+        XCTAssertEqual(module.evaluate(conflicting).callState, .indeterminate)
+    }
+
+    func testPrejoinDescriptorRoundTripAndLegacyDefault() throws {
+        let data = Data(#"{"schemaVersion":1,"id":"observed.zoom","displayName":"Zoom","nativeBundleIdentifiers":["us.zoom.xos"],"callRules":{"prejoin":[{"labels":["Start"]}]}}"#.utf8)
+        let descriptor = try CommunicationModuleDescriptor.decode(data)
+        XCTAssertEqual(descriptor.callRules.prejoin.count, 1)
+        XCTAssertEqual(try JSONDecoder().decode(CommunicationModuleDescriptor.self, from: JSONEncoder().encode(descriptor)), descriptor)
+        XCTAssertTrue(CommunicationCallRules().prejoin.isEmpty)
+    }
     private func module(id: String = "test.call", host: String = "meet.example.com", validation: CommunicationModuleValidation = .contractTested) throws -> SemanticCommunicationModule {
         try SemanticCommunicationModule(descriptor: .init(id: id, displayName: "Synthetic call", browserBundleIdentifiers: ["browser.synthetic"],
             urlRules: [.init(host: host, pathPrefixes: ["/room"], excludedPathPrefixes: ["/room/settings"])], validation: validation,

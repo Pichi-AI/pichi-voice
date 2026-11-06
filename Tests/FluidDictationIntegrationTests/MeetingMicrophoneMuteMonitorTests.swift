@@ -691,21 +691,31 @@ final class MeetingCommunicationModuleIntegrationTests: XCTestCase {
 private final nonisolated class ModuleObserverTestProbe: MeetingCommunicationObservationReading, @unchecked Sendable {
     private let lock = NSLock()
     private var microphone: CommunicationMicrophoneState? = .muted
+    private var callState: CommunicationCallState = .inCall
+    private var windowID: UInt32 = 77
+    private var requestedBounds: [UInt32?] = []
     private var focused = true
     private var requestHandler: (@Sendable () -> Void)?
     private var focusDocuments: [String?] = []
     func configure(microphone: CommunicationMicrophoneState?, focused: Bool = true,
+                   callState: CommunicationCallState = .inCall, windowID: UInt32 = 77,
                    onRequest: (@Sendable () -> Void)? = nil) {
-        self.lock.withLock { self.microphone = microphone; self.focused = focused; self.requestHandler = onRequest }
+        self.lock.withLock {
+            self.microphone = microphone; self.focused = focused; self.callState = callState
+            self.windowID = windowID; self.requestHandler = onRequest
+        }
     }
     func request(application: MeetingApplicationIdentity, boundWindowID: UInt32?, boundDocument: String?,
                  modules: MeetingCommunicationModuleSnapshot,
                  completion: @escaping @Sendable ([MeetingCommunicationObservation]) -> Void) {
-        let (mic, handler) = self.lock.withLock { (self.microphone, self.requestHandler) }
-        if let mic {
+        let (mic, phase, window, handler) = self.lock.withLock {
+            self.requestedBounds.append(boundWindowID)
+            return (self.microphone, self.callState, self.windowID, self.requestHandler)
+        }
+        if let mic, boundWindowID == nil || boundWindowID == window {
             let snapshot = CommunicationObservationSnapshot(bundleIdentifier: application.bundleIdentifier,
-                processID: application.processID ?? 42, windowID: 77, documentURL: "https://call.example.com/room",
-                controls: [.init(role: "AXButton", labels: ["Leave call"]),
+                processID: application.processID ?? 42, windowID: window, documentURL: "https://call.example.com/room",
+                controls: [.init(role: "AXButton", labels: [phase == .prejoin ? "Join now" : "Leave call"]),
                     .init(role: "AXButton", labels: [mic == .muted ? "Turn on microphone" : "Turn off microphone"])])
             completion([.init(snapshot: snapshot, evidence: modules.registry.resolve(snapshot: snapshot)!, acquiredAtHostTime: mach_absolute_time())])
         } else { completion([]) }
@@ -715,6 +725,7 @@ private final nonisolated class ModuleObserverTestProbe: MeetingCommunicationObs
         self.lock.withLock { self.focusDocuments.append(boundDocument); return self.focused }
     }
     var documents: [String?] { self.lock.withLock { self.focusDocuments } }
+    var bounds: [UInt32?] { self.lock.withLock { self.requestedBounds } }
 }
 
 private final nonisolated class ModuleObserverTestCapture: @unchecked Sendable {
@@ -730,6 +741,36 @@ private final nonisolated class ModuleObserverTestCapture: @unchecked Sendable {
 }
 
 final class MeetingModuleMicrophoneObserverTests: XCTestCase {
+    func testPrejoinDoesNotInventMuteOrPinTheWrongWindowAfterJoin() async throws {
+        let module = try SemanticCommunicationModule(descriptor: .init(id: "test.prejoin", displayName: "Prejoin boundary",
+            browserBundleIdentifiers: ["com.google.Chrome"], urlRules: [.init(host: "call.example.com")],
+            callRules: .init(connected: [.init(labels: ["Leave call"])], prejoin: [.init(labels: ["Join now"])]),
+            microphoneRules: .init(muted: [.init(labels: ["Turn on microphone"])], unmuted: [.init(labels: ["Turn off microphone"])])))
+        let snapshot = MeetingCommunicationModuleSnapshot(registry: try .init(modules: [module]), registrations: [.init(module: module)])
+        let arrivals = (0..<3).map { self.expectation(description: "prejoin admission \($0)") }
+        let capture = ModuleObserverTestCapture(arrivals), probe = ModuleObserverTestProbe()
+        let observer = MeetingModuleMicrophoneObserver(application: .init(bundleIdentifier: "com.google.Chrome", processID: 42, displayName: "Synthetic browser"),
+            snapshot: snapshot, probe: probe) { capture.append($0) }
+        observer.start(externallyDriven: true)
+        await self.fulfillment(of: [arrivals[0]], timeout: 2)
+        let preview = self.expectation(description: "preview inspected")
+        probe.configure(microphone: .unmuted, callState: .prejoin, windowID: 77, onRequest: { preview.fulfill() })
+        observer.requestPoll()
+        await self.fulfillment(of: [preview], timeout: 2)
+        probe.configure(microphone: .muted, windowID: 88)
+        observer.requestPoll()
+        await self.fulfillment(of: [arrivals[1]], timeout: 2)
+        probe.configure(microphone: .unmuted, windowID: 88)
+        observer.requestPoll()
+        await self.fulfillment(of: [arrivals[2]], timeout: 2)
+        let pinned = self.expectation(description: "connected window pinned")
+        probe.configure(microphone: nil, windowID: 88, onRequest: { pinned.fulfill() })
+        observer.requestPoll()
+        await self.fulfillment(of: [pinned], timeout: 2)
+        await observer.stop()
+        XCTAssertEqual(probe.bounds, [nil, nil, 88, 88])
+        XCTAssertEqual(capture.states, [.unmuted, .muted, .unmuted])
+    }
     func testSameWindowDocumentLossRetiresTemporaryGrantButPreservesPermanentUnmute() async throws {
         let module = try SemanticCommunicationModule(descriptor: .init(id: "test.owned-call", displayName: "Synthetic call",
             browserBundleIdentifiers: ["com.google.Chrome"], urlRules: [.init(host: "call.example.com")],
@@ -771,5 +812,101 @@ final class MeetingModuleMicrophoneObserverTests: XCTestCase {
         await self.fulfillment(of: [missing], timeout: 2)
         await observer.stop()
         XCTAssertEqual(capture.states, [.unmuted, .muted, .unmuted, .muted, .unmuted])
+    }
+}
+
+private final nonisolated class RecordedCallStatus: MeetingRenderedAudioStatusObserving {
+    let snapshot: MeetingRenderedAudioStatusSnapshot
+    init(_ snapshot: MeetingRenderedAudioStatusSnapshot) { self.snapshot = snapshot }
+    func sample(processID: Int32, boundWindowID: UInt32?) -> MeetingRenderedAudioStatusSnapshot { self.snapshot }
+    func ownsFocusedWindow(processID: Int32) -> Bool { false }
+    func invalidate() {}
+}
+
+/// Sanitized control subsets observed with CUA on 2026-11-06, not fabricated platform labels.
+/// Dynamic room IDs, process/window IDs, participant names and messages are excluded.
+final class MeetingRecordedCommunicationSurfaceTests: XCTestCase {
+    private func evidence(bundle: String = "com.google.Chrome", url: String?, controls: [CommunicationControlSnapshot]) -> CommunicationModuleEvidence? {
+        MeetingCommunicationModuleHost.snapshot.registry.resolve(snapshot: .init(bundleIdentifier: bundle,
+            processID: 42, windowID: 77, documentURL: url,
+            windowIdentifier: bundle == "us.zoom.xos" ? "zm.meeting.window.main" : nil, controls: controls))
+    }
+
+    func testObservedMeetMuteAndUnmuteControlsMatchProductionProfile() {
+        let leave = CommunicationControlSnapshot(role: "AXButton", labels: ["Leave call"])
+        for (label, expected) in [("Turn on microphone", CommunicationMicrophoneState.muted), ("Turn off microphone", .unmuted)] {
+            let value = self.evidence(url: "https://meet.google.com/meet/abc-defg-hij", controls: [leave, .init(role: "AXButton", labels: [label])])
+            XCTAssertEqual(value?.callState, .inCall)
+            XCTAssertEqual(value?.microphoneState, expected)
+        }
+    }
+
+    func testObservedTeamsConsumerRequiresTheSelfToolbarAndButtonIdentity() {
+        let leave = CommunicationControlSnapshot(role: "AXButton", identifier: "hangup-button", labels: ["Leave"])
+        for (label, expected) in [("Unmute mic", CommunicationMicrophoneState.muted), ("Mute mic", .unmuted)] {
+            let selfMic = CommunicationControlSnapshot(role: "AXButton", identifier: "microphone-button", labels: [label], ancestorIdentifiers: ["horizontalMiddleEnd"])
+            let value = self.evidence(url: "https://teams.live.com/v2/", controls: [leave, selfMic])
+            XCTAssertEqual(value?.callState, .inCall)
+            XCTAssertEqual(value?.microphoneState, expected)
+            let unrelated = CommunicationControlSnapshot(role: "AXButton", identifier: "microphone-button", labels: [label], ancestorIdentifiers: ["participant-menu"])
+            XCTAssertEqual(self.evidence(url: "https://teams.live.com/v2/", controls: [leave, unrelated])?.microphoneState, .indeterminate)
+        }
+    }
+
+    func testObservedPrejoinControlsDoNotBecomeConnectedCalls() {
+        let zoom = self.evidence(bundle: "us.zoom.xos", url: nil,
+            controls: [.init(role: "AXButton", labels: ["Start"]), .init(role: "AXButton", identifier: "Audio", labels: ["Audio, turn on, currently muted", "Unmute"])])
+        XCTAssertEqual(zoom?.callState, .prejoin)
+        XCTAssertEqual(zoom?.microphoneState, .indeterminate)
+        let teams = self.evidence(url: "https://teams.live.com/v2/", controls: [
+            .init(role: "AXButton", identifier: "prejoin-join-button", labels: ["Join now"]),
+            .init(role: "AXSwitch", labels: ["Unmute mic (⇧ ⌘ M)"], value: "0")])
+        XCTAssertEqual(teams?.callState, .prejoin)
+    }
+
+    func testObservedTelemostConnectingToolbarIsNotEnoughToConfirmCall() {
+        let value = self.evidence(url: "https://telemost.yandex.ru/j/anonymized-room", controls: [
+            .init(role: "AXButton", labels: ["Выключить микрофон"]),
+            .init(role: "AXButton", labels: ["Открыть экран звонка"]),
+            .init(role: "AXButton", labels: ["Завершить звонок"])])
+        XCTAssertEqual(value?.callState, .indeterminate)
+        XCTAssertEqual(value?.microphoneState, .indeterminate)
+    }
+
+    func testRecordedNativeTeamsViewportPathCanReachControlsWithoutReadingListsOrEditors() {
+        // CUA container roles mapped to their native AXGroup equivalent for this path replay.
+        let path = ["AXWindow", "AXGroup", "AXGroup", "AXGroup", "AXScrollArea", "AXWebArea", "AXGroup"]
+        XCTAssertTrue(path.enumerated().allSatisfy { MeetingCommunicationAXTraversal.descends(role: $0.element, depth: $0.offset) })
+        for privateSubtree in ["AXTextArea", "AXTextField", "AXList", "AXTable", "AXOutline"] {
+            XCTAssertFalse(MeetingCommunicationAXTraversal.descends(role: privateSubtree, depth: 6))
+        }
+        XCTAssertFalse(MeetingCommunicationAXTraversal.descends(role: "AXGroup", depth: 12))
+    }
+
+    func testHiddenToolbarNativeProofIsBoundToTheSameWindowAndCannotOverridePrejoin() throws {
+        let module = try SemanticCommunicationModule(descriptor: .init(id: "observed.zoom", displayName: "Observed native surface",
+            nativeBundleIdentifiers: ["us.zoom.xos"],
+            callRules: .init(connected: [.init(labels: ["Leave"])], prejoin: [.init(labels: ["Start"])]),
+            nativeWindowIdentifiers: ["zm.meeting.window.main"]))
+        func host(window: UInt32) throws -> MeetingCommunicationModuleSnapshot {
+            .init(registry: try .init(modules: [module]), registrations: [.init(module: module,
+                nativeCallStatusFactory: { RecordedCallStatus(.init(callWindowID: window, state: .muted, temporaryHUDVisible: nil)) })])
+        }
+        let hidden = CommunicationObservationSnapshot(bundleIdentifier: "us.zoom.xos", processID: 42, windowID: 77,
+            windowIdentifier: "zm.meeting.window.main", controls: [])
+        XCTAssertEqual(try host(window: 77).resolve(hidden)?.callState, .inCall)
+        XCTAssertEqual(try host(window: 77).resolve(hidden)?.microphoneState, .muted)
+        XCTAssertEqual(try host(window: 88).resolve(hidden)?.callState, .indeterminate)
+        let preview = CommunicationObservationSnapshot(bundleIdentifier: "us.zoom.xos", processID: 42, windowID: 77,
+            windowIdentifier: "zm.meeting.window.main", controls: [.init(role: "AXButton", labels: ["Start"])])
+        XCTAssertEqual(try host(window: 77).resolve(preview)?.callState, .prejoin)
+        let conflict = CommunicationObservationSnapshot(bundleIdentifier: "us.zoom.xos", processID: 42, windowID: 77,
+            windowIdentifier: "zm.meeting.window.main", controls: preview.controls + [.init(role: "AXButton", labels: ["Leave"])])
+        XCTAssertEqual(try host(window: 77).resolve(conflict)?.callState, .indeterminate)
+        let home = CommunicationObservationSnapshot(bundleIdentifier: "us.zoom.xos", processID: 42, windowID: 77,
+            windowIdentifier: "home-window", controls: [])
+        XCTAssertEqual(try host(window: 77).resolve(home)?.callState, .indeterminate)
+        let impostor = CommunicationObservationSnapshot(bundleIdentifier: "another.app", processID: 42, windowID: 77, controls: [])
+        XCTAssertNil(try host(window: 77).resolve(impostor))
     }
 }

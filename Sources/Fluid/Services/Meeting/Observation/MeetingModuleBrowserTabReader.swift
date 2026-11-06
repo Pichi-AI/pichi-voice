@@ -26,7 +26,7 @@ final class MeetingModuleBrowserTabReader: BrowserTabReading {
             switch evidence.callState {
             case .inCall: url.callState = .inCall
             case .ended: url.callState = .ended
-            case .ringing, .onHold, .indeterminate: url.callState = .unknown
+            case .prejoin, .ringing, .onHold, .indeterminate: url.callState = .unknown
             }
             return url
         }

@@ -18,6 +18,14 @@ nonisolated protocol MeetingCommunicationObservationReading: Sendable {
     func ownsFocus(application: MeetingApplicationIdentity, windowID: UInt32, boundDocument: String?) -> Bool
 }
 
+/// Native Teams and Slack wrap their entire web content in a scroll area. Prune history/list
+/// and editable subtrees, not that outer viewport. Kept pure for recorded-hierarchy regression.
+nonisolated enum MeetingCommunicationAXTraversal {
+    static func descends(role: String, depth: Int) -> Bool {
+        depth < 12 && !["AXTextField", "AXTextArea", "AXStaticText", "AXImage", "AXMenu", "AXMenuBar", "AXTabGroup", "AXList", "AXTable", "AXOutline"].contains(role)
+    }
+}
+
 /// Shared, bounded native reader. Discovery scans once per second; active reads use only
 /// validated cached call controls. Text inputs, chat text and participant names are not sampled.
 final nonisolated class MeetingCommunicationAXProbe: MeetingCommunicationObservationReading, @unchecked Sendable {
@@ -130,7 +138,7 @@ final nonisolated class MeetingCommunicationAXProbe: MeetingCommunicationObserva
                 let snapshot = CommunicationObservationSnapshot(bundleIdentifier: application.bundleIdentifier, processID: pid,
                     windowID: descriptor.windowID, documentURL: document,
                     windowIdentifier: try reader.string(window, kAXIdentifierAttribute as String), windowTitle: descriptor.title, controls: controls)
-                if let evidence = modules.registry.resolve(snapshot: snapshot) {
+                if let evidence = modules.resolve(snapshot) {
                     results.append(.init(snapshot: snapshot, evidence: evidence, acquiredAtHostTime: began))
                 }
             }
@@ -153,12 +161,12 @@ final nonisolated class MeetingCommunicationAXProbe: MeetingCommunicationObserva
             try reader.visit()
             let role = try reader.string(node, kAXRoleAttribute as String) ?? ""
             let identifier = try reader.string(node, kAXIdentifierAttribute as String)
-            if ["AXButton", "AXCheckBox", "AXToggleButton", "AXMenuButton", "AXPopUpButton"].contains(role) {
+            if ["AXButton", "AXCheckBox", "AXSwitch", "AXToggleButton", "AXMenuButton", "AXPopUpButton"].contains(role) {
                 found.append(.init(path: path, ancestors: ancestors))
                 guard found.count <= 128 else { return [] }
                 continue
             }
-            guard depth < 12, !["AXTextField", "AXTextArea", "AXStaticText", "AXImage", "AXMenu", "AXMenuBar", "AXTabGroup", "AXScrollArea", "AXList", "AXTable", "AXOutline"].contains(role) else { continue }
+            guard MeetingCommunicationAXTraversal.descends(role: role, depth: depth) else { continue }
             let next = ancestors + (identifier.map { [$0] } ?? [])
             for child in try reader.elements(node).reversed() { pending.append((path + [child], next, depth + 1)) }
             guard pending.count <= 512 else { return [] }

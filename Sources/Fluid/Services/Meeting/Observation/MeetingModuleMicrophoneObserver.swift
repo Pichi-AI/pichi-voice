@@ -55,11 +55,15 @@ final nonisolated class MeetingModuleMicrophoneObserver: MeetingMicrophoneObserv
                 self?.queue.async { [weak self] in
                     guard let self, self.running, self.generation == generation else { return }
                     self.pending = false
-                    let positive = observations.filter { $0.evidence.callState != .indeterminate }
+                    let allPositive = observations.filter { $0.evidence.callState != .indeterminate }
+                    // Prejoin/ringing may live in a different window from the eventual call.
+                    // Prefer one connected surface and pin ownership only after connection.
+                    let connected = allPositive.filter { $0.evidence.callState == .inCall || $0.evidence.callState == .onHold }
+                    let positive = self.windowID == nil && !connected.isEmpty ? connected : allPositive
                     guard positive.count == 1, let observation = positive.first,
                           self.moduleID == nil || self.moduleID == observation.evidence.moduleID,
                           MeetingMicrophoneMuteMonitor.elapsed(since: observation.acquiredAtHostTime, until: mach_absolute_time()) <= 0.65 else { return }
-                    if self.moduleID == nil {
+                    if self.moduleID == nil, observation.evidence.callState == .inCall || observation.evidence.callState == .onHold {
                         self.moduleID = observation.evidence.moduleID
                         self.windowID = observation.snapshot.windowID
                         self.document = observation.snapshot.documentURL
@@ -81,7 +85,7 @@ final nonisolated class MeetingModuleMicrophoneObserver: MeetingMicrophoneObserv
                         case .unmuted: state = .unmuted
                         case .indeterminate: state = nil
                         }
-                    case .indeterminate: state = nil
+                    case .prejoin, .indeterminate: state = nil
                     }
                     if self.transition.observe(state, at: observation.acquiredAtHostTime) {
                         self.publish(self.transition.state, at: observation.acquiredAtHostTime)

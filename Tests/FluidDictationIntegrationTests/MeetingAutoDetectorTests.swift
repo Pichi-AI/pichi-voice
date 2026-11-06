@@ -199,6 +199,18 @@ private final class DetectorHarness {
 
 @MainActor
 final class MeetingAutoDetectorTests: XCTestCase {
+    func testObservedZoomPreviewDoesNotOfferStartUntilConnectedEvidenceArrives() {
+        let h = DetectorHarness()
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "us.zoom.xos", processID: 77), at: h.clock.now())
+        // Zoom 7.1.9 uses the meeting window identity and microphone even before Start.
+        h.detector.handleWindowSnapshot([.init(processID: 77, windowID: 701, title: "Zoom Meeting", layer: 0, communicationCallState: .prejoin)], at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        XCTAssertTrue(h.prompts.isEmpty)
+        XCTAssertNil(h.detector.automaticTarget)
+        h.detector.handleWindowSnapshot([.init(processID: 77, windowID: 701, title: "Zoom Meeting", layer: 0, communicationCallState: .inCall)], at: h.clock.now())
+        XCTAssertEqual(h.prompts.count, 1)
+        XCTAssertEqual(h.detector.automaticTarget?.windowID, 701)
+    }
     func testModuleRingingDoesNotOfferRecordingAndConnectedDoes() {
         let h = DetectorHarness()
         let bundle = "ru.keepcoder.Telegram"

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Versioned, data-only observations. Modules never receive PCM, credentials or editable page text.
-public enum CommunicationCallState: String, Codable, Sendable { case indeterminate, ringing, inCall, onHold, ended }
+public enum CommunicationCallState: String, Codable, Sendable { case indeterminate, prejoin, ringing, inCall, onHold, ended }
 public enum CommunicationMicrophoneState: String, Codable, Sendable { case indeterminate, muted, unmuted }
 /// Evidence provenance, not an entitlement or a security trust level.
 public enum CommunicationModuleValidation: String, Codable, Sendable { case nativeValidated, contractTested, researchOnly }
@@ -114,17 +114,20 @@ public struct CommunicationCallRules: Codable, Sendable, Equatable {
     public let ended: [CommunicationControlSelector]
     public let ringing: [CommunicationControlSelector]
     public let held: [CommunicationControlSelector]
-    private enum CodingKeys: String, CodingKey { case connected, ended, ringing, held }
+    public let prejoin: [CommunicationControlSelector]
+    private enum CodingKeys: String, CodingKey { case connected, ended, ringing, held, prejoin }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(connected: try c.decodeIfPresent([CommunicationControlSelector].self, forKey: .connected) ?? [],
                   ended: try c.decodeIfPresent([CommunicationControlSelector].self, forKey: .ended) ?? [],
                   ringing: try c.decodeIfPresent([CommunicationControlSelector].self, forKey: .ringing) ?? [],
-                  held: try c.decodeIfPresent([CommunicationControlSelector].self, forKey: .held) ?? [])
+                  held: try c.decodeIfPresent([CommunicationControlSelector].self, forKey: .held) ?? [],
+                  prejoin: try c.decodeIfPresent([CommunicationControlSelector].self, forKey: .prejoin) ?? [])
     }
     public init(connected: [CommunicationControlSelector] = [], ended: [CommunicationControlSelector] = [],
-                ringing: [CommunicationControlSelector] = [], held: [CommunicationControlSelector] = []) {
-        self.connected = connected; self.ended = ended; self.ringing = ringing; self.held = held
+                ringing: [CommunicationControlSelector] = [], held: [CommunicationControlSelector] = [],
+                prejoin: [CommunicationControlSelector] = []) {
+        self.connected = connected; self.ended = ended; self.ringing = ringing; self.held = held; self.prejoin = prejoin
     }
 }
 public struct CommunicationMicrophoneRules: Codable, Sendable, Equatable {
@@ -220,7 +223,7 @@ public struct CommunicationModuleDescriptor: Codable, Sendable, Equatable {
         }
     }
     public var selectors: [CommunicationControlSelector] {
-        self.callRules.connected + self.callRules.ended + self.callRules.ringing + self.callRules.held + self.microphoneRules.muted + self.microphoneRules.unmuted
+        self.callRules.connected + self.callRules.ended + self.callRules.ringing + self.callRules.held + self.callRules.prejoin + self.microphoneRules.muted + self.microphoneRules.unmuted
     }
     public func validate() throws {
         func valid(_ value: String, maximum: Int = 512) -> Bool { !value.isEmpty && value.utf8.count <= maximum && !value.unicodeScalars.contains(where: { $0.value < 32 }) }
@@ -277,8 +280,10 @@ public struct SemanticCommunicationModule: CommunicationObservationModule {
         func sees(_ rules: [CommunicationControlSelector]) -> Bool { rules.contains { rule in snapshot.controls.contains(where: rule.matches) } }
         let connected = sees(self.descriptor.callRules.connected), ended = sees(self.descriptor.callRules.ended)
         let ringing = sees(self.descriptor.callRules.ringing), held = sees(self.descriptor.callRules.held)
+        let prejoin = sees(self.descriptor.callRules.prejoin)
         let call: CommunicationCallState
-        if ended { call = connected || ringing || held ? .indeterminate : .ended }
+        if prejoin { call = connected || ended || ringing || held ? .indeterminate : .prejoin }
+        else if ended { call = connected || ringing || held ? .indeterminate : .ended }
         else if ringing { call = held ? .indeterminate : .ringing }
         else if held { call = .onHold }
         else { call = connected ? .inCall : .indeterminate }
