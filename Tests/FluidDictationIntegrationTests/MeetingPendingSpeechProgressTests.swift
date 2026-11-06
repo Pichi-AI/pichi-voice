@@ -48,6 +48,51 @@ final class MeetingPendingSpeechProgressTests: XCTestCase {
         XCTAssertTrue(projection.snapshot.tokens.isEmpty, "A display envelope must not retain a fictitious wave for a missing PCM gap")
     }
 
+    func testFragmentedAcknowledgementsStayBoundedAndCommitAtomically() {
+        let overflow = expectation(description: "Fragmented coverage reports capacity")
+        overflow.assertForOverFulfill = false
+        var projection = MeetingPendingSpeechProjection(maximumIntervals: 4, diagnostics: { event in
+            if event.kind == .capacityReached { overflow.fulfill() }
+        })
+        // Scalar-only observations fill 64 views; the final view coalesces later speech.
+        speech(&projection, start: 0, duration: 30)
+        XCTAssertEqual(projection.snapshot.tokens.count, MeetingPendingSpeechProjection.maximumTokens)
+        let coalescedID = projection.snapshot.tokens.last!.id
+        admit(&projection)
+        for start in [26.0, 27.0, 28.0] {
+            projection.acknowledgeProtectedIntervals(source: .you, intervals: [start..<(start + 0.1)], transcriptRevision: 1)
+        }
+        XCTAssertEqual(projection.retainedIntervalCounts.max(), 4)
+        let bounded = projection.snapshot
+        // The first interval could trim another token, but the second would exceed
+        // the coalesced token's budget. Reject the whole ACK, including that trim.
+        projection.acknowledgeProtectedIntervals(source: .you, intervals: [0..<0.2, 29..<29.1], transcriptRevision: 1)
+        for index in 0..<20 {
+            let start = 29.2 + Double(index) * 0.03
+            projection.acknowledgeResolvedAudio(source: .you, start: start, end: start + 0.01)
+        }
+        XCTAssertEqual(projection.snapshot, bounded)
+        XCTAssertEqual(projection.snapshot.tokens.last?.id, coalescedID)
+        XCTAssertTrue(projection.retainedIntervalCounts.allSatisfy { $0 <= 4 })
+        wait(for: [overflow], timeout: 0)
+        projection.acknowledgeProtectedIntervals(source: .you, intervals: [0..<30], transcriptRevision: 1)
+        XCTAssertTrue(projection.snapshot.tokens.isEmpty, "A broader confirmed ACK can still retire all retained proof")
+        XCTAssertTrue(projection.retainedIntervalCounts.allSatisfy { $0 == 0 })
+
+        // Apply the same bound to cadence debt before its first visible token exists.
+        var pending = MeetingPendingSpeechProjection(maximumIntervals: 3)
+        admit(&pending)
+        speech(&pending, start: 0, duration: 0.38)
+        pending.acknowledgeProtectedIntervals(source: .you, intervals: [0.05..<0.06, 0.1..<0.11], transcriptRevision: 1)
+        XCTAssertEqual(pending.retainedIntervalCounts.max(), 3)
+        pending.acknowledgeResolvedAudio(source: .you, start: 0.15, end: 0.16)
+        XCTAssertTrue(pending.retainedIntervalCounts.allSatisfy { $0 <= 3 })
+        speech(&pending, start: 0.38, duration: 0.04)
+        XCTAssertEqual(pending.snapshot.tokens.count, 1, "Overflow cannot consume unacknowledged cadence debt")
+        pending.acknowledgeProtectedIntervals(source: .you, intervals: [0..<1], transcriptRevision: 1)
+        XCTAssertTrue(pending.snapshot.tokens.isEmpty)
+    }
+
     func testDelayedVADCannotRecreateProcessedAudioOrHideAnUnknownGap() {
         var projection = MeetingPendingSpeechProjection()
         admit(&projection)

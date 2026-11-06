@@ -453,7 +453,7 @@ nonisolated struct MeetingPendingSpeechSnapshot: Sendable, Equatable {
 /// Wave cadence is a bounded presentation estimate, never recognized words.
 nonisolated struct MeetingPendingSpeechProjection {
     static let maximumTokens = 64
-    private static let maximumIntervals = 8_192
+    private let maximumIntervals: Int
     static let minimumActivityRMS: Float = 0.0042
     static let quietWaitingSeconds: TimeInterval = 5
     private static let cadenceResetSeconds: TimeInterval = 0.24
@@ -541,9 +541,18 @@ nonisolated struct MeetingPendingSpeechProjection {
     private let onDiagnostic: (@Sendable (DiagnosticEvent) -> Void)?
     private(set) var snapshot = MeetingPendingSpeechSnapshot(isCapturing: true)
 
-    init(diagnostics: (@Sendable (DiagnosticEvent) -> Void)? = nil) {
+    init(maximumIntervals: Int = 8_192, diagnostics: (@Sendable (DiagnosticEvent) -> Void)? = nil) {
+        precondition((1...8_192).contains(maximumIntervals))
+        self.maximumIntervals = maximumIntervals
         self.onDiagnostic = diagnostics
     }
+
+    #if DEBUG
+    var retainedIntervalCounts: [Int] {
+        self.tracks.values.flatMap { [$0.pending.intervals.count, $0.processedIntervals.count] }
+            + self.tokenSupport.values.map(\.count)
+    }
+    #endif
 
     /// Exactly one short scalar frame from admitted PCM, using its capture PTS timeline.
     mutating func observe(source: MeetingLiveSpeaker, start: Double, end: Double,
@@ -615,7 +624,7 @@ nonisolated struct MeetingPendingSpeechProjection {
         if contributesSpeech, end > track.protectedThrough + 0.000_001 {
             let measured = max(start, track.protectedThrough)..<end
             track.pending.append(Self.subtract([measured], coveredBy: track.processedIntervals))
-            guard track.pending.intervals.count <= Self.maximumIntervals else {
+            guard track.pending.intervals.count <= self.maximumIntervals else {
                 track.pending.intervals.removeAll(keepingCapacity: true)
                 self.emit(.capacityReached, source: source, start: start, end: end)
                 return
@@ -642,7 +651,7 @@ nonisolated struct MeetingPendingSpeechProjection {
                     // disappear merely because the renderer reached its view budget.
                     let id = self.snapshot.tokens[index].id
                     let support = Self.merged((self.tokenSupport[id] ?? []) + speech)
-                    guard support.count <= Self.maximumIntervals else {
+                    guard support.count <= self.maximumIntervals else {
                         self.emit(.capacityReached, source: source, start: start, end: end)
                         return
                     }
@@ -723,22 +732,20 @@ nonisolated struct MeetingPendingSpeechProjection {
         var track = tracks[source] ?? Track()
         guard end > track.protectedThrough else { return }
         let start = track.protectedThrough
+        guard applyCoverage(source: source, start: start, end: end, captionID: nil, visibleUTF16: 0) else { return }
+        track = tracks[source] ?? track
         track.protectedThrough = end
         tracks[source] = track
-        applyCoverage(source: source, start: start, end: end, captionID: nil, visibleUTF16: 0)
         emit(.processedCoverage, source: source, transcriptRevision: transcriptRevision, start: start, end: end)
     }
 
     mutating func acknowledgeProtectedIntervals(source: MeetingLiveSpeaker,
         intervals: [Range<Double>], transcriptRevision: UInt64) {
         guard snapshot.isCapturing, transcriptRevision == visibleRevision,
-              intervals.count <= Self.maximumIntervals,
+              intervals.count <= self.maximumIntervals,
               intervals.allSatisfy({ $0.lowerBound.isFinite && $0.upperBound.isFinite
                   && $0.lowerBound >= 0 && $0.upperBound > $0.lowerBound }) else { return }
-        for interval in Self.merged(intervals) {
-            applyCoverage(source: source, start: interval.lowerBound, end: interval.upperBound,
-                captionID: nil, visibleUTF16: 0)
-        }
+        applyCoverage(source: source, intervals: Self.merged(intervals), captionID: nil, visibleUTF16: 0)
     }
 
     /// A caption worker completed this interval without a visible caption (empty final
@@ -746,7 +753,7 @@ nonisolated struct MeetingPendingSpeechProjection {
     /// It cannot advance a source prefix across earlier queued or privacy-held speech.
     mutating func acknowledgeResolvedAudio(source: MeetingLiveSpeaker, start: Double, end: Double) {
         guard snapshot.isCapturing, start.isFinite, end.isFinite, start >= 0, end > start else { return }
-        applyCoverage(source: source, start: start, end: end, captionID: nil, visibleUTF16: 0)
+        guard applyCoverage(source: source, start: start, end: end, captionID: nil, visibleUTF16: 0) else { return }
         emit(.processedCoverage, source: source, start: start, end: end)
     }
 
@@ -770,38 +777,58 @@ nonisolated struct MeetingPendingSpeechProjection {
         track.cadenceSeconds = track.cadenceSeconds * 0.8 + observed * 0.2
     }
 
+    @discardableResult
     private mutating func applyCoverage(source: MeetingLiveSpeaker, start: TimeInterval, end: TimeInterval,
-                                       captionID: UUID?, visibleUTF16: Int) {
-        guard end > start else { return }
-        let coverage = start..<end
+                                       captionID: UUID?, visibleUTF16: Int) -> Bool {
+        guard end > start else { return false }
+        return applyCoverage(source: source, intervals: [start..<end], captionID: captionID, visibleUTF16: visibleUTF16)
+    }
+
+    /// Preflight the complete acknowledgement before changing any retained proof.
+    /// Subtraction can fragment a bounded interval list just as append can grow it.
+    /// On overflow retain the old proof, without bridging already acknowledged holes.
+    @discardableResult
+    private mutating func applyCoverage(source: MeetingLiveSpeaker, intervals: [Range<Double>],
+                                       captionID: UUID?, visibleUTF16: Int) -> Bool {
+        guard let first = intervals.first, let last = intervals.last else { return true }
+        let start = first.lowerBound, end = last.upperBound
         var track = self.tracks[source] ?? Track()
-        let remembered = Self.merged(track.processedIntervals + [coverage])
+        let remembered = Self.merged(track.processedIntervals + intervals)
             .filter { $0.upperBound > (track.lastEnd ?? 0) + 0.000_001 }
-        guard remembered.count <= Self.maximumIntervals else {
+        let pending = Self.subtract(track.pending.intervals, coveredBy: intervals)
+        guard remembered.count <= self.maximumIntervals, pending.count <= self.maximumIntervals else {
             self.emit(.capacityReached, source: source, start: start, end: end)
-            return
+            return false
         }
-        track.processedIntervals = remembered
-        track.pending.intervals = Self.subtract(track.pending.intervals, coveredBy: [coverage])
-        self.tracks[source] = track
+        var supports: [UInt64: [Range<Double>]] = [:]
+        var nextTokens: [MeetingPendingSpeechToken] = []
         var removed: [MeetingPendingSpeechToken] = []
         var trimmed: [MeetingPendingSpeechToken] = []
-        self.snapshot.tokens = self.snapshot.tokens.compactMap { token in
-            guard token.source == source, token.end > start, token.start < end else { return token }
-            let support = Self.subtract(self.tokenSupport[token.id] ?? [token.start..<token.end], coveredBy: [coverage])
-            guard let first = support.first, let last = support.last else {
-                self.tokenSupport[token.id] = nil
-                removed.append(token)
-                return nil
+        for token in self.snapshot.tokens {
+            guard token.source == source, token.end > start, token.start < end else {
+                nextTokens.append(token); continue
             }
-            self.tokenSupport[token.id] = support
+            let support = Self.subtract(self.tokenSupport[token.id] ?? [token.start..<token.end], coveredBy: intervals)
+            guard support.count <= self.maximumIntervals else {
+                self.emit(.capacityReached, source: source, start: start, end: end)
+                return false
+            }
+            supports[token.id] = support
+            guard let first = support.first, let last = support.last else {
+                removed.append(token); continue
+            }
             var retained = token
             retained.start = first.lowerBound
             retained.end = last.upperBound
             if retained != token { trimmed.append(token) }
-            return retained
+            nextTokens.append(retained)
         }
-        guard !removed.isEmpty || !trimmed.isEmpty else { return }
+        track.processedIntervals = remembered
+        track.pending.intervals = pending
+        self.tracks[source] = track
+        for (id, support) in supports { self.tokenSupport[id] = support.isEmpty ? nil : support }
+        self.snapshot.tokens = nextTokens
+        guard !removed.isEmpty || !trimmed.isEmpty else { return true }
         self.snapshot.revision &+= 1
         self.reportedCapacity = false
         if !removed.isEmpty {
@@ -812,6 +839,7 @@ nonisolated struct MeetingPendingSpeechProjection {
             self.emit(.trimmed, source: source, tokens: trimmed, transcriptRevision: self.visibleRevision,
                 captionID: captionID, visibleUTF16: visibleUTF16, start: start, end: end)
         }
+        return true
     }
 
     private static func merged(_ ranges: [Range<Double>]) -> [Range<Double>] {
