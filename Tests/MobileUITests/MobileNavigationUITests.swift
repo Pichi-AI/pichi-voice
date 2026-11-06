@@ -3,6 +3,9 @@ import UIKit
 import CoreText
 
 final class MobileNavigationUITests: XCTestCase {
+    /// A test that sets its own launch arguments must repeat these, or a clean simulator stops at first-run setup.
+    private static let completedSetup = ["-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
+
     private var app: XCUIApplication!
 
     override func setUpWithError() throws {
@@ -884,7 +887,7 @@ final class MobileNavigationUITests: XCTestCase {
     func testOwnerVoiceSettingsUseNativeRecordingStructureInBothLanguages() throws {
         for (language, settingsTitle, appearance) in [("en", "Settings", "light"), ("ru", "Настройки", "dark")] {
             app.terminate()
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             XCUIDevice.shared.orientation = .portrait
             app.launch()
             waitForOrientation(portrait: true)
@@ -1041,7 +1044,7 @@ final class MobileNavigationUITests: XCTestCase {
 
     func testRussianSettingsAndModelsInDarkAppearance() throws {
         app.terminate()
-        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark"]
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark"] + Self.completedSetup
         app.launch()
         waitForOrientation(portrait: true)
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
@@ -1064,7 +1067,7 @@ final class MobileNavigationUITests: XCTestCase {
         for appearance in ["light", "dark"] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
-            app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             waitForOrientation(portrait: true)
             openNavigation("meetings", title: "Записи")
@@ -1191,7 +1194,7 @@ final class MobileNavigationUITests: XCTestCase {
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             waitForOrientation(portrait: true)
             capture("attribution-\(language)-ready")
@@ -1228,7 +1231,7 @@ final class MobileNavigationUITests: XCTestCase {
         for (language, appearance, meetingsTitle) in [("en", "light", "Recordings"), ("ru", "dark", "Записи")] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             waitForOrientation(portrait: true)
             capture("protected-export-\(language)-ready")
@@ -1346,7 +1349,7 @@ final class MobileNavigationUITests: XCTestCase {
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             waitForOrientation(portrait: true)
             capture("legacy-attribution-\(language)-ready")
@@ -1589,7 +1592,7 @@ final class MobileNavigationUITests: XCTestCase {
             ("ru", "dark", "Записи")
         ] {
             for iteration in 0..<2 {
-                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
                 app.launch()
                 openNavigation("meetings", title: meetings)
                 let meeting = app.buttons["history.session.\(fixtureID)"]
@@ -1638,7 +1641,7 @@ final class MobileNavigationUITests: XCTestCase {
             ("ru", "dark", "Записи", "Вы", "Participant 1")
         ] {
             func openFixture() throws {
-                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
                 app.launch()
                 capture("participant-correction-\(language)-ready")
                 openNavigation("meetings", title: meetings)
@@ -1766,7 +1769,7 @@ final class MobileNavigationUITests: XCTestCase {
         let lastID = "00000000-0000-0000-0000-202610210105"
         for (language, appearance, meetings) in [("en", "light", "Recordings"), ("ru", "dark", "Записи")] {
             app.terminate()
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             capture("navigation-surface-\(language)-ready")
             openNavigation("meetings", title: meetings)
@@ -1835,7 +1838,7 @@ final class MobileNavigationUITests: XCTestCase {
         let identifiers = try savedParagraphIdentifiers(expectedCount: expected.count)
         for (language, appearance, meetings) in [("en", "light", "Recordings"), ("ru", "dark", "Записи")] {
             app.terminate()
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             capture("saved-reading-\(language)-ready")
             openNavigation("meetings", title: meetings)
@@ -1866,7 +1869,7 @@ final class MobileNavigationUITests: XCTestCase {
         }
         let identifiers = try savedParagraphIdentifiers(expectedCount: expected.count)
         app.terminate()
-        app.launchArguments = ["-PichiInterfaceLanguage", "ru"]
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru"] + Self.completedSetup
         app.launch()
         capture("private-saved-ready")
         // A scheduled iPadOS update can cover the application with a passcode sheet.
@@ -1902,7 +1905,7 @@ final class MobileNavigationUITests: XCTestCase {
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             waitForOrientation(portrait: true)
             openNavigation("meetings", title: meetingsTitle)
@@ -1976,7 +1979,9 @@ final class MobileNavigationUITests: XCTestCase {
             capture("location-\(language)-\(appearance)-launched")
             openNavigation("meetings", title: meetingsTitle)
             let meeting = app.buttons["history.session.\(fixtureID)"]
-            XCTAssertTrue(meeting.waitForExistence(timeout: 10), "Stage LocationMeeting.json in the owned simulator")
+            guard meeting.waitForExistence(timeout: 10) else {
+                throw XCTSkip("Stage LocationMeeting.json in the owned simulator")
+            }
             // The place names the recording; the start is on the row's second line.
             XCTAssertTrue(meeting.label.contains(expected) && !meeting.label.contains("\(expected) · "), meeting.label)
             capture("location-\(language)-\(appearance)-history")
