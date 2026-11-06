@@ -80,6 +80,19 @@ class GateTests(unittest.TestCase):
         self.assertEqual(value["result"], "failed")
         self.assertEqual(value["uncovered"], {"tools/source.py": [2]})
 
+    def test_full_baseline_requires_selected_reports_even_with_no_diff(self):
+        self.put("tools/source.py", "value = 1\n")
+        self.base = self.commit()
+        args = ["--root", str(self.root), "--base", self.base, "--head", self.base,
+                "--reports-dir", str(self.reports), "--require-scope", "python"]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(GATE.main(args), 1)
+        plan = self.plan()
+        self.report(plan, files={"tools/source.py": dict(executable_lines=[1], covered_lines=[1])})
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(GATE.main(args), 0)
+        self.assertEqual(json.loads(output.getvalue())["result"], "passed")
+
     def test_missing_new_file_or_report_and_zero_reports_fail_closed(self):
         plan = self.add_python()
         with self.assertRaises(OSError):

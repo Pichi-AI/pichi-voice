@@ -63,6 +63,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
       CI_ROOT: ${{ github.workspace }}/.build/pichi-coverage
+      PICHI_COVERAGE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -83,8 +84,8 @@ jobs:
         with:
           name: coverage-diagnostics-macos
           path: |
-            ${{ env.CI_ROOT }}/.build/coverage/macos/*.log
-            ${{ env.CI_ROOT }}/.build/coverage/macos/summary-*.json
+            ${{ env.CI_ROOT }}/.build/coverage/macos/*/*.log
+            ${{ env.CI_ROOT }}/.build/coverage/macos/*/summary-*.json
           retention-days: 1
 
   ios:
@@ -96,6 +97,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
       CI_ROOT: ${{ github.workspace }}/.build/pichi-coverage
+      PICHI_COVERAGE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -116,10 +118,10 @@ jobs:
         with:
           name: coverage-diagnostics-ios
           path: |
-            ${{ env.CI_ROOT }}/.build/coverage/ios/*.log
-            ${{ env.CI_ROOT }}/.build/coverage/ios/summary-*.json
-            ${{ env.CI_ROOT }}/.build/coverage/ios/device-*.json
-            ${{ env.CI_ROOT }}/.build/coverage/ios/screenshots-*/*.png
+            ${{ env.CI_ROOT }}/.build/coverage/ios/*/*.log
+            ${{ env.CI_ROOT }}/.build/coverage/ios/*/summary-*.json
+            ${{ env.CI_ROOT }}/.build/coverage/ios/*/device-*.json
+            ${{ env.CI_ROOT }}/.build/coverage/ios/*/screenshots-*/*.png
           retention-days: 1
 
   packages:
@@ -131,6 +133,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
       CI_ROOT: ${{ github.workspace }}/.build/pichi-coverage
+      PICHI_COVERAGE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -151,8 +154,8 @@ jobs:
         with:
           name: coverage-diagnostics-packages
           path: |
-            ${{ env.CI_ROOT }}/.build/coverage/packages/*.log
-            ${{ env.CI_ROOT }}/.build/coverage/packages/*.lcov
+            ${{ env.CI_ROOT }}/.build/coverage/packages/*/*.log
+            ${{ env.CI_ROOT }}/.build/coverage/packages/*/*.lcov
           retention-days: 1
 
   python:
@@ -163,6 +166,7 @@ jobs:
     timeout-minutes: 10
     env:
       CI_ROOT: ${{ github.workspace }}/.build/pichi-coverage
+      PICHI_COVERAGE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:

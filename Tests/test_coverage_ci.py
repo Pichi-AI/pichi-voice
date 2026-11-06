@@ -90,6 +90,14 @@ class CoverageProducerTests(unittest.TestCase):
                 CI.test_counts(invalid)
         tree = dict(testNodes=[dict(children=[dict(nodeType="Test Case", nodeIdentifier="Smoke/testA()", result="Passed")])])
         CI.require_test_class(tree, "Smoke")
+        mixed = [dict(nodeType="Test Case", nodeIdentifier="Legacy/" + name, result=result)
+                 for name, result in [("testOrdinary()", "Passed"), ("testStagedFixture()", "Skipped")]]
+        CI.require_test_class(mixed, "Legacy", allow_skips=True)
+        for results in [["Skipped"], ["Passed", "Failed"]]:
+            nodes = [dict(nodeType="Test Case", nodeIdentifier="Legacy/test" + str(i), result=result)
+                     for i, result in enumerate(results)]
+            with self.assertRaises(ValueError):
+                CI.require_test_class(nodes, "Legacy", allow_skips=True)
         for missing in [{}, [dict(nodeType="Test Case", nodeIdentifier="Other/testA()", result="Passed")],
                         [dict(nodeType="Test Case", nodeIdentifier="Smoke/testA()", result="Skipped")]]:
             with self.assertRaises(ValueError):
@@ -137,8 +145,20 @@ class CoverageProducerTests(unittest.TestCase):
         with patch.object(CI, "command", return_value=completed(status=1)) as run:
             self.assertEqual(CI.finish(self.root, plan, self.out, needs, self.out / "gate.json"), 1)
         self.assertIn("head", run.call_args.args[0])
+        self.assertEqual(run.call_args.args[0][-2:], ["--require-scope", "python"])
         with patch.dict(os.environ, {"PICHI_COVERAGE_PLAN": plan.read_text(), "PICHI_COVERAGE_NEEDS": needs.read_text()}), patch.object(CI, "command", return_value=completed()):
             self.assertEqual(CI.finish(self.root, None, self.out, None, self.out / "gate.json"), 0)
+
+    def test_changed_ui_classes_are_pinned_and_helpers_fail_closed(self):
+        with patch.dict(os.environ, {"PICHI_COVERAGE_PLAN": '{"base_sha":"pinned-base"}'}, clear=True), patch.object(CI, "git", side_effect=[
+                "head", "Tests/MobileUITests/Navigation.swift\nTests/MobileUITests/Notes.md",
+                "final class Navigation: XCTestCase {}\nclass Settings : XCTestCase {}"] ) as git:
+            self.assertEqual(CI.changed_ui_classes(self.root), {"Navigation", "Settings"})
+        self.assertIn("pinned-base", git.call_args_list[1].args)
+        self.assertEqual(git.call_args_list[2].args[-1], "head:Tests/MobileUITests/Navigation.swift")
+        with patch.dict(os.environ, {}, clear=True), patch.object(CI, "git", side_effect=[
+                "head", "base", "Tests/MobileUITests/Helpers.swift", "func helper() {}"]), self.assertRaisesRegex(ValueError, "explicit owning"):
+            CI.changed_ui_classes(self.root)
 
     def test_configured_host_keeps_ui_host_separate_and_exports_actual_temp(self):
         helper = self.root / "scripts/dev/macos-regression.py"
@@ -164,7 +184,7 @@ class CoverageProducerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             CI.configure_run(self.root, products, "Mobile")
 
-    def run_native(self, scope="macos", *, code=0, app_lines=3, ui_pass=True):
+    def run_native(self, scope="macos", *, code=0, app_lines=3, ui_pass=True, changed=()):
         calls = []
         def tool(argv, **kwargs):
             calls.append([str(x) for x in argv])
@@ -182,8 +202,8 @@ class CoverageProducerTests(unittest.TestCase):
                 return completed(json.dumps(dict(targets=[dict(name="App.app", executableLines=app_lines)])))
             if "--archive" in argv:
                 return completed(json.dumps(archive(self.root)))
-            return completed(json.dumps([dict(nodeType="Test Case", nodeIdentifier="Smoke/testA()", result="Passed" if ui_pass else "Skipped")]))
-        with patch.dict(os.environ, {"RUNNER_ENVIRONMENT": "github-hosted"}), patch.object(CI, "git", side_effect=lambda root, *args: "head" if args == ("rev-parse", "HEAD") else ""), patch.object(CI, "configure_run", return_value=(self.out / "coverage.xctestrun", {"App.app"})), patch.object(CI, "command", side_effect=tool):
+            return completed(json.dumps([dict(nodeType="Test Case", nodeIdentifier=name + "/testA()", result="Passed" if ui_pass else "Skipped") for name in ["Smoke", *changed]]))
+        with patch.dict(os.environ, {"RUNNER_ENVIRONMENT": "github-hosted"}), patch.object(CI, "git", side_effect=lambda root, *args: "head" if args == ("rev-parse", "HEAD") else ""), patch.object(CI, "changed_ui_classes", return_value=set(changed)), patch.object(CI, "configure_run", return_value=(self.out / "coverage.xctestrun", {"App.app"})), patch.object(CI, "command", side_effect=tool):
             status = CI.native(self.root, self.out, scope, "Smoke")
         return status, calls
 
@@ -207,6 +227,16 @@ class CoverageProducerTests(unittest.TestCase):
         self.assertEqual(CI.read(self.out / "ios.json")["tests"]["passed"], 2)
         with self.assertRaisesRegex(ValueError, "Required CI UI"):
             self.run_native("ios", ui_pass=False)
+
+    def test_changed_ui_classes_run_on_phone_and_retries_use_fresh_products(self):
+        _, first = self.run_native("ios", changed=("Navigation",))
+        _, second = self.run_native("ios", changed=("Navigation",))
+        runs = [x for x in first if "test-without-building" in x]
+        self.assertIn("-only-testing:PichiVoiceMobileUITests/Navigation", runs[0])
+        self.assertNotIn("-only-testing:PichiVoiceMobileUITests/Navigation", runs[1])
+        self.assertIn("-only-testing:PichiVoiceMobileIntegrationTests", runs[0])
+        self.assertNotIn("-only-testing:PichiVoiceMobileIntegrationTests", runs[1])
+        self.assertNotEqual(first[0][first[0].index("-derivedDataPath") + 1], second[0][second[0].index("-derivedDataPath") + 1])
 
     def test_package_accounting_combines_xctest_and_swift_testing(self):
         text = "Test Suite 'All tests' passed at now.\n Executed 7 tests, with 2 tests skipped and 0 failures\n"
@@ -239,11 +269,30 @@ class CoverageProducerTests(unittest.TestCase):
                 (folder / "one.profraw").write_bytes(b"fixture")
                 Path(kwargs["log"]).write_text("Test Suite 'All tests' passed at now.\n Executed 2 tests, with 0 failures\n")
             return completed(f"SF:{self.root}/Vendor/Sample/Sources/A.swift\nDA:1,1\n")
-        with patch.object(CI, "PACKAGES", ("Sample",)), patch.object(CI, "git", side_effect=["head", "head", ""]), patch.object(CI, "command", side_effect=tool):
+        with patch.object(CI, "PACKAGES", ("Sample",)), patch.object(CI, "git", side_effect=["head", "head", ""] * 2), patch.object(CI, "command", side_effect=tool):
+            self.assertEqual(CI.packages(self.root, self.out), 0)
             self.assertEqual(CI.packages(self.root, self.out), 0)
         export = next(x for x in commands if x[:3] == ["xcrun", "llvm-cov", "export"])
         self.assertIn("-object", export)
         self.assertTrue(any(str(x).endswith("/two") for x in export))
+        scratch_paths = [x[x.index("--scratch-path") + 1] for x in commands if x[0] == "swift"]
+        self.assertEqual(len(set(scratch_paths)), 2)
+
+    def test_each_package_must_run_passing_tests(self):
+        def tool(argv, **kwargs):
+            if argv[0] == "swift":
+                scratch = Path(argv[argv.index("--scratch-path") + 1])
+                scratch.mkdir(parents=True)
+                (scratch / "sample.profraw").write_bytes(b"profile")
+                obj = scratch / "Sample.xctest/Contents/MacOS/Sample"
+                obj.parent.mkdir(parents=True)
+                obj.write_bytes(b"object")
+                skipped = 1 if "Skipped" in str(scratch) else 0
+                Path(kwargs["log"]).write_text(f"Test Suite 'All tests' passed at now.\n Executed 1 test, with {skipped} tests skipped and 0 failures\n")
+            return completed(f"SF:{self.root}/Vendor/Sample/Sources/A.swift\nDA:1,1\n")
+        with patch.object(CI, "PACKAGES", ("Sample", "Skipped")), patch.object(CI, "git", return_value="head"), patch.object(CI, "command", side_effect=tool), self.assertRaisesRegex(ValueError, "all skipped: Skipped"):
+            CI.packages(self.root, self.out)
+        self.assertFalse((self.out / "packages.json").exists())
 
     def test_package_without_profiles_cannot_report_success(self):
         def tool(argv, **kwargs):

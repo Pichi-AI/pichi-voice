@@ -120,7 +120,7 @@ def test_counts(summary):
     return {"passed": values[1], "failed": values[2] + values[4], "skipped": values[3]}
 
 
-def require_test_class(tree, name):
+def require_test_class(tree, name, allow_skips=False):
     def visit(node):
         if isinstance(node, dict):
             if node.get("nodeType") == "Test Case" and node.get("nodeIdentifier", "").startswith(name + "/"):
@@ -131,7 +131,8 @@ def require_test_class(tree, name):
             for child in node:
                 yield from visit(child)
     results = list(visit(tree))
-    if not results or any(value != "Passed" for value in results):
+    accepted = {"Passed", "Skipped"} if allow_skips else {"Passed"}
+    if "Passed" not in results or any(value not in accepted for value in results):
         raise ValueError(f"Required CI UI class did not pass: {name}")
 
 
@@ -173,8 +174,9 @@ def finish(root, plan_path, reports, needs, output):
     if failed:
         save(output, {"result": "failed", "reason": "Missing or failed producer", "jobs": failed})
         return 1
+    selected = [item for scope in value["run_scopes"] for item in ("--require-scope", scope)]
     return command([sys.executable, "-S", "scripts/dev/coverage-gate.py", "--base", value["base_sha"],
-                    "--head", value["source_sha"], "--reports-dir", reports, "--output", output], cwd=root, tolerate=True).returncode
+                    "--head", value["source_sha"], "--reports-dir", reports, "--output", output, *selected], cwd=root, tolerate=True).returncode
 
 
 def configure_run(root, products, scheme):
@@ -212,11 +214,27 @@ def configure_run(root, products, scheme):
     return path, apps
 
 
+def changed_ui_classes(root):
+    plan = json.loads(os.environ.get("PICHI_COVERAGE_PLAN", "{}"))
+    head = git(root, "rev-parse", "HEAD")
+    base = plan.get("base_sha") or git(root, "merge-base", "origin/main", head)
+    paths = git(root, "diff", "--name-only", "--diff-filter=AMR", base, head, "--", "Tests/MobileUITests").splitlines()
+    classes = set()
+    for path in paths:
+        if path.endswith(".swift"):
+            text = git(root, "show", head + ":" + path)
+            names = re.findall(r"\bclass\s+(\w+)\s*:\s*XCTestCase\b", text)
+            if not names:
+                raise ValueError("Changed UI helper needs an explicit owning CI XCTest class: " + path)
+            classes.update(names)
+    return classes
+
+
 def native(root, output, scope, ui_class):
     if scope == "macos" and os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise ValueError("macOS coverage requires a disposable GitHub-hosted user; personal app data must stay isolated")
     source = git(root, "rev-parse", "HEAD")
-    work = Path(output) / scope
+    work = Path(output) / scope / ("run-" + uuid.uuid4().hex)
     work.mkdir(parents=True, exist_ok=True)
     scheme = "Fluid" if scope == "macos" else "PichiVoiceMobile"
     destination = "platform=macOS,arch=arm64" if scope == "macos" else "generic/platform=iOS Simulator"
@@ -226,6 +244,7 @@ def native(root, output, scope, ui_class):
              "-enableCodeCoverage", "YES", "ENABLE_CODE_COVERAGE=YES", *signing, "build-for-testing"], log=work / "build.log", cwd=root)
     specification, apps = configure_run(root, work / "DerivedData/Build/Products", scheme)
     files, totals, failed = {}, {"passed": 0, "failed": 0, "skipped": 0}, False
+    changed_classes = changed_ui_classes(root) if scope == "ios" else set()
     devices = [None] if scope == "macos" else ["iPhone 17", "iPad (A16)"]
     for index, kind in enumerate(devices):
         udid = None
@@ -238,8 +257,10 @@ def native(root, output, scope, ui_class):
                 save(work / f"device-{index}.json", {"udid": udid, "type": device, "runtime": runtime})
                 destination = "platform=iOS Simulator,id=" + udid
             bundle = work / f"tests-{index}.xcresult"
+            required_classes = {ui_class} | (changed_classes if index == 0 else set())
             selections = (["-skip-testing:FluidDictationIntegrationTests/DictationE2ETests/testDictationEndToEnd_whisperTiny_transcribesFixture"] if scope == "macos" else
-                          ["-only-testing:PichiVoiceMobileIntegrationTests", "-only-testing:PichiVoiceMobileUITests/" + ui_class])
+                          (["-only-testing:PichiVoiceMobileIntegrationTests"] if index == 0 else []) +
+                          ["-only-testing:PichiVoiceMobileUITests/" + name for name in sorted(required_classes)])
             result = command(["xcodebuild", "-xctestrun", specification, "-destination", destination, "-enableCodeCoverage", "YES",
                               "-parallel-testing-enabled", "NO", "-test-timeouts-enabled", "YES", "-default-test-execution-time-allowance", "120",
                               "-maximum-test-execution-time-allowance", "180", "-resultBundlePath", bundle, *selections, "test-without-building"],
@@ -258,7 +279,8 @@ def native(root, output, scope, ui_class):
             if scope == "ios":
                 tree = json.loads(command(["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", bundle, "--compact"]).stdout)
                 command(["xcrun", "xcresulttool", "export", "attachments", "--path", bundle, "--output-path", work / f"screenshots-{index}", "--filter", "*.png"])
-                require_test_class(tree, ui_class)
+                for name in required_classes:
+                    require_test_class(tree, name, allow_skips=name != ui_class)
         finally:
             if udid:
                 command(["xcrun", "simctl", "shutdown", udid], tolerate=True)
@@ -294,7 +316,7 @@ def swift_counts(text, xml=None):
 
 def packages(root, output):
     source = git(root, "rev-parse", "HEAD")
-    work = Path(output) / "packages"
+    work = Path(output) / "packages" / ("run-" + uuid.uuid4().hex)
     work.mkdir(parents=True, exist_ok=True)
     files, counts, failed = {}, {"passed": 0, "failed": 0, "skipped": 0}, False
     for name in PACKAGES:
@@ -302,7 +324,10 @@ def packages(root, output):
         result = command(["swift", "test", "--package-path", root / "Vendor" / name, "--scratch-path", scratch, "--jobs", "2",
                           "--enable-code-coverage", "--xunit-output", work / (name + ".xml")], log=log, cwd=root, tolerate=True)
         failed |= result.returncode != 0
-        for key, value in swift_counts(log.read_text(), work / (name + "-swift-testing.xml")).items():
+        current_counts = swift_counts(log.read_text(), work / (name + "-swift-testing.xml"))
+        if current_counts["passed"] == 0 or current_counts["failed"]:
+            raise ValueError("Required package tests failed or were all skipped: " + name)
+        for key, value in current_counts.items():
             counts[key] += value
         raw = list(scratch.rglob("*.profraw"))
         objects = []

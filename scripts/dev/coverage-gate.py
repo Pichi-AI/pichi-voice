@@ -192,11 +192,13 @@ def main(argv=None):
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", required=True)
     parser.add_argument("--reports-dir", type=Path)
+    parser.add_argument("--require-scope", choices=sorted(SCOPES), action="append", default=[])
     parser.add_argument("--output", type=Path)
     parser.add_argument("--root", type=Path, default=Path.cwd())
     args = parser.parse_args(argv)
     try:
         plan = classify(args.root, args.base, args.head)
+        plan["required_scopes"] = sorted(set(plan["required_scopes"]) | set(args.require_scope))
         value = plan if args.classify else evaluate(args.root, plan, args.reports_dir)
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
