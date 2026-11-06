@@ -2503,18 +2503,20 @@ private extension OnboardingFlowView {
     }
 
     @ViewBuilder private var ownerVoiceFooter: some View {
-        if self.ownerVoice.phase == .idle, self.ownerVoiceStartTask == nil {
+        if !self.isOwnerVoiceBusy {
+            let sampleIsReady = self.ownerVoice.phase == .ready
             self.cinematicFooter(
-                continueTitle: self.ownerVoice.hasProfile ? "Continue" : "Record",
+                continueTitle: sampleIsReady ? "Save" : self.ownerVoice.hasProfile ? "Continue" : "Record",
                 canContinue: true,
-                continueAction: {
-                    if self.ownerVoice.hasProfile { self.goNext(outcome: .completed) }
+                continueAction: self.forThisStep {
+                    if sampleIsReady { self.ownerVoice.save() }
+                    else if self.ownerVoice.hasProfile { self.goNext(outcome: .completed) }
                     else { self.startOwnerVoiceEnrollment() }
                 },
-                skipTitle: self.ownerVoice.hasProfile ? "Record again" : "Not now",
+                skipTitle: sampleIsReady || self.ownerVoice.hasProfile ? "Record again" : "Not now",
                 canSkip: true,
-                skipAction: {
-                    if self.ownerVoice.hasProfile { self.startOwnerVoiceEnrollment() }
+                skipAction: self.forThisStep {
+                    if sampleIsReady || self.ownerVoice.hasProfile { self.startOwnerVoiceEnrollment() }
                     else { self.goNext(outcome: .skipped) }
                 }
             )
