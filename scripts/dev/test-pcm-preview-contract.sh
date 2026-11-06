@@ -50,5 +50,6 @@ PY
 swiftc -swift-version 6 -parse-as-library -default-isolation MainActor \
     -module-cache-path "$pichi_build/ModuleCache" "$pichi_build/ActualMemoryAttempt.swift" \
     Sources/Fluid/Services/Privacy/TranscriptTextRedacting.swift \
+    Sources/Fluid/Services/Meeting/MeetingPCMSourceTimeline.swift \
     Tests/MeetingMemoryPreparationTests.swift -o "$pichi_build/preparation-tests"
 "$pichi_build/preparation-tests"

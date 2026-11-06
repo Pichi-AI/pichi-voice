@@ -247,6 +247,7 @@ struct SettingsView: View {
                         .padding(16)
                     }
                     .settingsSearchTarget(.fluidMeet)
+
                 }
 
                 if self.selectedSection == .general, self.appServices.accountSession.configuration != nil {

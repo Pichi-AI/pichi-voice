@@ -13,9 +13,9 @@ sys.path.insert(0, str(pathlib.Path('Tests').resolve()))
 from run_meeting_backup_refresh_tests import declaration
 
 coordinator = pathlib.Path('Sources/Fluid/Services/Meeting/MeetingSessionCoordinator.swift').read_text()
-callback = declaration(coordinator, 'preview: { [weak self] partial in')
+callback = declaration(coordinator, 'trackPreview: { [weak self] kind, partial in')
 assert 'MeetingTimelineTrace.shared?.record("protected_live_publication"' in callback
-callback = callback.removeprefix('preview: ')
+callback = callback.removeprefix('trackPreview: ')
 callback = callback.replace('MeetingTimelineTrace.shared?', 'self.trace?')
 models = pathlib.Path('Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift').read_text()
 types = '\n'.join(declaration(models, marker) for marker in [

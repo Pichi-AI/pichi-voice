@@ -30,7 +30,52 @@ model_declarations = "\n".join(declaration(models, marker) for marker in (
 validation = (ROOT / "Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift").read_text()
 configuration_validation = declaration(validation, "nonisolated extension MeetingCaptureConfiguration {")
 recording_source = (ROOT / "Sources/Fluid/Services/Meeting/MeetingRecordingSource.swift").read_text()
-swift = "import Foundation\n" + model_declarations + "\n" + configuration_validation + "\n" + recording_source + r'''
+preferences = (ROOT / "Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift").read_text()
+view = (ROOT / "Sources/Fluid/UI/MeetingTranscriptionView.swift").read_text()
+# The GUI builders are private. Bind this executable actual-source policy probe to each
+# actual launch path as a source-consistency check, without manufacturing a SwiftUI run.
+for marker in ("private var captureConfiguration:", "private func recordAgainConfiguration("):
+    builder = declaration(view, marker)
+    assert builder.count("applyingMeetingRecordingPreferences(to: configuration)") == 1
+    assert builder.index("MeetingCaptureConfiguration(") < builder.index("applyingMeetingRecordingPreferences(")
+    assert builder.rstrip().endswith("return self.settings.applyingMeetingRecordingPreferences(to: configuration)\n    }")
+start = declaration(view, "private func startRecording()")
+assert start.index("let configuration = self.captureConfiguration") < start.index("Task {")
+record_again = declaration(view, "private func recordAgain(_ session:")
+assert record_again.index("let configuration = self.recordAgainConfiguration(") < record_again.index("Task {")
+menu_start = declaration(menu, "func startMeetingRecordingFromMenuBar()")
+assert menu_start.count("applyingMeetingRecordingPreferences(to: configuration)") == 1
+assert menu_start.index("Self.menuBarMeetingConfiguration(") < menu_start.index("applyingMeetingRecordingPreferences(") < menu_start.index("self.meetingSessionCoordinator.startRecording(")
+preference_operations = "\n".join(declaration(preferences, marker) for marker in (
+    "var meetingSaveAudio:", "var meetingSpeakerLabelsEnabled:", "var meetingSpeakerProcessingMode:",
+    "func meetingSpeakerProcessingMode(for mode:", "var meetingPIIRedactionEnabled:",
+    "func applyingMeetingRecordingPreferences(to configuration:",
+))
+policy_witnesses = r'''
+enum MeetingBackendInputKind { case boundedMicrophonePCM, boundedMultiTrackPCM }
+struct BackendDescriptor {
+    let supportedSpeakerProcessingModes: Set<MeetingSpeakerProcessingMode>
+    let supportedInputs: Set<MeetingBackendInputKind>
+}
+enum PichiMeetingProviderFactory {
+    static func registeredBackendDescriptor(for model: String) -> BackendDescriptor? {
+        model == "synthetic-supported" ? .init(supportedSpeakerProcessingModes: [.afterRecording, .streaming],
+            supportedInputs: [.boundedMicrophonePCM, .boundedMultiTrackPCM]) : nil
+    }
+}
+final class SettingsStore {
+    struct Keys {
+        static let meetingSaveAudio = "SaveAudio", meetingSpeakerLabelsEnabled = "Labels"
+        static let meetingSpeakerProcessingMode = "SpeakerMode", meetingPIIRedactionEnabled = "Privacy"
+    }
+    struct ChangeWitness { func send() {} }
+    struct SpeechModel { let rawValue: String }
+    let objectWillChange = ChangeWitness()
+    let defaults: UserDefaults
+    var selectedSpeechModel = SpeechModel(rawValue: "synthetic-supported")
+    init(defaults: UserDefaults) { self.defaults = defaults }
+''' + preference_operations + "\n}\n"
+swift = "import Foundation\n" + model_declarations + "\n" + configuration_validation + "\n" + recording_source + "\n" + policy_witnesses + r'''
 enum VoiceEngineLanguageCatalog { static let parakeetV3LanguageIDs = ["en", "ru"] }
 enum MeetingModelValidationError: Error { case unsupportedLanguage, missingMicrophone, missingOnlineApplication, unexpectedInRoomApplication, unexpectedSystemAudioApplication }
 enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String), microphoneUnavailable }
@@ -97,6 +142,55 @@ rejects { _ = try AppServices.menuBarMeetingConfiguration(defaults: defaults, ta
 defaults.applicationAudioScope = .systemAudio
 let menuMigrated = try AppServices.menuBarMeetingConfiguration(defaults: defaults, target: nil, microphones: microphones, applications: [], preferredInputUID: nil)
 check(menuMigrated.application == nil && menuMigrated.platform == nil, "System scope must not stamp an old manual app as captured")
+let policySuite = "SyntheticAudioScopePolicy.\(UUID().uuidString)"
+let policyDefaults = UserDefaults(suiteName: policySuite)!
+defer { policyDefaults.removePersistentDomain(forName: policySuite) }
+let settings = SettingsStore(defaults: policyDefaults)
+for mode in MeetingCaptureMode.allCases {
+    var selected = mode == .onlineCall ? menuNarrow : menuMigrated
+    selected.mode = mode
+    if mode == .inRoom { selected.application = nil; selected.applicationAudioScope = nil }
+    selected.requiresEncryptedPersistence = true
+    selected.transcriptionBackendID = "synthetic-explicit-backend"
+    for saveAudio in [false, true] {
+        for labels in [false, true] {
+            for preference: MeetingSpeakerProcessingMode in [.afterRecording, .streaming] {
+                for privacy in [false, true] {
+                    settings.meetingSaveAudio = saveAudio
+                    settings.meetingSpeakerLabelsEnabled = labels
+                    settings.meetingSpeakerProcessingMode = preference
+                    settings.meetingPIIRedactionEnabled = privacy
+                    let configured = settings.applyingMeetingRecordingPreferences(to: selected)
+                    check(configured.audioStorageMode == (saveAudio ? .retainedFiles : .memoryOnly), "Configured retention must reach the resolved source")
+                    check(configured.speakerLabelsEnabled == labels, "Configured speaker label policy must reach the resolved source")
+                    check(configured.speakerProcessingMode == (labels && preference == .streaming ? .streaming : nil), "Explicit after-recording and disabled labels must not become streaming")
+                    check(configured.piiRedactionEnabled == privacy, "Configured privacy policy must reach the resolved source")
+                    var identity = configured
+                    identity.audioStorageMode = selected.audioStorageMode
+                    identity.speakerLabelsEnabled = selected.speakerLabelsEnabled
+                    identity.speakerProcessingMode = selected.speakerProcessingMode
+                    identity.piiRedactionEnabled = selected.piiRedactionEnabled
+                    check(identity == selected, "Sources and trusted explicit security/backend configuration must remain exact")
+                    settings.meetingSaveAudio = !saveAudio
+                    settings.meetingSpeakerLabelsEnabled = !labels
+                    settings.meetingSpeakerProcessingMode = preference == .streaming ? .afterRecording : .streaming
+                    settings.meetingPIIRedactionEnabled = !privacy
+                    check(configured.audioStorageMode == (saveAudio ? .retainedFiles : .memoryOnly)
+                        && configured.speakerLabelsEnabled == labels && configured.piiRedactionEnabled == privacy
+                        && configured.speakerProcessingMode == (labels && preference == .streaming ? .streaming : nil),
+                        "A returned capture value cannot follow later preference changes")
+                }
+            }
+        }
+    }
+    policyDefaults.removeObject(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode)
+    settings.meetingSpeakerLabelsEnabled = true
+    check(settings.applyingMeetingRecordingPreferences(to: selected).effectiveSpeakerProcessingMode == .streaming,
+        "Supported backend metadata defaults must reach either source topology")
+    check(policyDefaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode) == nil,
+        "Applying a default must not create a stored preference")
+}
+print("PASS actual launch-path source consistency: main Record, Record Again and menu")
 print("PASS: \(assertions) production source-scope assertions")
 '''
 build_root = ROOT / ".build"

@@ -272,6 +272,7 @@ PROBES = tuple(sorted(
        Probe("Tests/run_meeting_session_store_checkpoint_tests.sh", "bash"),
        Probe("Tests/run_meeting_universal_title_engine_tests.sh", "bash"),
        Probe("Tests/run_meeting_timeline_trace_tests.sh", "sh"),
+       Probe("Tests/run_meeting_streaming_echo_tests.sh", "bash"),
        Probe("Tests/run_process_cpu_diagnostics_tests.sh", "bash"),
        Probe("Tests/run_publication_composition_tests.sh", "bash"),
        Probe("Tests/run_publication_consent_tests.sh", "bash"),

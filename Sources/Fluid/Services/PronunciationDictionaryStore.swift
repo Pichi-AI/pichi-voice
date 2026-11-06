@@ -602,6 +602,44 @@ actor PronunciationDictionaryStore {
         return value
     }
 
+    /// UI playback uses the exact persisted enrollment and only its trained cut.
+    /// A stale sheet cannot read an unrelated or replaced recording by UUID alone.
+    func savedAudioSamples(for capture: PronunciationEnrollmentCapture, dictionaryEntryID: UUID, expectedProfileLabel: String) throws -> [Float] {
+        try self.requireAccess()
+        self.loadIfNeeded()
+        guard let stored = self.document?.profiles.first(where: {
+            $0.dictionaryEntryID == dictionaryEntryID && $0.modelKey == capture.modelKey && $0.label == expectedProfileLabel
+        }), stored.enrollments.filter({ $0 == capture }).count == 1 else {
+            throw PronunciationDictionaryStoreError.staleEvidence
+        }
+        if capture.originalAudioID != nil {
+            return try self.originalAudioSamples(for: capture, entryID: dictionaryEntryID)
+        }
+        guard let id = capture.inspectionID else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+        let audio = try self.inspection(for: id)
+        let lower = max(0, min(audio.recordedSampleCount, Int(audio.selectedStart * 16_000)))
+        let upper = min(audio.recordedSampleCount, Int(audio.selectedEnd * 16_000))
+        guard lower < upper else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+        return Array(audio.samples[lower..<upper])
+    }
+
+    /// Remove one exact enrollment, retaining its word, other models and examples.
+    /// Persist owns orphan cleanup, so files shared by retained examples survive.
+    func removeSavedSample(_ capture: PronunciationEnrollmentCapture, dictionaryEntryID: UUID, expectedProfileLabel: String) throws {
+        try self.requireAccess()
+        self.loadIfNeeded()
+        var profiles = self.document?.profiles ?? []
+        guard let profileIndex = profiles.firstIndex(where: {
+            $0.dictionaryEntryID == dictionaryEntryID && $0.modelKey == capture.modelKey && $0.label == expectedProfileLabel
+        }) else { throw PronunciationDictionaryStoreError.staleEvidence }
+        let matches = profiles[profileIndex].enrollments.indices.filter { profiles[profileIndex].enrollments[$0] == capture }
+        guard matches.count == 1, let captureIndex = matches.first else { throw PronunciationDictionaryStoreError.staleEvidence }
+        profiles[profileIndex].enrollments.remove(at: captureIndex)
+        if profiles[profileIndex].enrollments.isEmpty { profiles.remove(at: profileIndex) }
+        try self.persist(Document(version: 1, profiles: profiles))
+        self.revisions[dictionaryEntryID] = UUID()
+    }
+
     nonisolated private func inspectionURL(_ id: UUID) -> URL {
         self.fileURL.deletingLastPathComponent().appendingPathComponent("pronunciation-inspection", isDirectory: true)
             .appendingPathComponent(id.uuidString).appendingPathExtension("plist")

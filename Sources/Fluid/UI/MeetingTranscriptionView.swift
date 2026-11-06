@@ -1117,7 +1117,7 @@ struct MeetingTranscriptionView: View {
             )
         } catch { return nil }
 
-        return MeetingCaptureConfiguration(
+        let configuration = MeetingCaptureConfiguration(
             mode: self.privateState.setupDraft.mode,
             title: title,
             languageCode: self.privateState.setupDraft.languageCode,
@@ -1129,6 +1129,7 @@ struct MeetingTranscriptionView: View {
             microphone: microphone,
             timestampDefaultTitle: !self.privateState.setupDraft.titleWasEdited
         )
+        return self.settings.applyingMeetingRecordingPreferences(to: configuration)
     }
 
     private func stopAndTranscribe(expectedSessionID: MeetingSessionID?) {
@@ -1352,7 +1353,7 @@ struct MeetingTranscriptionView: View {
             }
             application = resolved.identity
         }
-        return MeetingCaptureConfiguration(
+        let configuration = MeetingCaptureConfiguration(
             mode: session.mode,
             title: session.defaultTitleBase ?? session.title,
             languageCode: session.languageCode,
@@ -1362,6 +1363,7 @@ struct MeetingTranscriptionView: View {
             microphone: microphone,
             timestampDefaultTitle: session.defaultTitleBase != nil
         )
+        return self.settings.applyingMeetingRecordingPreferences(to: configuration)
     }
 
     private func resolvedMicrophone(for session: MeetingSession) -> MeetingMicrophoneIdentity? {

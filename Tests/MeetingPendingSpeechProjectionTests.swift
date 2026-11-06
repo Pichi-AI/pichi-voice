@@ -2,6 +2,11 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
+nonisolated enum PichiLocalization {
+    static func text(_ value: String) -> String { value }
+    static func format(_ value: String, _ args: CVarArg...) -> String { String(format: value, arguments: args) }
+}
+
 // Headless test context for the production live-model file. No app host, audio hardware,
 // model weights, transcript store or privacy service is constructed by this probe.
 typealias SessionSpeakerID = UUID

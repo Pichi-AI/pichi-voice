@@ -2,6 +2,9 @@ import Foundation
 
 // Compile the actual controller and progressive-window implementation with this minimal
 // context. These tests own no native model, microphone, file store or personal transcript.
+typealias MeetingAudioTrackID = UUID
+typealias MeetingBackendSpeakerToken = String
+
 nonisolated struct MeetingPCMTranscriptBatch: Sendable { let text: String }
 nonisolated struct MeetingBackendSpeakerActivity: Sendable {}
 nonisolated enum PichiLocalization { static func text(_ key: String) -> String { key } }
@@ -34,6 +37,7 @@ private nonisolated struct Prepared: MeetingPreparedStreamingPCMProcessing {
     var entered: Signal? = nil
     var inferenceGate: Signal? = nil
     var failRecognition = false
+    var finishEntered: Signal? = nil
     var feedbackEntered: Signal? = nil
     var feedbackGate: Signal? = nil
 
@@ -53,6 +57,7 @@ private nonisolated struct Prepared: MeetingPreparedStreamingPCMProcessing {
     }
     func finishStreaming() async throws -> MeetingStreamingPCMObservation {
         await self.evidence.record("finish")
+        await self.finishEntered?.release()
         return .init(batch: .init(text: "safe-final"), activity: [], acceptedThroughSample: 3,
                      processedThroughSample: 3, retainedFromSample: 0, isFinal: true)
     }
@@ -86,6 +91,7 @@ nonisolated struct MeetingStreamingPCMControllerTests {
     }
 
     static func main() async throws {
+        try await self.testSharedTracksFinishAndCancel()
         try await self.testSuccessAndFinishJoin()
         try await self.testPreparationFailure()
         try await self.testPreparationCancellationJoin()
@@ -99,6 +105,45 @@ nonisolated struct MeetingStreamingPCMControllerTests {
         try await self.testDeferredFailureAndCancellation()
         try await self.testFeedbackCancellationJoin()
         print("PASS streaming controller preparation, single-command admission, actual PCM wait cancellation, guarded previews and joined resource teardown")
+    }
+
+    static func testSharedTracksFinishAndCancel() async throws {
+        let firstID = UUID(), secondID = UUID(), evidence = Evidence()
+        let firstFinished = Signal()
+        let firstPrepared = Prepared(evidence: evidence, finishEntered: firstFinished), secondPrepared = Prepared(evidence: evidence)
+        let controllers = try MeetingStreamingPCMController.deferredTracks(trackIDs: [firstID, secondID]) { body in
+            await evidence.record("one-scope-open")
+            do { try await body([firstID: firstPrepared, secondID: secondPrepared]) }
+            catch { await evidence.record("one-scope-cleaned"); throw error }
+            await evidence.record("one-scope-cleaned")
+        }
+        let first = controllers[firstID]!, second = controllers[secondID]!
+        async let firstResult = first.recognize(window: .controllerTestWindow(samples: [0.1], sealed: true), offset: 0)
+        async let secondResult = second.recognize(window: .controllerTestWindow(samples: [0.2, 0.3], sealed: true), offset: 0)
+        let results = try await (firstResult, secondResult)
+        try require(results.0.batch.text == "safe-1" && results.1.batch.text == "safe-2", "Physical source windows stay independent")
+        let firstStop = Task { _ = try await first.finishStreaming(); await evidence.record("first-stop-returned") }
+        await firstFinished.wait()
+        try require(await !evidence.contains("first-stop-returned"), "First source cannot release the shared native scope")
+        _ = try await second.finishStreaming()
+        try await firstStop.value
+        let events = await evidence.events
+        try require(events.filter { $0 == "one-scope-open" }.count == 1 && events.filter { $0 == "one-scope-cleaned" }.count == 1,
+                    "Both sources own exactly one preparation and joined cleanup")
+        try require(events.firstIndex(of: "one-scope-cleaned")! < events.firstIndex(of: "first-stop-returned")!, "Stop returns only after shared cleanup")
+
+        let cancelledEvidence = Evidence(), cancelledEntered = Signal()
+        let cancelled = try MeetingStreamingPCMController.deferredTracks(trackIDs: [firstID, secondID]) { body in
+            do { try await body([firstID: Prepared(evidence: cancelledEvidence, entered: cancelledEntered), secondID: Prepared(evidence: cancelledEvidence)]) }
+            catch { await cancelledEvidence.record("cancel-cleaned"); throw error }
+        }
+        let waiting = Task { try await cancelled[firstID]!.recognize(window: .controllerTestWindow(samples: [], sealed: false), offset: 0) }
+        await cancelledEntered.wait()
+        waiting.cancel()
+        do { _ = try await waiting.value; throw ExpectedFailure.recognize }
+        catch is CancellationError {}
+        try require(await cancelledEvidence.contains("cancel-cleaned"), "Cancelling one source joins the idle sibling and whole native scope")
+        await cancelled[secondID]!.cancelAndWait()
     }
 
     static func testFeedbackCancellationJoin() async throws {

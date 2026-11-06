@@ -19,6 +19,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         var runtime: any MeetingCaptureRuntime
         var writers: [MeetingAudioChunkWriter]
         var memoryConsumer: (any MeetingMemoryAudioConsuming)?
+        var streamingTee: MeetingMultiTrackCaptureTee?
         var comparisonProbe: MeetingAudioComparisonProbe?
         var privacyGate: MeetingMicrophonePrivacyGate?
         var muteMonitor: MeetingMicrophoneMuteMonitor?
@@ -55,7 +56,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             )
         }
         if configuration.effectiveSpeakerProcessingMode == .streaming {
-            guard configuration.mode == .inRoom, self.memoryConsumerFactory != nil else {
+            guard self.memoryConsumerFactory != nil else {
                 throw MeetingCaptureError.captureStartFailed(
                     PichiLocalization.text("In-memory transcription is not available for this attempt."))
             }
@@ -85,9 +86,12 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             comparisonProbe = nil
         }
         if let comparisonProbe { eventHandler(.audioComparisonProbeStarted(comparisonProbe)) }
-        let privacyGate = configuration.mode == .onlineCall ? MeetingMicrophonePrivacyGate() : nil
+        let privacyGate = configuration.mode == .onlineCall
+            ? MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions)) : nil
         let muteMonitor: MeetingMicrophoneMuteMonitor?
         if let privacyGate {
+            // Admission follows remembered transitions, not the availability of a toolbar frame.
+            privacyGate.setAdmitted(true, observedAtHostTime: mach_absolute_time())
             var application = configuration.effectiveApplicationAudioScope == .selectedApplication
                 ? configuration.application : nil
             // Audio follows the selected process. Discovery must find its current unique call,
@@ -95,6 +99,11 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             application?.windowID = nil
             muteMonitor = MeetingMicrophoneMuteMonitor(application: application) { observation in
                 let admitted = observation.state == .unmuted
+                if admitted, let earlierRelease = observation.unsafeStartHostTime,
+                   let resumedAt = observation.refinementUntilHostTime {
+                    privacyGate.refineHistoricalRelease(unsafeStartHostTime: earlierRelease,
+                        resumedAtHostTime: resumedAt)
+                }
                 privacyGate.setAdmitted(
                     admitted,
                     observedAtHostTime: observation.observedAtHostTime,
@@ -102,21 +111,17 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 )
                 eventHandler(.microphoneMuteStateChanged(observation.state))
             }
-            eventHandler(.microphoneMuteStateChanged(.checking))
+            eventHandler(.microphoneMuteStateChanged(.unmuted))
             muteMonitor?.start()
         } else {
             muteMonitor = nil
             eventHandler(.microphoneMuteStateChanged(.notApplicable))
         }
-        let admittedLiveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)? = liveAudioHandler.map { handler in
-            { kind, sample in
-                guard kind != .microphone || privacyGate?.permitsReleasedSample(sample) != false else { return }
-                handler(kind, sample)
-            }
-        }
         var startingWriters: [MeetingAudioChunkWriter] = []
         var startingMemoryConsumer: (any MeetingMemoryAudioConsuming)?
         var startingRuntime: (any MeetingCaptureRuntime)?
+        var startingStreamingTee: MeetingMultiTrackCaptureTee?
+        var startingStreamingConsumers: [any MeetingMemoryAudioConsuming] = []
         do {
             let tracks = Self.makeTracks(session: session, configuration: configuration)
             for track in tracks {
@@ -139,10 +144,36 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             let writersByKind = Dictionary(uniqueKeysWithValues: zip(tracks.map(\.kind), writers))
 
             var memoryConsumer: (any MeetingMemoryAudioConsuming)?
-            if configuration.effectiveSpeakerProcessingMode == .streaming, let memoryConsumerFactory,
+            if configuration.effectiveSpeakerProcessingMode == .streaming, configuration.mode == .inRoom, let memoryConsumerFactory,
                let microphoneTrack = tracks.first(where: { $0.kind == .microphone }) {
                 memoryConsumer = try await memoryConsumerFactory(session, configuration, microphoneTrack, eventHandler)
                 startingMemoryConsumer = memoryConsumer
+            }
+            var streamingTee: MeetingMultiTrackCaptureTee?
+            if configuration.effectiveSpeakerProcessingMode == .streaming, configuration.mode == .onlineCall,
+               let memoryConsumerFactory {
+                var consumers: [MeetingAudioTrackKind: any MeetingMemoryAudioConsuming] = [:]
+                for track in tracks {
+                    let consumer = try await memoryConsumerFactory(session, configuration, track, eventHandler)
+                    startingStreamingConsumers.append(consumer)
+                    consumers[track.kind] = consumer
+                }
+                streamingTee = try MeetingMultiTrackCaptureTee(consumers: consumers,
+                    originHostTime: session.timebase.startedHostTime, eventHandler: eventHandler,
+                    liveAudioHandler: liveAudioHandler,
+                    sampleAdmission: { kind, sample in
+                        kind != .microphone || privacyGate?.permitsReleasedSample(sample) != false
+                    })
+                startingStreamingTee = streamingTee
+            }
+            let captureAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
+            if let streamingTee { captureAudioHandler = { kind, sample in streamingTee.offer(kind: kind, sample: sample) } }
+            else { captureAudioHandler = liveAudioHandler }
+            let admittedLiveAudioHandler = captureAudioHandler.map { handler in
+                { @Sendable (kind: MeetingAudioTrackKind, sample: CMSampleBuffer) in
+                    guard kind != .microphone || privacyGate?.permitsReleasedSample(sample) != false else { return }
+                    handler(kind, sample)
+                }
             }
             let runtime: any MeetingCaptureRuntime
             switch configuration.mode {
@@ -245,6 +276,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 runtime: runtime,
                 writers: writers,
                 memoryConsumer: memoryConsumer,
+                streamingTee: streamingTee,
                 comparisonProbe: comparisonProbe,
                 privacyGate: privacyGate,
                 muteMonitor: muteMonitor
@@ -272,6 +304,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             try? await startingRuntime?.stop()
             _ = await Self.stopWriters(startingWriters)
             try? await startingMemoryConsumer?.finish()
+            if let startingStreamingTee { try? await startingStreamingTee.finish() }
+            else { await Self.finishConsumers(startingStreamingConsumers) }
             if let comparisonProbe { await comparisonProbe.stop() }
             throw error
         }
@@ -323,6 +357,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             // The bounded worker's finish includes the final durable speaker checkpoint.
             // Stop cannot hand the session back before that tail has joined.
             do { try await activeCapture.memoryConsumer?.finish() }
+            catch { runtimeFailure = runtimeFailure ?? error }
+            do { try await activeCapture.streamingTee?.finish() }
             catch { runtimeFailure = runtimeFailure ?? error }
             let result = MeetingCaptureStopResult(tracks: tracks, stoppedAt: stoppedAt)
             if let runtimeFailure {
@@ -384,6 +420,12 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             &assertionID
         )
         return result == kIOReturnSuccess ? assertionID : nil
+    }
+
+    private nonisolated static func finishConsumers(_ consumers: [any MeetingMemoryAudioConsuming]) async {
+        await withTaskGroup(of: Void.self) { group in
+            for consumer in consumers { group.addTask { try? await consumer.finish() } }
+        }
     }
 
     private nonisolated static func stopWriters(_ writers: [MeetingAudioChunkWriter]) async -> [MeetingAudioTrack] {
@@ -6697,5 +6739,150 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             }
             return result
         }
+    }
+}
+
+/// A platform capture adapter over the existing post-writer, echo-admitted PCM boundary.
+/// Each source keeps its converter and physical clock; inference remains in the shared pipeline.
+/// No task is allocated per packet. Stop joins this bounded queue before concurrently closing
+/// both consumers, whose shared prepared model owner cannot retire until both tracks finish.
+final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
+    private final nonisolated class Track: @unchecked Sendable {
+        let kind: MeetingAudioTrackKind
+        let consumer: any MeetingMemoryAudioConsuming
+        let gate = MeetingPCMIntakeGate()
+        var converter: MeetingCapturePCMConverter
+        var expectedNativeEnd: CMTime?
+        init(kind: MeetingAudioTrackKind, consumer: any MeetingMemoryAudioConsuming) throws {
+            self.kind = kind
+            self.consumer = consumer
+            self.converter = try MeetingCapturePCMConverter()
+        }
+    }
+    private let tracks: [MeetingAudioTrackKind: Track]
+    private let origin: CMTime
+    private let queue = DispatchQueue(label: "com.fluidvoice.meeting.streaming.capture", qos: .userInitiated)
+    private let lock = NSLock()
+    private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
+    private let liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
+    private let sampleAdmission: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Bool)?
+    private var accepting = true
+    private var terminalError: Error?
+    private var finishTask: Task<Void, Error>?
+
+    init(consumers: [MeetingAudioTrackKind: any MeetingMemoryAudioConsuming], originHostTime: UInt64,
+         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?,
+         sampleAdmission: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Bool)? = nil) throws {
+        self.tracks = try Dictionary(uniqueKeysWithValues: consumers.map { kind, consumer in
+            (kind, try Track(kind: kind, consumer: consumer))
+        })
+        self.origin = CMTime(seconds: AVAudioTime.seconds(forHostTime: originHostTime), preferredTimescale: 1_000_000_000)
+        self.eventHandler = eventHandler
+        self.liveAudioHandler = liveAudioHandler
+        self.sampleAdmission = sampleAdmission
+    }
+
+    /// Called only after the original audio writer and microphone transcript gate admitted PCM.
+    func offer(kind: MeetingAudioTrackKind, sample: CMSampleBuffer) {
+        guard self.sampleAdmission?(kind, sample) != false else { return }
+        var failure: Error?
+        self.lock.withLock {
+            guard self.accepting, self.terminalError == nil, let track = self.tracks[kind] else { return }
+            let frames = CMSampleBufferGetNumSamples(sample)
+            guard let description = CMSampleBufferGetFormatDescription(sample),
+                  let format = try? MeetingPCMFormatContract(formatDescription: description),
+                  let reservation = track.gate.reserve(frames: frames, channels: format.channelCount, sampleRate: format.sampleRate) else {
+                failure = MeetingMemoryAudioError.overload
+                return
+            }
+            guard let owned = MeetingLiveSampleCopy.copy(sample) else {
+                track.gate.release(reservation)
+                failure = MeetingCapturePCMError.invalidBuffer
+                return
+            }
+            self.queue.async {
+                defer { track.gate.release(reservation) }
+                guard self.lock.withLock({ self.terminalError == nil }) else { return }
+                do {
+                    try self.deliver(owned.buffer, pts: owned.pts, track: track)
+                } catch { self.fail(error) }
+            }
+        }
+        if let failure { self.fail(failure) }
+    }
+
+    private func deliver(_ buffer: AVAudioPCMBuffer, pts: CMTime, track: Track) throws {
+        let start = CMTimeGetSeconds(pts - self.origin)
+        guard start.isFinite, start >= -0.02, start <= Double(Int.max / 16_000) else {
+            throw MeetingCapturePCMError.invalidPresentationTime
+        }
+        if let end = track.expectedNativeEnd {
+            let gap = CMTimeGetSeconds(pts - end)
+            guard gap >= -0.02 else { throw MeetingCapturePCMError.timelineDiscontinuity }
+            if gap > 1.0 / 16_000 {
+                if let tail = try track.converter.finish() { try self.enqueue(tail, track: track) }
+                track.converter = try MeetingCapturePCMConverter()
+            }
+        }
+        track.expectedNativeEnd = pts + CMTime(seconds: Double(buffer.frameLength) / buffer.format.sampleRate,
+                                               preferredTimescale: 1_000_000_000)
+        if let converted = try track.converter.convert(buffer, presentationTime: pts) { try self.enqueue(converted, track: track) }
+    }
+
+    private func enqueue(_ sample: CMSampleBuffer, track: Track) throws {
+        // An earlier mute boundary may revoke PCM while the conversion queue is busy.
+        // Recheck the measured output before either ASR or source VAD can consume it.
+        guard self.sampleAdmission?(track.kind, sample) != false else { return }
+        guard track.consumer.enqueue(sample) else {
+            throw track.consumer.rejectionReason.map(MeetingCapturePCMError.transcriptionRejected) ?? .transcriptionStopped
+        }
+        // Preserve the converter's measured source PTS for both timeline mapping and VAD.
+        // Source absence never creates PCM, model work or non-speech evidence.
+        self.liveAudioHandler?(track.kind, sample)
+    }
+
+    private func fail(_ error: Error) {
+        let emit = self.lock.withLock { () -> Bool in
+            guard self.terminalError == nil else { return false }
+            self.terminalError = error
+            self.accepting = false
+            return true
+        }
+        guard emit else { return }
+        let detail = PichiLocalization.text("In-memory transcription stopped. Completed text was preserved.")
+        self.eventHandler(.interrupted(kind: .writerBackpressure, trackID: nil, detail: detail))
+        self.eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: detail))
+    }
+
+    /// The platform runtime must be joined before calling finish. Repeated callers join one tail.
+    func finish() async throws {
+        let task = self.lock.withLock { () -> Task<Void, Error> in
+            if let finishTask { return finishTask }
+            self.accepting = false
+            let task = Task.detached { [self] in
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    self.queue.async {
+                        if self.lock.withLock({ self.terminalError == nil }) {
+                            do {
+                                for track in self.tracks.values {
+                                    if let tail = try track.converter.finish() { try self.enqueue(tail, track: track) }
+                                }
+                            } catch { self.fail(error) }
+                        }
+                        continuation.resume()
+                    }
+                }
+                await withTaskGroup(of: Void.self) { group in
+                    for track in self.tracks.values {
+                        group.addTask { do { try await track.consumer.finish() } catch { self.fail(error) } }
+                    }
+                }
+                if let error = self.lock.withLock({ self.terminalError }) { throw error }
+            }
+            self.finishTask = task
+            return task
+        }
+        try await task.value
     }
 }
