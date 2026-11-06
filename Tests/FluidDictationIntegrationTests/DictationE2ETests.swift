@@ -3664,6 +3664,12 @@ extension DictationE2ETests {
             let worker = DictionaryAudioLearningService(store: store,
                 extract: { evidence in PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: evidence.modelKey) },
                 canProcess: { idle })
+            let published = expectation(description: "Every accepted correction published after audio persistence")
+            published.expectedFulfillmentCount = revokeFirst ? 4 : 5
+            let observer = NotificationCenter.default.addObserver(forName: .parakeetVocabularyDidChange, object: nil, queue: .main) { notice in
+                if !DictionaryEntriesChangeNotice.requiresVocabularyReload(notice) { published.fulfill() }
+            }
+            defer { NotificationCenter.default.removeObserver(observer) }
             func evidence(_ heard: String) -> DictionaryLearningAudioEvidence {
                 DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: heard,
                     sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
@@ -3681,7 +3687,9 @@ extension DictationE2ETests {
             firstValid = !revokeFirst
             idle = true
             worker.activityDidEnd()
-            for _ in 0..<200 where worker.pendingCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
+            // Wait for completed publications, not a fixed number of scheduler turns.
+            // A cold settings subscriber can delay the first multi-entry disk batch.
+            await fulfillment(of: [published], timeout: 5)
             XCTAssertEqual(worker.pendingCount, 0)
             let profiles = await store.allProfiles()
             XCTAssertEqual(profiles.count, revokeFirst ? 4 : 5)
