@@ -3,35 +3,32 @@ import SwiftUI
 struct DictionarySavedAudioSummary {
     let count: Int
     let latestCapture: Date?
+    var heardVariants: [String] = []
 
     /// Counts links in committed metadata. A legacy feature-only reference is
     /// not an audio sample; the links do not verify that their files are readable.
     static func from(_ captures: [PronunciationEnrollmentCapture]) -> Self {
         let linked = captures.filter { $0.inspectionID != nil || $0.originalAudioID != nil }
-        return Self(count: linked.count, latestCapture: linked.compactMap(\.capturedAt).max())
+        var seen = Set<String>()
+        let variants = captures.compactMap(\.observedText).filter { !$0.isEmpty && seen.insert($0).inserted }
+        return Self(count: linked.count, latestCapture: linked.compactMap(\.capturedAt).max(), heardVariants: variants)
     }
 }
 
 struct DictionarySavedAudioSummaryView: View {
     let summary: DictionarySavedAudioSummary
+    var onManage: (() -> Void)? = nil
     @Environment(\.theme) private var theme
-    @Environment(\.locale) private var locale
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if self.summary.count == 0 {
-                Text("No linked audio samples")
-            } else {
-                Text(PichiLocalization.format("Linked audio samples: %lld (up to 10 per model)", self.summary.count))
-                if let latest = self.summary.latestCapture {
-                    Text(PichiLocalization.format("Latest sample added: %@", latest.formatted(Date.FormatStyle(date: .abbreviated, time: .standard).locale(self.locale))))
-                }
+        if self.summary.count > 0 {
+            Button(action: self.onManage ?? {}) {
+                Label(PichiLocalization.format("Recordings (%lld)", self.summary.count), systemImage: "waveform")
             }
+            .fluidGlassAction()
+            .font(self.theme.typography.caption)
+            .disabled(self.onManage == nil)
         }
-        .font(self.theme.typography.caption)
-        .foregroundStyle(self.theme.palette.secondaryText)
-        .lineLimit(nil)
-        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -43,6 +40,7 @@ struct DictionaryDrawerEntryRow: View {
     let onTest: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
+    var onRecordings: (() -> Void)? = nil
     @Environment(\.theme) private var theme
 
     enum Part: CaseIterable, Hashable { case replacement, aliases, samples, test, edit, delete }
@@ -62,16 +60,11 @@ struct DictionaryDrawerEntryRow: View {
                 part: .replacement
             )
             self.measured(
-                Text(verbatim: self.entry.triggers.joined(separator: ", "))
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading),
+                self.spellings,
                 part: .aliases
             )
             if let summary = self.audioSummary {
-                self.measured(DictionarySavedAudioSummaryView(summary: summary), part: .samples)
+                self.measured(DictionarySavedAudioSummaryView(summary: summary, onManage: self.onRecordings), part: .samples)
             }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
@@ -87,6 +80,10 @@ struct DictionaryDrawerEntryRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .coordinateSpace(name: self.entry.id)
+    }
+
+    private var spellings: some View {
+        DictionarySavedSpellingsView(entry: self.entry, heardVariants: self.audioSummary?.heardVariants ?? [])
     }
 
     private var testButton: some View {
@@ -140,5 +137,33 @@ struct DictionaryDrawerEntryRow: View {
         #else
         content
         #endif
+    }
+}
+
+/// Literal rules and acoustic observations have distinct labels in both word lists.
+struct DictionarySavedSpellingsView: View {
+    let entry: SettingsStore.CustomDictionaryEntry
+    var heardVariants: [String] = []
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if !self.entry.triggers.isEmpty {
+                Text(PichiLocalization.format("Auto-replace: %@", self.entry.triggers.joined(separator: ", ")))
+                    .lineLimit(2)
+            }
+            let heard = self.heardVariants.filter { value in
+                value.caseInsensitiveCompare(self.entry.replacement) != .orderedSame &&
+                    !self.entry.triggers.contains { $0.caseInsensitiveCompare(value) == .orderedSame }
+            }
+            if !heard.isEmpty {
+                Text(PichiLocalization.format("Recognized as: %@", heard.joined(separator: ", ")))
+                    .lineLimit(2)
+            }
+        }
+        .font(self.theme.typography.caption)
+        .foregroundStyle(self.theme.palette.secondaryText)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

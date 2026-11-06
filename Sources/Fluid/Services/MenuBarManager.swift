@@ -99,6 +99,14 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     override init() {
         super.init()
+        NotificationCenter.default.publisher(for: .openCustomDictionaryFromVoiceEngine)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard !SettingsStore.shared.shouldShowOnboarding else { return }
+                    self?.openCustomDictionary()
+                }
+            }
+            .store(in: &self.cancellables)
         NotificationCenter.default.publisher(for: .openDictionaryWordTraining)
             .sink { [weak self] notification in
                 MainActor.assumeIsolated {
