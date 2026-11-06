@@ -258,6 +258,7 @@ struct SettingsView: View {
                                 microphone: nil
                             )
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(16)
                     }
                     .settingsSearchTarget(.ownerVoice)
