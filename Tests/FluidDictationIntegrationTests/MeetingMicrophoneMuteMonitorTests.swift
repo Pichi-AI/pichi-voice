@@ -269,7 +269,7 @@ final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
         XCTAssertEqual(state.state, .unmuted)
         XCTAssertFalse(state.temporaryUnmute)
         XCTAssertEqual(state.historicalReleaseUnmuteAt, 140, "The old PCM boundary refines history before this newer unmute")
-        XCTAssertEqual(state.historicalReleaseUntilAt, 130, "Only the first muted period bounds the old temporary epoch")
+        XCTAssertEqual(state.historicalReleaseUntilAt, 140, "The first following unmute ends the private release gap")
         XCTAssertFalse(state.observe(.unmuted, at: 180))
         XCTAssertEqual(state.state, .unmuted)
     }
@@ -288,7 +288,7 @@ final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
             XCTAssertFalse(state.keyUp(processedAt: 170, releasedAt: 120))
             XCTAssertEqual(state.state, .unmuted)
             XCTAssertEqual(state.historicalReleaseUnmuteAt, 140)
-            XCTAssertEqual(state.historicalReleaseUntilAt, 130, "The 135..137 epoch is newer than the historical scope")
+            XCTAssertEqual(state.historicalReleaseUntilAt, 135, "The 135..137 epoch is newer than the historical scope")
         }
     }
 
@@ -300,7 +300,7 @@ final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
         XCTAssertTrue(state.observe(.unmuted, at: 140))
         XCTAssertFalse(state.keyUp(processedAt: 170, releasedAt: 120))
         XCTAssertEqual(state.state, .unmuted)
-        XCTAssertEqual(state.historicalReleaseUntilAt, 130)
+        XCTAssertEqual(state.historicalReleaseUntilAt, 140)
     }
 
     func testMutedHistoryIsBoundedAndDoesNotGuessAcrossRetiredPeriods() {
@@ -317,6 +317,36 @@ final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
         XCTAssertEqual(state.state, .unmuted)
         XCTAssertNil(state.historicalReleaseUnmuteAt)
         XCTAssertNil(state.historicalReleaseUntilAt, "An evicted old boundary cannot truncate unrelated later epochs")
+    }
+
+    func testHistoricalReleaseKeepsFirstResumeWhenHUDAndRenderedUnmuteShareEpoch() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 100))
+        state.keyDown(at: 110)
+        XCTAssertTrue(state.observeTemporaryHUD(true, at: 115))
+        XCTAssertFalse(state.observe(.muted, at: 119))
+        XCTAssertFalse(state.observe(.unmuted, at: 125))
+        XCTAssertTrue(state.observe(.muted, at: 130))
+        XCTAssertTrue(state.observe(.unmuted, at: 135))
+        XCTAssertFalse(state.keyUp(processedAt: 170, releasedAt: 120))
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertEqual(state.historicalReleaseUnmuteAt, 135)
+        XCTAssertEqual(state.historicalReleaseUntilAt, 125)
+    }
+
+    func testRetiredHistoryIncludesTheFirstResumeBoundary() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 100))
+        state.keyDown(at: 105)
+        XCTAssertFalse(state.observe(.muted, at: 110))
+        XCTAssertTrue(state.observe(.unmuted, at: 115))
+        for index in UInt64(0)..<64 {
+            XCTAssertTrue(state.observe(.muted, at: 120 + index * 10))
+            XCTAssertTrue(state.observe(.unmuted, at: 125 + index * 10))
+        }
+        XCTAssertFalse(state.keyUp(processedAt: 800, releasedAt: 112))
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertNil(state.historicalReleaseUntilAt)
     }
 
     func testHUDDoesNotRewriteIndependentRenderedStateHistory() {

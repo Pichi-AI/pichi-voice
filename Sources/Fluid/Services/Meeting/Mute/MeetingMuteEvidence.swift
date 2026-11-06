@@ -80,7 +80,7 @@ nonisolated struct MeetingMuteTransitionState {
     private var hudVisible = false
     private var temporaryObservedDuringHold = false
     private var awaitingMutedAfterRelease = false
-    private struct MutedSegment { var first: UInt64; var last: UInt64 }
+    private struct MutedSegment { var first: UInt64; var last: UInt64; var resumed: UInt64? }
     private var mutedSegments: [MutedSegment] = []
     private var mutedHistoryRetiredThrough: UInt64 = 0
     private static let maximumMutedSegments = 64
@@ -103,14 +103,18 @@ nonisolated struct MeetingMuteTransitionState {
             if self.lastVisibleState == .muted, !self.mutedSegments.isEmpty {
                 self.mutedSegments[self.mutedSegments.count - 1].last = time
             } else {
-                self.mutedSegments.append(MutedSegment(first: time, last: time))
+                self.mutedSegments.append(MutedSegment(first: time, last: time, resumed: nil))
                 if self.mutedSegments.count > Self.maximumMutedSegments {
-                    self.mutedHistoryRetiredThrough = self.mutedSegments.removeFirst().last
+                    let retired = self.mutedSegments.removeFirst()
+                    self.mutedHistoryRetiredThrough = retired.resumed ?? retired.last
                 }
             }
         }
         guard visible != self.lastVisibleState else { return false }
-        if visible == .unmuted { self.lastRenderedUnmuteAt = time }
+        if visible == .unmuted {
+            self.lastRenderedUnmuteAt = time
+            if !self.mutedSegments.isEmpty { self.mutedSegments[self.mutedSegments.count - 1].resumed = time }
+        }
         self.lastVisibleState = visible
         if visible == .muted {
             self.persistentState = .muted
@@ -173,9 +177,9 @@ nonisolated struct MeetingMuteTransitionState {
             self.lastUnmuteFromMutedAt = nil
             self.hudVisible = true
             if releasedAt > self.mutedHistoryRetiredThrough,
-               let firstMute = self.mutedSegments.first(where: { $0.last >= releasedAt && $0.first < unmutedAt }) {
+               let firstMute = self.mutedSegments.first(where: { $0.resumed.map({ $0 >= releasedAt && $0 <= unmutedAt }) == true }) {
                 self.historicalReleaseUnmuteAt = unmutedAt
-                self.historicalReleaseUntilAt = firstMute.first >= releasedAt ? firstMute.first : firstMute.last
+                self.historicalReleaseUntilAt = firstMute.resumed
             }
             return false
         }

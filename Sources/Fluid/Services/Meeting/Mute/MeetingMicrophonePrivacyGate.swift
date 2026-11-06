@@ -215,24 +215,36 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
         }
     }
 
-    /// A delayed PTT release can arrive after a newer permanent unmute. The caller supplies
-    /// the first intervening muted period as the inclusive old-epoch cutoff, so subsequent
-    /// legitimate closed epochs and current admission stay unchanged.
-    func refineClosedPrefixes(unsafeStartHostTime: UInt64, before oldEpochCutoffHostTime: UInt64) {
+    /// Remove a delayed PTT release gap without changing the newer remembered state. A HUD
+    /// grant and a later rendered unmute may share one admission epoch, so preserve both safe
+    /// sides of the gap, including the currently open epoch, using the existing interval ledger.
+    func refineHistoricalRelease(unsafeStartHostTime: UInt64, resumedAtHostTime: UInt64) {
         let now = self.hostTime()
-        guard oldEpochCutoffHostTime > 0, oldEpochCutoffHostTime <= now,
-              unsafeStartHostTime <= oldEpochCutoffHostTime else { return }
+        guard resumedAtHostTime > 0, resumedAtHostTime <= now,
+              unsafeStartHostTime <= resumedAtHostTime else { return }
         let safeEnd = unsafeStartHostTime > self.prefixSafetyTicks ? unsafeStartHostTime - self.prefixSafetyTicks : 0
         self.lock.withLock {
-            self.approvedIntervals = self.approvedIntervals.compactMap { interval in
-                guard interval.start <= oldEpochCutoffHostTime else { return interval }
-                let end = min(interval.end, safeEnd)
-                return end > interval.start ? (interval.start, end) : nil
+            self.approvedIntervals = self.approvedIntervals.flatMap { interval -> [(start: UInt64, end: UInt64)] in
+                guard interval.end > safeEnd, interval.start < resumedAtHostTime else { return [interval] }
+                var kept: [(start: UInt64, end: UInt64)] = []
+                if interval.start < safeEnd { kept.append((interval.start, safeEnd)) }
+                if interval.end > resumedAtHostTime { kept.append((resumedAtHostTime, interval.end)) }
+                return kept
+            }
+            if self.admitted, !self.stopped, let start = self.epochStart, start < resumedAtHostTime {
+                if start < safeEnd { self.approvedIntervals.append((start, safeEnd)) }
+                self.epochStart = resumedAtHostTime
+            }
+            if self.approvedIntervals.count > Self.maximumApprovedIntervals {
+                self.approvedIntervals.removeFirst(self.approvedIntervals.count - Self.maximumApprovedIntervals)
             }
             let items = self.pending
             self.pending.removeAll(keepingCapacity: true)
             for item in items {
-                if !item.approvedClosedPrefix || self.isApprovedLocked(item.metadata) {
+                let inCurrentEpoch = !self.stopped && self.admitted
+                    && self.epochStart.map({ item.metadata.start >= $0 }) == true
+                    && item.generation == self.generation
+                if inCurrentEpoch || self.isApprovedLocked(item.metadata) {
                     self.pending.append(item)
                 } else if item.state == .copying {
                     item.state = .cancelledCopy

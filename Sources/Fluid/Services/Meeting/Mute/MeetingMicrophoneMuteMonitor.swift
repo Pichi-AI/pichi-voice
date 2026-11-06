@@ -13,7 +13,7 @@ nonisolated struct MeetingMicrophoneMuteObservation: Sendable {
     /// A passive key event can arrive after a newer frame. Its acquisition boundary must
     /// narrow earlier approvals independently of observation freshness. Zero revokes all.
     var unsafeStartHostTime: UInt64? = nil
-    /// Historical PTT refinement ends at the first rendered muted period after that release,
+    /// Historical PTT refinement ends at the first rendered unmute following that release,
     /// so later legitimate closed epochs are not clipped by an old keyboard event.
     var refinementUntilHostTime: UInt64? = nil
 }

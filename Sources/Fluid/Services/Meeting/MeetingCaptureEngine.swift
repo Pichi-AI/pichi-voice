@@ -99,9 +99,9 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             muteMonitor = MeetingMicrophoneMuteMonitor(application: application) { observation in
                 let admitted = observation.state == .unmuted
                 if admitted, let earlierRelease = observation.unsafeStartHostTime,
-                   let oldEpochCutoff = observation.refinementUntilHostTime {
-                    privacyGate.refineClosedPrefixes(unsafeStartHostTime: earlierRelease,
-                        before: oldEpochCutoff)
+                   let resumedAt = observation.refinementUntilHostTime {
+                    privacyGate.refineHistoricalRelease(unsafeStartHostTime: earlierRelease,
+                        resumedAtHostTime: resumedAt)
                 }
                 privacyGate.setAdmitted(
                     admitted,
