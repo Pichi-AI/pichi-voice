@@ -147,6 +147,15 @@ nonisolated struct DictionaryCorrectionReplacementPlan {
             (span.upperBound == text.endIndex || text.indices.contains(span.upperBound))
     }
 
+    static func confirmedRange(_ range: NSRange, text: String, replacing edit: NSRange,
+                               withLength length: Int, in updatedText: String) -> NSRange? {
+        guard NSIntersectionRange(range, edit).length == 0,
+              let moved = Self.project(range, replacing: edit, withLength: length),
+              Self.exactTermRanges(of: text, in: updatedText, scope: NSRange(location: 0, length: updatedText.utf16.count)).contains(moved)
+        else { return nil }
+        return moved
+    }
+
     /// A partial overlap cannot identify the same occurrence after replacement.
     static func project(_ range: NSRange, replacing edit: NSRange, withLength length: Int) -> NSRange? {
         guard range.location >= 0, range.location != NSNotFound, range.length >= 0,

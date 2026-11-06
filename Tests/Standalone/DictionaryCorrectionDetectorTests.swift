@@ -97,6 +97,17 @@ struct DictionaryNegativeCorrection {}
         self.expect(shrink.text == "foo foo", "Shrinking edits keep every original occurrence")
         self.expect(shrink.mappedRange(NSRange(location: 9, length: 0)) == NSRange(location: 7, length: 0), "Restore caret after repeated shrinking edits")
         self.expect(DictionaryCorrectionReplacementPlan(sourceText: "😀 word", range: NSRange(location: 1, length: 1), replacement: "x") == nil, "Reject broken UTF16 selection")
+        let approved = NSRange(location: 0, length: 3)
+        self.expect(DictionaryCorrectionReplacementPlan.confirmedRange(approved, text: "foo", replacing: NSRange(location: 3, length: 0), withLength: 1, in: "food") == nil, "Appending a letter revokes queued pronunciation approval")
+        self.expect(DictionaryCorrectionReplacementPlan.confirmedRange(approved, text: "foo", replacing: NSRange(location: 0, length: 0), withLength: 1, in: "xfoo") == nil, "Prepending a letter revokes queued pronunciation approval")
+        self.expect(DictionaryCorrectionReplacementPlan.confirmedRange(approved, text: "foo", replacing: NSRange(location: 3, length: 0), withLength: 1, in: "foo ") == approved, "Appending a separator preserves approval")
+        self.expect(DictionaryCorrectionReplacementPlan.confirmedRange(approved, text: "foo", replacing: NSRange(location: 0, length: 0), withLength: 1, in: " foo") == NSRange(location: 1, length: 3), "Prepending a separator shifts the same approval")
+        let compoundBefore = "Pech Pech"
+        let compoundPlan = DictionaryCorrectionReplacementPlan(sourceText: compoundBefore, range: NSRange(location: 0, length: 4), replacement: "Pichi")!
+        let expanded = AutomaticDictionaryCorrectionDetector.candidate(before: compoundBefore, after: "Pichi Pech", insertedRange: NSRange(location: 0, length: 9), knownCanonicalTerms: ["Pichi Pech"])
+        self.expect(AutomaticDictionaryCorrectionDetector.confirmedCandidate(expanded, in: compoundPlan) == nil, "Propagation cannot approve a different expanded canonical group")
+        let core = self.candidate(compoundBefore, "Pichi Pech")
+        self.expect(AutomaticDictionaryCorrectionDetector.confirmedCandidate(core, in: compoundPlan)?.correctedText == "Pichi", "Keep the explicitly confirmed word after propagation changes its neighbor")
 
         var map = DictionaryCorrectionTextMap(originalText: "😀 fooo then baad fooo")
         let originalSecond = (map.originalText as NSString).range(of: "baad")

@@ -197,8 +197,9 @@ final class AutomaticDictionaryCorrectionTracker {
 
     private final class CorrectionApproval {
         var range: NSRange
+        let text: String
         var isValid = true
-        init(range: NSRange) { self.range = range }
+        init(range: NSRange, text: String) { self.range = range; self.text = text }
     }
 
     private struct ObservationSession {
@@ -340,16 +341,14 @@ final class AutomaticDictionaryCorrectionTracker {
         let sourceMap = session.textMap
         if isInside {
             let local = NSRange(location: change.oldRange.location - session.insertedRange.location, length: change.oldRange.length)
-            for approval in session.approvals where approval.isValid {
-                if NSIntersectionRange(approval.range, local).length > 0 ||
-                    (local.length == 0 && local.location > approval.range.location && local.location < NSMaxRange(approval.range)) {
-                    approval.isValid = false
-                } else if let moved = DictionaryCorrectionReplacementPlan.project(approval.range, replacing: local, withLength: change.newRange.length) {
-                    approval.range = moved
-                } else { approval.isValid = false }
-            }
             guard session.textMap.replace(range: local, replacement: (currentValue as NSString).substring(with: change.newRange)) else {
                 self.cancel(); return
+            }
+            for approval in session.approvals where approval.isValid {
+                if let moved = DictionaryCorrectionReplacementPlan.confirmedRange(approval.range, text: approval.text,
+                    replacing: local, withLength: change.newRange.length, in: session.textMap.text) {
+                    approval.range = moved
+                } else { approval.isValid = false }
             }
         }
 
@@ -590,13 +589,23 @@ final class AutomaticDictionaryCorrectionTracker {
     }
 
     private func evaluate(_ pending: PendingCorrection) {
-        let candidate = AutomaticDictionaryCorrectionDetector.candidate(
+        let detected = AutomaticDictionaryCorrectionDetector.candidate(
             before: pending.beforeValue,
             after: pending.afterValue,
             insertedRange: pending.insertedRange,
             allowsInsertionAtEnd: true,
             knownCanonicalTerms: self.session?.knownCanonicalTerms ?? []
         )
+        let repeated = AutomaticDictionaryCorrectionDetector.candidate(before: pending.beforeValue, after: pending.afterValue,
+            insertedRange: pending.insertedRange, allowsInsertionAtEnd: true)
+        let repetitionPlan = repeated.flatMap { value in
+            value.sourceUTF16Range.flatMap { DictionaryCorrectionReplacementPlan(sourceText: pending.sourceMap.text,
+                range: $0, replacement: value.correctedText) }
+        }
+        let candidate = repetitionPlan.flatMap {
+            AutomaticDictionaryCorrectionDetector.confirmedCandidate(detected, in: $0) ??
+                AutomaticDictionaryCorrectionDetector.confirmedCandidate(repeated, in: $0)
+        } ?? (repetitionPlan == nil ? detected : nil)
         if let candidate {
             DictionaryVoiceSpellingLearner.shared.reject(editedText: candidate.heardText)
         }
@@ -622,8 +631,8 @@ final class AutomaticDictionaryCorrectionTracker {
         self.debounceTask = nil
         self.session?.pendingCorrection = nil
 
-        if let candidate {
-            self.session?.acceptedCorrections.append((candidate.heardText, candidate.correctedText))
+        if let repeated {
+            self.session?.acceptedCorrections.append((repeated.heardText, repeated.correctedText))
             if self.session?.acceptedCorrections.count ?? 0 > 64 { self.session?.acceptedCorrections.removeFirst() }
         }
 
@@ -643,10 +652,9 @@ final class AutomaticDictionaryCorrectionTracker {
         // Persist original audio before publishing a new acoustic dictionary term.
         if let candidate, let context, SettingsStore.shared.automaticDictionaryLearningEnabled,
            !SettingsStore.shared.shouldShowOnboarding, let sourceRange = candidate.sourceUTF16Range {
-            self.enqueueCorrection(candidate, context: context,
+            let admitted = self.enqueueCorrection(candidate, context: context,
                 range: NSRange(location: sourceRange.location, length: candidate.correctedText.utf16.count))
-            self.propagateAcceptedCorrections()
-            return
+            if admitted { self.propagateAcceptedCorrections(); return }
         }
         self.propagateAcceptedCorrections()
 
@@ -663,7 +671,7 @@ final class AutomaticDictionaryCorrectionTracker {
             DebugLogger.shared.info("DICTIONARY_CORRECTION suggestion_skipped reason=already_saved", source: "DictionaryLearning")
             return
         }
-        guard AutomaticDictionarySuggestionPolicy.shared.shouldShow(
+        guard context != nil || AutomaticDictionarySuggestionPolicy.shared.shouldShow(
             candidate,
             requiredOccurrences: SettingsStore.shared.automaticDictionarySuggestionFrequency.rawValue
         ) else {
@@ -706,22 +714,27 @@ final class AutomaticDictionaryCorrectionTracker {
     }
 
     private func enqueueCorrection(_ candidate: AutomaticDictionaryCorrectionCandidate,
-                                   context: DictionaryLearningCorrectionContext, range: NSRange) {
+                                   context: DictionaryLearningCorrectionContext, range: NSRange) -> Bool {
         guard let originalRange = Range(context.selectedUTF16Range, in: context.deliveredTextBeforeEdit),
               let heard = DictionaryCorrectionEditPolicy.acousticSpelling(String(context.deliveredTextBeforeEdit[originalRange])),
-              heard != candidate.correctedText else { return }
-        let approval = CorrectionApproval(range: range)
+              heard != candidate.correctedText,
+              let resolved = try? DictionaryLearningAlignmentResolver.resolve(recording: context.recording,
+                deliveredTextBeforeEdit: context.deliveredTextBeforeEdit,
+                selectedUTF16Range: context.selectedUTF16Range, observedText: heard) else { return false }
+        let rawText = context.recording.alignment.words[resolved.sourceWordRange].map(\.text).joined(separator: " ")
+        guard let observed = DictionaryCorrectionEditPolicy.acousticSpelling(rawText) else { return false }
+        let evidence = DictionaryLearningAudioEvidence(recordingID: resolved.recordingID, modelKey: resolved.modelKey,
+            observedText: observed, sourceWordRange: resolved.sourceWordRange, sourceSampleRange: resolved.sourceSampleRange,
+            focalSampleRange: resolved.focalSampleRange, samples: resolved.samples, featureFrames: resolved.featureFrames)
+        let approval = CorrectionApproval(range: range, text: candidate.correctedText)
         self.session?.approvals.removeAll { !$0.isValid }
         self.session?.approvals.append(approval)
         let profile = self.profile
         let corrected = AutomaticDictionaryCorrectionCandidate(heardText: heard, correctedText: candidate.correctedText)
-        DictionaryAudioLearningService.shared.learnCorrection(candidate: corrected, isValid: {
+        // Only the bounded resolved clip is retained by the queue, never the full recording.
+        return DictionaryAudioLearningService.shared.learnCorrection(candidate: corrected, evidence: evidence, isValid: {
             approval.isValid && PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork
-        }) {
-            try DictionaryLearningAlignmentResolver.resolve(recording: context.recording,
-                deliveredTextBeforeEdit: context.deliveredTextBeforeEdit,
-                selectedUTF16Range: context.selectedUTF16Range, observedText: heard)
-        }
+        })
     }
 
     private func propagateAcceptedCorrections() {
@@ -756,7 +769,8 @@ final class AutomaticDictionaryCorrectionTracker {
                     let local = NSRange(location: edit.location - session.insertedRange.location, length: edit.length)
                     guard session.textMap.replace(range: local, replacement: correction.corrected) else { self.cancel(); return }
                     for approval in session.approvals where approval.isValid {
-                        if let moved = DictionaryCorrectionReplacementPlan.project(approval.range, replacing: local, withLength: correction.corrected.utf16.count) {
+                        if let moved = DictionaryCorrectionReplacementPlan.confirmedRange(approval.range, text: approval.text,
+                            replacing: local, withLength: correction.corrected.utf16.count, in: session.textMap.text) {
                             approval.range = moved
                         } else { approval.isValid = false }
                     }

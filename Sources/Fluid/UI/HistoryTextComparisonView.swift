@@ -340,7 +340,9 @@ struct HistoryTextComparisonView: View {
         let explicit = self.explicitInlineCandidate(context: context, replacement: replacement)
         let selectedPhrase = DictionaryInlineTextEdit.wordRanges(in: context.edit.heardText).count > 1 ||
             DictionaryInlineTextEdit.wordRanges(in: replacement).count > 1
-        let candidate = selectedPhrase ? explicit : (detected ?? explicit)
+        let proposed = selectedPhrase ? explicit : (detected ?? explicit)
+        let candidate = AutomaticDictionaryCorrectionDetector.confirmedCandidate(proposed, in: plan) ??
+            AutomaticDictionaryCorrectionDetector.confirmedCandidate(explicit, in: plan)
         guard TranscriptionHistoryStore.shared.applyWordCorrection(
             entryID: context.entryID, expectedText: context.edit.sourceText,
             range: range, replacement: replacement, profile: context.profile, isOriginal: true,

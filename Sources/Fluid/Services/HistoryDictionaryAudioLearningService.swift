@@ -45,6 +45,8 @@ final class HistoryDictionaryAudioLearningService {
               selection.isOriginal, candidate.sourceUTF16Range == selection.range,
               plan.text == expectedText,
               let confirmedRange = plan.mappedRange(selection.range),
+              DictionaryCorrectionReplacementPlan.isValid(confirmedRange, in: expectedText),
+              (expectedText as NSString).substring(with: confirmedRange) == candidate.correctedText,
               let history = self.currentEntry(selection: selection, candidate: candidate, correctionPlan: plan),
               history.sourceTranscriptText == expectedText, let audio = history.audio,
               let url = DictationAudioHistoryStore.scoped(to: selection.profile).audioFileURL(for: history),

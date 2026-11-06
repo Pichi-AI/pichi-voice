@@ -20,6 +20,14 @@ struct AutomaticDictionaryTextChange: Equatable {
 }
 
 enum AutomaticDictionaryCorrectionDetector {
+    static func confirmedCandidate(_ candidate: AutomaticDictionaryCorrectionCandidate?,
+                                   in plan: DictionaryCorrectionReplacementPlan) -> AutomaticDictionaryCorrectionCandidate? {
+        guard let candidate, let range = candidate.sourceUTF16Range, let mapped = plan.mappedRange(range),
+              DictionaryCorrectionReplacementPlan.isValid(mapped, in: plan.text),
+              (plan.text as NSString).substring(with: mapped) == candidate.correctedText else { return nil }
+        return candidate
+    }
+
     private static let edgeCharacters = CharacterSet.whitespacesAndNewlines.union(
         CharacterSet(charactersIn: ".,!?;:\"“”‘’()[]{}")
     )

@@ -3670,9 +3670,13 @@ extension DictationE2ETests {
             }
             let first = evidence("fooo"), second = evidence("baad")
             XCTAssertTrue(worker.learnCorrection(candidate: .init(heardText: "fooo", correctedText: "Foo"),
-                isValid: { firstValid }, prepare: { first }))
+                evidence: first, isValid: { firstValid }))
             XCTAssertTrue(worker.learnCorrection(candidate: .init(heardText: "baad", correctedText: "Bad"),
-                isValid: { true }, prepare: { second }))
+                evidence: second, isValid: { true }))
+            for label in ["Third", "Fourth", "Fifth"] {
+                XCTAssertTrue(worker.learnCorrection(candidate: .init(heardText: "mistyped", correctedText: label),
+                    evidence: evidence("mistyped"), isValid: { true }))
+            }
             XCTAssertTrue(settings.customDictionaryEntries.isEmpty, "No empty entry may precede persisted original audio")
             firstValid = !revokeFirst
             idle = true
@@ -3680,8 +3684,9 @@ extension DictationE2ETests {
             for _ in 0..<200 where worker.pendingCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
             XCTAssertEqual(worker.pendingCount, 0)
             let profiles = await store.allProfiles()
-            XCTAssertEqual(profiles.count, revokeFirst ? 1 : 2)
-            XCTAssertEqual(Set(settings.customDictionaryEntries.map(\.replacement)), revokeFirst ? ["Bad"] : ["Foo", "Bad"])
+            XCTAssertEqual(profiles.count, revokeFirst ? 4 : 5)
+            let expected = Set(["Bad", "Third", "Fourth", "Fifth"] + (revokeFirst ? [] : ["Foo"]))
+            XCTAssertEqual(Set(settings.customDictionaryEntries.map(\.replacement)), expected)
             XCTAssertTrue(settings.customDictionaryEntries.allSatisfy { $0.triggers.isEmpty })
             XCTAssertTrue(profiles.allSatisfy { $0.enrollments.count == 1 })
             await worker.prepareForPrivateProfileTransition()
@@ -4155,10 +4160,10 @@ extension DictationE2ETests {
             canProcess: { false },
             isCurrent: { _ in true }
         )
-        for _ in 0..<6 {
+        for _ in 0..<34 {
             service.learn(entry: entry, evidenceID: UUID(), evidence: evidence)
         }
-        XCTAssertEqual(service.pendingCount, 4)
+        XCTAssertEqual(service.pendingCount, 32)
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(service.pendingCount, 0)
         let profiles = await store.allProfiles()
