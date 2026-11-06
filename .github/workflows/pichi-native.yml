@@ -25,7 +25,8 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, pichi-voice-isolated]
     timeout-minutes: 90
     env:
-      CI_ROOT: ${{ github.workspace }}/.build/pichi-native-${{ github.run_id }}-${{ github.run_attempt }}
+      NATIVE_ROOT: ${{ github.workspace }}-native-${{ github.run_id }}-${{ github.run_attempt }}
+      CI_ROOT: ${{ github.workspace }}-native-${{ github.run_id }}-${{ github.run_attempt }}/worktree
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - name: Require the prepared isolated runner
@@ -39,7 +40,13 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - run: git worktree add --detach "$CI_ROOT" HEAD
+      - name: Create independently recoverable native worktree
+        id: workspace
+        run: |
+          mkdir "$NATIVE_ROOT"
+          echo 'owned=true' >> "$GITHUB_OUTPUT"
+          git clone --no-local --mirror "$GITHUB_WORKSPACE" "$NATIVE_ROOT/repository.git"
+          git --git-dir="$NATIVE_ROOT/repository.git" worktree add --detach "$CI_ROOT" "$GITHUB_SHA"
       - working-directory: ${{ env.CI_ROOT }}
         run: |
           python3 -m venv .build/coverage-venv
@@ -53,9 +60,16 @@ jobs:
           pichi_options=()
           if [[ "$FULL_BASELINE" == true ]]; then pichi_options+=(--all); fi
           .build/coverage-venv/bin/python scripts/dev/coverage-ci.py verify --output .build/coverage "${pichi_options[@]}"
+      - name: Release recorded simulators even after cancellation
+        id: devices
+        if: always() && steps.workspace.outputs.owned == 'true'
+        run: |
+          if [[ ! -d "$CI_ROOT" ]]; then exit 0; fi
+          mkdir -p "$CI_ROOT/.build/coverage"
+          python3 -B -S scripts/dev/coverage-ci.py cleanup --root "$CI_ROOT" --output "$CI_ROOT/.build/coverage" > "$CI_ROOT/.build/coverage/cleanup.log" 2>&1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         id: evidence
-        if: always()
+        if: always() && steps.workspace.outputs.owned == 'true'
         with:
           name: native-coverage-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -73,13 +87,17 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Release owned worktree after evidence preservation
-        if: always()
+        if: always() && steps.workspace.outputs.owned == 'true'
         env:
           EVIDENCE_SAVED: ${{ steps.evidence.outcome }}
+          DEVICES_RELEASED: ${{ steps.devices.outcome }}
         run: |
-          if [[ ! -d "$CI_ROOT" ]]; then exit 0; fi
-          if [[ "$EVIDENCE_SAVED" != success ]]; then
-            echo "::error::Preserve $CI_ROOT; evidence upload did not succeed."
+          if [[ ! -d "$CI_ROOT" ]]; then
+            rm -rf -- "$NATIVE_ROOT"
+            exit 0
+          fi
+          if [[ "$EVIDENCE_SAVED" != success || "$DEVICES_RELEASED" != success ]]; then
+            echo "::error::Preserve $NATIVE_ROOT; evidence or simulator cleanup needs recovery."
             exit 1
           fi
           rm -rf -- "$CI_ROOT/.build"
@@ -87,4 +105,6 @@ jobs:
             echo "::error::Preserve $CI_ROOT; unexpected source or untracked changes remain."
             exit 1
           fi
-          git worktree remove "$CI_ROOT"
+          git --git-dir="$NATIVE_ROOT/repository.git" worktree remove "$CI_ROOT"
+          rm -rf -- "$NATIVE_ROOT/repository.git"
+          rmdir "$NATIVE_ROOT"

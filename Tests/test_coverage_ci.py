@@ -258,6 +258,60 @@ class CoverageProducerTests(unittest.TestCase):
         with patch.dict(os.environ, {"RUNNER_ENVIRONMENT": "self-hosted", "PICHI_ISOLATED_NATIVE_RUNNER": "1"}, clear=True), patch.object(CI, "plan", side_effect=plan), patch.object(CI, "command", return_value=completed()), self.assertRaisesRegex(ValueError, "Unknown native"):
             CI.verify(self.root, self.out)
 
+    def test_native_dispatch_on_unchanged_main_requires_explicit_baseline(self):
+        empty = dict(base_sha="head", source_sha="head", required_scopes=[])
+        with patch.dict(os.environ, {"RUNNER_ENVIRONMENT": "self-hosted", "PICHI_ISOLATED_NATIVE_RUNNER": "1"}, clear=True), patch.object(CI, "git", side_effect=["head", "head"]), patch.object(CI, "command", return_value=completed(json.dumps(empty))) as run, contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "--all on main"):
+            CI.verify(self.root, self.out)
+        self.assertEqual(run.call_count, 1)
+
+    def test_simulator_cleanup_is_owned_idempotent_and_verified(self):
+        runtime = "runtime"
+        devices = {"one": dict(udid="one", name="coverage-1234abcd", deviceTypeIdentifier="phone", state="Booted"),
+                   "two": dict(udid="two", name="coverage-5678abcd", deviceTypeIdentifier="pad", state="Shutdown"),
+                   "foreign": dict(udid="foreign", name="user-active", deviceTypeIdentifier="phone", state="Booted")}
+        for index, uid in enumerate(["one", "two"]):
+            device = devices[uid]
+            CI.save(self.out / f"ios/run-fixture/device-{index}.json", dict(udid=uid, name=device["name"], type=device["deviceTypeIdentifier"], runtime=runtime))
+        def tool(argv, **kwargs):
+            if argv[2] == "list":
+                return completed(json.dumps(dict(devices={runtime: list(devices.values())})))
+            if argv[2] == "shutdown":
+                devices[argv[3]]["state"] = "Shutdown"
+            else:
+                del devices[argv[3]]
+            return completed()
+        with patch.object(CI, "command", side_effect=tool) as run:
+            self.assertEqual(CI.cleanup(self.root, self.out), 0)
+            self.assertEqual(CI.cleanup(self.root, self.out), 0)
+        deleted = [call.args[0][-1] for call in run.call_args_list if call.args[0][2] == "delete"]
+        self.assertEqual(deleted, ["one", "two"])
+        self.assertEqual(list(devices), ["foreign"])
+
+    def test_simulator_cleanup_preserves_recovery_state_on_uncertain_ownership_or_shutdown(self):
+        path = self.out / "ios/run-fixture/device-0.json"
+        record = dict(udid="owned", name="coverage-1234abcd", type="phone", runtime="runtime")
+        device = dict(udid="owned", name=record["name"], deviceTypeIdentifier="phone", state="Booted")
+        inventory = completed(json.dumps(dict(devices={"runtime": [device]})))
+        for change in [dict(name="missing-proof"), dict(name="coverage-ffffffff"), dict(type="different"), dict(runtime="different")]:
+            CI.save(path, {**record, **change})
+            with patch.object(CI, "command", return_value=inventory) as run, self.assertRaises(ValueError):
+                CI.cleanup(self.root, self.out)
+            self.assertEqual(run.call_count, 1)
+            self.assertTrue(path.exists())
+        CI.save(path, record)
+        with patch.object(CI, "command", side_effect=[inventory, RuntimeError("shutdown denied")]), self.assertRaisesRegex(RuntimeError, "shutdown denied"):
+            CI.cleanup(self.root, self.out)
+        with patch.object(CI, "command", side_effect=[inventory, completed(), completed(), inventory]), self.assertRaisesRegex(ValueError, "did not complete"):
+            CI.cleanup(self.root, self.out)
+        self.assertTrue(path.exists())
+
+    def test_cleanup_without_owned_records_does_not_touch_simulators(self):
+        with patch.object(CI, "command") as run:
+            self.assertEqual(CI.cleanup(self.root, self.out), 0)
+            with self.assertRaises(ValueError):
+                CI.cleanup(self.root, self.root.parent)
+        run.assert_not_called()
+
     def test_app_coverage_uses_executable_path_and_cannot_accept_embedded_test_bundle(self):
         # Xcode's display name omits Debug even though the actual executable includes it.
         target = dict(name="Pichi Voice.app", buildProductPath="/build/Pichi Voice Debug.app/Contents/MacOS/Pichi Voice Debug", executableLines=10)
@@ -407,7 +461,7 @@ class CoverageProducerTests(unittest.TestCase):
         self.assertEqual(len(list((self.out / "python").glob("run-*"))), 2)
 
     def test_cli_dispatch_and_errors(self):
-        for mode, function in [("plan", "plan"), ("finish", "finish"), ("native", "native"), ("packages", "packages"), ("python", "python"), ("verify", "verify")]:
+        for mode, function in [("plan", "plan"), ("finish", "finish"), ("native", "native"), ("packages", "packages"), ("python", "python"), ("verify", "verify"), ("cleanup", "cleanup")]:
             with patch.object(CI, function, return_value=0) as target:
                 self.assertEqual(CI.main([mode, "--output", str(self.out)]), 0)
                 target.assert_called_once()

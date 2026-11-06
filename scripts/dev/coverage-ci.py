@@ -272,8 +272,9 @@ def native(root, output, scope, ui_class):
                 inventory = json.loads(command(["xcrun", "simctl", "list", "--json"]).stdout)
                 device = next(x["identifier"] for x in inventory["devicetypes"] if x["name"] == kind)
                 runtime = next(x["identifier"] for x in inventory["runtimes"] if x["name"] == "iOS 27.0" and x["isAvailable"])
-                udid = command(["xcrun", "simctl", "create", "coverage-" + uuid.uuid4().hex[:8], device, runtime]).stdout.strip()
-                save(work / f"device-{index}.json", {"udid": udid, "type": device, "runtime": runtime})
+                name = "coverage-" + uuid.uuid4().hex[:8]
+                udid = command(["xcrun", "simctl", "create", name, device, runtime]).stdout.strip()
+                save(work / f"device-{index}.json", {"udid": udid, "name": name, "type": device, "runtime": runtime})
                 destination = "platform=iOS Simulator,id=" + udid
             bundle = work / f"tests-{index}.xcresult"
             required_classes = {ui_class} | (changed_classes if index == 0 else set())
@@ -421,6 +422,8 @@ def verify(root, output, force_all=False):
     plan_path, needs_path = output / "plan.json", output / "needs.json"
     plan(root, plan_path, force_all)
     value = read(plan_path)
+    if not value["run_scopes"]:
+        raise ValueError("No coverage scopes selected; choose a task branch or --all on main")
     states = {"plan": {"result": "success"}}
     checked = command(["bash", "scripts/dev/check.sh"], cwd=root, log=output / "portable.log", tolerate=True)
     states["portable"] = {"result": "failure" if checked.returncode else "success"}
@@ -437,9 +440,38 @@ def verify(root, output, force_all=False):
     return finish(root, plan_path, output, needs_path, output / "coverage-gate.json")
 
 
+def cleanup(root, output):
+    output.relative_to(root)
+    records = [read(path) for path in output.glob("ios/run-*/device-*.json")]
+    if not records:
+        return 0
+    inventory = json.loads(command(["xcrun", "simctl", "list", "--json"]).stdout)
+    devices = {device["udid"]: (runtime, device) for runtime, items in inventory["devices"].items() for device in items}
+    removed = set()
+    for record in records:
+        name = record.get("name", "")
+        if not re.fullmatch(r"coverage-[0-9a-f]{8}", name):
+            raise ValueError("Missing simulator ownership proof")
+        current = devices.get(record["udid"])
+        if current is None:
+            continue
+        runtime, device = current
+        if device["name"] != name or runtime != record["runtime"] or device["deviceTypeIdentifier"] != record["type"]:
+            raise ValueError("Simulator ownership does not match the recorded device")
+        if device["state"] != "Shutdown":
+            command(["xcrun", "simctl", "shutdown", record["udid"]])
+        command(["xcrun", "simctl", "delete", record["udid"]])
+        removed.add(record["udid"])
+    if removed:
+        inventory = json.loads(command(["xcrun", "simctl", "list", "--json"]).stdout)
+        if any(device["udid"] in removed for items in inventory["devices"].values() for device in items):
+            raise ValueError("Owned simulator cleanup did not complete")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("plan", "finish", "native", "packages", "python", "verify"))
+    parser.add_argument("mode", choices=("plan", "finish", "native", "packages", "python", "verify", "cleanup"))
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--all", action="store_true")
@@ -461,6 +493,8 @@ def main(argv=None):
             return packages(args.root, args.output)
         if args.mode == "verify":
             return verify(args.root, args.output, args.all)
+        if args.mode == "cleanup":
+            return cleanup(args.root, args.output)
         return python(args.root, args.output)
     except (ValueError, RuntimeError, OSError, KeyError, StopIteration, ET.ParseError) as error:
         print(f"Coverage producer failed: {error}", file=sys.stderr)
