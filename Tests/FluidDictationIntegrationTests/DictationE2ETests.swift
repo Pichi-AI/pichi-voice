@@ -5525,7 +5525,7 @@ extension DictationE2ETests {
         await fulfillment(of: [undone], timeout: 2)
         XCTAssertTrue(first.didUndoSavedCorrection)
         XCTAssertFalse(second.didUndoSavedCorrection)
-        XCTAssertEqual(controller.presentedSessions.count, 2)
+        XCTAssertEqual(controller.presentedCandidateIDs, [second.candidate.id])
         XCTAssertEqual(controller.displayDeadline, deadline)
         XCTAssertEqual(controller.progressGeneration, generation)
         let profiles = await store.allProfiles()
@@ -5550,9 +5550,151 @@ extension DictationE2ETests {
         let row = try XCTUnwrap(controller.presentedSessions.first)
         row.addOnlyCorrection()
         XCTAssertEqual(row.screen, .success)
+        XCTAssertTrue(controller.presentedCandidateIDs.isEmpty)
         controller.show(candidate: final) { _ in }
         XCTAssertEqual(controller.presentedCandidateIDs, [final.id])
         controller.withdrawSuggestion(final.id)
         XCTAssertTrue(controller.presentedCandidateIDs.isEmpty)
+    }
+}
+
+
+extension DictationE2ETests {
+    func testCorrectionPlacementProtectsWholeEditorAndPrefersAboveThenBelow() throws {
+        let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let size = CGSize(width: 500, height: 220)
+        let bottomEditor = CGRect(x: 300, y: 40, width: 900, height: 380)
+        let above = try XCTUnwrap(DictionaryCorrectionOverlayPlacement.frame(size: size, screen: screen, editor: bottomEditor))
+        XCTAssertGreaterThanOrEqual(above.minY, bottomEditor.maxY + 10)
+        XCTAssertFalse(above.intersects(bottomEditor))
+        let topEditor = CGRect(x: 300, y: 500, width: 900, height: 380)
+        let below = try XCTUnwrap(DictionaryCorrectionOverlayPlacement.frame(size: size, screen: screen, editor: topEditor))
+        XCTAssertLessThanOrEqual(below.maxY, topEditor.minY - 10)
+        XCTAssertFalse(below.intersects(topEditor))
+    }
+
+    func testCorrectionPlacementUsesSideOrScrollSpaceAndNeverCoversFullScreenEditor() throws {
+        let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let narrow = CGRect(x: 10, y: 10, width: 500, height: 880)
+        let side = try XCTUnwrap(DictionaryCorrectionOverlayPlacement.frame(size: .init(width: 500, height: 300), screen: screen, editor: narrow))
+        XCTAssertGreaterThanOrEqual(side.minX, narrow.maxX + 10)
+        let wide = CGRect(x: 10, y: 10, width: 1420, height: 500)
+        let region = try XCTUnwrap(DictionaryCorrectionOverlayPlacement.region(size: .init(width: 500, height: 600), screen: screen, editor: wide, minimumHeight: 180))
+        XCTAssertLessThan(region.height, 600)
+        XCTAssertFalse(region.intersects(wide))
+        XCTAssertNil(DictionaryCorrectionOverlayPlacement.frame(size: .init(width: 500, height: 300), screen: screen, editor: screen))
+        XCTAssertNil(DictionaryCorrectionOverlayPlacement.region(size: .init(width: 500, height: 300), screen: screen, editor: screen, minimumHeight: 180))
+    }
+
+    func testCorrectionPlacementPreservesSafeDragAndRepositionsAfterGrowth() throws {
+        let screen = CGRect(x: -1440, y: -200, width: 1440, height: 900)
+        let editor = CGRect(x: -1100, y: -100, width: 1000, height: 300)
+        let anchor = CGPoint(x: -1200, y: 500)
+        let first = try XCTUnwrap(DictionaryCorrectionOverlayPlacement.frame(size: .init(width: 500, height: 220), screen: screen, editor: editor, manualTopLeft: anchor))
+        XCTAssertEqual(first.origin, CGPoint(x: -1200, y: 280))
+        let grown = try XCTUnwrap(DictionaryCorrectionOverlayPlacement.frame(size: .init(width: 500, height: 400), screen: screen, editor: editor, manualTopLeft: anchor))
+        XCTAssertFalse(grown.intersects(editor.insetBy(dx: -10, dy: -10)))
+        XCTAssertTrue(screen.contains(grown))
+        let transformed = DictionaryCorrectionOverlayPlacement.appKitFrame(accessibilityFrame: CGRect(x: -1200, y: 300, width: 800, height: 400), primaryScreenTop: 900)
+        XCTAssertEqual(transformed, CGRect(x: -1200, y: 200, width: 800, height: 400))
+    }
+
+    func testConfirmSavedCorrectionKeepsAudioAndDismissesOnlyItsRow() async throws {
+        let settings = SettingsStore.shared
+        let previousEntries = settings.customDictionaryEntries, previousEnabled = settings.automaticDictionaryLearningEnabled
+        defer { settings.customDictionaryEntries = previousEntries; settings.automaticDictionaryLearningEnabled = previousEnabled }
+        settings.automaticDictionaryLearningEnabled = true
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let worker = DictionaryAudioLearningService(store: store,
+            extract: { evidence in PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: evidence.modelKey) }, canProcess: { true })
+        let controller = DictionaryCorrectionOverlayController(audioLearning: worker)
+        defer { controller.concealPrivatePresentation() }
+        let saved = expectation(description: "Both saved rows appear")
+        saved.expectedFulfillmentCount = 2
+        for (index, word) in ["ConfirmAlphaE2E", "ConfirmBetaE2E"].enumerated() {
+            let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: "mistyped",
+                sourceWordRange: index..<(index + 1), sourceSampleRange: 0..<2, focalSampleRange: index..<(index + 1), samples: [0, 0])
+            XCTAssertTrue(worker.learnCorrection(candidate: .init(heardText: "mistyped", correctedText: word), evidence: evidence,
+                isValid: { true }, didSave: { controller.showSavedCorrection($0); saved.fulfill() }))
+        }
+        await fulfillment(of: [saved], timeout: 5)
+        let rows = controller.presentedSessions
+        XCTAssertEqual(rows.count, 2)
+        guard rows.count == 2 else { return }
+        let deadline = controller.displayDeadline, generation = controller.progressGeneration
+        let originalEntries = settings.customDictionaryEntries
+        let originalProfiles = await store.allProfiles()
+        controller.confirm(id: rows[0].candidate.id)
+        XCTAssertEqual(controller.presentedCandidateIDs, [rows[1].candidate.id])
+        XCTAssertEqual(controller.displayDeadline, deadline)
+        XCTAssertEqual(controller.progressGeneration, generation)
+        XCTAssertFalse(rows[0].didUndoSavedCorrection)
+        controller.confirm(id: rows[1].candidate.id)
+        XCTAssertTrue(controller.presentedCandidateIDs.isEmpty)
+        XCTAssertFalse(controller.isPresented)
+        XCTAssertEqual(settings.customDictionaryEntries, originalEntries)
+        let profiles = await store.allProfiles()
+        XCTAssertEqual(profiles.map(\.id), originalProfiles.map(\.id))
+        await worker.prepareForPrivateProfileTransition()
+    }
+
+    func testConfirmCannotSilentlyAcceptUnsavedProposal() {
+        let controller = DictionaryCorrectionOverlayController()
+        defer { controller.concealPrivatePresentation() }
+        let proposal = AutomaticDictionaryCorrectionCandidate(heardText: "whte label", correctedText: "White Label")
+        controller.show(candidate: proposal) { _ in XCTFail("Unsaved proposal must not be accepted") }
+        controller.confirm(id: proposal.id)
+        XCTAssertEqual(controller.presentedCandidateIDs, [proposal.id])
+    }
+}
+
+
+extension DictationE2ETests {
+    func testRepeatedPhraseUsesWholeValueWhenEditorCannotWriteSelectedText() throws {
+        let prefix = "Earlier untouched field text. "
+        let dictated = "White Label supports billing. White Label supports themes. White Label supports API."
+        let before = prefix + dictated
+        let edited = prefix + dictated.replacingOccurrences(of: "White Label supports billing", with: "Whitelabel supports billing")
+        let scope = NSRange(location: prefix.utf16.count, length: dictated.utf16.count)
+        let candidate = try XCTUnwrap(AutomaticDictionaryCorrectionDetector.candidate(before: before, after: edited, insertedRange: scope, allowsInsertionAtEnd: true))
+        XCTAssertEqual(candidate.heardText, "White Label")
+        XCTAssertEqual(candidate.correctedText, "Whitelabel")
+        let currentScope = NSRange(location: scope.location, length: edited.utf16.count - scope.location)
+        let match = try XCTUnwrap(DictionaryCorrectionReplacementPlan.exactTermRanges(of: candidate.heardText, in: edited, scope: currentScope).first)
+        let plan = try XCTUnwrap(DictionaryCorrectionReplacementPlan(sourceText: edited, range: match, replacement: candidate.correctedText, scope: currentScope))
+        var editorValue = edited
+        let selection = NSRange(location: edited.utf16.count, length: 0)
+        XCTAssertNotNil(plan.mappedRange(selection))
+        XCTAssertTrue(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { editorValue == edited },
+            writeSelectedText: nil, writeValue: { editorValue = plan.text; return true }))
+        XCTAssertEqual(editorValue, prefix + dictated.replacingOccurrences(of: "White Label", with: "Whitelabel"))
+        XCTAssertTrue(plan.confirmsAppliedText(editorValue, differenceFromExpected: nil))
+        XCTAssertFalse(editorValue.contains("White Label"))
+    }
+
+    func testRepeatWriteFallbackDoesNotOverwriteNewInputOrDuplicateUncertainWrite() {
+        var current = true, writes = 0
+        XCTAssertFalse(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { current },
+            writeSelectedText: { current = false; return false }, writeValue: { writes += 1; return true }))
+        XCTAssertEqual(writes, 0)
+        current = true
+        XCTAssertTrue(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { current },
+            writeSelectedText: { true }, writeValue: { writes += 1; return true }))
+        XCTAssertEqual(writes, 0)
+        XCTAssertTrue(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { current },
+            writeSelectedText: { false }, writeValue: { writes += 1; return true }))
+        XCTAssertEqual(writes, 1)
+        XCTAssertFalse(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { false },
+            writeSelectedText: { XCTFail("Target moved"); return true }, writeValue: { XCTFail("Target moved"); return true }))
+        XCTAssertFalse(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { true }, writeSelectedText: nil, writeValue: nil))
+    }
+
+    func testWhiteLabelHistoryPlanReplacesExactOccurrencesAndPreservesOtherSpellings() throws {
+        let text = "White Label, White Label. White Labeling and White Labele stay distinct."
+        let plan = try XCTUnwrap(DictionaryCorrectionReplacementPlan(sourceText: text,
+            range: (text as NSString).range(of: "White Label"), replacement: "Whitelabel"))
+        XCTAssertEqual(plan.text, "Whitelabel, Whitelabel. White Labeling and White Labele stay distinct.")
     }
 }
