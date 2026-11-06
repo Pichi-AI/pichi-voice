@@ -943,6 +943,7 @@ struct MeetingSpeakerAttributionTests {
         self.check(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONEncoder().encode(frozen)) == frozen)
         var beforeTurnBoundaries = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
+        beforeTurnBoundaries.removeValue(forKey: "enableCompleteReadingAssignment")
         beforeTurnBoundaries.removeValue(forKey: "enableProvisionalSpeakerIdentities")
         beforeTurnBoundaries.removeValue(forKey: "enableStableSpeakerOpening")
         beforeTurnBoundaries.removeValue(forKey: "preserveIndependentSpeakerTurns")

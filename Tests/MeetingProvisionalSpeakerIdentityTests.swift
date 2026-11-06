@@ -298,7 +298,7 @@ import Foundation
         check(first.inserted[2].speakerID == nil, "Punctuation acquired a reading identity")
         check(first.inserted[3].speakerID == first.inserted[1].speakerID)
         check(first.inserted[4].speakerID == first.inserted[1].speakerID, "A known short reply lost its actual identity")
-        check(first.inserted[3].speakerAttribution?.rule == .existingParticipantContext)
+        check(first.inserted[3].speakerAttribution?.rule == .readingParticipantContext)
         check(first.inserted[3].speakerAttribution?.rule.isIndependentAcousticSelection == false)
         check(first.inserted[3].nativeSpeakerAssignment == .assigned(c)
             && first.inserted[3].nativeTiming == rows[3].nativeTiming && first.inserted[3].text == "да")

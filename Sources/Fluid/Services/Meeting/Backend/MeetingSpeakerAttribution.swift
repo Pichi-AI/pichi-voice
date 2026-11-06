@@ -468,7 +468,7 @@ nonisolated enum MeetingSpeakerAttribution {
                     )
                 }
             }
-            if policy.enableCompleteReadingAssignment {
+            if policy.enableCompleteReadingAssignment, !contextualBarrierEpochIDs.contains(epoch), contextIndexes[epoch] == nil {
                 for position in decisions.indices {
                     try self.checkCancellation(at: position)
                     let decision = decisions[position]

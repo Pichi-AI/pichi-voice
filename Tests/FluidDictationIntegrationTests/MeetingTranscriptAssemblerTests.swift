@@ -27,6 +27,45 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
     // fixtures exercise that replay contract explicitly instead of inheriting today's default.
     private let provisionalPolicy = MeetingSpeakerAttributionPolicy(enableProvisionalSpeakerIdentities: true)
 
+    /// Explicit local audit input only. Private sessions never become repository fixtures.
+    func testOptInSavedMeetingReadingCoverage() throws {
+        guard let path = ProcessInfo.processInfo.environment["PICHI_SPEAKER_AUDIT_ROOT"] else {
+            throw XCTSkip("Set PICHI_SPEAKER_AUDIT_ROOT to an authorized read-only metadata snapshot")
+        }
+        let root = URL(fileURLWithPath: path, isDirectory: true)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = MeetingSessionDateCodec.decodingStrategy
+        var reports: [[String: Any]] = []
+        for platform in ["ipad", "mac"] {
+            let files = try FileManager.default.contentsOfDirectory(at: root.appendingPathComponent(platform),
+                includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+            for file in files {
+                let data = try Data(contentsOf: file)
+                guard let session = try? decoder.decode(MeetingSession.self, from: data),
+                      session.state == .completed, session.speakerLabelsEnabled != false else { continue }
+                let original = session.transcriptSegments
+                let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: original.filter { !$0.isEcho }, in: session)
+                let names = Dictionary(session.activeSpeakers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
+                let missing = paragraphs.filter {
+                    $0.segments.contains(where: \.hasReadableContent)
+                        && (!($0.showsSpeakerLabel) || MeetingTranscriptExporter.speakerPresentation(
+                            for: $0, in: session, speakerNames: names).participantID == nil)
+                }.count
+                XCTAssertEqual(missing, 0, "Unowned reading turn in \(platform)/\(file.lastPathComponent)")
+                XCTAssertEqual(session.transcriptSegments, original)
+                XCTAssertEqual(try Data(contentsOf: file), data, "Audit must not modify the stored source")
+                reports.append(["platform": platform, "snapshot": file.lastPathComponent,
+                    "segments": original.count,
+                    "originalUnownedLexical": original.filter { $0.hasLexicalContent && !$0.isEcho && $0.speakerID == nil }.count,
+                    "readingParagraphs": paragraphs.count, "unownedReadingParagraphs": missing])
+            }
+        }
+        XCTAssertFalse(reports.isEmpty)
+        let report = root.appendingPathComponent("reading-coverage-replay.json")
+        try JSONSerialization.data(withJSONObject: reports, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: report.path)
+    }
+
     private func readingFixture(_ spans: [(Double, Double, Int?)]) -> (MeetingSession, MeetingAnalysisEpochID) {
         let track = UUID(), attempt = UUID()
         let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
@@ -1018,7 +1057,9 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertNotNil(speakerByUnit["u-0"] ?? nil)
         XCTAssertEqual(result.segments.map(\.nativeSpeakerAssignment), units.map { Optional($0.speaker) })
         XCTAssertEqual(speakerByUnit["u-0"], speakerByUnit["u-1"], "slot-0 keeps its name across the reset")
-        XCTAssertNil(speakerByUnit["u-2"] ?? nil, "A brief different slot cannot inherit the linked participant")
+        XCTAssertEqual(speakerByUnit["u-2"], speakerByUnit["u-1"], "A brief unresolved slot reuses the reading participant")
+        XCTAssertEqual(result.segments[2].speakerAttribution?.rule, .readingParticipantContext)
+        XCTAssertNil(result.segments[2].speakerAttribution?.selectedToken, "Reading ownership cannot fabricate an acoustic identity link")
         XCTAssertEqual(result.sidecar.speakerIdentityLinks.count, 1)
     }
 
@@ -1123,7 +1164,10 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         ))
         XCTAssertEqual(standard.speakers.count, 1, "An unlinked brief voice cannot open an extra participant")
         XCTAssertNotNil(standard.segments.first?.speakerID)
-        XCTAssertNil(standard.segments.last?.speakerID, "A matching label alone does not establish identity across epochs")
+        XCTAssertEqual(standard.segments.last?.speakerID, standard.segments.first?.speakerID)
+        XCTAssertEqual(standard.segments.last?.speakerAttribution?.rule, .readingParticipantContext)
+        XCTAssertNil(standard.segments.last?.speakerAttribution?.selectedToken,
+            "The reading fallback does not establish native identity across epochs")
         XCTAssertTrue(standard.sidecar.speakerIdentityLinks.isEmpty)
         XCTAssertEqual(standard.segments.map(\.nativeSpeakerAssignment), units.map { Optional($0.speaker) })
         let result = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(

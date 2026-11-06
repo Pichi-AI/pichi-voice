@@ -179,10 +179,18 @@ nonisolated enum MeetingReadingSpeakerResolver {
             return id
         }
         var grouped: [MeetingAnalysisEpochID: [Int]] = [:]
+        var admittedByTrack: [MeetingAudioTrackID: [Anchor]] = [:]
         for index in segments.indices {
             try Task.checkCancellation()
             guard let scope = scopeForSegment(segments[index]), scope.trackID == segments[index].sourceTrackID else { continue }
             grouped[scope, default: []].append(index)
+            if let id = anchorID(segments[index]) {
+                let time = timing(segments[index])
+                admittedByTrack[scope.trackID, default: []].append(.init(index: index, id: id, start: time.start, end: time.end))
+            }
+        }
+        for track in admittedByTrack.keys {
+            admittedByTrack[track]?.sort { ($0.start, $0.end, $0.index) < ($1.start, $1.end, $1.index) }
         }
         let scopes = grouped.keys.sorted {
             (grouped[$0]!.first!, $0.trackID.uuidString, $0.ordinal, $0.generation)
@@ -273,6 +281,19 @@ nonisolated enum MeetingReadingSpeakerResolver {
                     // admission table. Reuse its exact scoped token, including coarse mixtures.
                     var chosen = knownTokenID(source.speakerAttribution?.selectedToken)
                     var best = -Double.infinity
+                    if chosen == nil {
+                        // A reset cannot prove a new acoustic person. When this scope has no
+                        // usable voice, the reading fallback reuses an already admitted same-
+                        // source participant. This is not a contextual/acoustic anchor and
+                        // never creates an identity link across epochs or privacy barriers.
+                        let admitted = admittedByTrack[scope.trackID] ?? []
+                        var low = 0, high = admitted.count
+                        while low < high {
+                            let middle = low + (high - low) / 2
+                            if admitted[middle].start <= time.start { low = middle + 1 } else { high = middle }
+                        }
+                        chosen = (low > 0 ? admitted[low - 1].id : admitted.first?.id)
+                    }
                     if chosen == nil {
                         for id in candidates {
                             let support = supports[id]?.seconds(start: windowStart, end: windowEnd) ?? 0
