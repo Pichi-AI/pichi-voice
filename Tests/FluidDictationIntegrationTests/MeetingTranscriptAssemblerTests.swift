@@ -186,6 +186,44 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         tail.cancel()
     }
 
+    func testDurableFallbackKeepsItsIdentityAcrossArchiveAndPortableExport() throws {
+        var (session, epoch) = self.readingFixture([(0, 0.1, nil), (8, 8.1, nil)])
+        session.speakers = []
+        session.piiRedactionEnabled = true
+        let result = try MeetingStreamingProtectedWordTail.finalizingProtectedTranscript(
+            .init(segments: session.transcriptSegments), attemptID: UUID(), policy: .standard,
+            speakerNameFormat: "Speaker %lld", epochForSegment: { _ in epoch })
+        session.transcriptSegments = result.segments
+        session.speakers = result.speakers
+        let id = try XCTUnwrap(result.speakers.first?.id)
+        XCTAssertEqual(result.speakers.count, 1)
+        let presentations = MeetingTranscriptExporter.speakerPresentations(in: session)
+        XCTAssertEqual(Set(presentations.values.compactMap(\.participantID)), [id])
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: session)) as? [String: Any])
+        let people = try XCTUnwrap(json["speakers"] as? [[String: Any]])
+        XCTAssertEqual(people.count, 1)
+        XCTAssertEqual(people[0]["id"] as? String, id.uuidString)
+    }
+
+    func testNamedOrOwnerConfirmedFallbackIsNotReassignedByLaterContext() throws {
+        let (fixture, epoch) = self.readingFixture([(0, 0.1, nil), (4, 10, 0)])
+        var session = fixture
+        session.speakers = []
+        session.transcriptSegments = Array(fixture.transcriptSegments.prefix(1))
+        let first = try self.resolveReading(session, epoch: epoch)
+        for customName in [false, true] {
+            var named = first.speakers[0]
+            named.displayName = "Explicit participant"
+            named.usesCustomDisplayName = customName
+            named.isLocalUser = !customName
+            session.speakers = [named, fixture.speakers[0]]
+            session.transcriptSegments = first.segments + Array(fixture.transcriptSegments.suffix(1))
+            let next = try self.resolveReading(session, epoch: epoch)
+            XCTAssertEqual(next.segments[0], first.segments[0])
+            XCTAssertEqual(next.speakers[0], named)
+        }
+    }
+
     func testMixedUtteranceSelectsDominantReadingVoiceWithoutChangingAcousticAssignment() throws {
         let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
         let a = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "a")

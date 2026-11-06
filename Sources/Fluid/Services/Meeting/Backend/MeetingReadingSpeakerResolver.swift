@@ -180,10 +180,15 @@ nonisolated enum MeetingReadingSpeakerResolver {
         }
         var grouped: [MeetingAnalysisEpochID: [Int]] = [:]
         var admittedByTrack: [MeetingAudioTrackID: [Anchor]] = [:]
+        var publishedByTrack: [MeetingAudioTrackID: [Anchor]] = [:]
         for index in segments.indices {
             try Task.checkCancellation()
             guard let scope = scopeForSegment(segments[index]), scope.trackID == segments[index].sourceTrackID else { continue }
             grouped[scope, default: []].append(index)
+            if let id = activeID(segments[index].speakerID), segments[index].hasReadableContent, !segments[index].isEcho {
+                let time = timing(segments[index])
+                publishedByTrack[scope.trackID, default: []].append(.init(index: index, id: id, start: time.start, end: time.end))
+            }
             if let id = anchorID(segments[index]) {
                 let time = timing(segments[index])
                 admittedByTrack[scope.trackID, default: []].append(.init(index: index, id: id, start: time.start, end: time.end))
@@ -191,6 +196,9 @@ nonisolated enum MeetingReadingSpeakerResolver {
         }
         for track in admittedByTrack.keys {
             admittedByTrack[track]?.sort { ($0.start, $0.end, $0.index) < ($1.start, $1.end, $1.index) }
+        }
+        for track in publishedByTrack.keys {
+            publishedByTrack[track]?.sort { ($0.start, $0.end, $0.index) < ($1.start, $1.end, $1.index) }
         }
         let scopes = grouped.keys.sorted {
             (grouped[$0]!.first!, $0.trackID.uuidString, $0.ordinal, $0.generation)
@@ -229,7 +237,7 @@ nonisolated enum MeetingReadingSpeakerResolver {
             if !region.isEmpty { regions.append(region) }
             let placeholder = fallbackSpeaker(scope)
             let mayResolvePlaceholder = records[placeholder.id].map {
-                $0.identityIsProvisional == true && $0.usesCustomDisplayName != true && $0.diarizationClusterID == nil
+                $0.identityIsProvisional == true && $0.usesCustomDisplayName != true && !$0.isLocalUser && $0.diarizationClusterID == nil
             } ?? true
             let manualPlaceholder = indices.contains {
                 segments[$0].speakerID == placeholder.id && segments[$0].isUserSpeakerAssigned == true
@@ -257,13 +265,17 @@ nonisolated enum MeetingReadingSpeakerResolver {
                     guard source.hasReadableContent, !source.isEcho else { continue }
                     // A confirmed/manual selection is authoritative. Existing context remains
                     // a reading choice and is not added to the immutable anchor index above.
-                    if let id = activeID(source.speakerID),
-                       source.speakerAttribution?.rule != .readingParticipantContext || source.isUserSpeakerAssigned == true,
-                       source.speakerID != placeholder.id || !mayResolvePlaceholder || manualPlaceholder {
-                        if source.speakerID != id, source.isUserSpeakerAssigned != true {
-                            result.segments[index].speakerID = id
+                    if let id = activeID(source.speakerID) {
+                        let explicitIdentity = source.isUserSpeakerAssigned == true || records[id]?.usesCustomDisplayName == true
+                            || (records[id]?.isLocalUser == true && records[id]?.diarizationClusterID == nil)
+                        let needsContext = source.speakerAttribution?.rule == .readingParticipantContext
+                            || (source.speakerID == placeholder.id && mayResolvePlaceholder && !manualPlaceholder)
+                        if explicitIdentity || !needsContext {
+                            if source.speakerID != id, source.isUserSpeakerAssigned != true {
+                                result.segments[index].speakerID = id
+                            }
+                            continue
                         }
-                        continue
                     }
                     while cursor < anchors.count, anchors[cursor].start <= time.start { cursor += 1 }
                     let left = cursor > 0 ? anchors[cursor - 1] : nil
@@ -282,6 +294,13 @@ nonisolated enum MeetingReadingSpeakerResolver {
                     var chosen = knownTokenID(source.speakerAttribution?.selectedToken)
                     var best = -Double.infinity
                     if chosen == nil {
+                        for id in candidates {
+                            let support = supports[id]?.seconds(start: windowStart, end: windowEnd) ?? 0
+                            // Ties use temporal order, never model slot names or UUIDs.
+                            if support > best + policy.comparisonTolerance { chosen = id; best = support }
+                        }
+                    }
+                    if chosen == nil {
                         // A reset cannot prove a new acoustic person. When this scope has no
                         // usable voice, the reading fallback reuses an already admitted same-
                         // source participant. This is not a contextual/acoustic anchor and
@@ -294,13 +313,8 @@ nonisolated enum MeetingReadingSpeakerResolver {
                         }
                         chosen = (low > 0 ? admitted[low - 1].id : admitted.first?.id)
                     }
-                    if chosen == nil {
-                        for id in candidates {
-                            let support = supports[id]?.seconds(start: windowStart, end: windowEnd) ?? 0
-                            // Ties use temporal order, never model slot names or UUIDs.
-                            if support > best + policy.comparisonTolerance { chosen = id; best = support }
-                        }
-                    }
+                    if chosen == nil { chosen = activeID(source.speakerID) }
+                    if chosen == nil { chosen = publishedByTrack[scope.trackID]?.first?.id }
                     if chosen == nil {
                         if records[placeholder.id] == nil {
                             guard result.speakers.count < MeetingSessionSpeaker.maximumParticipants else {

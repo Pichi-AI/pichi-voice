@@ -1230,7 +1230,11 @@ nonisolated enum MeetingTranscriptExporter {
                 speakerID: presentations[paragraph.id]?.participantID,
                 text: paragraph.text)
         }
-        var exportSpeakers = session.readableSpeakers
+        let usedParticipantIDs = Set(segments.compactMap(\.speakerID))
+        var exportSpeakers = session.readableSpeakers.filter {
+            usedParticipantIDs.contains($0.id) || $0.identityIsProvisional != true
+                || $0.diarizationClusterID != nil || $0.usesCustomDisplayName == true || $0.isLocalUser
+        }
         var exportedIDs = Set(exportSpeakers.map(\.id))
         for paragraph in paragraphs {
             if let speaker = paragraph.projectedSpeakerRecord, exportedIDs.insert(speaker.id).inserted {
