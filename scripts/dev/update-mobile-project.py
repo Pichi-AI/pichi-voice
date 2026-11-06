@@ -171,7 +171,7 @@ test_config = configs("Mobile test", True)
 test_target = obj("PichiVoiceMobileUITests", f'isa = PBXNativeTarget; buildConfigurationList = {test_config}; buildPhases = {arr([test_sources,test_frameworks])}; buildRules = (); dependencies = {arr([dependency])}; name = PichiVoiceMobileUITests; productName = PichiVoiceMobileUITests; productReference = {test_product}; productType = "com.apple.product-type.bundle.ui-testing";')
 integration_builds = []
 integration_paths = list((ROOT / "Tests/MobileIntegrationTests").glob("*.swift"))
-for portable_name in ["MobileRegisteredModelInferenceTests.swift", "MeetingOwnerVoiceProfileTests.swift"]:
+for portable_name in ["MobileRegisteredModelInferenceTests.swift", "MeetingOwnerVoiceProfileTests.swift", "MeetingTranscriptAssemblerTests.swift"]:
     portable_test = ROOT / "Tests/FluidDictationIntegrationTests" / portable_name
     if portable_test.is_file(): integration_paths.append(portable_test)
 for path in sorted(integration_paths):

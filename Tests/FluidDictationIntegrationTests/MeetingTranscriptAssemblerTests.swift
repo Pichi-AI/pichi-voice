@@ -224,6 +224,15 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         }
     }
 
+    func testPrunedLiveContextReusesKnownSourceParticipantWithoutOpeningAnother() throws {
+        var (session, epoch) = self.readingFixture([(30, 30.1, nil)])
+        session.speakers = [session.speakers[0]]
+        let result = try self.resolveReading(session, epoch: epoch)
+        XCTAssertEqual(result.speakers, session.speakers)
+        XCTAssertEqual(result.segments[0].speakerID, session.speakers[0].id)
+        XCTAssertEqual(result.segments[0].nativeSpeakerAssignment, .unassigned)
+    }
+
     func testMixedUtteranceSelectsDominantReadingVoiceWithoutChangingAcousticAssignment() throws {
         let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
         let a = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "a")

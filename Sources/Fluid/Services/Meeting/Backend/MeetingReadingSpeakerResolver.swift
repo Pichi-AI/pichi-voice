@@ -236,6 +236,9 @@ nonisolated enum MeetingReadingSpeakerResolver {
             }
             if !region.isEmpty { regions.append(region) }
             let placeholder = fallbackSpeaker(scope)
+            let existingSourceParticipant = speakers.first {
+                $0.diarizationClusterID?.hasPrefix("\(scope.trackID.uuidString)#") == true && activeID($0.id) == $0.id
+            }?.id
             let mayResolvePlaceholder = records[placeholder.id].map {
                 $0.identityIsProvisional == true && $0.usesCustomDisplayName != true && !$0.isLocalUser && $0.diarizationClusterID == nil
             } ?? true
@@ -315,6 +318,7 @@ nonisolated enum MeetingReadingSpeakerResolver {
                     }
                     if chosen == nil { chosen = activeID(source.speakerID) }
                     if chosen == nil { chosen = publishedByTrack[scope.trackID]?.first?.id }
+                    if chosen == nil { chosen = existingSourceParticipant }
                     if chosen == nil {
                         if records[placeholder.id] == nil {
                             guard result.speakers.count < MeetingSessionSpeaker.maximumParticipants else {

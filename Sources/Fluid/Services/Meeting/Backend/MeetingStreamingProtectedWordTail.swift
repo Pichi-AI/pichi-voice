@@ -527,6 +527,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 scopeForSegment: { _ in self.epoch },
                 fallbackSpeaker: { assembler.readingFallbackSpeaker(attemptID: self.attemptID,
                     epoch: $0, trackKind: trackKind) })
+            guard reading.speakers.count <= self.limits.maximumSpeakers else { throw Failure.speakerLimit }
             resolved = reading.segments
             self.speakers = MeetingSessionSpeaker.numberingGeneratedParticipants(reading.speakers,
                 speakerNameFormat: self.speakerNameFormat)
