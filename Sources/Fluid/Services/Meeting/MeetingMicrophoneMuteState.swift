@@ -22,6 +22,7 @@ final nonisolated class MeetingMicrophoneRecordingControl: @unchecked Sendable {
     private let publish: @Sendable (MeetingMicrophoneMuteState) -> Void
     private var meetingState = MeetingMicrophoneMuteState.unmuted
     private var manuallyMuted = false
+    private var finishing = false
     private var stopped = false
 
     init(gate: MeetingMicrophonePrivacyGate,
@@ -37,6 +38,12 @@ final nonisolated class MeetingMicrophoneRecordingControl: @unchecked Sendable {
     func observe(_ observation: MeetingMicrophoneMuteObservation) {
         self.lock.withLock {
             guard !self.stopped, observation.state == .muted || observation.state == .unmuted else { return }
+            if self.finishing, observation.state == .unmuted {
+                if let release = observation.unsafeStartHostTime, let resumed = observation.refinementUntilHostTime {
+                    self.gate.refineHistoricalRelease(unsafeStartHostTime: release, resumedAtHostTime: resumed)
+                }
+                return // A draining observer may subtract approvals, never reopen capture.
+            }
             self.meetingState = observation.state
             if observation.state == .unmuted, let release = observation.unsafeStartHostTime,
                let resumed = observation.refinementUntilHostTime {
@@ -50,13 +57,16 @@ final nonisolated class MeetingMicrophoneRecordingControl: @unchecked Sendable {
 
     func setManuallyMuted(_ muted: Bool) {
         self.lock.withLock {
-            guard !self.stopped, self.manuallyMuted != muted else { return }
+            guard !self.stopped, !self.finishing, self.manuallyMuted != muted else { return }
             self.manuallyMuted = muted
             self.apply(at: self.hostTime())
         }
     }
 
-    /// Freeze commands before joining monitor and PCM delivery during stop/cancellation.
+    /// Refuse new grants while already queued negative observations drain through the gate.
+    func beginFinishing() { self.lock.withLock { self.finishing = true } }
+
+    /// Called after the observer joins, or immediately after admission is closed on failure.
     func finish() { self.lock.withLock { self.stopped = true } }
 
     private func apply(at time: UInt64, unsafeStart: UInt64? = nil) {

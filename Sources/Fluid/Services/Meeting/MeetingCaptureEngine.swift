@@ -325,8 +325,9 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         let task = Task<MeetingCaptureStopResult, Error> {
             // Freeze the last confirmed interval, then join approved delayed PCM while the
             // producing runtime and writers still exist. Uncertain tail audio is discarded.
-            activeCapture.microphoneControl?.finish()
+            activeCapture.microphoneControl?.beginFinishing()
             await activeCapture.muteMonitor?.stop()
+            activeCapture.microphoneControl?.finish()
             await activeCapture.privacyGate?.stop()
             #if DEBUG
             AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .runtimeStop)

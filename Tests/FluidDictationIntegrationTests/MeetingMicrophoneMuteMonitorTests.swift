@@ -618,7 +618,7 @@ final class MeetingCallObservationServiceTests: XCTestCase {
         await service.shutdown()
     }
 
-    func testConcurrentStopJoinsSameNativeRetirementAndFencesDeliveryFirst() async throws {
+    func testConcurrentStopDrainsNegativesAndJoinsSameNativeRetirement() async throws {
         let store = CallObservationTestStore(), keys = CallObservationTestKeys()
         let barrier = CallObservationBarrier(); store.stopBarrier = barrier
         let service = self.service(store: store, keys: keys)
@@ -630,9 +630,13 @@ final class MeetingCallObservationServiceTests: XCTestCase {
         let second = Task { await token.stop() }
         microphone.emit(.unmuted)
         XCTAssertTrue(store.delivered.isEmpty)
+        microphone.emit(.muted)
+        XCTAssertEqual(store.delivered, [.muted], "Already admitted negative evidence must reach PCM admission during drain")
         XCTAssertEqual(service.activeMicrophoneObservationCount, 0)
         await barrier.release()
         await first.value; await second.value
+        microphone.emit(.muted)
+        XCTAssertEqual(store.delivered, [.muted], "The delivery fence closes only after the driver joins")
         XCTAssertEqual(microphone.snapshot.3, 1)
         await service.shutdown()
     }

@@ -716,6 +716,67 @@ extension MeetingAudioChunkSinkTests {
 /// Synthetic PCM crosses the actual quarantine and writer, including the writer's second
 /// admission check. No microphone, meeting application, model or shared preferences are used.
 final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
+    @MainActor
+    func testStoppingDrainsQueuedMuteToRealWriterWithoutReopeningAdmission() async throws {
+        let fixture = try Fixture(admissionPolicy: .latchedTransitions)
+        defer { fixture.gate.close(); fixture.removeDirectory() }
+        let gate = fixture.gate, clock = fixture.clock
+        let control = MeetingMicrophoneRecordingControl(gate: gate, hostTime: { clock.now() }, publish: { _ in })
+        let service = MeetingCallObservationService(automaticScheduling: false,
+            microphoneFactory: { _, handler in
+                StopDrainMicrophone(handler: handler, onStop: {
+                    control.setManuallyMuted(true)
+                    control.setManuallyMuted(false)
+                    handler(.init(state: .muted, observedAtHostTime: clock.now(), generation: 1,
+                                  unsafeStartHostTime: Clock.ticks(1_001.49)))
+                    // This later positive cannot reopen the epoch while finishing.
+                    handler(.init(state: .unmuted, observedAtHostTime: clock.now(), generation: 1))
+                })
+            }, keyListenerFactory: { _ in StopDrainKeys() })
+        let token = service.makeMicrophoneObservation(application: nil, handler: control.observe)
+        try token.start()
+        clock.set(1_000.12)
+        let confirmed = try self.sample(marker: 0.25, at: 1_000.1)
+        XCTAssertTrue(gate.submit(confirmed, deliveryQueue: fixture.deliveryQueue) { fixture.writer.enqueue($0) })
+        clock.set(1_001.3); gate.checkFreshnessAndDrain(); fixture.deliveryQueue.sync {}
+        _ = await fixture.writer.snapshot()
+        clock.set(1_001.52)
+        let privateTail = try self.sample(marker: 0.9, at: 1_001.5)
+        XCTAssertTrue(gate.submit(privateTail, deliveryQueue: fixture.deliveryQueue) { fixture.writer.enqueue($0) })
+        clock.set(1_001.72)
+        control.beginFinishing()
+        await token.stop()
+        XCTAssertFalse(gate.permitsReleasedSample(privateTail))
+        // Check the controller independently of the service's positive fence as well.
+        control.observe(.init(state: .unmuted, observedAtHostTime: clock.now(), generation: 1))
+        XCTAssertFalse(gate.permitsReleasedSample(privateTail))
+        control.finish()
+        await gate.stop()
+        let result = await fixture.writer.stop()
+        await service.shutdown()
+        let persisted = try self.readSamples(result, in: fixture.directory)
+        XCTAssertEqual(persisted, [Float](repeating: 0.25, count: 480),
+                       "Stop preserves confirmed speech and removes the queued release tail")
+        XCTAssertEqual(fixture.observations.writerFailures, 0)
+    }
+
+    private final nonisolated class StopDrainMicrophone: MeetingMicrophoneObservationPolling, @unchecked Sendable {
+        let handler: MeetingMicrophoneMuteMonitor.Handler
+        let onStop: @Sendable () -> Void
+        init(handler: @escaping MeetingMicrophoneMuteMonitor.Handler, onStop: @escaping @Sendable () -> Void) {
+            self.handler = handler; self.onStop = onStop
+        }
+        func start(externallyDriven: Bool) {}
+        func requestPoll() {}
+        func handleSharedPTT(_ event: MeetingMutePTTListener.Event) {}
+        func stop() async { self.onStop() }
+    }
+
+    private final nonisolated class StopDrainKeys: MeetingCallKeyListening, @unchecked Sendable {
+        func start() -> Bool { false }
+        func stop() {}
+    }
+
     func testManualAndMeetingMuteExcludeRealWriterAndDiagnosticsThenResumeWithoutReplay() async throws {
         let finalized = self.expectation(description: "The first real PCM epoch finalized")
         finalized.assertForOverFulfill = false

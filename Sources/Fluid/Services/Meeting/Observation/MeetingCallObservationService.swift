@@ -52,10 +52,17 @@ final class MeetingCallObservationService {
     private final nonisolated class DeliveryFence: @unchecked Sendable {
         private let lock = NSLock()
         private var open = true
+        private var draining = false
+        func beginDraining() { self.lock.withLock { self.draining = true } }
         func close() { self.lock.withLock { self.open = false } }
         func deliver(_ observation: MeetingMicrophoneMuteObservation,
                      to handler: MeetingMicrophoneMuteMonitor.Handler) {
-            self.lock.withLock { if self.open { handler(observation) } }
+            self.lock.withLock {
+                guard self.open else { return }
+                let subtractsApproval = observation.state == .muted ||
+                    (observation.unsafeStartHostTime != nil && observation.refinementUntilHostTime != nil)
+                if !self.draining || subtractsApproval { handler(observation) }
+            }
         }
     }
 
@@ -136,14 +143,17 @@ final class MeetingCallObservationService {
     fileprivate func stopMicrophone(id: UUID) async {
         if let stopping = self.stoppingMicrophones[id] { await stopping.value; return }
         guard let observation = self.microphones.removeValue(forKey: id) else { return }
-        observation.delivery.close()
+        observation.delivery.beginDraining()
         self.keyRouter.remove(id: id)
         if self.microphones.isEmpty {
             self.keyListener?.stop()
             self.keyListener = nil
         }
         self.reconcileScheduler()
-        let stopping = Task { await observation.driver.stop() }
+        let stopping = Task {
+            await observation.driver.stop()
+            observation.delivery.close()
+        }
         self.stoppingMicrophones[id] = stopping
         await stopping.value
         self.stoppingMicrophones[id] = nil
