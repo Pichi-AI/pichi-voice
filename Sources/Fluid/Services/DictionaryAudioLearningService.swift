@@ -2,6 +2,7 @@
 import FluidAudio
 #endif
 import Foundation
+import CryptoKit
 
 /// Existing correction UI owns approval. This service owns only the optional background evidence.
 @MainActor
@@ -23,6 +24,7 @@ final class DictionaryAudioLearningService {
         let explicitHistory: Bool
         let expiresAt: Date
         let pronunciationGeneration: String
+        let retainedEvidenceBytes: Int
     }
 
     private let store: PronunciationDictionaryStore
@@ -97,13 +99,67 @@ final class DictionaryAudioLearningService {
         evidence: DictionaryLearningAudioEvidence
     ) {
         guard !evidence.samples.isEmpty, evidence.samples.count <= 238_080 else { return }
-        self.enqueue(entry: entry, evidenceID: evidenceID, explicitHistory: false, isValid: { true }, prepare: { evidence })
+        self.enqueue(entry: entry, evidenceID: evidenceID, explicitHistory: false,
+            retainedEvidenceBytes: Self.retainedBytes(evidence), isValid: { true }, prepare: { evidence })
+    }
+
+    /// A completed correction already approves the spelling. Keep original-audio
+    /// publication in this worker, including retries, cancellation and profile ownership.
+    @discardableResult
+    func learnCorrection(
+        candidate: AutomaticDictionaryCorrectionCandidate,
+        evidence: DictionaryLearningAudioEvidence,
+        evidenceID: UUID = UUID(),
+        isValid: @escaping @MainActor () -> Bool
+    ) -> Bool {
+        let label = candidate.correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard SettingsStore.shared.automaticDictionaryLearningEnabled,
+              DictionaryCorrectionEditPolicy.isTerm(label) else { return false }
+        guard let entry = Self.correctionTarget(label: label, entries: SettingsStore.shared.customDictionaryEntries) else { return false }
+        let wasNew = !SettingsStore.shared.customDictionaryEntries.contains(entry)
+        let eligible: @MainActor () -> Bool = {
+            guard SettingsStore.shared.automaticDictionaryLearningEnabled, isValid() else { return false }
+            let current = SettingsStore.shared.customDictionaryEntries.filter {
+                $0.id == entry.id || $0.replacement.caseInsensitiveCompare(entry.replacement) == .orderedSame
+            }
+            return current.isEmpty ? wasNew : current.count == 1 && current[0] == entry
+        }
+        return self.enqueue(entry: entry, evidenceID: evidenceID, explicitHistory: false,
+            retainedEvidenceBytes: Self.retainedBytes(evidence), isValid: eligible,
+            isCurrentBeforePreparation: eligible, publishTarget: {
+                guard eligible() else { return .rejected }
+                if SettingsStore.shared.customDictionaryEntries.contains(entry) { return .unchanged }
+                SettingsStore.shared.customDictionaryEntries.append(entry)
+                return .created
+            }, didPublishTarget: {
+                ASRService.invalidateDictionaryCache()
+                DictionaryEntriesChangeNotice.post()
+            }, prepare: { evidence })
+    }
+
+    private static func retainedBytes(_ evidence: DictionaryLearningAudioEvidence) -> Int {
+        let featureValues = evidence.featureFrames.reduce(0) { $0 + $1.frames.values.count }
+        return (evidence.samples.count + featureValues) * MemoryLayout<Float>.size
+    }
+
+    static func correctionTarget(label: String, entries: [SettingsStore.CustomDictionaryEntry]) -> SettingsStore.CustomDictionaryEntry? {
+        guard DictionaryCorrectionEditPolicy.isTerm(label) else { return nil }
+        let matches = entries.filter { $0.replacement.caseInsensitiveCompare(label) == .orderedSame }
+        guard matches.count <= 1 else { return nil }
+        if let existing = matches.first { return existing }
+        var bytes = Array(SHA256.hash(data: Data(("history-acoustic-entry:" + label.lowercased()).utf8)).prefix(16))
+        bytes[6] = (bytes[6] & 0x0f) | 0x80
+        bytes[8] = (bytes[8] & 0x3f) | 0x80
+        let identifier = UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                                     bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
+        return SettingsStore.CustomDictionaryEntry(id: identifier, triggers: [], replacement: label)
     }
 
     /// History preparation shares the same bounded, joined, profile-owned worker as enrollment.
     @discardableResult
     func enqueue(
         entry: SettingsStore.CustomDictionaryEntry, evidenceID: UUID, explicitHistory: Bool = true,
+        retainedEvidenceBytes: Int = 0,
         isValid: @escaping @MainActor () -> Bool,
         isCurrentBeforePreparation: (@MainActor () -> Bool)? = nil,
         publishTarget: (@MainActor () -> TargetPublication)? = nil,
@@ -114,8 +170,11 @@ final class DictionaryAudioLearningService {
               DictionaryMatcherExperiment.sharedFeaturesEnabled, isValid() else { return false }
         guard !self.queue.contains(where: { $0.evidenceID == evidenceID }) else { return false }
         self.pruneExpired()
-        // Four short clips bound queued PCM to less than 4 MB. The text correction is already independent.
-        guard self.queue.count < 4 else {
+        // History requests retain metadata only; observed edits retain resolved clips.
+        // Allow a burst of sequential corrections while bounding both count and bytes.
+        let maximumRetainedBytes = 128 * 1024 * 1024
+        guard self.queue.count < 32, retainedEvidenceBytes >= 0,
+              retainedEvidenceBytes <= maximumRetainedBytes - self.queue.reduce(0, { $0 + $1.retainedEvidenceBytes }) else {
             DebugLogger.shared.warning(
                 "Audio learning queue full; text correction retained",
                 source: "DictionaryLearning"
@@ -132,7 +191,8 @@ final class DictionaryAudioLearningService {
             didPublishTarget: didPublishTarget,
             explicitHistory: explicitHistory,
             expiresAt: Date().addingTimeInterval(self.lifetime),
-            pronunciationGeneration: DictionaryMatcherExperiment.generation
+            pronunciationGeneration: DictionaryMatcherExperiment.generation,
+            retainedEvidenceBytes: retainedEvidenceBytes
         ))
         self.drain()
         self.scheduleExpiry()

@@ -3645,6 +3645,82 @@ private actor DictionaryLearningTestExtractor {
 }
 
 extension DictationE2ETests {
+    func testCompletedCorrectionsPublishAudioBeforeEntriesAndSurviveNextCorrection() async throws {
+        let settings = SettingsStore.shared
+        let previousEntries = settings.customDictionaryEntries
+        let previousEnabled = settings.automaticDictionaryLearningEnabled
+        defer {
+            settings.customDictionaryEntries = previousEntries
+            settings.automaticDictionaryLearningEnabled = previousEnabled
+        }
+        settings.automaticDictionaryLearningEnabled = true
+        for revokeFirst in [false, true] {
+            settings.customDictionaryEntries = []
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+            var idle = false
+            var firstValid = true
+            let worker = DictionaryAudioLearningService(store: store,
+                extract: { evidence in PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: evidence.modelKey) },
+                canProcess: { idle })
+            let published = expectation(description: "Every accepted correction published after audio persistence")
+            published.expectedFulfillmentCount = revokeFirst ? 4 : 5
+            let observer = NotificationCenter.default.addObserver(forName: .parakeetVocabularyDidChange, object: nil, queue: .main) { notice in
+                if !DictionaryEntriesChangeNotice.requiresVocabularyReload(notice) { published.fulfill() }
+            }
+            defer { NotificationCenter.default.removeObserver(observer) }
+            func evidence(_ heard: String) -> DictionaryLearningAudioEvidence {
+                DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: heard,
+                    sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
+            }
+            let first = evidence("fooo"), second = evidence("baad")
+            XCTAssertTrue(worker.learnCorrection(candidate: .init(heardText: "fooo", correctedText: "Foo"),
+                evidence: first, isValid: { firstValid }))
+            XCTAssertTrue(worker.learnCorrection(candidate: .init(heardText: "baad", correctedText: "Bad"),
+                evidence: second, isValid: { true }))
+            for label in ["Third", "Fourth", "Fifth"] {
+                XCTAssertTrue(worker.learnCorrection(candidate: .init(heardText: "mistyped", correctedText: label),
+                    evidence: evidence("mistyped"), isValid: { true }))
+            }
+            XCTAssertTrue(settings.customDictionaryEntries.isEmpty, "No empty entry may precede persisted original audio")
+            firstValid = !revokeFirst
+            idle = true
+            worker.activityDidEnd()
+            // Wait for completed publications, not a fixed number of scheduler turns.
+            // A cold settings subscriber can delay the first multi-entry disk batch.
+            await fulfillment(of: [published], timeout: 5)
+            XCTAssertEqual(worker.pendingCount, 0)
+            let profiles = await store.allProfiles()
+            XCTAssertEqual(profiles.count, revokeFirst ? 4 : 5)
+            let expected = Set(["Bad", "Third", "Fourth", "Fifth"] + (revokeFirst ? [] : ["Foo"]))
+            XCTAssertEqual(Set(settings.customDictionaryEntries.map(\.replacement)), expected)
+            XCTAssertTrue(settings.customDictionaryEntries.allSatisfy { $0.triggers.isEmpty })
+            XCTAssertTrue(profiles.allSatisfy { $0.enrollments.count == 1 })
+            await worker.prepareForPrivateProfileTransition()
+        }
+    }
+
+    func testSequentialCorrectionsKeepOriginalRepeatedAudioOccurrence() throws {
+        let original = "fooo then baad and fooo"
+        let words = original.split(separator: " ").enumerated().map {
+            ASRWordTiming(text: String($0.element), start: Double($0.offset) * 0.2, end: Double($0.offset + 1) * 0.2)
+        }
+        let recording = try XCTUnwrap(DictionaryLearningRecording(alignment: .init(modelKey: "parakeet-v3", words: words), samples: Array(repeating: 0, count: 16_000)))
+        var map = DictionaryCorrectionTextMap(originalText: original)
+        let plan = try XCTUnwrap(DictionaryCorrectionReplacementPlan(sourceText: original, range: (original as NSString).range(of: "fooo"), replacement: "Foo"))
+        for range in plan.ranges.reversed() { XCTAssertTrue(map.replace(range: range, replacement: "Foo")) }
+        let next = try XCTUnwrap(map.originalRange(for: (map.text as NSString).range(of: "baad")))
+        let evidence = try DictionaryLearningAlignmentResolver.resolve(recording: recording, deliveredTextBeforeEdit: original,
+            selectedUTF16Range: next, observedText: "baad")
+        XCTAssertEqual(evidence.sourceWordRange, 2..<3)
+        let repeated = try XCTUnwrap(map.originalRange(for: (map.text as NSString).range(of: "Foo", options: .backwards)))
+        let last = try DictionaryLearningAlignmentResolver.resolve(recording: recording, deliveredTextBeforeEdit: original,
+            selectedUTF16Range: repeated, observedText: "fooo")
+        XCTAssertEqual(last.sourceWordRange, 4..<5)
+        XCTAssertEqual(last.focalSampleRange.lowerBound + last.sourceSampleRange.lowerBound, 12_800)
+    }
+
     func testDictionaryLearningDefersToDictationAndRetriesOnce() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -4092,10 +4168,10 @@ extension DictationE2ETests {
             canProcess: { false },
             isCurrent: { _ in true }
         )
-        for _ in 0..<6 {
+        for _ in 0..<34 {
             service.learn(entry: entry, evidenceID: UUID(), evidence: evidence)
         }
-        XCTAssertEqual(service.pendingCount, 4)
+        XCTAssertEqual(service.pendingCount, 32)
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(service.pendingCount, 0)
         let profiles = await store.allProfiles()
