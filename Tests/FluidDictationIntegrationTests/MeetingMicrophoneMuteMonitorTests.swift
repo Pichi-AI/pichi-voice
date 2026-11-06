@@ -835,6 +835,23 @@ private final nonisolated class RecordedCallStatus: MeetingRenderedAudioStatusOb
 /// Sanitized control subsets observed with CUA on 2026-11-06, not fabricated platform labels.
 /// Dynamic room IDs, process/window IDs, participant names and messages are excluded.
 final class MeetingRecordedCommunicationSurfaceTests: XCTestCase {
+    func testNativeScalarValueReachesDeclaredToggleSelector() throws {
+        let module = try SemanticCommunicationModule(descriptor: .init(id: "observed.toggle", displayName: "Native scalar boundary",
+            nativeBundleIdentifiers: ["test.native.call"], callRules: .init(connected: [.init(identifier: "leave")]),
+            microphoneRules: .init(
+                muted: [.init(role: "AXCheckBox", identifier: "self-mic", expectedValue: "0")],
+                unmuted: [.init(role: "AXCheckBox", identifier: "self-mic", expectedValue: "1")])) )
+        for (raw, state) in [(NSNumber(value: false), CommunicationMicrophoneState.muted), (NSNumber(value: true), .unmuted)] {
+            let snapshot = CommunicationObservationSnapshot(bundleIdentifier: "test.native.call", processID: 42, windowID: 77,
+                controls: [.init(role: "AXButton", identifier: "leave"),
+                    .init(role: "AXCheckBox", identifier: "self-mic", value: MeetingCommunicationAXValue.string(raw))])
+            XCTAssertEqual(module.evaluate(snapshot).microphoneState, state)
+        }
+        XCTAssertEqual(MeetingCommunicationAXValue.string(NSNumber(value: 2)), "2")
+        XCTAssertNil(MeetingCommunicationAXValue.string(NSNumber(value: Double.nan)))
+        XCTAssertNil(MeetingCommunicationAXValue.string(["untrusted": "1"]))
+        XCTAssertNil(MeetingCommunicationAXValue.string(String(repeating: "x", count: 1_025)))
+    }
     private func evidence(bundle: String = "com.google.Chrome", url: String?, controls: [CommunicationControlSnapshot]) -> CommunicationModuleEvidence? {
         MeetingCommunicationModuleHost.snapshot.registry.resolve(snapshot: .init(bundleIdentifier: bundle,
             processID: 42, windowID: 77, documentURL: url,

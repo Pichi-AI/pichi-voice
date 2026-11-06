@@ -26,6 +26,18 @@ nonisolated enum MeetingCommunicationAXTraversal {
     }
 }
 
+/// AX checkbox/switch values are numeric CF scalars, not NSString. Normalize the scalar at
+/// the native boundary so descriptor expectedValue rules can consume actual 0/1/2 values.
+nonisolated enum MeetingCommunicationAXValue {
+    static func string(_ value: Any?) -> String? {
+        let text: String?
+        if let value = value as? String { text = value }
+        else if let value = value as? NSNumber, value.doubleValue.isFinite { text = value.stringValue }
+        else { text = (value as? URL)?.absoluteString }
+        return text.flatMap { $0.utf8.count <= 1_024 ? $0 : nil }
+    }
+}
+
 /// Shared, bounded native reader. Discovery scans once per second; active reads use only
 /// validated cached call controls. Text inputs, chat text and participant names are not sampled.
 final nonisolated class MeetingCommunicationAXProbe: MeetingCommunicationObservationReading, @unchecked Sendable {
@@ -151,7 +163,7 @@ final nonisolated class MeetingCommunicationAXProbe: MeetingCommunicationObserva
             .compactMap { try reader.string(element, $0 as String) }.filter { $0.utf8.count <= 1024 }
         return .init(role: try reader.string(element, kAXRoleAttribute as String) ?? "",
             identifier: try reader.string(element, kAXIdentifierAttribute as String), labels: labels,
-            value: try reader.string(element, kAXValueAttribute as String), ancestorIdentifiers: ancestors)
+            value: MeetingCommunicationAXValue.string(try reader.value(element, kAXValueAttribute as String)), ancestorIdentifiers: ancestors)
     }
 
     private func discoverControls(root: AXUIElement, prefix: [AXUIElement], reader: inout MeetingMuteControlLocator.Reader) throws -> [CachedControl] {
