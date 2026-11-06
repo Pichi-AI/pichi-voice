@@ -49,6 +49,7 @@ struct CustomDictionaryView: View {
     @State private var editingEntry: SettingsStore.CustomDictionaryEntry?
     @State private var savedVoiceSummaries: [UUID: DictionarySavedAudioSummary] = [:]
     @State private var savedVoiceRevision: UInt64 = 0
+    @State private var savedRecordingsEntry: SettingsStore.CustomDictionaryEntry?
 
     private var voiceCountRequest: String {
         self.profile.generation.uuidString + String(self.savedVoiceRevision) + self.entries.map { "\($0.id):\($0.replacement)" }.joined(separator: "|")
@@ -364,6 +365,14 @@ struct CustomDictionaryView: View {
             self.dictionaryDrawerToggle
         }
         .dismissTextFocusOnBackgroundTap()
+        .sheet(item: self.$savedRecordingsEntry) { entry in
+            DictionarySavedSamplesView(entry: entry, asr: self.asr)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openCustomDictionaryFromVoiceEngine).receive(on: RunLoop.main)) { notice in
+            guard self.isProfileVisible, let id = notice.object as? UUID,
+                  let entry = SettingsStore.shared.customDictionaryEntries.first(where: { $0.id == id }) else { return }
+            self.savedRecordingsEntry = entry
+        }
         .task(id: self.revealTarget) {
             self.revealSearchTarget()
         }
@@ -387,6 +396,7 @@ struct CustomDictionaryView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)) { _ in
             self.savedVoiceSummaries = [:]
+            self.savedRecordingsEntry = nil
         }
         .task(id: self.pronunciationRevisionNoticeRequest) {
             self.pronunciationRevisionNotice = nil
@@ -605,12 +615,16 @@ struct CustomDictionaryView: View {
                                 self.isWordDrawerPresented = false
                             },
                             onEdit: { self.editingEntry = entry },
-                            onDelete: { self.drawerDeletion = entry }
+                            onDelete: { self.drawerDeletion = entry },
+                            onRecordings: { self.savedRecordingsEntry = entry }
                         )
                         .contextMenu {
                             Button("Edit…") { self.editingEntry = entry }
                             Button("Record pronunciation") { self.recordMorePronunciations(for: entry) }
                                 .disabled(self.isManualEntryBlocked || !self.activePronunciationMatching)
+                            if (self.savedVoiceSummaries[entry.id]?.count ?? 0) > 0 {
+                                Button("Saved recordings") { self.savedRecordingsEntry = entry }
+                            }
                             Button("Remove word", role: .destructive) { self.drawerDeletion = entry }
                         }
                         Divider().opacity(0.3)
@@ -1282,6 +1296,7 @@ struct CustomDictionaryView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     DictionaryEntryRow(
                         entry: entry,
+                        heardVariants: self.savedVoiceSummaries[entry.id]?.heardVariants ?? [],
                         onEdit: {
                             self.closeYourDictionary()
                             self.editingEntry = entry
@@ -1289,7 +1304,10 @@ struct CustomDictionaryView: View {
                         onDelete: { self.deleteEntry(entry) }
                     )
                     if let summary = self.savedVoiceSummaries[entry.id] {
-                        DictionarySavedAudioSummaryView(summary: summary)
+                        DictionarySavedAudioSummaryView(summary: summary, onManage: {
+                            self.closeYourDictionary()
+                            self.savedRecordingsEntry = entry
+                        })
                     }
                 }
             }
@@ -4074,6 +4092,7 @@ struct BoostTermRow: View {
 
 struct DictionaryEntryRow: View {
     let entry: SettingsStore.CustomDictionaryEntry
+    var heardVariants: [String] = []
     let onEdit: () -> Void
     let onDelete: () -> Void
 
@@ -4081,25 +4100,14 @@ struct DictionaryEntryRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: self.theme.metrics.spacing.sm) {
-            FlowLayout(spacing: 4) {
-                ForEach(self.entry.triggers, id: \.self) { trigger in
-                    Text(trigger)
-                        .font(self.theme.typography.caption)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(RoundedRectangle(cornerRadius: 4).fill(.quaternary))
-                }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(CustomDictionaryManualEntry.replacementDisplayText(self.entry.replacement))
+                    .font(self.theme.typography.bodySmallStrong)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                DictionarySavedSpellingsView(entry: self.entry, heardVariants: self.heardVariants)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            Image(systemName: "arrow.right")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.tertiaryText)
-
-            Text(CustomDictionaryManualEntry.replacementDisplayText(self.entry.replacement))
-                .font(self.theme.typography.bodySmallStrong)
-                .foregroundStyle(self.theme.palette.accentText)
-                .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 2) {
                 Button {

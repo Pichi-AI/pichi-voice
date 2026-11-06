@@ -30,6 +30,11 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     @Published private(set) var hasError = false
     @Published private(set) var successTitle = "Added to Dictionary"
     @Published private(set) var isAutomaticCaptureEnabled = false
+    @Published private(set) var isUndoingSavedCorrection = false
+    @Published private(set) var didUndoSavedCorrection = false
+
+    private(set) var savedCorrection: DictionaryAudioLearningService.SavedCorrection?
+    var isSavedCorrection: Bool { self.savedCorrection != nil }
 
     var onInteraction: (() -> Void)?
     var onSuccess: (() -> Void)?
@@ -48,6 +53,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     private var trainingGeneration: String?
     private var activeCaptureToken: Int?
     private var pronunciationSettingsObserver: AnyCancellable?
+    private var undoTask: Task<Void, Never>?
 
     private var trainingRunIsCurrent: Bool {
         !self.isProfileVisible ? self.trainingGeneration != nil :
@@ -57,11 +63,13 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     init(
         candidate: AutomaticDictionaryCorrectionCandidate,
         asr: ASRService,
-        audioLearning: DictionaryAudioLearningService? = nil
+        audioLearning: DictionaryAudioLearningService? = nil,
+        savedCorrection: DictionaryAudioLearningService.SavedCorrection? = nil
     ) {
         self.candidate = candidate
         self.asr = asr
         self.audioLearning = audioLearning ?? .shared
+        self.savedCorrection = savedCorrection
 
         let replacement = CustomDictionaryTrainingMerge.normalizedReplacement(candidate.correctedText)
         let savedVariants = SettingsStore.shared.customDictionaryEntries
@@ -71,6 +79,10 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
             from: savedVariants + [candidate.heardText],
             intendedReplacement: replacement
         )
+        if savedCorrection != nil {
+            self.screen = .success
+            self.successTitle = "Saved to Dictionary"
+        }
         // Observe the generation too: SwiftUI may coalesce a rapid OFF then ON.
         self.pronunciationSettingsObserver = NotificationCenter.default.publisher(for: DictionaryMatcherExperiment.didChangeNotification)
             .sink { [weak self] _ in
@@ -83,6 +95,49 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
 
     var intendedText: String {
         CustomDictionaryTrainingMerge.normalizedReplacement(self.candidate.correctedText)
+    }
+
+    func undoSavedCorrection() {
+        guard let receipt = self.savedCorrection, receipt.isCurrent, self.isProfileVisible,
+              !self.isCancelled, !self.isUndoingSavedCorrection, !self.didUndoSavedCorrection else { return }
+        self.onInteraction?()
+        self.isUndoingSavedCorrection = true
+        self.hasError = false
+        self.statusMessage = ""
+        self.undoTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isUndoingSavedCorrection = false; self.undoTask = nil }
+            do {
+                let removed = try await self.audioLearning.undoSavedCorrection(receipt)
+                guard !Task.isCancelled, !self.isCancelled, self.isProfileVisible,
+                      self.savedCorrection?.id == receipt.id else { return }
+                self.didUndoSavedCorrection = true
+                self.successTitle = removed ? "Save undone" : "Save already removed"
+                self.onSuccess?()
+            } catch {
+                guard !Task.isCancelled, !self.isCancelled, self.isProfileVisible,
+                      self.savedCorrection?.id == receipt.id else { return }
+                self.hasError = true
+                self.statusMessage = "Couldn't undo this save. Try again."
+            }
+        }
+    }
+
+    func openSavedDictionary() {
+        guard let receipt = self.savedCorrection, receipt.isCurrent, self.isProfileVisible,
+              !self.isCancelled, !self.isUndoingSavedCorrection else { return }
+        self.onInteraction?()
+        NotificationCenter.default.post(name: .openCustomDictionaryFromVoiceEngine, object: receipt.entry.id)
+        self.onOpenDictionary?()
+    }
+
+    /// Conceal private notice data synchronously; the shared worker owns any
+    /// already-admitted undo and its joined profile retirement.
+    func concealSavedCorrection() {
+        guard self.isSavedCorrection else { return }
+        self.savedCorrection = nil
+        self.isCancelled = true
+        self.undoTask?.cancel()
     }
 
     var readinessProgress: Int {
@@ -277,6 +332,8 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
 
     func cancel() {
         self.isCancelled = true
+        self.undoTask?.cancel()
+        guard !self.isSavedCorrection else { return }
         self.trainingGeneration = nil
         self.discardCurrentCapture = true
         self.isAutomaticCaptureEnabled = false
@@ -294,6 +351,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     func disablePronunciationTraining() {
+        guard !self.isSavedCorrection else { return }
         self.trainingGeneration = nil
         self.discardCurrentCapture = true
         self.isAutomaticCaptureEnabled = false
