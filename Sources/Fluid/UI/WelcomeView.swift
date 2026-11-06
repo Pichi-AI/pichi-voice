@@ -93,6 +93,8 @@ struct OnboardingFlowView: View {
     @State private var lastOnboardingMicrophoneLevelUpdate: TimeInterval = 0
     @State private var microphonePreviewTask: Task<Void, Never>?
     @State private var ownerVoiceStartTask: Task<Void, Never>?
+    @State private var ownerVoiceSpeechRestoreTask: Task<Void, Never>?
+    @State private var ownerVoiceSpeechModelToRestore: SettingsStore.SpeechModel?
     @State private var microphonePreviewGeneration: UInt64 = 0
     @State private var onboardingMicrophoneRefreshGeneration: UInt64 = 0
     @State private var isOnboardingFlowVisible = false
@@ -226,7 +228,7 @@ struct OnboardingFlowView: View {
     }
 
     private var isOwnerVoiceBusy: Bool {
-        self.ownerVoiceStartTask != nil || self.ownerVoice.isBusy
+        self.ownerVoiceStartTask != nil || self.ownerVoiceSpeechRestoreTask != nil || self.ownerVoice.isBusy
     }
 
     private var progressValue: Double {
@@ -446,6 +448,8 @@ struct OnboardingFlowView: View {
         .onChange(of: self.currentStep) { _, _ in
             if self.step != .ownerVoice {
                 self.ownerVoiceStartTask?.cancel()
+                self.ownerVoiceSpeechRestoreTask?.cancel()
+                self.ownerVoiceSpeechModelToRestore = nil
                 self.ownerVoice.cancelIfVisible()
             }
             if self.step != .voiceModel {
@@ -461,6 +465,9 @@ struct OnboardingFlowView: View {
                 self.step.analyticsStep,
                 origin: self.settings.analyticsOnboardingOrigin
             )
+        }
+        .onChange(of: self.ownerVoice.phase) { _, _ in
+            if !self.ownerVoice.isBusy { self.restoreSpeechAfterOwnerVoiceIfNeeded() }
         }
         .onChange(of: self.isMicrophoneReady) { _, isReady in
             guard self.step == .permissions else { return }
@@ -492,6 +499,8 @@ struct OnboardingFlowView: View {
         }
         .onDisappear {
             self.ownerVoiceStartTask?.cancel()
+            self.ownerVoiceSpeechRestoreTask?.cancel()
+            self.ownerVoiceSpeechModelToRestore = nil
             self.ownerVoice.cancelIfVisible()
             self.isOnboardingFlowVisible = false
             self.onboardingMicrophoneRefreshGeneration &+= 1
@@ -2323,13 +2332,44 @@ struct OnboardingFlowView: View {
             defer { self.ownerVoiceStartTask = nil }
             await previewStop?.value
             guard !Task.isCancelled, self.isOnboardingFlowVisible, self.step == .ownerVoice else { return }
+            self.ownerVoiceSpeechModelToRestore = self.settings.selectedSpeechModel
             self.ownerVoice.start(microphone: microphone)
         }
     }
 
     private func cancelOwnerVoiceEnrollment() {
         self.ownerVoiceStartTask?.cancel()
+        self.ownerVoiceSpeechRestoreTask?.cancel()
         self.ownerVoice.cancel()
+    }
+
+    private func restoreSpeechAfterOwnerVoiceIfNeeded() {
+        guard self.ownerVoiceSpeechRestoreTask == nil, let model = self.ownerVoiceSpeechModelToRestore else { return }
+        guard self.isOnboardingFlowVisible, self.step == .ownerVoice,
+              self.settings.selectedSpeechModel == model else {
+            self.ownerVoiceSpeechModelToRestore = nil
+            return
+        }
+        guard !self.asr.isAsrReady else { self.ownerVoiceSpeechModelToRestore = nil; return }
+        // Shared audio handback may leave ASR cold while optional AI preparation holds
+        // ordinary residency. Use normal onboarding readiness after enrollment has joined.
+        self.ownerVoiceSpeechRestoreTask = Task { @MainActor in
+            defer { self.ownerVoiceSpeechRestoreTask = nil }
+            do {
+                try Task.checkCancellation()
+                guard self.isOnboardingFlowVisible, self.step == .ownerVoice,
+                      self.settings.selectedSpeechModel == model else { return }
+                try await self.asr.ensureAsrReady(source: .onboarding)
+                try Task.checkCancellation()
+                if self.settings.selectedSpeechModel == model { self.ownerVoiceSpeechModelToRestore = nil }
+            } catch {
+                guard !Task.isCancelled, self.isOnboardingFlowVisible, self.step == .ownerVoice,
+                      self.settings.selectedSpeechModel == model else { return }
+                self.asr.errorTitle = PichiLocalization.text("Voice Model Setup Failed")
+                self.asr.errorMessage = error.localizedDescription
+                self.asr.showError = true
+            }
+        }
     }
 
     private func goBack() {
@@ -2341,6 +2381,10 @@ struct OnboardingFlowView: View {
 
     private func goNext(outcome: AnalyticsOnboardingOutcome = .continued) {
         guard !self.isOwnerVoiceBusy else { return }
+        if self.step == .ownerVoice, self.ownerVoiceSpeechModelToRestore != nil, !self.asr.isAsrReady {
+            self.restoreSpeechAfterOwnerVoiceIfNeeded()
+            return
+        }
         self.completeCurrentStep(outcome: outcome)
         self.activeShortcutRecordingTarget = nil
         self.shortcutRecordingMessage = nil
@@ -2490,6 +2534,9 @@ private extension OnboardingFlowView {
                         if self.ownerVoiceStartTask != nil {
                             ProgressView(PichiLocalization.text("Preparing microphone…"))
                         }
+                        if self.ownerVoiceSpeechRestoreTask != nil {
+                            ProgressView(PichiLocalization.text("Loading..."))
+                        }
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, self.theme.metrics.spacing.xxl)
@@ -2505,11 +2552,13 @@ private extension OnboardingFlowView {
     @ViewBuilder private var ownerVoiceFooter: some View {
         if !self.isOwnerVoiceBusy {
             let sampleIsReady = self.ownerVoice.phase == .ready
+            let speechNeedsRetry = self.ownerVoiceSpeechModelToRestore != nil && !self.asr.isAsrReady
             self.cinematicFooter(
-                continueTitle: sampleIsReady ? "Save" : self.ownerVoice.hasProfile ? "Continue" : "Record",
+                continueTitle: speechNeedsRetry ? "Try again" : sampleIsReady ? "Save" : self.ownerVoice.hasProfile ? "Continue" : "Record",
                 canContinue: true,
                 continueAction: self.forThisStep {
-                    if sampleIsReady { self.ownerVoice.save() }
+                    if speechNeedsRetry { self.restoreSpeechAfterOwnerVoiceIfNeeded() }
+                    else if sampleIsReady { self.ownerVoice.save() }
                     else if self.ownerVoice.hasProfile { self.goNext(outcome: .completed) }
                     else { self.startOwnerVoiceEnrollment() }
                 },
