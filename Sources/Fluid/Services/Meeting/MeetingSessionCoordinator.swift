@@ -799,12 +799,12 @@ final class MeetingSessionCoordinator: ObservableObject {
             _ = captureOrigin.establish(CMTime(seconds: seconds, preferredTimescale: 1_000_000_000))
         }
         let liveTranscriptionCoordinator = MeetingLiveTranscriptionCoordinator(originBox: captureOrigin,
-            onEmptyRecognition: { [weak self] source, start, end in
+            onResolvedAudioWithoutCaption: { [weak self] source, start, end in
                 CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
                     MainActor.assumeIsolated {
                         guard let self, generation == self.captureGeneration,
                               let capture = self.pendingSpeechCapture else { return }
-                        self.pendingSpeech = capture.acknowledgeEmptyRecognition(source: source, start: start, end: end)
+                        self.pendingSpeech = capture.acknowledgeResolvedAudio(source: source, start: start, end: end)
                     }
                 }
                 CFRunLoopWakeUp(CFRunLoopGetMain())

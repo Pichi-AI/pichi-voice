@@ -741,10 +741,10 @@ nonisolated struct MeetingPendingSpeechProjection {
         }
     }
 
-    /// A retained-file caption worker successfully decoded this interval without text.
-    /// Unlike a cleared partial or silence observation, this is completed processing.
+    /// A caption worker completed this interval without a visible caption (empty final
+    /// or admitted echo suppression). A cleared partial or silence is not completion.
     /// It cannot advance a source prefix across earlier queued or privacy-held speech.
-    mutating func acknowledgeEmptyRecognition(source: MeetingLiveSpeaker, start: Double, end: Double) {
+    mutating func acknowledgeResolvedAudio(source: MeetingLiveSpeaker, start: Double, end: Double) {
         guard snapshot.isCapturing, start.isFinite, end.isFinite, start >= 0, end > start else { return }
         applyCoverage(source: source, start: start, end: end, captionID: nil, visibleUTF16: 0)
         emit(.processedCoverage, source: source, start: start, end: end)
@@ -1031,9 +1031,9 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         }
     }
 
-    func acknowledgeEmptyRecognition(source: MeetingLiveSpeaker, start: Double, end: Double) -> MeetingPendingSpeechSnapshot {
+    func acknowledgeResolvedAudio(source: MeetingLiveSpeaker, start: Double, end: Double) -> MeetingPendingSpeechSnapshot {
         self.lock.withLock {
-            self.projection.acknowledgeEmptyRecognition(source: source, start: start, end: end)
+            self.projection.acknowledgeResolvedAudio(source: source, start: start, end: end)
             return self.projection.snapshot
         }
     }
