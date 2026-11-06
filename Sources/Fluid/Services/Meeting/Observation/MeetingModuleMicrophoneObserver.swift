@@ -107,8 +107,7 @@ final nonisolated class MeetingModuleMicrophoneObserver: MeetingMicrophoneObserv
             case let .modifiersChanged(timestamp, flags):
                 guard let owned = self.ownedChord, !MeetingPTTChordMatcher.modifiersMatch(owned, flags: flags) else { return }
                 self.ownedChord = nil
-                let boundary = timestamp.map(MeetingMicrophoneMuteMonitor.hostTime(nanoseconds:)) ?? now
-                if self.transition.keyUp(processedAt: now, releasedAt: boundary) { self.publish(.muted, at: now, unsafeStart: boundary, refine: true) }
+                self.releasePTT(timestamp: timestamp, processedAt: now)
             case let .key(held, timestamp, code, flags):
                 guard let moduleID = self.moduleID, let chords = self.modules.registration(id: moduleID)?.module.descriptor.pushToTalkChords else { return }
                 if held {
@@ -120,15 +119,19 @@ final nonisolated class MeetingModuleMicrophoneObserver: MeetingMicrophoneObserv
                 } else {
                     guard self.ownedChord?.keyCode == code else { return }
                     self.ownedChord = nil
-                    let boundary = MeetingMuteTransitionState.releaseBoundary(eventTime: timestamp.map(MeetingMicrophoneMuteMonitor.hostTime(nanoseconds:)), processedAt: now)
-                    if self.transition.keyUp(processedAt: now, releasedAt: boundary.unsafeStart > 0 ? boundary.unsafeStart : nil) {
-                        self.publish(.muted, at: now, unsafeStart: boundary.unsafeStart, refine: true)
-                    } else if let resumed = self.transition.historicalReleaseUnmuteAt, let until = self.transition.historicalReleaseUntilAt {
-                        self.publish(.unmuted, at: resumed, unsafeStart: boundary.unsafeStart, until: until, refine: true)
-                    }
+                    self.releasePTT(timestamp: timestamp, processedAt: now)
                 }
             }
         }
+    }
+
+    private func releasePTT(timestamp: UInt64?, processedAt now: UInt64) {
+        guard let observation = self.transition.releaseObservation(
+            eventTime: timestamp.map(MeetingMicrophoneMuteMonitor.hostTime(nanoseconds:)),
+            processedAt: now, generation: self.generation) else { return }
+        self.publish(observation.state, at: observation.observedAtHostTime,
+                     unsafeStart: observation.unsafeStartHostTime,
+                     until: observation.refinementUntilHostTime, refine: true)
     }
 
     func stop() async {

@@ -331,8 +331,7 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         case let .modifiersChanged(timestamp, flags):
             guard let owned = self.ownedChord, !MeetingPTTChordMatcher.modifiersMatch(owned, flags: flags) else { return }
             self.ownedChord = nil
-            let boundary = timestamp.map(Self.hostTime(nanoseconds:)) ?? now
-            if self.transition.keyUp(processedAt: now, releasedAt: boundary) { self.publish(.muted, at: now, unsafeStart: boundary, refineBoundary: true) }
+            self.releasePTT(timestamp: timestamp, processedAt: now)
         case let .key(held, timestamp, code, flags):
             if held {
                 guard let chord = MeetingPTTChordMatcher.chord(in: self.pushToTalkChords, keyCode: code, flags: flags) else { return }
@@ -344,18 +343,18 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
             } else {
                 guard self.ownedChord?.keyCode == code else { return }
                 self.ownedChord = nil
-                let boundary = MeetingMuteTransitionState.releaseBoundary(
-                    eventTime: timestamp.map(Self.hostTime(nanoseconds:)), processedAt: now)
-                if self.transition.keyUp(processedAt: now, releasedAt: boundary.unsafeStart > 0 ? boundary.unsafeStart : nil) {
-                    self.publish(.muted, at: now, unsafeStart: boundary.unsafeStart, refineBoundary: true)
-                } else if let newerUnmute = self.transition.historicalReleaseUnmuteAt,
-                          let scopeEnd = self.transition.historicalReleaseUntilAt {
-                    // Narrow the old temporary epoch without overriding a newer rendered unmute.
-                    self.publish(.unmuted, at: newerUnmute, unsafeStart: boundary.unsafeStart,
-                        refinementUntil: scopeEnd, refineBoundary: true)
-                }
+                self.releasePTT(timestamp: timestamp, processedAt: now)
             }
         }
+    }
+
+    private func releasePTT(timestamp: UInt64?, processedAt now: UInt64) {
+        guard let observation = self.transition.releaseObservation(
+            eventTime: timestamp.map(Self.hostTime(nanoseconds:)), processedAt: now,
+            generation: self.generation) else { return }
+        self.publish(observation.state, at: observation.observedAtHostTime,
+                     unsafeStart: observation.unsafeStartHostTime,
+                     refinementUntil: observation.refinementUntilHostTime, refineBoundary: true)
     }
 
     static func hostTime(nanoseconds: UInt64) -> UInt64 {

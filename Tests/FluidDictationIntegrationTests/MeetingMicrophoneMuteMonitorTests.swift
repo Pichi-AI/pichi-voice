@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import XCTest
 import PichiCallObservation
 @testable import FluidVoice_Debug
@@ -283,6 +284,24 @@ final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
         XCTAssertTrue(state.observe(.muted, at: 140))
         XCTAssertTrue(state.keyUp(processedAt: 150), "A delayed real release still narrows the PCM exclusion boundary")
         XCTAssertEqual(state.state, .muted)
+    }
+
+    func testSharedChordReleaseKeepsHistoricalExclusionAndNewerRenderedUnmute() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 90))
+        state.keyDown(at: 100)
+        XCTAssertTrue(state.observe(.unmuted, at: 110))
+        XCTAssertTrue(state.observe(.muted, at: 125))
+        XCTAssertTrue(state.observe(.unmuted, at: 140))
+        let release = state.releaseObservation(eventTime: 120, processedAt: 150, generation: 7)
+        XCTAssertEqual(release?.state, .unmuted)
+        XCTAssertEqual(release?.observedAtHostTime, 140)
+        XCTAssertEqual(release?.unsafeStartHostTime, 120)
+        XCTAssertEqual(release?.refinementUntilHostTime, 140)
+        XCTAssertEqual(release?.generation, 7)
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertNil(state.releaseObservation(eventTime: 151, processedAt: 160, generation: 7),
+                     "The later physical key-up must not create a second grant or exclusion")
     }
 
     func testDelayedKeyUpDoesNotOverrideNewerRenderedMuteUnmuteCycle() {
@@ -765,17 +784,55 @@ private final nonisolated class ModuleObserverTestProbe: MeetingCommunicationObs
 
 private final nonisolated class ModuleObserverTestCapture: @unchecked Sendable {
     private let lock = NSLock()
-    private var values: [MeetingMicrophoneMuteState] = []
+    private var values: [MeetingMicrophoneMuteObservation] = []
     private let arrivals: [XCTestExpectation]
     init(_ arrivals: [XCTestExpectation]) { self.arrivals = arrivals }
     func append(_ observation: MeetingMicrophoneMuteObservation) {
-        let index = self.lock.withLock { self.values.append(observation.state); return self.values.count - 1 }
+        let index = self.lock.withLock { self.values.append(observation); return self.values.count - 1 }
         if index < self.arrivals.count { self.arrivals[index].fulfill() }
     }
-    var states: [MeetingMicrophoneMuteState] { self.lock.withLock { self.values } }
+    var states: [MeetingMicrophoneMuteState] { self.lock.withLock { self.values.map(\.state) } }
+    var observations: [MeetingMicrophoneMuteObservation] { self.lock.withLock { self.values } }
 }
 
 final class MeetingModuleMicrophoneObserverTests: XCTestCase {
+    func testDelayedModifierReleaseReachesHandlerAfterNewerRenderedUnmute() async throws {
+        let module = try SemanticCommunicationModule(descriptor: .init(id: "test.modifier-release", displayName: "Owned chord",
+            browserBundleIdentifiers: ["com.google.Chrome"], urlRules: [.init(host: "call.example.com")],
+            callRules: .init(connected: [.init(labels: ["Leave call"])]),
+            microphoneRules: .init(muted: [.init(labels: ["Turn on microphone"])], unmuted: [.init(labels: ["Turn off microphone"])]),
+            pushToTalkChords: [.init(modifiers: [.option])]))
+        let snapshot = MeetingCommunicationModuleSnapshot(registry: try .init(modules: [module]), registrations: [.init(module: module)])
+        let arrivals = (0..<6).map { self.expectation(description: "modifier transition \($0)") }
+        let capture = ModuleObserverTestCapture(arrivals), probe = ModuleObserverTestProbe()
+        let observer = MeetingModuleMicrophoneObserver(application: .init(bundleIdentifier: "com.google.Chrome", processID: 42, displayName: "Synthetic browser"),
+            snapshot: snapshot, probe: probe) { capture.append($0) }
+        observer.start(externallyDriven: true)
+        await fulfillment(of: [arrivals[0]], timeout: 2)
+        observer.requestPoll()
+        await fulfillment(of: [arrivals[1]], timeout: 2)
+        observer.handleSharedPTT(.key(held: true, timestampNanoseconds: nil, modifierFlags: CGEventFlags.maskAlternate.rawValue))
+        probe.configure(microphone: .unmuted)
+        observer.requestPoll()
+        await fulfillment(of: [arrivals[2]], timeout: 2)
+        let releasedAt = DispatchTime.now().uptimeNanoseconds
+        probe.configure(microphone: .muted)
+        observer.requestPoll()
+        await fulfillment(of: [arrivals[3]], timeout: 2)
+        probe.configure(microphone: .unmuted)
+        observer.requestPoll()
+        await fulfillment(of: [arrivals[4]], timeout: 2)
+        observer.handleSharedPTT(.modifiersChanged(timestampNanoseconds: releasedAt, modifierFlags: 0))
+        await fulfillment(of: [arrivals[5]], timeout: 2)
+        observer.handleSharedPTT(.key(held: false, timestampNanoseconds: nil))
+        await observer.stop()
+        let observations = capture.observations
+        XCTAssertEqual(capture.states, [.unmuted, .muted, .unmuted, .muted, .unmuted, .unmuted])
+        XCTAssertEqual(observations.last?.unsafeStartHostTime, MeetingMicrophoneMuteMonitor.hostTime(nanoseconds: releasedAt))
+        XCTAssertEqual(observations.last?.observedAtHostTime, observations[4].observedAtHostTime)
+        XCTAssertEqual(observations.last?.refinementUntilHostTime, observations[4].observedAtHostTime)
+    }
+
     func testPrejoinDoesNotInventMuteOrPinTheWrongWindowAfterJoin() async throws {
         let module = try SemanticCommunicationModule(descriptor: .init(id: "test.prejoin", displayName: "Prejoin boundary",
             browserBundleIdentifiers: ["com.google.Chrome"], urlRules: [.init(host: "call.example.com")],

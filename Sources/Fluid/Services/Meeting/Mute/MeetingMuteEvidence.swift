@@ -91,6 +91,21 @@ nonisolated struct MeetingMuteTransitionState {
         return (eventTime, eventTime)
     }
 
+    /// Both key-up and modifier release end the same owned chord. A delayed release can
+    /// narrow an old PCM epoch without changing a newer rendered unmute.
+    mutating func releaseObservation(eventTime: UInt64?, processedAt now: UInt64,
+                                     generation: UInt64) -> MeetingMicrophoneMuteObservation? {
+        let boundary = Self.releaseBoundary(eventTime: eventTime, processedAt: now)
+        if self.keyUp(processedAt: now, releasedAt: boundary.unsafeStart > 0 ? boundary.unsafeStart : nil) {
+            return .init(state: .muted, observedAtHostTime: now, generation: generation,
+                         unsafeStartHostTime: boundary.unsafeStart)
+        }
+        guard let resumed = self.historicalReleaseUnmuteAt,
+              let until = self.historicalReleaseUntilAt else { return nil }
+        return .init(state: .unmuted, observedAtHostTime: resumed, generation: generation,
+                     unsafeStartHostTime: boundary.unsafeStart, refinementUntilHostTime: until)
+    }
+
     /// Returns true only for a newly observed visible transition which changes effective state.
     @discardableResult
     mutating func observe(_ visible: MeetingMicrophoneMuteState?, at time: UInt64) -> Bool {
