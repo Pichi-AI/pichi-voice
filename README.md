@@ -209,82 +209,38 @@ To pause listening without ending a hands-free dictation, enable **Settings → 
 
 ## Building from Source
 
-```bash
-git clone https://github.com/altic-dev/FluidVoice.git
-cd FluidVoice
-open Fluid.xcodeproj
-```
-
-Build and run in Xcode. All dependencies are managed via Swift Package Manager.
-
-Run a signed Debug build using the script:
+For this downstream, follow [Pichi Voice development setup](docs/development/codex.md) and [AGENTS.md](AGENTS.md). Clone `Pichi-AI/pichi-voice`, then create an isolated task worktree before editing or building:
 
 ```bash
-./build.sh
+git clone https://github.com/Pichi-AI/pichi-voice.git
+cd pichi-voice
+bash scripts/dev/new-worktree.sh my-task
+# Change into the absolute worktree path printed by the helper.
+bash scripts/dev/setup.sh
+bash scripts/dev/macos.sh build
 ```
 
-The signed build is written to `DerivedData/Build/Products/Debug/FluidVoice Debug.app`.
-Keep launching that product after each rebuild so macOS can preserve its Accessibility
-authorization.
-
-For CI or contributors who do not have a signing identity, use the explicit unsigned
-fallback:
-
-```bash
-./build.sh unsigned
-```
-
-Unsigned builds are tied to a specific executable version and may require Accessibility,
-Screen Recording, and microphone permissions to be removed and granted again after rebuilding.
+The wrapper uses worktree-local build and dependency directories. It produces an unsigned compilation artifact. For interactive UI, microphone or permission acceptance, use the existing signing tools and [frozen native acceptance procedure](docs/development/agent-workflow.md#native-acceptance). Keep the tested bundle and identity fixed throughout a run.
 
 ---
 
 ## Contributing
 
-Contributions are welcome! Read the [contribution guidelines](CONTRIBUTING.md) before starting work.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for Pichi Voice contribution and review expectations. [AGENTS.md](AGENTS.md) owns development principles, architecture boundaries and the requirement for unit tests with new code and integration tests for UI interaction.
 
-- **Every PR needs a linked issue**, including bug fixes and small changes.
-- **Major features and UI or UX changes need maintainer or moderator approval before implementation.** Open an issue and wait for explicit agreement on the scope.
-- **Major feature requests start in [Discussions](https://github.com/altic-dev/FluidVoice/discussions/new?category=ideas).** After approval, create or link a tracking issue and reference both in the PR.
-- **Keep PRs focused and verifiable.** Include a screenshot, image, or video, clear reproduction or verification steps, and testing results. Show before and after for UI or UX changes.
-
-### Development Setup
-
-1. Clone and open in Xcode as above.
-2. **Signing:** `FluidVoice → Signing & Capabilities → Automatically manage signing → pick your Team` (Personal Team is fine). If you have certificates for multiple teams, select one without changing the project by running `FLUIDVOICE_DEVELOPMENT_TEAM=YOUR_TEAM_ID ./build.sh`.
-3. Build and run — SPM handles dependencies.
-4. **(Optional) Pre-commit hook** to prevent accidental team ID commits:
-   ```bash
-   cp scripts/check-team-id.sh .git/hooks/pre-commit
-   chmod +x .git/hooks/pre-commit
-   ```
-
-### Pull Request Guidelines
-
-- **One feature or fix per PR** — keep changes focused and atomic
-- **Link a tracking issue** — a Discussion alone does not replace it
-- **Get approval before implementing major features or UI or UX changes**
-- **Follow the PR template**, including reproduction steps and screenshot, image, or video evidence
-- **Report testing results** and any checks you could not run
-- **AI-assisted coding is welcome; human review is required.** A human must create or vet the final PR, understand the full diff, and verify the behavior. Briefly explain AI use and your own checks; keep descriptions, code comments, and review replies focused. See [AI-assisted contribution guidelines](CONTRIBUTING.md#ai-assisted-contributions).
-- **Never commit personal team IDs or API keys**
-- **Check `git diff`** before committing
-
-**These requirements are mandatory. PRs that do not follow the [contribution guidelines](CONTRIBUTING.md) will not be reviewed or merged until they comply, and may be closed.**
+Submissions to FluidVoice itself follow its separate [upstream contribution policy](https://github.com/altic-dev/FluidVoice/blob/main/CONTRIBUTING.md).
 
 ---
 
 ## Run Integration Tests
 
-```bash
-xcodebuild test -project Fluid.xcodeproj -scheme Fluid -destination 'platform=macOS'
-```
-
-CI uses unsigned builds:
+Run from your task worktree:
 
 ```bash
-xcodebuild test -project Fluid.xcodeproj -scheme Fluid -destination 'platform=macOS' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+bash scripts/dev/macos.sh test
 ```
+
+See [Testing](docs/development/testing.md) for focused test selection, native/mobile targets, fixture locations and the limits of portable CI. A passing build does not establish runtime acceptance.
 
 ---
 

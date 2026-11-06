@@ -1,51 +1,23 @@
-<!--
-PRs that do not follow this template will be blocked by the PR Policy check.
-If the missing information is not fixed after 48 hours, the PR may be closed.
-Read CONTRIBUTING.md before starting work. Every PR needs a tracking issue.
-Major features and UI/UX changes need explicit maintainer or moderator approval before implementation.
--->
+<!-- Follow CONTRIBUTING.md and AGENTS.md. Report observed evidence, with private data removed. -->
 
-## Description
-Brief description of what this PR does and why it is needed.
+## Problem and behavior
 
-## Type of Change
-- [ ] 🐞 Bug fix
-- [ ] ✨ New feature
-- [ ] 💥 Breaking change
-- [ ] 🧹 Chore
-- [ ] 📝 Documentation update
+Explain the problem and resulting behavior. Link the issue, design or owner-defined scope when available.
 
-## Related Issue or Discussion
-Closes #(issue number), or Related to #(issue number) for partial work.
-An issue is required for every PR; a Discussion or roadmap link alone is not enough.
+## Design and boundaries
 
-For major features, also link the accepted Discussion.
-For major features or UI/UX changes, link the maintainer or moderator's approval of the scope.
+Describe relevant extension contracts, compatibility, privacy and resource ownership decisions. Omit this section for a simple documentation change.
 
-## Testing
-Include exact reproduction or verification steps, expected behavior, and the result after this change.
-Record the FluidVoice version, macOS version, and Mac architecture used, plus checks you could not run.
+## Verification
 
-- [ ] Tested on Intel Mac
-- [ ] Tested on Apple Silicon Mac
-- [ ] Tested on macOS version:
-- [ ] Ran linter locally: `swiftlint --strict --config .swiftlint.yml Sources Tests Package.swift`
-- [ ] Ran formatter locally: `swiftformat --config .swiftformat Sources`
-- [ ] Ran tests locally:
+Map changed behavior to unit tests. For UI interactions, include integration coverage and native evidence. Use docs/development/testing.md to choose affected checks.
 
-## Screenshots / Video
-Attach screenshots, images, or a video showing the issue and the result.
-For UI or UX changes, include before-and-after evidence.
-For non-visual changes, include a screenshot of relevant test results or diagnostic output and copyable logs or test output.
-Remove personal information and secrets from attachments.
+| Check and tested revision | Result and scope |
+| --- | --- |
+| | |
 
-## Notes
-Add reviewer context, rollout notes, or known tradeoffs here.
+State unrun checks, skips and remaining acceptance gaps. Include environment details when they affect the result. Documentation-only changes need diff, links and consistency checks.
 
-If AI was used, briefly state how you used it and what you personally reviewed and tested.
-Example: "Claude drafted the fix; I reviewed the full diff, reproduced the bug, and tested the fix on macOS [version] / [architecture]. I did not test on Intel."
-Keep the description, code comments, and review replies focused; remove redundant generated commentary and unrelated suggestions.
+## Review and handoff
 
-- [ ] A human created this PR or reviewed and approved it before submission, understands the full diff, and takes responsibility for the change.
-
-**The contribution requirements are mandatory. PRs that do not follow [CONTRIBUTING.md](https://github.com/altic-dev/FluidVoice/blob/main/CONTRIBUTING.md) will not be reviewed or merged until they comply, and may be closed.**
+Record the independently reviewed revision and resolution of material findings. Describe remaining risks, relevant AI assistance and resource cleanup or preserved artifacts when applicable.
