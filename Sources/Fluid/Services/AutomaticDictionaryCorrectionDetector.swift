@@ -20,6 +20,14 @@ struct AutomaticDictionaryTextChange: Equatable {
 }
 
 enum AutomaticDictionaryCorrectionDetector {
+    static func confirmedCandidate(_ candidate: AutomaticDictionaryCorrectionCandidate?,
+                                   in plan: DictionaryCorrectionReplacementPlan) -> AutomaticDictionaryCorrectionCandidate? {
+        guard let candidate, let range = candidate.sourceUTF16Range, let mapped = plan.mappedRange(range),
+              DictionaryCorrectionReplacementPlan.isValid(mapped, in: plan.text),
+              (plan.text as NSString).substring(with: mapped) == candidate.correctedText else { return nil }
+        return candidate
+    }
+
     private static let edgeCharacters = CharacterSet.whitespacesAndNewlines.union(
         CharacterSet(charactersIn: ".,!?;:\"“”‘’()[]{}")
     )
@@ -120,6 +128,9 @@ enum AutomaticDictionaryCorrectionDetector {
         else {
             return nil
         }
+        // The audio/approval range must describe the spelling, excluding sentence
+        // punctuation trimmed from heardText. History follows this exact span.
+        sourceRange = (before as NSString).range(of: heard, options: .literal, range: oldTokenRange)
 
         // A spelling repair may leave part of a saved compound term unchanged.
         // Keep that exact occurrence together, including its original audio range.

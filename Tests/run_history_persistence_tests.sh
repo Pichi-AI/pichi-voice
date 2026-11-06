@@ -28,6 +28,7 @@ xcrun swiftc -O -parse-as-library \
     Sources/Fluid/Account/AccountDomain.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
     Sources/Fluid/Account/PrivateProfileDefaults.swift \
     "$task_test_dir/DictationAudioSnapshot.swift" \
+    Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift \
     Sources/Fluid/Persistence/TranscriptionHistoryDatabase.swift \
     Sources/Fluid/Persistence/TranscriptionHistoryStore.swift \
     Tests/HistoryPersistenceBoundaryTests.swift \
