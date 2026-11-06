@@ -3073,6 +3073,23 @@ private func XCTAssertAsyncThrowsError<T>(
 // Only native ASR/diarization and application resource participants are synthetic here.
 @MainActor
 extension MeetingParakeetNemotronBackendTests {
+    func testInRoomStreamingUsesMeasuredCoverageAcrossAResumedSource() async throws {
+        let fixture = try self.onlinePipelineFixture(service: OnlinePipelineService(), runtime: OnlinePipelineRuntime(), mode: .inRoom)
+        fixture.publication.collectBatches = true
+        let track = fixture.session.audioTracks[0]
+        let consumer = try await fixture.pipeline.memoryConsumer(for: fixture.session.id, track: track, eventHandler: { _ in })
+        for index in 0..<8 {
+            let frame = 600 * 16_000 + index * 8_000 + (index >= 4 ? 3 * 16_000 : 0)
+            XCTAssertTrue(consumer.enqueue(try Self.onlinePCM(frames: 8_000, startFrame: frame)))
+        }
+        try await consumer.finish()
+        let coverage = fixture.publication.receivedBatches.flatMap(\.protectedSourceIntervals)
+        XCTAssertFalse(coverage.isEmpty)
+        XCTAssertTrue(coverage.allSatisfy { $0.upperBound <= 2 + 0.000_001 || $0.lowerBound >= 5 - 0.000_001 })
+        XCTAssertEqual(try XCTUnwrap(coverage.last?.upperBound), 7, accuracy: 0.000_001)
+        XCTAssertTrue(try XCTUnwrap(fixture.attempt.sourceTimelines[track.id]).hasGaps)
+    }
+
     func testProtectedIntervalPublicationContinuesAfterGapsForBothSources() async throws {
         let fixture = try self.onlinePipelineFixture(service: OnlinePipelineService(), runtime: OnlinePipelineRuntime())
         fixture.publication.collectBatches = true
@@ -3391,11 +3408,14 @@ extension MeetingParakeetNemotronBackendTests {
     }
 
     private func onlinePipelineFixture(service: any MeetingASRServicing, runtime: any MeetingParakeetNemotronRunning,
+                                       mode: MeetingCaptureMode = .onlineCall,
         configuration: MeetingFinalProcessingConfiguration? = nil, descriptor: MeetingBackendDescriptor? = nil) throws
         -> (pipeline: MeetingProcessingPipeline, session: MeetingSession, attempt: MeetingMemoryProcessingAttempt,
             publication: OnlinePipelinePublication, directory: URL) {
-        let tracks = [self.makeMicTrack(chunks: [], eraStart: 0), self.makeAppTrack(chunks: [])]
-        var session = self.makeSession(mode: .onlineCall, tracks: tracks)
+        let tracks = mode == .onlineCall
+            ? [self.makeMicTrack(chunks: [], eraStart: 0), self.makeAppTrack(chunks: [])]
+            : [self.makeMicTrack(chunks: [], eraStart: 0)]
+        var session = self.makeSession(mode: mode, tracks: tracks)
         session.speakerLabelsEnabled = true
         session.speakerProcessingMode = .streaming
         session.transcriptIsComplete = true
@@ -3405,7 +3425,7 @@ extension MeetingParakeetNemotronBackendTests {
         let descriptor = descriptor ?? MeetingBackendDescriptor(id: .init(rawValue: "synthetic-online-stream"), version: "1",
             execution: .local, supportedLanguageCodes: [configuration.languageCode], supportedTrackKinds: [.microphone, .applicationAudio],
             supportedFinalPrecisions: [.word], resultContract: .canonicalEvidence, knownLimits: [], analysisSampleRate: 16_000,
-            supportedInputs: [.boundedMultiTrackPCM], supportedSpeakerProcessingModes: [.streaming])
+            supportedInputs: [.boundedMultiTrackPCM, .boundedMicrophonePCM], supportedSpeakerProcessingModes: [.streaming])
         let directory = try self.makeTempSessionDirectory()
         let request = MeetingBackendRequest(attemptID: UUID(), session: session, sessionDirectory: directory, configuration: configuration)
         let publication = OnlinePipelinePublication(session)
@@ -3540,6 +3560,13 @@ private final nonisolated class OnlinePipelineRuntime: MeetingParakeetNemotronRu
     var supportsStreamingPCMProcessing: Bool { true }
     var supportsMultiTrackStreamingPCMProcessing: Bool { true }
     func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws { evidence.record("prepare") }
+    func withPreparedStreamingPCM(trackID: UUID, attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+        onProgress: nonisolated(nonsending) @escaping @Sendable (MeetingStreamingPCMObservation) async throws -> Void,
+        body: nonisolated(nonsending) @escaping @Sendable (any MeetingPreparedStreamingPCMProcessing) async throws -> Void) async throws {
+        evidence.record("scope-open")
+        defer { evidence.record("scope-cleaned") }
+        try await body(OnlinePipelinePrepared(track: trackID, attempt: attemptID, evidence: evidence, progress: onProgress))
+    }
     func withPreparedStreamingPCMTracks(trackIDs: [UUID], attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
         onProgress: nonisolated(nonsending) @escaping @Sendable (UUID, MeetingStreamingPCMObservation) async throws -> Void,
         body: nonisolated(nonsending) @escaping @Sendable ([UUID: any MeetingPreparedStreamingPCMProcessing]) async throws -> Void) async throws {
