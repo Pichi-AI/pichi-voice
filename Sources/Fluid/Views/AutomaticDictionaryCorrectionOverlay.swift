@@ -1135,7 +1135,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 Label {
                     Text(PichiLocalization.text(self.savedStatus, locale: self.interfaceLocale))
                 } icon: {
-                    Image(systemName: self.session.didUndoSavedCorrection ? "arrow.uturn.backward" : "waveform.badge.checkmark")
+                    Image(systemName: self.session.didUndoSavedCorrection ? "arrow.uturn.backward" : "waveform")
                 }
                 .font(self.theme.typography.captionSmall)
                 .foregroundStyle(self.theme.palette.secondaryText)
