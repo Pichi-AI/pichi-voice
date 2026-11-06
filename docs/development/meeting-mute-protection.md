@@ -2,11 +2,18 @@
 
 Online recordings start with microphone recording enabled. An explicit rendered mute transition pauses microphone admission; an explicit rendered unmute transition resumes it. The last state survives hidden controls, unavailable observations, missing permissions and snapshot timeouts. There is no checking/unknown product state. In-room recording and meeting playback retain their existing behavior.
 
+The existing microphone icon is a button in the recording canvas and compact pill. It controls
+only recording the local microphone in Pichi, without changing the conference's microphone or
+the other participants' audio. A manual pause lasts for the current recording until the user
+enables it here. Conference unmute and temporary PTT cannot clear a manual pause. Local enable
+still respects a remembered conference mute. The indicator exposes the effective state, reason
+and local action through localized help and accessibility. A new recording resets local intent.
+
 ## Observation paths
 
 | Source | Transition evidence | No new usable observation |
 | --- | --- | --- |
-| Zoom desktop | Own rendered Computer audio state, temporary-unmute HUD, microphone control semantics and local icon proof | Retain last state |
+| Zoom desktop | Own enabled `onMuteAudio:` command in the Meeting menu of the bound focused call window, exact status-only Computer audio state, temporary-unmute HUD, microphone control semantics and local icon proof | Retain last state |
 | Google Meet in Chrome | Pinned call window/document, microphone control semantics and local icon proof | Retain last state |
 | Other applications, other browsers, system-audio scope | No adapter currently registered | Remain enabled by default |
 

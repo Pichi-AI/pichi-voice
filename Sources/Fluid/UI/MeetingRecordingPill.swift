@@ -364,6 +364,13 @@ struct MeetingRecordingPillContent: View {
         .init(state: self.coordinator.activeSession?.mode == .onlineCall ? self.coordinator.microphoneMuteState : .notApplicable)
     }
 
+    var microphoneIndicator: MeetingMicrophoneMuteIndicator {
+        let sessionID = self.coordinator.activeSession?.id
+        return MeetingMicrophoneMuteIndicator(state: self.coordinator.microphoneMuteState, onToggle: {
+            Task { await self.coordinator.toggleMicrophoneRecording(expectedSessionID: sessionID) }
+        })
+    }
+
     private var interfaceLanguage: PichiInterfaceLanguage {
         PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language
     }
@@ -403,8 +410,8 @@ struct MeetingRecordingPillContent: View {
     private var compactPill: some View {
         HStack(spacing: 7) {
             if self.mutePresentation.isMonitored {
-                MeetingMicrophoneMuteIndicator(state: self.coordinator.microphoneMuteState)
-                    .frame(width: 20, height: 20)
+                self.microphoneIndicator
+                    .disabled(self.isStopping || self.coordinator.isMicrophoneControlPending)
             } else {
                 MeetingRecordingLevelBars(level: self.microphoneLevel, animated: !self.reduceMotion)
                     .frame(width: 20, height: 11)
@@ -419,10 +426,10 @@ struct MeetingRecordingPillContent: View {
             height: MeetingOverlayPresentation.pill.visibleSize.height
         )
         .contentShape(Capsule())
-        // The whole capsule opens the captions window; only the stop button opts out.
+        // Background taps expand captions; native microphone and stop buttons own their taps.
         .onTapGesture { self.pill.expand() }
         .background(self.compactSurface)
-        .accessibilityAddTraits(.isButton)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(self.coordinator.activeSession?.isLocalContentConcealed == true
             ? PichiLocalization.text("recording.protection.concealed.title") : PichiLocalization.text("Show live captions"))
         .accessibilityValue(self.mutePresentation.isMonitored

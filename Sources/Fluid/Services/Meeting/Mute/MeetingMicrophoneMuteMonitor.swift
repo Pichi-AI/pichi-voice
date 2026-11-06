@@ -98,6 +98,7 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
             guard let self, !self.started, !self.stopped else { return }
             self.started = true
             self.running = true
+            DebugLogger.shared.info("Meeting mute observer started: accessibilityTrusted=\(AXIsProcessTrusted())", source: "MeetingMicrophoneMuteMonitor")
             self.generation &+= 1
             self.publish(.unmuted, at: mach_absolute_time())
             guard self.platform != nil, self.application?.processID.map({ $0 > 0 }) == true else {
