@@ -7,6 +7,13 @@ import Foundation
 /// One owner must call `stop()` before retiring the capture attempt or its delivery queues.
 final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
     struct Configuration: Sendable {
+        enum AdmissionPolicy: Equatable, Sendable {
+            case freshObservations
+            /// A confirmed transition remains effective until another transition or stop.
+            case latchedTransitions
+        }
+
+        var admissionPolicy: AdmissionPolicy = .freshObservations
         var quarantineSeconds: Double = 1
         var observationLeaseSeconds: Double = 0.75
         var maximumQueuedBytes: Int = 2 * 1024 * 1024
@@ -106,26 +113,43 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
 
     /// Times are mach host units, matching CMClockConvertHostTimeToSystemUnits and capture PTS.
     /// A negative always closes immediately. An old or malformed positive cannot reopen intake.
+    /// Latched transitions do not expire, but a newly delivered transition must still be timely.
     func setAdmitted(_ value: Bool, observedAtHostTime observed: UInt64, unsafeStartHostTime: UInt64? = nil) {
         let now = self.hostTime()
+        let boundary: UInt64?
+        if self.configuration.admissionPolicy == .latchedTransitions {
+            let supplied = unsafeStartHostTime ?? observed
+            boundary = supplied <= now ? supplied : 0
+        } else {
+            boundary = unsafeStartHostTime
+        }
         self.lock.withLock {
             guard !self.stopped else {
-                if !value, let unsafeStartHostTime {
+                if !value, let boundary {
+                    self.closeEpochLocked(at: now, unsafeStart: boundary)
+                    self.drainLocked(now: now)
+                }
+                return
+            }
+            if !value {
+                self.closeEpochLocked(at: now, unsafeStart: boundary)
+                self.drainLocked(now: now)
+                return
+            }
+            guard observed > 0, observed <= now, now - observed <= self.leaseTicks,
+                  self.latestObservation.map({ observed >= $0 }) ?? true,
+                  self.lastNegativeProcessedAt.map({ observed > $0 }) ?? true else {
+                // Rejected evidence is not a mute transition in a state-latched attempt.
+                if self.configuration.admissionPolicy == .freshObservations {
                     self.closeEpochLocked(at: now, unsafeStart: unsafeStartHostTime)
                     self.drainLocked(now: now)
                 }
                 return
             }
-            guard value, observed > 0, observed <= now, now - observed <= self.leaseTicks,
-                  self.latestObservation.map({ observed >= $0 }) ?? true,
-                  self.lastNegativeProcessedAt.map({ observed > $0 }) ?? true else {
-                self.closeEpochLocked(at: now, unsafeStart: unsafeStartHostTime)
-                self.drainLocked(now: now)
-                return
-            }
             // A delayed timer must not let a fresh positive retroactively fill an observation
             // gap. Close the old epoch before renewing, even if no PCM arrived during that gap.
-            if self.admitted, let previous = self.latestObservation, now - previous > self.leaseTicks {
+            if self.configuration.admissionPolicy == .freshObservations,
+               self.admitted, let previous = self.latestObservation, now - previous > self.leaseTicks {
                 self.closeEpochLocked(at: now)
             }
             self.latestObservation = observed
@@ -160,7 +184,8 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
             guard metadata.bytes <= self.configuration.maximumQueuedBytes - self.retainedBytes,
                   self.retainedBuffers < self.configuration.maximumQueuedBuffers else {
                 self.rejectedBuffers += 1
-                self.closeEpochLocked(at: now)
+                // Backpressure drops this block; it must not invent a mute transition.
+                if self.configuration.admissionPolicy == .freshObservations { self.closeEpochLocked(at: now) }
                 return nil
             }
             let item = Item(metadata: metadata, generation: self.generation, queue: deliveryQueue, delivery: delivery)
@@ -187,6 +212,47 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
             item.state = .pending
             self.drainLocked(now: self.hostTime())
             return true
+        }
+    }
+
+    /// Remove a delayed PTT release gap without changing the newer remembered state. A HUD
+    /// grant and a later rendered unmute may share one admission epoch, so preserve both safe
+    /// sides of the gap, including the currently open epoch, using the existing interval ledger.
+    func refineHistoricalRelease(unsafeStartHostTime: UInt64, resumedAtHostTime: UInt64) {
+        let now = self.hostTime()
+        guard resumedAtHostTime > 0, resumedAtHostTime <= now,
+              unsafeStartHostTime <= resumedAtHostTime else { return }
+        let safeEnd = unsafeStartHostTime > self.prefixSafetyTicks ? unsafeStartHostTime - self.prefixSafetyTicks : 0
+        self.lock.withLock {
+            self.approvedIntervals = self.approvedIntervals.flatMap { interval -> [(start: UInt64, end: UInt64)] in
+                guard interval.end > safeEnd, interval.start < resumedAtHostTime else { return [interval] }
+                var kept: [(start: UInt64, end: UInt64)] = []
+                if interval.start < safeEnd { kept.append((interval.start, safeEnd)) }
+                if interval.end > resumedAtHostTime { kept.append((resumedAtHostTime, interval.end)) }
+                return kept
+            }
+            if self.admitted, !self.stopped, let start = self.epochStart, start < resumedAtHostTime {
+                if start < safeEnd { self.approvedIntervals.append((start, safeEnd)) }
+                self.epochStart = resumedAtHostTime
+            }
+            if self.approvedIntervals.count > Self.maximumApprovedIntervals {
+                self.approvedIntervals.removeFirst(self.approvedIntervals.count - Self.maximumApprovedIntervals)
+            }
+            let items = self.pending
+            self.pending.removeAll(keepingCapacity: true)
+            for item in items {
+                let inCurrentEpoch = !self.stopped && self.admitted
+                    && self.epochStart.map({ item.metadata.start >= $0 }) == true
+                    && item.generation == self.generation
+                if inCurrentEpoch || self.isApprovedLocked(item.metadata) {
+                    self.pending.append(item)
+                } else if item.state == .copying {
+                    item.state = .cancelledCopy
+                } else {
+                    self.releaseLocked(item, rejected: true)
+                }
+            }
+            self.drainLocked(now: now)
         }
     }
 
@@ -247,6 +313,9 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
     }
 
     private func freshLocked(now: UInt64) -> Bool {
+        if self.configuration.admissionPolicy == .latchedTransitions {
+            return !self.stopped && self.admitted
+        }
         guard !self.stopped, self.admitted, let observation = self.latestObservation,
               now >= observation, now - observation <= self.leaseTicks else {
             if self.admitted { self.closeEpochLocked(at: now) }
@@ -260,7 +329,8 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
         if self.isApprovedLocked(metadata) { return true }
         return self.freshLocked(now: now) && self.epochStart.map({ metadata.start >= $0 }) == true
             && metadata.end <= now && now - metadata.end >= self.quarantineTicks
-            && self.latestObservation.map({ $0 >= metadata.end }) == true
+            && (self.configuration.admissionPolicy == .latchedTransitions
+                || self.latestObservation.map({ $0 >= metadata.end }) == true)
     }
 
     private func isApprovedLocked(_ metadata: SampleMetadata) -> Bool {
@@ -277,11 +347,12 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
                 return end > interval.start ? (interval.start, end) : nil
             }
         }
+        let confirmedThrough: UInt64? = self.configuration.admissionPolicy == .latchedTransitions ? now : self.latestObservation
         if preserveConfirmedPrefix, self.admitted, let start = self.epochStart,
-           let observed = self.latestObservation, observed <= now, observed > self.prefixSafetyTicks {
-            var end = observed - self.prefixSafetyTicks
-            // A key-up or another early close boundary may narrow a grant; it can never extend
-            // conference proof beyond the last positive visual observation.
+           let confirmedThrough, confirmedThrough <= now, confirmedThrough > self.prefixSafetyTicks {
+            var end = confirmedThrough - self.prefixSafetyTicks
+            // Lease admission ends at its last positive proof; latched admission ends at the
+            // explicit close. An earlier key-up boundary may narrow either policy's grant.
             if let safeBoundary { end = min(end, safeBoundary) }
             if end > start {
                 self.approvedIntervals.append((start, end))

@@ -782,7 +782,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.activeSession = session
         self.state = .preparing(session.id)
         #if os(macOS)
-        self.microphoneMuteState = configuration.mode == .onlineCall ? .checking : .notApplicable
+        self.microphoneMuteState = configuration.mode == .onlineCall ? .unmuted : .notApplicable
         #endif
         self.startupTrackHealth.removeAll()
         self.startupWriterFailures.removeAll()

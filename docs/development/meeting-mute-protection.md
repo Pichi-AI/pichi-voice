@@ -1,39 +1,41 @@
 # Meeting microphone admission on macOS
 
-Online recordings admit local microphone PCM only after a fresh observation of the selected meeting's unmuted control. In-room recording retains its existing behavior. Meeting/application playback continues independently of microphone admission.
+Online recordings start with microphone recording enabled. An explicit rendered mute transition pauses microphone admission; an explicit rendered unmute transition resumes it. The last state survives hidden controls, unavailable observations, missing permissions and snapshot timeouts. There is no checking/unknown product state. In-room recording and meeting playback retain their existing behavior.
 
-## Supported observation paths
+## Observation paths
 
-| Source | Current adapter | Missing or ambiguous evidence |
+| Source | Transition evidence | No new usable observation |
 | --- | --- | --- |
-| Zoom desktop | Native control identity, consistent English AX actions, synthetic microphone/slash shape proof | Block microphone |
-| Google Meet in Google Chrome | Selected process, unique call window and Meet document, English microphone actions, synthetic shape proof | Block microphone |
-| Other applications, other browsers, system-audio scope | No confirmed adapter | Block microphone |
+| Zoom desktop | Own rendered Computer audio state, temporary-unmute HUD, microphone control semantics and local icon proof | Retain last state |
+| Google Meet in Chrome | Pinned call window/document, microphone control semantics and local icon proof | Retain last state |
+| Other applications, other browsers, system-audio scope | No adapter currently registered | Remain enabled by default |
 
-The locator discovers the actual control and refreshes its geometry, including window movement and resizing. There are no user calibration images or fixed screen coordinates. Discovery is bounded and cached. A utility timer samples a 48 by 48 crop at 4 Hz; classification uses a 24 by 24 local representation. No OCR, model, image upload or image persistence is used. The observer uses existing Accessibility/screen-capture permissions without requesting broader access.
+The monitor remembers transitions instead of requiring constant visibility of an unmuted icon. An initial explicit muted observation is a mute transition from the default enabled state. A new recording starts a new state history. A replaced or ambiguous call window cannot silently become another selected call.
 
-The attempt pins its process, window and Meet document after unique discovery. A replaced window, another call or unrecognized interface must not silently become the selected source. Restart recording after an unsupported source-window replacement. A hidden control, stale frame, contradictory semantics or missing permission yields unknown.
+Discovery is bounded and cached. Control geometry follows movement and resizing without fixed screen coordinates or user calibration. Zoom can use its rendered self-audio status even when its toolbar is hidden; a small owned HUD provides temporary-unmute evidence. The existing utility polling cadence remains bounded. Pixel fallback samples only a 48 by 48 crop, classified locally at 24 by 24. No OCR, image persistence, image upload or inference model is used. Chrome's native AX role is read through the bounded reader; full screen-reader mode is not enabled.
 
 ## Audio boundary
 
-`MeetingMicrophonePrivacyGate` owns at most 2 MiB and 256 PCM buffers across copying, quarantine and delivery. Its one-second RAM quarantine exceeds the 0.75-second positive-observation lease. Invalid PCM and unverified acquisition timestamps are rejected. Raw microphone diagnostics, software normalization, persistence and live ASR receive only released PCM. Writer and live sinks recheck admission to exclude a delayed retired callback.
+The existing gate adds a `latchedTransitions` policy for online recordings; `freshObservations` remains available for its original contract and regression tests. The latched policy has no observation expiry or heartbeat requirement. A missing frame cannot close an enabled microphone or reopen a muted one.
 
-On mute or unknown, only a previously confirmed prefix ending before the last positive snapshot start minus 50 ms remains eligible. The uncertain tail is discarded. A later earlier unsafe boundary narrows existing approvals. Even confirmed prefixes complete the quarantine delay. Ordinary stop joins that prefix before retiring the runtime and writers; aborted starts revoke all approvals. Physical microphone health counters continue while intentionally blocked, without treating privacy exclusion as a hardware failure.
+The one-second owned-PCM quarantine remains bounded at 2 MiB and 256 buffers across copies, queued work and delivery. Invalid PCM and unverified acquisition timestamps are rejected. Diagnostics, persistence and live ASR share the admission boundary, with an additional writer/live recheck for retired queued buffers. Quota overflow rejects that block without changing the remembered mute state.
 
-The existing VPIO path is used for supported speakers. Direct software AEC has insufficient render history for a delayed microphone and is excluded for privacy-gated capture. Existing SCK fallbacks retain truthful unfiltered echo-protection metadata.
+Explicit mute and PTT release carry the earliest available acquisition boundary. Pending PCM after that boundary, including the existing 50 ms timing margin, is excluded. Delayed earlier boundaries narrow existing approvals. Ordinary stop preserves only the mature eligible prefix and joins it before retiring queues; abort revokes approvals. The existing VPIO path and truthful unfiltered SCK fallback provenance are retained because direct software AEC has insufficient render history for the quarantine delay.
 
-A passive Space listener observes only the targeted foreground call. Key-down never grants admission. A possible push-to-talk release closes immediately, using its event timestamp independently of callback freshness. Missing timestamps, focus loss or listener disablement conservatively revoke retained approvals. Fresh muted UI confirmation is required before clearing the release fence. Ordinary Space during persistent unmute does not close the microphone.
+## Temporary unmute
+
+Space key-down alone never enables recording. A rendered temporary-unmute transition or explicit audio state must confirm it. A confirmed temporary unmute keeps its muted base state, which is restored on the owned key-up boundary. Ordinary Space while persistently unmuted does not invent mute. Stale frames from a finished PTT interval cannot reopen it. Missing HUD/control observations alone do not change the remembered state.
 
 ## Presentation and limits
 
-The recording canvas and compact pill share the microphone indicator: a red slashed microphone for detected mute, a question badge for checking/unknown and the normal microphone for confirmed unmute. Blocked states suppress the microphone meter and healthy check. Localized hints explain that microphone recording is blocked.
+The canvas and compact pill show a normal microphone while recording is enabled and a red slashed microphone with a lock while muted. The muted meter is suppressed. Localized hints describe the retained admission state rather than claiming continuous platform confirmation.
 
-Observed UI state is a best-effort signal. The meeting application provides no bound on icon or accessibility updates, and passive key delivery has no hard latency guarantee. RAM quarantine reduces exposure and fails closed on missing evidence, but cannot prove sample-exact exclusion at the platform's internal mute transition. Conference-provided media or an authoritative platform integration is required for that stronger claim.
+This policy deliberately prioritizes continuity of the last observed state. A completely missed transition cannot be inferred from absent UI and will leave the previous state in effect. Default enabled admission can record before an initial mute observation, and unsupported platforms cannot currently detect transitions. Rendered UI and passive keyboard delivery do not provide sample-exact attestation of the conference's internal mute boundary.
 
 ## Verification
 
-- `bash scripts/dev/test-meeting-microphone-privacy.sh`: optimized synthetic PCM, clock, bounded-memory, prefix, delayed-boundary and joined-stop checks; no devices or files.
-- `MeetingMicrophoneMuteMonitorTests`: semantics, unrelated glyph rejection, document pinning, push-to-talk fences and unsupported-source lifecycle.
-- `MeetingMicrophoneWriterPrivacyTests`: actual quarantine and writer with synthetic markers, including on-disk PCM and diagnostic exclusion after revocation.
-- `MeetingMicrophoneCaptureTests`: existing clock contracts plus acquisition-time privacy validation.
-- Native signed-app acceptance must separately check both platforms, window geometry changes and the microphone indicator in both themes. Physical Space acceptance is performed by the user after installation; synthetic key delivery does not establish event-tap acceptance.
+- `bash scripts/dev/test-meeting-microphone-privacy.sh`: optimized synthetic PCM checks for both policies, long observation gaps, explicit boundaries, bounded memory and joined stop.
+- `MeetingMicrophoneMuteMonitorTests`: retained states, exact rendered/HUD selectors, source pinning, temporary unmute and stale-frame fences.
+- `MeetingMicrophoneWriterPrivacyTests`: actual CAF/diagnostic output across hidden-control periods and explicit mute/unmute transitions.
+- `MeetingMicrophoneCaptureTests`: existing clock contracts and independent acquisition-time validation.
+- Native signed-app acceptance checks hidden toolbar, compact Zoom, temporary/persistent unmute, resizing and native indicator appearance. The user's physical Space test remains separate from injected-key tests.

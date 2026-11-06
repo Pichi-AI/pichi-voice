@@ -86,9 +86,12 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             comparisonProbe = nil
         }
         if let comparisonProbe { eventHandler(.audioComparisonProbeStarted(comparisonProbe)) }
-        let privacyGate = configuration.mode == .onlineCall ? MeetingMicrophonePrivacyGate() : nil
+        let privacyGate = configuration.mode == .onlineCall
+            ? MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions)) : nil
         let muteMonitor: MeetingMicrophoneMuteMonitor?
         if let privacyGate {
+            // Admission follows remembered transitions, not the availability of a toolbar frame.
+            privacyGate.setAdmitted(true, observedAtHostTime: mach_absolute_time())
             var application = configuration.effectiveApplicationAudioScope == .selectedApplication
                 ? configuration.application : nil
             // Audio follows the selected process. Discovery must find its current unique call,
@@ -96,6 +99,11 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             application?.windowID = nil
             muteMonitor = MeetingMicrophoneMuteMonitor(application: application) { observation in
                 let admitted = observation.state == .unmuted
+                if admitted, let earlierRelease = observation.unsafeStartHostTime,
+                   let resumedAt = observation.refinementUntilHostTime {
+                    privacyGate.refineHistoricalRelease(unsafeStartHostTime: earlierRelease,
+                        resumedAtHostTime: resumedAt)
+                }
                 privacyGate.setAdmitted(
                     admitted,
                     observedAtHostTime: observation.observedAtHostTime,
@@ -103,7 +111,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 )
                 eventHandler(.microphoneMuteStateChanged(observation.state))
             }
-            eventHandler(.microphoneMuteStateChanged(.checking))
+            eventHandler(.microphoneMuteStateChanged(.unmuted))
             muteMonitor?.start()
         } else {
             muteMonitor = nil

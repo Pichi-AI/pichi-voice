@@ -37,11 +37,11 @@ final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
     }
 
     func testDelayedReleaseUsesEventBoundaryAndInvalidTimesRevokeAll() {
-        let delayed = MeetingMutePTTState.releaseBoundary(eventTime: 100, processedAt: 200)
+        let delayed = MeetingMuteTransitionState.releaseBoundary(eventTime: 100, processedAt: 200)
         XCTAssertEqual(delayed.fence, 100)
         XCTAssertEqual(delayed.unsafeStart, 100)
         for missingOrInvalid in [nil, UInt64(0), UInt64(201)] {
-            let boundary = MeetingMutePTTState.releaseBoundary(eventTime: missingOrInvalid, processedAt: 200)
+            let boundary = MeetingMuteTransitionState.releaseBoundary(eventTime: missingOrInvalid, processedAt: 200)
             XCTAssertEqual(boundary.fence, 200)
             XCTAssertEqual(boundary.unsafeStart, 0)
         }
@@ -65,10 +65,10 @@ final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
 
     func testPositiveUnmuteRequiresBothSemanticsAndIcon() {
         XCTAssertEqual(MeetingMuteObservationPolicy.state(before: .unmuted, after: .unmuted, visual: .unmuted), .unmuted)
-        XCTAssertEqual(MeetingMuteObservationPolicy.state(before: .unknown, after: .unmuted, visual: .unmuted), .unknown)
-        XCTAssertEqual(MeetingMuteObservationPolicy.state(before: .unmuted, after: .muted, visual: .unmuted), .unknown)
-        XCTAssertEqual(MeetingMuteObservationPolicy.state(before: .muted, after: .muted, visual: .unmuted), .unknown)
-        XCTAssertEqual(MeetingMuteObservationPolicy.state(before: .unmuted, after: .unmuted, visual: .unknown), .unknown)
+        XCTAssertEqual(MeetingMuteObservationPolicy.state(before: .unknown, after: .unmuted, visual: .unmuted), nil)
+        XCTAssertEqual(MeetingMuteObservationPolicy.state(before: .unmuted, after: .muted, visual: .unmuted), nil)
+        XCTAssertEqual(MeetingMuteObservationPolicy.state(before: .muted, after: .muted, visual: .unmuted), nil)
+        XCTAssertEqual(MeetingMuteObservationPolicy.state(before: .unmuted, after: .unmuted, visual: .unknown), nil)
         XCTAssertEqual(MeetingMuteObservationPolicy.state(before: .unmuted, after: .unmuted, visual: .muted), .muted)
     }
 
@@ -105,40 +105,280 @@ final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
         XCTAssertEqual(MeetingMuteIconProof.classify(rgb: self.rgb(headOnly)), .unknown)
     }
 
-    func testDelayedKeyDownStillOwnsRelease() {
-        var state = MeetingMutePTTState()
-        state.keyDown(at: 90, persistentlyUnmuted: true, latestObservation: 100)
-        XCTAssertTrue(state.possiblePTT)
-        XCTAssertTrue(state.release(at: 150))
-        XCTAssertFalse(state.permitsPositive(captureStarted: 160))
-        state.confirmedMuted(captureStarted: 149)
-        XCTAssertFalse(state.permitsPositive(captureStarted: 170))
-        state.confirmedMuted(captureStarted: 151)
-        XCTAssertTrue(state.permitsPositive(captureStarted: 170))
-        XCTAssertFalse(state.permitsPositive(captureStarted: 140), "A late pre-release positive stays excluded after fresh mute clears the fence")
+    func testDefaultAndLastTransitionSurviveMissingEvidence() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertFalse(state.observe(nil, at: 100))
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertTrue(state.observe(.muted, at: 110))
+        for time in UInt64(120)...160 { XCTAssertFalse(state.observe(nil, at: time)) }
+        XCTAssertEqual(state.state, .muted, "A hidden toolbar, timeout or unreadable frame is not unmute")
+        XCTAssertTrue(state.observe(.unmuted, at: 170))
+        XCTAssertFalse(state.observe(nil, at: 1_000))
+        XCTAssertEqual(state.state, .unmuted, "An enabled microphone does not need a permanent icon lease")
+    }
+
+    func testRepeatedAndOutOfOrderFramesDoNotPublishTransitions() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertFalse(state.observe(.unmuted, at: 100))
+        XCTAssertTrue(state.observe(.muted, at: 200))
+        XCTAssertFalse(state.observe(.muted, at: 210))
+        XCTAssertFalse(state.observe(.unmuted, at: 190))
+        XCTAssertEqual(state.state, .muted)
+        XCTAssertTrue(state.observe(.unmuted, at: 220))
+        XCTAssertFalse(state.observe(.muted, at: 215))
+        XCTAssertEqual(state.state, .unmuted)
+    }
+
+    func testSpaceKeyDownNeverOpensWithoutVisibleProof() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 100))
+        state.keyDown(at: 110)
+        XCTAssertEqual(state.state, .muted)
+        XCTAssertFalse(state.observe(nil, at: 120))
+        XCTAssertFalse(state.keyUp(processedAt: 130), "A rejected/unobserved PTT must not synthesize a grant")
+        XCTAssertEqual(state.state, .muted)
+        XCTAssertFalse(state.observe(.muted, at: 140), "A fresh rendered muted state rearms later transitions")
+        XCTAssertTrue(state.observe(.unmuted, at: 150), "A later permanent visible unmute can open")
+    }
+
+    func testShortOwnedPTTReleaseRejectsFirstLingeringHUDAndUnmute() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 100))
+        state.keyDown(at: 110)
+        XCTAssertFalse(state.keyUp(processedAt: 120))
+        XCTAssertEqual(state.state, .muted)
+        XCTAssertFalse(state.observeTemporaryHUD(true, at: 130, corroboratedUnmute: true))
+        XCTAssertFalse(state.observe(.unmuted, at: 130))
+        XCTAssertFalse(state.observe(nil, at: 140))
+        XCTAssertEqual(state.state, .muted)
+        XCTAssertFalse(state.observe(.muted, at: 150))
+        XCTAssertTrue(state.observe(.unmuted, at: 160))
+    }
+
+    func testVisibleTemporaryUnmuteReturnsToMutedOnRelease() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 100))
+        state.keyDown(at: 110)
+        XCTAssertTrue(state.observe(.unmuted, at: 120))
+        XCTAssertTrue(state.temporaryUnmute)
+        XCTAssertTrue(state.keyUp(processedAt: 150))
+        XCTAssertEqual(state.state, .muted)
+        XCTAssertFalse(state.observe(.unmuted, at: 140), "A queued pre-release frame is stale")
+        XCTAssertFalse(state.observe(.unmuted, at: 160), "The same lingering pre-release icon is not a new transition")
+        XCTAssertFalse(state.observe(nil, at: 170))
+        XCTAssertFalse(state.observe(.muted, at: 180))
+        XCTAssertTrue(state.observe(.unmuted, at: 190), "A fresh permanent transition can open after PTT")
     }
 
     func testOrdinarySpaceInPersistentUnmuteDoesNotClose() {
-        var state = MeetingMutePTTState()
-        state.keyDown(at: 110, persistentlyUnmuted: true, latestObservation: 100)
+        var state = MeetingMuteTransitionState()
+        XCTAssertFalse(state.observe(.unmuted, at: 100))
+        state.keyDown(at: 110)
         XCTAssertFalse(state.possiblePTT)
-        XCTAssertFalse(state.release(at: 150))
-        XCTAssertTrue(state.permitsPositive(captureStarted: 160))
+        XCTAssertFalse(state.keyUp(processedAt: 150))
+        XCTAssertEqual(state.state, .unmuted)
+        state.keyDown(at: nil)
+        XCTAssertFalse(state.keyUp(processedAt: 160))
+        XCTAssertEqual(state.state, .unmuted, "A missing keyboard timestamp is not a conference mute transition")
     }
 
-    func testShortPTTAndFocusLossRequireFreshMutedConfirmation() {
-        var state = MeetingMutePTTState()
-        state.keyDown(at: 110, persistentlyUnmuted: false, latestObservation: 100)
-        state.keyDown(at: 120, persistentlyUnmuted: true, latestObservation: 115)
-        XCTAssertTrue(state.possiblePTT, "Repeat delivery cannot reclassify a held PTT as persistent unmute")
-        XCTAssertTrue(state.release(at: 150), "The focus-loss reset uses the same exclusion as key-up")
-        XCTAssertFalse(state.release(at: 160))
-        XCTAssertFalse(state.permitsPositive(captureStarted: 170))
-        state.confirmedMuted(captureStarted: 170)
-        XCTAssertTrue(state.permitsPositive(captureStarted: 180))
-        var missingTime = MeetingMutePTTState()
-        missingTime.keyDown(at: nil, persistentlyUnmuted: true, latestObservation: 100)
-        XCTAssertTrue(missingTime.release(at: 150))
+    func testDelayedKeyDownReclassifiesObservedUnmuteFromMuted() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 100))
+        XCTAssertTrue(state.observe(.unmuted, at: 130))
+        state.keyDown(at: 120)
+        XCTAssertTrue(state.possiblePTT)
+        XCTAssertTrue(state.temporaryUnmute)
+        XCTAssertTrue(state.keyUp(processedAt: 150))
+        XCTAssertEqual(state.state, .muted)
+    }
+
+    func testTemporaryHUDRequiresOwnedSpaceOrRenderedCorroboration() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 100))
+        state.keyDown(at: 105)
+        XCTAssertTrue(state.observeTemporaryHUD(true, at: 110))
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertTrue(state.temporaryUnmute)
+        XCTAssertFalse(state.observe(nil, at: 120))
+        XCTAssertFalse(state.observeTemporaryHUD(nil, at: 130))
+        XCTAssertFalse(state.observeTemporaryHUD(false, at: 140), "HUD disappearance is not itself mute")
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertTrue(state.keyUp(processedAt: 150))
+        XCTAssertEqual(state.state, .muted)
+        XCTAssertFalse(state.observeTemporaryHUD(true, at: 160), "The lingering old HUD cannot reopen after release")
+        XCTAssertFalse(state.observeTemporaryHUD(false, at: 170))
+        state.keyDown(at: 175)
+        XCTAssertTrue(state.observeTemporaryHUD(true, at: 180), "A new rendered HUD appearance can grant owned PTT")
+    }
+
+    func testOwnedHUDReclassifiesTemporaryModeFromAssumedOrPersistentUnmute() {
+        for sawPersistentUnmute in [false, true] {
+            var state = MeetingMuteTransitionState()
+            if sawPersistentUnmute { XCTAssertFalse(state.observe(.unmuted, at: 100)) }
+            state.keyDown(at: 110)
+            XCTAssertEqual(state.state, .unmuted)
+            XCTAssertFalse(state.observeTemporaryHUD(true, at: 120), "The output was already unmuted")
+            XCTAssertTrue(state.temporaryUnmute, "The explicit owned HUD identifies the underlying muted base")
+            XCTAssertTrue(state.keyUp(processedAt: 130))
+            XCTAssertEqual(state.state, .muted)
+        }
+    }
+
+    func testUnownedHUDCannotTurnCaptionTextIntoUnmute() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 100))
+        XCTAssertFalse(state.observeTemporaryHUD(true, at: 110))
+        XCTAssertEqual(state.state, .muted)
+        XCTAssertFalse(state.observeTemporaryHUD(false, at: 120))
+        XCTAssertTrue(state.observeTemporaryHUD(true, at: 130, corroboratedUnmute: true))
+        XCTAssertEqual(state.state, .unmuted)
+    }
+
+    func testNegativeProcessingFenceMatchesAudioGate() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 100))
+        state.negativeWasProcessed(at: 120)
+        XCTAssertFalse(state.observe(.unmuted, at: 115))
+        XCTAssertEqual(state.state, .muted)
+        XCTAssertTrue(state.observe(.unmuted, at: 130))
+    }
+
+    func testListenerLossKeepsStateUntilExplicitMuteAndRefinesReleaseBoundary() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 100))
+        state.keyDown(at: 110)
+        XCTAssertTrue(state.observe(.unmuted, at: 120))
+        state.keyListenerUnavailable()
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertFalse(state.observe(nil, at: 130))
+        XCTAssertTrue(state.observe(.muted, at: 140))
+        XCTAssertTrue(state.keyUp(processedAt: 150), "A delayed real release still narrows the PCM exclusion boundary")
+        XCTAssertEqual(state.state, .muted)
+    }
+
+    func testDelayedKeyUpDoesNotOverrideNewerRenderedMuteUnmuteCycle() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 90))
+        state.keyDown(at: 100)
+        XCTAssertTrue(state.observe(.unmuted, at: 110))
+        XCTAssertTrue(state.observe(.muted, at: 130))
+        XCTAssertTrue(state.observe(.unmuted, at: 140))
+        XCTAssertFalse(state.keyUp(processedAt: 170, releasedAt: 120))
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertFalse(state.temporaryUnmute)
+        XCTAssertEqual(state.historicalReleaseUnmuteAt, 140, "The old PCM boundary refines history before this newer unmute")
+        XCTAssertEqual(state.historicalReleaseUntilAt, 140, "The first following unmute ends the private release gap")
+        XCTAssertFalse(state.observe(.unmuted, at: 180))
+        XCTAssertEqual(state.state, .unmuted)
+    }
+
+    func testHistoricalReleaseScopePreservesLaterLegitimateClosedEpochs() {
+        for delayedHUDGrant in [false, true] {
+            var state = MeetingMuteTransitionState()
+            XCTAssertTrue(state.observe(.muted, at: 90))
+            state.keyDown(at: 100)
+            if delayedHUDGrant { XCTAssertTrue(state.observeTemporaryHUD(true, at: 125)) }
+            else { XCTAssertTrue(state.observe(.unmuted, at: 110)) }
+            XCTAssertEqual(state.observe(.muted, at: 130), !delayedHUDGrant)
+            XCTAssertEqual(state.observe(.unmuted, at: 135), !delayedHUDGrant)
+            XCTAssertTrue(state.observe(.muted, at: 137))
+            XCTAssertTrue(state.observe(.unmuted, at: 140))
+            XCTAssertFalse(state.keyUp(processedAt: 170, releasedAt: 120))
+            XCTAssertEqual(state.state, .unmuted)
+            XCTAssertEqual(state.historicalReleaseUnmuteAt, 140)
+            XCTAssertEqual(state.historicalReleaseUntilAt, 135, "The 135..137 epoch is newer than the historical scope")
+        }
+    }
+
+    func testHistoricalReleaseInsideAnObservedMutedPeriodUsesItsLastObservation() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 90))
+        state.keyDown(at: 100)
+        XCTAssertFalse(state.observe(.muted, at: 130))
+        XCTAssertTrue(state.observe(.unmuted, at: 140))
+        XCTAssertFalse(state.keyUp(processedAt: 170, releasedAt: 120))
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertEqual(state.historicalReleaseUntilAt, 140)
+    }
+
+    func testMutedHistoryIsBoundedAndDoesNotGuessAcrossRetiredPeriods() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 10))
+        state.keyDown(at: 11)
+        XCTAssertTrue(state.observe(.unmuted, at: 12))
+        for index in UInt64(0)..<70 {
+            XCTAssertTrue(state.observe(.muted, at: 20 + index * 2))
+            XCTAssertTrue(state.observe(.unmuted, at: 21 + index * 2))
+        }
+        XCTAssertEqual(state.retainedMutedSegmentCount, 64)
+        XCTAssertFalse(state.keyUp(processedAt: 200, releasedAt: 15))
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertNil(state.historicalReleaseUnmuteAt)
+        XCTAssertNil(state.historicalReleaseUntilAt, "An evicted old boundary cannot truncate unrelated later epochs")
+    }
+
+    func testHistoricalReleaseKeepsFirstResumeWhenHUDAndRenderedUnmuteShareEpoch() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 100))
+        state.keyDown(at: 110)
+        XCTAssertTrue(state.observeTemporaryHUD(true, at: 115))
+        XCTAssertFalse(state.observe(.muted, at: 119))
+        XCTAssertFalse(state.observe(.unmuted, at: 125))
+        XCTAssertTrue(state.observe(.muted, at: 130))
+        XCTAssertTrue(state.observe(.unmuted, at: 135))
+        XCTAssertFalse(state.keyUp(processedAt: 170, releasedAt: 120))
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertEqual(state.historicalReleaseUnmuteAt, 135)
+        XCTAssertEqual(state.historicalReleaseUntilAt, 125)
+    }
+
+    func testRetiredHistoryIncludesTheFirstResumeBoundary() {
+        var state = MeetingMuteTransitionState()
+        XCTAssertTrue(state.observe(.muted, at: 100))
+        state.keyDown(at: 105)
+        XCTAssertFalse(state.observe(.muted, at: 110))
+        XCTAssertTrue(state.observe(.unmuted, at: 115))
+        for index in UInt64(0)..<64 {
+            XCTAssertTrue(state.observe(.muted, at: 120 + index * 10))
+            XCTAssertTrue(state.observe(.unmuted, at: 125 + index * 10))
+        }
+        XCTAssertFalse(state.keyUp(processedAt: 800, releasedAt: 112))
+        XCTAssertEqual(state.state, .unmuted)
+        XCTAssertNil(state.historicalReleaseUntilAt)
+    }
+
+    func testHUDDoesNotRewriteIndependentRenderedStateHistory() {
+        for sawRenderedUnmute in [false, true] {
+            var state = MeetingMuteTransitionState()
+            XCTAssertTrue(state.observe(.muted, at: 100))
+            state.keyDown(at: 110)
+            XCTAssertTrue(state.observeTemporaryHUD(true, at: 120))
+            if sawRenderedUnmute { XCTAssertFalse(state.observe(.unmuted, at: 125)) }
+            XCTAssertEqual(state.observe(.muted, at: 130), sawRenderedUnmute,
+                "Only an actual new rendered mute transition can cancel the temporary grant")
+            XCTAssertFalse(state.observeTemporaryHUD(true, at: 130))
+            XCTAssertEqual(state.state, sawRenderedUnmute ? .muted : .unmuted)
+        }
+    }
+
+    func testZoomRenderedStatusRejectsDisplayNameTextAndAcceptsStatusOnlyMetadata() {
+        XCTAssertNil(MeetingZoomMuteStatusObserver.selfTileState("Synthetic Peer, Computer audio muted"))
+        XCTAssertNil(MeetingZoomMuteStatusObserver.selfTileState("Synthetic Peer, Computer audio unmuted"))
+        XCTAssertEqual(MeetingZoomMuteStatusObserver.selfTileState("Computer audio muted"), .muted)
+        XCTAssertEqual(MeetingZoomMuteStatusObserver.selfTileState("Computer audio unmuted"), .unmuted)
+        XCTAssertNil(MeetingZoomMuteStatusObserver.selfTileState("Another participant, audio muted"))
+        XCTAssertNil(MeetingZoomMuteStatusObserver.selfTileState("Computer camera muted"))
+        XCTAssertNil(MeetingZoomMuteStatusObserver.selfTileState("Settings to mute computer audio"))
+    }
+
+    func testZoomTemporaryHUDRequiresExactRenderedStatus() {
+        XCTAssertTrue(MeetingZoomMuteStatusObserver.isTemporaryHUDText("Temporarily unmuted"))
+        XCTAssertTrue(MeetingZoomMuteStatusObserver.isTemporaryHUDText("Temporarily\nunmuted"))
+        XCTAssertFalse(MeetingZoomMuteStatusObserver.isTemporaryHUDText("Hold Space to temporarily unmute"))
+        XCTAssertFalse(MeetingZoomMuteStatusObserver.isTemporaryHUDText("Camera temporarily unmuted"))
+        XCTAssertFalse(MeetingZoomMuteStatusObserver.isTemporaryHUDText(nil))
     }
 
     func testUnsupportedMonitorStopsWithoutOpeningNativeResources() {
@@ -148,10 +388,10 @@ final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
         }
         monitor.start()
         self.stop(monitor)
-        XCTAssertEqual(capture.states, [.checking, .unknown, .unknown])
+        XCTAssertEqual(capture.states, [.unmuted])
         monitor.start()
         self.stop(monitor)
-        XCTAssertEqual(capture.states, [.checking, .unknown, .unknown], "Stop is terminal and idempotent for one attempt")
+        XCTAssertEqual(capture.states, [.unmuted], "Stop is terminal and idempotent for one attempt")
     }
 
     func testStoppingBeforeStartPreventsLaterCallbacks() {
