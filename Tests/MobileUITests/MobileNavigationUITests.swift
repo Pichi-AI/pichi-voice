@@ -5,7 +5,33 @@ import CoreText
 final class MobileNavigationUITests: XCTestCase {
     private var app: XCUIApplication!
 
+    // These acceptance cases consume caller-staged sessions/audio. Admission
+    // happens before launching the AUT; a missing fixture is not a product failure.
+    static let stagedFixtureCases = [
+        "testColdGuestHistoryLoadsWithoutManualRefresh",
+        "testWordTimedHistoryFlowsAndParticipantsWrapInBothOrientationsAndThemes",
+        "testGeneralizedSpeakerAttributionLabelsInBothLanguagesAndThemes",
+        "testProtectedTranscriptExportOpensNativeShareSheetInBothLanguages",
+        "testLegacyOrphanWordReadsInsideOneParticipantParagraphInBothLanguagesAndThemes",
+        "testExplicitSpeakerAliasPersistsWithTranscriptPrivacyEnabled",
+        "testLegacyParticipantCaptionsStayPlainAfterReopen",
+        "testFragmentParticipantCorrectionScopesUndoAndReopen",
+        "testTranscriptScrollKeepsNavigationControlsReadable",
+        "testReselectingMeetingsClosesMeetingDetail",
+        "testRetainedProcessingRecoveryActionsInBothLanguagesAndThemes",
+        "testStartingOverRestoredRecoveryResolvesIt",
+        "testMeetingLocationTitlesInBothLanguagesAndThemes"
+    ]
+
+    static func needsStagedFixture(_ testName: String, environment: [String: String]) -> Bool {
+        stagedFixtureCases.contains(where: testName.contains)
+            && environment["PICHI_MOBILE_STAGED_UI_FIXTURES"] != "1"
+    }
+
     override func setUpWithError() throws {
+        if Self.needsStagedFixture(name, environment: ProcessInfo.processInfo.environment) {
+            throw XCTSkip("Requires explicitly staged synthetic sessions/audio: PICHI_MOBILE_STAGED_UI_FIXTURES=1")
+        }
         if name.contains("testSpeakerColorsNativeSmoke") || name.contains("testParticipantInlineNameAndOwnerTransferSmoke") {
             #if !targetEnvironment(simulator)
             throw XCTSkip("Synthetic speaker color smoke is simulator-only")
@@ -62,9 +88,11 @@ final class MobileNavigationUITests: XCTestCase {
             let language = name.contains("testSharedGuestHistoryAcrossAccountProfiles") ? "ru" : "en"
             app.launchArguments += ["-PichiInterfaceLanguage", language]
         }
-        if name.contains("testSensitivePolicySettingsInBothLanguagesAndThemes") {
+        #if targetEnvironment(simulator)
+        if !productionSmoke {
             app.launchArguments += ["-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
         }
+        #endif
         if name.contains("testSharedGuestHistoryAcrossAccountProfiles") {
             app.launchEnvironment["PICHI_UI_SHARED_GUEST_HISTORY_REVIEW"] = "1"
             app.launchEnvironment["PICHI_UI_SHARED_GUEST_HISTORY_PROFILE"] = "a"
@@ -813,7 +841,14 @@ final class MobileNavigationUITests: XCTestCase {
         #endif
     }
 
-    func testSharedGuestHistoryAcrossAccountProfiles() throws {
+    func testSharedGuestHistoryAcrossAccountProfilesAccountALight() throws { try verifySharedGuestHistory(profile: "a", appearance: "light") }
+    func testSharedGuestHistoryAcrossAccountProfilesAccountADark() throws { try verifySharedGuestHistory(profile: "a", appearance: "dark") }
+    func testSharedGuestHistoryAcrossAccountProfilesAccountBLight() throws { try verifySharedGuestHistory(profile: "b", appearance: "light") }
+    func testSharedGuestHistoryAcrossAccountProfilesAccountBDark() throws { try verifySharedGuestHistory(profile: "b", appearance: "dark") }
+    func testSharedGuestHistoryAcrossAccountProfilesGuestLight() throws { try verifySharedGuestHistory(profile: "guest", appearance: "light") }
+    func testSharedGuestHistoryAcrossAccountProfilesGuestDark() throws { try verifySharedGuestHistory(profile: "guest", appearance: "dark") }
+
+    private func verifySharedGuestHistory(profile: String, appearance: String) throws {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Synthetic shared History review requires an owned simulator")
         #else
@@ -822,40 +857,36 @@ final class MobileNavigationUITests: XCTestCase {
         let accountBID = "E0000000-0000-4000-8000-000000000003"
         let launchArguments = app.launchArguments
         defer { app.terminate() }
-        for appearance in ["light", "dark"] {
-            for profile in ["a", "b", "guest"] {
-                app.terminate()
-                app.launchArguments = launchArguments + ["-ThemePreference", appearance]
-                app.launchEnvironment["PICHI_UI_SHARED_GUEST_HISTORY_PROFILE"] = profile
-                app.launch()
-                XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15),
-                              "The actual meeting root must finish its isolated profile fixture")
-                capture("shared-guest-\(profile)-\(appearance)-ready")
-                let meetingsTitle = app.tabBars.buttons["Записи"].exists ? "Записи" : "Recordings"
-                openNavigation("meetings", title: meetingsTitle)
-                let guest = app.buttons["history.session.\(guestID)"]
-                XCTAssertTrue(guest.waitForExistence(timeout: 5),
-                              "Every profile must show the saved device-guest meeting without refresh")
-                XCTAssertTrue(guest.label.contains("Гостевая встреча Ёж"))
-                let ownID: String? = profile == "a" ? accountAID : (profile == "b" ? accountBID : nil)
-                if let ownID {
-                    XCTAssertTrue(app.buttons["history.session.\(ownID)"].waitForExistence(timeout: 5),
-                                  "An account must retain its own meeting alongside shared guest History")
-                }
-                for foreignID in [accountAID, accountBID] where foreignID != ownID {
-                    XCTAssertFalse(app.buttons["history.session.\(foreignID)"].exists,
-                                   "Guest sharing must not expose another account's private meeting")
-                }
-                capture("shared-guest-\(profile)-\(appearance)-list")
-                guest.tap()
-                XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5),
-                              "The shared guest row must open its actual transcript")
-                XCTAssertTrue(app.buttons["transcript.copy"].exists)
-                XCTAssertTrue(app.buttons["transcript.more"].exists)
-                XCTAssertTrue(app.staticTexts["Синтетический текст гостевой встречи."].waitForExistence(timeout: 5))
-                capture("shared-guest-\(profile)-\(appearance)-detail")
-            }
+        app.terminate()
+        app.launchArguments = launchArguments + ["-ThemePreference", appearance]
+        app.launchEnvironment["PICHI_UI_SHARED_GUEST_HISTORY_PROFILE"] = profile
+        app.launch()
+        XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15),
+                      "The actual meeting root must finish its isolated profile fixture")
+        capture("shared-guest-\(profile)-\(appearance)-ready")
+        let meetingsTitle = app.tabBars.buttons["Записи"].exists ? "Записи" : "Recordings"
+        openNavigation("meetings", title: meetingsTitle)
+        let guest = app.buttons["history.session.\(guestID)"]
+        XCTAssertTrue(guest.waitForExistence(timeout: 5),
+                      "Every profile must show the saved device-guest meeting without refresh")
+        XCTAssertTrue(guest.label.contains("Гостевая встреча Ёж"))
+        let ownID: String? = profile == "a" ? accountAID : (profile == "b" ? accountBID : nil)
+        if let ownID {
+            XCTAssertTrue(app.buttons["history.session.\(ownID)"].waitForExistence(timeout: 5),
+                          "An account must retain its own meeting alongside shared guest History")
         }
+        for foreignID in [accountAID, accountBID] where foreignID != ownID {
+            XCTAssertFalse(app.buttons["history.session.\(foreignID)"].exists,
+                           "Guest sharing must not expose another account's private meeting")
+        }
+        capture("shared-guest-\(profile)-\(appearance)-list")
+        guest.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5),
+                      "The shared guest row must open its actual transcript")
+        XCTAssertTrue(app.buttons["transcript.copy"].exists)
+        XCTAssertTrue(app.buttons["transcript.more"].exists)
+        XCTAssertTrue(app.staticTexts["Синтетический текст гостевой встречи."].waitForExistence(timeout: 5))
+        capture("shared-guest-\(profile)-\(appearance)-detail")
         #endif
     }
 

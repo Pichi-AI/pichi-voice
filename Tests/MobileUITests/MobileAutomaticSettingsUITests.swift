@@ -53,134 +53,140 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
         capture("guest-retention-disabled")
     }
 
-    func testAutomaticDeliverySettingsInBothLanguagesAndThemes() throws {
+    func testAutomaticDeliverySettingsEnglishLight() throws { try verifyAutomaticDeliverySettings(language: "en", appearance: "light") }
+    func testAutomaticDeliverySettingsEnglishDark() throws { try verifyAutomaticDeliverySettings(language: "en", appearance: "dark") }
+    func testAutomaticDeliverySettingsRussianLight() throws { try verifyAutomaticDeliverySettings(language: "ru", appearance: "light") }
+    func testAutomaticDeliverySettingsRussianDark() throws { try verifyAutomaticDeliverySettings(language: "ru", appearance: "dark") }
+
+    private func verifyAutomaticDeliverySettings(language: String, appearance: String) throws {
         let app = XCUIApplication()
         defer { app.terminate() }
         XCUIDevice.shared.orientation = .portrait
-        for (language, appearance) in [("en", "light"), ("en", "dark"), ("ru", "light"), ("ru", "dark")] {
-            app.launchEnvironment["PICHI_UI_AUTOMATIC_SETTINGS_REVIEW"] = "1"
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
-            app.launch()
-            let prefix = "automatic-\(language)-\(appearance)"
-            XCTAssertTrue(app.descendants(matching: .any)["automatic.review.ready"].firstMatch.waitForExistence(timeout: 15))
-            XCTAssertFalse(app.descendants(matching: .any)["automatic.review.failed"].firstMatch.exists)
-            XCTAssertTrue(app.buttons["account.workspace.selector"].waitForExistence(timeout: 5))
-            capture(prefix + "-account")
-            let automatic = app.switches["cloud.sync.toggle"]
-            expose(automatic, in: app, step: prefix + "-automatic")
-            XCTAssertEqual(automatic.value as? String, "0")
-            openPrivacy(app, step: prefix + "-privacy")
-            let encryption = app.switches["privacy.encryptLocalRecordings"]
-            let deletion = app.switches["cloud.automatic.deleteLocal"]
-            expose(encryption, in: app, step: prefix + "-encryption")
-            XCTAssertEqual(encryption.value as? String, "0")
-            XCTAssertTrue(encryption.isEnabled)
-            expose(deletion, in: app, step: prefix + "-retention")
-            XCTAssertEqual(deletion.value as? String, "0")
-            XCTAssertTrue(deletion.isEnabled, "A connected workspace can configure retention without enabling uploads")
-            tap(encryption, app: app, step: prefix + "-local-encryption-visible")
-            waitForValue(encryption, "1")
-            tap(deletion, app: app, step: prefix + "-retention-visible")
-            waitForValue(deletion, "1")
-            capture(prefix + "-local-policies-on")
-            closePrivacy(app)
-            expose(automatic, in: app, step: prefix + "-automatic-still-off")
-            XCTAssertEqual(automatic.value as? String, "0", "Privacy choices must not silently grant upload consent")
-            tap(automatic, app: app, step: prefix + "-automatic-visible")
-            waitForValue(automatic, "1")
-            openPrivacy(app, step: prefix + "-protected-sync")
-            expose(encryption, in: app, step: prefix + "-forced-encryption")
-            waitForValue(encryption, "1", enabled: false)
-            XCTAssertTrue(app.descendants(matching: .any)["privacy.encryption.requiredForSync"].firstMatch.exists)
-            expose(deletion, in: app, step: prefix + "-synced-retention")
-            XCTAssertEqual(deletion.value as? String, "1")
-            XCTAssertTrue(deletion.isEnabled)
-            capture(prefix + "-automatic-requires-encryption")
-            closePrivacy(app)
-            tap(automatic, app: app, step: prefix + "-automatic-pause-visible")
-            waitForValue(automatic, "0")
-            openPrivacy(app, step: prefix + "-independent-policies")
-            expose(encryption, in: app, step: prefix + "-encryption-still-on")
-            XCTAssertEqual(encryption.value as? String, "1")
-            XCTAssertTrue(encryption.isEnabled)
-            tap(encryption, app: app, step: prefix + "-encryption-off-visible")
-            waitForValue(encryption, "0")
-            expose(deletion, in: app, step: prefix + "-retention-still-on")
-            XCTAssertEqual(deletion.value as? String, "1")
-            XCTAssertTrue(deletion.isEnabled)
-            tap(deletion, app: app, step: prefix + "-retention-off-visible")
-            waitForValue(deletion, "0")
-            XCTAssertFalse(app.descendants(matching: .any)["privacy.retention.error"].firstMatch.exists)
-            capture(prefix + "-policies-restored-off")
-            closePrivacy(app)
-            let close = app.buttons["automatic.review.close"]
-            XCTAssertTrue(close.isHittable)
-            close.tap()
-            XCTAssertTrue(app.descendants(matching: .any)["automatic.review.closed"].firstMatch.waitForExistence(timeout: 10),
-                "Fixture must join owned work and remove its temporary root before app termination")
-            capture(prefix + "-closed")
-            app.terminate()
-        }
+        app.launchEnvironment["PICHI_UI_AUTOMATIC_SETTINGS_REVIEW"] = "1"
+        app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+        app.launch()
+        let prefix = "automatic-\(language)-\(appearance)"
+        XCTAssertTrue(app.descendants(matching: .any)["automatic.review.ready"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertFalse(app.descendants(matching: .any)["automatic.review.failed"].firstMatch.exists)
+        XCTAssertTrue(app.buttons["account.workspace.selector"].waitForExistence(timeout: 5))
+        capture(prefix + "-account")
+        let automatic = app.switches["cloud.sync.toggle"]
+        expose(automatic, in: app, step: prefix + "-automatic")
+        XCTAssertEqual(automatic.value as? String, "0")
+        openPrivacy(app, step: prefix + "-privacy")
+        let encryption = app.switches["privacy.encryptLocalRecordings"]
+        let deletion = app.switches["cloud.automatic.deleteLocal"]
+        expose(encryption, in: app, step: prefix + "-encryption")
+        XCTAssertEqual(encryption.value as? String, "0")
+        XCTAssertTrue(encryption.isEnabled)
+        expose(deletion, in: app, step: prefix + "-retention")
+        XCTAssertEqual(deletion.value as? String, "0")
+        XCTAssertTrue(deletion.isEnabled, "A connected workspace can configure retention without enabling uploads")
+        tap(encryption, app: app, step: prefix + "-local-encryption-visible")
+        waitForValue(encryption, "1")
+        tap(deletion, app: app, step: prefix + "-retention-visible")
+        waitForValue(deletion, "1")
+        capture(prefix + "-local-policies-on")
+        closePrivacy(app)
+        expose(automatic, in: app, step: prefix + "-automatic-still-off")
+        XCTAssertEqual(automatic.value as? String, "0", "Privacy choices must not silently grant upload consent")
+        tap(automatic, app: app, step: prefix + "-automatic-visible")
+        waitForValue(automatic, "1")
+        openPrivacy(app, step: prefix + "-protected-sync")
+        expose(encryption, in: app, step: prefix + "-forced-encryption")
+        waitForValue(encryption, "1", enabled: false)
+        XCTAssertTrue(app.descendants(matching: .any)["privacy.encryption.requiredForSync"].firstMatch.exists)
+        expose(deletion, in: app, step: prefix + "-synced-retention")
+        XCTAssertEqual(deletion.value as? String, "1")
+        XCTAssertTrue(deletion.isEnabled)
+        capture(prefix + "-automatic-requires-encryption")
+        closePrivacy(app)
+        tap(automatic, app: app, step: prefix + "-automatic-pause-visible")
+        waitForValue(automatic, "0")
+        openPrivacy(app, step: prefix + "-independent-policies")
+        expose(encryption, in: app, step: prefix + "-encryption-still-on")
+        XCTAssertEqual(encryption.value as? String, "1")
+        XCTAssertTrue(encryption.isEnabled)
+        tap(encryption, app: app, step: prefix + "-encryption-off-visible")
+        waitForValue(encryption, "0")
+        expose(deletion, in: app, step: prefix + "-retention-still-on")
+        XCTAssertEqual(deletion.value as? String, "1")
+        XCTAssertTrue(deletion.isEnabled)
+        tap(deletion, app: app, step: prefix + "-retention-off-visible")
+        waitForValue(deletion, "0")
+        XCTAssertFalse(app.descendants(matching: .any)["privacy.retention.error"].firstMatch.exists)
+        capture(prefix + "-policies-restored-off")
+        closePrivacy(app)
+        let close = app.buttons["automatic.review.close"]
+        XCTAssertTrue(close.isHittable)
+        close.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["automatic.review.closed"].firstMatch.waitForExistence(timeout: 10),
+            "Fixture must join owned work and remove its temporary root before app termination")
+        capture(prefix + "-closed")
+        app.terminate()
     }
 
     /// The default account screen exposes its selected scope and consent without
     /// a wall of implementation details; those details remain reachable on demand.
-    func testCompactAccountShowsSelectedWorkspaceAndExpandableDetails() throws {
+    func testCompactAccountEnglishLight() throws { try verifyCompactAccount(language: "en", appearance: "light") }
+    func testCompactAccountEnglishDark() throws { try verifyCompactAccount(language: "en", appearance: "dark") }
+    func testCompactAccountRussianLight() throws { try verifyCompactAccount(language: "ru", appearance: "light") }
+    func testCompactAccountRussianDark() throws { try verifyCompactAccount(language: "ru", appearance: "dark") }
+
+    private func verifyCompactAccount(language: String, appearance: String) throws {
         let app = XCUIApplication()
         defer { app.terminate() }
         XCUIDevice.shared.orientation = .portrait
-        for (language, appearance) in [("en", "light"), ("en", "dark"), ("ru", "light"), ("ru", "dark")] {
-            app.launchEnvironment["PICHI_UI_AUTOMATIC_SETTINGS_REVIEW"] = "1"
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
-            app.launch()
-            let prefix = "compact-\(language)-\(appearance)"
-            XCTAssertTrue(app.descendants(matching: .any)["automatic.review.ready"].firstMatch.waitForExistence(timeout: 15))
-            let workspace = app.buttons["account.workspace.selector"]
-            XCTAssertTrue(workspace.waitForExistence(timeout: 5))
-            XCTAssertEqual(workspace.value as? String, "Synthetic workspace Ёё")
-            let automatic = app.switches["cloud.sync.toggle"]
-            XCTAssertTrue(automatic.isHittable && automatic.isEnabled)
-            XCTAssertEqual(automatic.value as? String, "0")
-            XCTAssertTrue(app.staticTexts["cloud.sync.summary"].exists)
-            let destination = app.descendants(matching: .any)["cloud.automatic.destination"].firstMatch
-            XCTAssertFalse(destination.exists, "The technical server row is collapsed by default")
-            XCTAssertFalse(app.buttons["account.switchPerson"].exists)
-            XCTAssertFalse(app.buttons["account.signOut"].exists)
-            capture(prefix + "-default")
+        app.launchEnvironment["PICHI_UI_AUTOMATIC_SETTINGS_REVIEW"] = "1"
+        app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+        app.launch()
+        let prefix = "compact-\(language)-\(appearance)"
+        XCTAssertTrue(app.descendants(matching: .any)["automatic.review.ready"].firstMatch.waitForExistence(timeout: 15))
+        let workspace = app.buttons["account.workspace.selector"]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+        XCTAssertEqual(workspace.value as? String, "Synthetic workspace Ёё")
+        let automatic = app.switches["cloud.sync.toggle"]
+        XCTAssertTrue(automatic.isHittable && automatic.isEnabled)
+        XCTAssertEqual(automatic.value as? String, "0")
+        XCTAssertTrue(app.staticTexts["cloud.sync.summary"].exists)
+        let destination = app.descendants(matching: .any)["cloud.automatic.destination"].firstMatch
+        XCTAssertFalse(destination.exists, "The technical server row is collapsed by default")
+        XCTAssertFalse(app.buttons["account.switchPerson"].exists)
+        XCTAssertFalse(app.buttons["account.signOut"].exists)
+        capture(prefix + "-default")
 
-            XCTAssertTrue(workspace.isHittable)
-            workspace.tap()
-            capture(prefix + "-workspace-opened")
-            // Native UIMenu actions expose their visible title rather than
-            // forwarding the SwiftUI Button's accessibility identifier.
-            XCTAssertTrue(app.buttons["Synthetic workspace Ёё"].waitForExistence(timeout: 5))
-            dismissMenu(app)
-            XCTAssertTrue(workspace.isHittable)
+        XCTAssertTrue(workspace.isHittable)
+        workspace.tap()
+        capture(prefix + "-workspace-opened")
+        // Native UIMenu actions expose their visible title rather than
+        // forwarding the SwiftUI Button's accessibility identifier.
+        XCTAssertTrue(app.buttons["Synthetic workspace Ёё"].waitForExistence(timeout: 5))
+        dismissMenu(app)
+        XCTAssertTrue(workspace.isHittable)
 
-            let details = app.descendants(matching: .any)["cloud.sync.details.toggle"].firstMatch
-            expose(details, in: app, step: prefix + "-details-visible")
-            details.tap()
-            capture(prefix + "-details-open")
-            XCTAssertTrue(destination.waitForExistence(timeout: 5))
-            details.tap()
-            XCTAssertFalse(destination.exists)
-            XCTAssertEqual(automatic.value as? String, "0", "Reading details must not enable sending")
+        let details = app.descendants(matching: .any)["cloud.sync.details.toggle"].firstMatch
+        expose(details, in: app, step: prefix + "-details-visible")
+        details.tap()
+        capture(prefix + "-details-open")
+        XCTAssertTrue(destination.waitForExistence(timeout: 5))
+        details.tap()
+        XCTAssertFalse(destination.exists)
+        XCTAssertEqual(automatic.value as? String, "0", "Reading details must not enable sending")
 
-            let actions = app.buttons["account.actions"]
-            expose(actions, in: app, step: prefix + "-actions-visible")
-            actions.tap()
-            capture(prefix + "-actions")
-            let switchTitle = language == "ru" ? "Сменить аккаунт" : "Switch account"
-            let signOutTitle = language == "ru" ? "Выйти" : "Sign out"
-            XCTAssertTrue(app.buttons[switchTitle].waitForExistence(timeout: 5))
-            XCTAssertTrue(app.buttons[signOutTitle].exists)
-            dismissMenu(app)
-            let close = app.buttons["automatic.review.close"]
-            XCTAssertTrue(close.isHittable)
-            close.tap()
-            XCTAssertTrue(app.descendants(matching: .any)["automatic.review.closed"].firstMatch.waitForExistence(timeout: 10))
-            app.terminate()
-        }
+        let actions = app.buttons["account.actions"]
+        expose(actions, in: app, step: prefix + "-actions-visible")
+        actions.tap()
+        capture(prefix + "-actions")
+        let switchTitle = language == "ru" ? "Сменить аккаунт" : "Switch account"
+        let signOutTitle = language == "ru" ? "Выйти" : "Sign out"
+        XCTAssertTrue(app.buttons[switchTitle].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons[signOutTitle].exists)
+        dismissMenu(app)
+        let close = app.buttons["automatic.review.close"]
+        XCTAssertTrue(close.isHittable)
+        close.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["automatic.review.closed"].firstMatch.waitForExistence(timeout: 10))
+        app.terminate()
     }
 
     private func dismissMenu(_ app: XCUIApplication) {

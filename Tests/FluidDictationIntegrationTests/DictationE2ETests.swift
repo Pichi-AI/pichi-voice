@@ -1625,7 +1625,7 @@ extension DictationE2ETests {
 
     func testDictationEndToEnd_whisperTiny_transcribesFixture() async throws {
         // Arrange
-        let modelDirectory = Self.modelDirectoryForRun()
+        let modelDirectory = self.modelDirectoryForRun(sharedCache: true)
         try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
 
         let provider = WhisperProvider(modelDirectory: modelDirectory, modelOverride: .whisperTiny, languageCodeOverride: "en")
@@ -1649,7 +1649,7 @@ extension DictationE2ETests {
     }
 
     func testWhisperProvider_legacyBinCacheDoesNotCountAsDownloadedOrDeletedByReadinessCheck() throws {
-        let modelDirectory = Self.modelDirectoryForRun()
+        let modelDirectory = self.modelDirectoryForRun()
         try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
 
         let legacyURL = modelDirectory.appendingPathComponent("ggml-tiny.bin")
@@ -1662,7 +1662,7 @@ extension DictationE2ETests {
     }
 
     func testWhisperProvider_readinessCheckDoesNotCreateMissingDirectory() {
-        let modelDirectory = Self.modelDirectoryForRun()
+        let modelDirectory = self.modelDirectoryForRun()
         let provider = WhisperProvider(modelDirectory: modelDirectory, modelOverride: .whisperTiny)
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: modelDirectory.path))
@@ -1671,7 +1671,7 @@ extension DictationE2ETests {
     }
 
     func testWhisperProvider_ggufCacheReadinessDoesNotDeleteLegacyUntilExplicitClear() async throws {
-        let modelDirectory = Self.modelDirectoryForRun()
+        let modelDirectory = self.modelDirectoryForRun()
         try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
 
         let model = SettingsStore.SpeechModel.whisperTiny
@@ -2873,10 +2873,10 @@ extension DictationE2ETests {
         )
     }
 
-    private static func modelDirectoryForRun() -> URL {
+    private func modelDirectoryForRun(sharedCache: Bool = false) -> URL {
         // Use a stable path on CI so GitHub Actions cache can speed up runs.
-        if ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true" ||
-            ProcessInfo.processInfo.environment["CI"] == "true"
+        if sharedCache && (ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true" ||
+            ProcessInfo.processInfo.environment["CI"] == "true")
         {
             guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
                 preconditionFailure("Could not find caches directory")
@@ -2884,10 +2884,12 @@ extension DictationE2ETests {
             return caches.appendingPathComponent("WhisperModels")
         }
 
-        // Local runs: isolate per test execution.
+        // Synthetic cache tests stay isolated on CI too. Only the opt-in real
+        // transcription test above may use the reusable download cache.
         let base = FileManager.default.temporaryDirectory
             .appendingPathComponent("FluidVoiceTests", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        self.addTeardownBlock { try? FileManager.default.removeItem(at: base) }
         return base.appendingPathComponent("WhisperModels", isDirectory: true)
     }
 

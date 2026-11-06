@@ -222,7 +222,10 @@ final class UpdateAppReplacementTests: XCTestCase {
         let lock = fixture.applications.appendingPathComponent(".fluidvoice-update-FluidVoice.app.lock")
         func childLockAttempt() throws -> Int32 {
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            // The system shim can invoke a different Xcode than the test host.
+            // CI supplies its actual interpreter, preserving the real cross-process lock check.
+            process.executableURL = URL(fileURLWithPath:
+                ProcessInfo.processInfo.environment["PICHI_TEST_PYTHON_EXECUTABLE"] ?? "/usr/bin/python3")
             process.arguments = ["-c", """
             import fcntl, os, sys
             target = os.stat(sys.argv[1])

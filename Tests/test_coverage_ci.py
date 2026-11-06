@@ -147,6 +147,7 @@ class CoverageProducerTests(unittest.TestCase):
             path, apps = CI.configure_run(self.root, products, "Mobile")
         targets = plistlib.loads(path.read_bytes())["TestConfigurations"][0]["TestTargets"]
         self.assertEqual(apps, {"App.app"})
+        self.assertEqual(targets[0]["EnvironmentVariables"]["PICHI_TEST_PYTHON_EXECUTABLE"], sys.executable)
         self.assertEqual(targets[0]["EnvironmentVariables"]["PICHI_MOBILE_HOSTED_FIXTURE"], "1")
         self.assertNotIn("PICHI_MOBILE_HOSTED_FIXTURE", targets[1]["EnvironmentVariables"])
         self.assertEqual(targets[0]["EnvironmentVariables"]["FLUID_EXPORT_TEST_SANDBOX_TEMP"], "/owned/temp/")

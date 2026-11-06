@@ -47,8 +47,9 @@ def git(root, *args):
 
 def production(path):
     parts = Path(path).parts
-    return (not any(p.lower() in ("tests", ".build", ".git") for p in parts)
-            and not Path(path).name.startswith("test_")
+    tests = (path.startswith("Tests/") or path.startswith("Vendor/") and len(parts) > 2 and parts[2] == "Tests"
+             or path.startswith("tools/") and Path(path).name.startswith("test_") and path.endswith(".py"))
+    return (not tests and not any(p in (".build", ".git") for p in parts)
             and path.endswith((".swift", ".c", ".cc", ".cpp", ".m", ".mm", ".h", ".hpp", ".py")))
 
 
@@ -184,7 +185,9 @@ def configure_run(root, products, scheme):
     spec = importlib.util.spec_from_file_location("coverage_regression", root / "scripts/dev/macos-regression.py")
     helper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(helper)
-    helper.configure_targets(value, os.environ)
+    environment = dict(os.environ)
+    environment["PICHI_TEST_PYTHON_EXECUTABLE"] = sys.executable
+    helper.configure_targets(value, environment)
     temp = command(["getconf", "DARWIN_USER_TEMP_DIR"]).stdout.strip()
     apps = set()
     def visit(node):
