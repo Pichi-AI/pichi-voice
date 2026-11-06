@@ -353,7 +353,7 @@ def packages(root, output):
 def python(root, output):
     import coverage
     source = git(root, "rev-parse", "HEAD")
-    work = Path(output) / "python"
+    work = Path(output) / "python" / ("run-" + uuid.uuid4().hex)
     work.mkdir(parents=True, exist_ok=True)
     tracked = git(root, "ls-files", "*.py").splitlines()
     config = work / "coveragerc"

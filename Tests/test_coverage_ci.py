@@ -323,6 +323,32 @@ class CoverageProducerTests(unittest.TestCase):
             CI.python(self.root, self.out)
         self.assertEqual(cov.stop.call_count, 2)
 
+    @unittest.skipUnless(importlib.util.find_spec("coverage"), "real retry regression requires coverage.py")
+    def test_python_retry_cannot_inherit_hits_from_failed_import(self):
+        source = self.root / "tools/fixture_product.py"
+        source.parent.mkdir()
+        source.write_text("def only_in_failed_import():\n    return 42\n")
+        (source.parent / "test_fixture.py").write_text(
+            "import os, unittest\nfrom fixture_product import only_in_failed_import\n"
+            "if os.environ.get('PICHI_COVERAGE_RETRY_FIXTURE') != 'retry':\n"
+            "    only_in_failed_import()\n    raise RuntimeError('first import fails')\n"
+            "class Fixture(unittest.TestCase):\n    def test_pass(self): self.assertEqual(1 + 1, 2)\n")
+        def git(*args):
+            subprocess.run(["git", "-C", str(self.root), *args], check=True, capture_output=True)
+        git("init", "-q")
+        git("add", "tools")
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture")
+        argv = [sys.executable, str(ROOT / "scripts/dev/coverage-ci.py"), "python", "--root", str(self.root), "--output", str(self.out)]
+        first = subprocess.run(argv, capture_output=True, text=True, env={**os.environ, "PICHI_COVERAGE_RETRY_FIXTURE": "first"})
+        self.assertNotEqual(first.returncode, 0)
+        self.assertIn("first import fails", first.stderr)
+        second = subprocess.run(argv, capture_output=True, text=True, env={**os.environ, "PICHI_COVERAGE_RETRY_FIXTURE": "retry"})
+        self.assertEqual(second.returncode, 0, second.stderr)
+        row = CI.read(self.out / "python.json")["files"]["tools/fixture_product.py"]
+        self.assertIn(2, row["executable_lines"])
+        self.assertNotIn(2, row["covered_lines"])
+        self.assertEqual(len(list((self.out / "python").glob("run-*"))), 2)
+
     def test_cli_dispatch_and_errors(self):
         for mode, function in [("plan", "plan"), ("finish", "finish"), ("native", "native"), ("packages", "packages"), ("python", "python")]:
             with patch.object(CI, function, return_value=0) as target:

@@ -191,8 +191,8 @@ jobs:
         with:
           name: coverage-diagnostics-python
           path: |
-            ${{ env.CI_ROOT }}/.build/coverage/python/tests.log
-            ${{ env.CI_ROOT }}/.build/coverage/python/coverage.json
+            ${{ env.CI_ROOT }}/.build/coverage/python/*/tests.log
+            ${{ env.CI_ROOT }}/.build/coverage/python/*/coverage.json
           retention-days: 1
 
   coverage:
