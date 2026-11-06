@@ -7,10 +7,10 @@ import Foundation
 final class HistoryDictionaryAudioLearningService {
     static let shared = HistoryDictionaryAudioLearningService()
 
-    func enrich(candidate: AutomaticDictionaryCorrectionCandidate, selection: DictionaryHistoryWordSelection) async -> AutomaticDictionaryCorrectionCandidate {
+    func enrich(candidate: AutomaticDictionaryCorrectionCandidate, selection: DictionaryHistoryWordSelection, correctionPlan: DictionaryCorrectionReplacementPlan? = nil) async -> AutomaticDictionaryCorrectionCandidate {
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled,
               PrivateProfileStorage.isReadable(selection.profile), PrivateProfileStorage.acceptsNewWork,
-              let initial = self.currentEntry(selection: selection, candidate: candidate),
+              let initial = self.currentEntry(selection: selection, candidate: candidate, correctionPlan: correctionPlan),
               let audio = initial.audio,
               let url = DictationAudioHistoryStore.scoped(to: selection.profile).audioFileURL(for: initial) else { return candidate }
         do {
@@ -18,11 +18,12 @@ final class HistoryDictionaryAudioLearningService {
                 fileURL: url, recordingID: Self.recordingID(entryID: initial.id, fileName: audio.fileName), profile: selection.profile
             )
             try Task.checkCancellation()
-            guard let current = self.currentEntry(selection: selection, candidate: candidate),
+            guard let current = self.currentEntry(selection: selection, candidate: candidate, correctionPlan: correctionPlan),
                   current.rawText == initial.rawText, current.audio == audio else { return candidate }
+            let alignment = Self.alignmentSelection(history: initial, selection: selection, candidate: candidate, plan: correctionPlan)
             let evidence = try DictionaryLearningAlignmentResolver.resolve(
-                recording: recording, deliveredTextBeforeEdit: selection.sourceText,
-                selectedUTF16Range: selection.range, observedText: candidate.heardText
+                recording: recording, deliveredTextBeforeEdit: alignment.text,
+                selectedUTF16Range: alignment.range, observedText: alignment.observed
             )
             var enriched = candidate
             enriched.audioEvidence = evidence
@@ -34,21 +35,27 @@ final class HistoryDictionaryAudioLearningService {
         }
     }
 
-    /// An inline save is explicit approval for this occurrence only. Preparation and
-    /// persistence are owned by the shared worker and retired with the private profile.
+    /// An inline save approves the selected pronunciation and exact same-text repetitions.
+    /// The shared worker owns preparation and persistence, retiring both with the profile.
     @discardableResult
-    func enqueueInline(candidate: AutomaticDictionaryCorrectionCandidate, selection: DictionaryHistoryWordSelection, expectedText: String) -> Bool {
-        guard selection.isOriginal, candidate.sourceUTF16Range == selection.range,
-              (selection.sourceText as NSString).replacingCharacters(in: selection.range, with: candidate.correctedText) == expectedText,
-              let history = self.currentEntry(selection: selection, candidate: candidate),
+    func enqueueInline(candidate: AutomaticDictionaryCorrectionCandidate, selection: DictionaryHistoryWordSelection, expectedText: String,
+                       correctionPlan: DictionaryCorrectionReplacementPlan? = nil) -> Bool {
+        guard let plan = correctionPlan ?? DictionaryCorrectionReplacementPlan(sourceText: selection.sourceText,
+                  range: selection.range, replacement: candidate.correctedText),
+              selection.isOriginal, candidate.sourceUTF16Range == selection.range,
+              plan.text == expectedText,
+              let confirmedRange = plan.mappedRange(selection.range),
+              let history = self.currentEntry(selection: selection, candidate: candidate, correctionPlan: plan),
               history.sourceTranscriptText == expectedText, let audio = history.audio,
               let url = DictationAudioHistoryStore.scoped(to: selection.profile).audioFileURL(for: history),
               FileManager.default.fileExists(atPath: url.path),
               let dictionaryEntry = Self.targetEntry(candidate: candidate, selection: selection,
                   history: history, entries: SettingsStore.shared.customDictionaryEntries) else { return false }
         let wasNew = !SettingsStore.shared.customDictionaryEntries.contains(dictionaryEntry)
-        let source = selection.sourceText
-        let identity = "\(selection.entryID.uuidString):\(audio.fileName):\(selection.range.location):\(selection.range.length):\(dictionaryEntry.id.uuidString):\(source)"
+        let confirmation = history.sourceFragments.first { $0.range == confirmedRange && $0.text == candidate.correctedText && $0.isValid(in: expectedText) }
+        let approvalID = confirmation?.correctionID
+        let alignment = Self.alignmentSelection(history: history, selection: selection, candidate: candidate, plan: plan)
+        let identity = "\(selection.entryID.uuidString):\(audio.fileName):\(selection.range.location):\(selection.range.length):\(dictionaryEntry.id.uuidString):\(selection.sourceText)"
         let evidenceID = Self.stableID(identity)
         let generation = DictionaryMatcherExperiment.generation
         let isValid: @MainActor () -> Bool = {
@@ -57,7 +64,17 @@ final class HistoryDictionaryAudioLearningService {
                   Self.entryStillEligible(dictionaryEntry, entries: SettingsStore.shared.customDictionaryEntries, allowMissing: wasNew),
                   FileManager.default.fileExists(atPath: url.path),
                   let current = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == selection.entryID }) else { return false }
-            return current.sourceTranscriptText == expectedText && current.rawText == history.rawText && current.audio == audio &&
+            let approvalStillPresent: Bool
+            if let approvalID {
+                approvalStillPresent = current.sourceFragments.contains {
+                    $0.correctionID == approvalID && $0.text == candidate.correctedText && $0.isValid(in: current.sourceTranscriptText)
+                }
+            } else {
+                // Legacy groups have no durable identity. Keep their conservative
+                // snapshot guard until an explicit edit establishes provenance.
+                approvalStillPresent = current.sourceTranscriptText == expectedText
+            }
+            return approvalStillPresent && current.rawText == history.rawText && current.audio == audio &&
                 DictationAudioHistoryStore.scoped(to: selection.profile).audioFileURL(for: current) == url
         }
         let publishTarget: (@MainActor () -> DictionaryAudioLearningService.TargetPublication)?
@@ -84,8 +101,8 @@ final class HistoryDictionaryAudioLearningService {
             try Task.checkCancellation()
             guard isValid() else { return nil }
             let evidence = try DictionaryLearningAlignmentResolver.resolve(
-                recording: recording, deliveredTextBeforeEdit: source,
-                selectedUTF16Range: selection.range, observedText: candidate.heardText
+                recording: recording, deliveredTextBeforeEdit: alignment.text,
+                selectedUTF16Range: alignment.range, observedText: alignment.observed
             )
             // A saved group's displayed spelling is already canonical. Preserve
             // the freshly aligned original ASR spelling as the learned error,
@@ -147,12 +164,29 @@ final class HistoryDictionaryAudioLearningService {
                            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
     }
 
-    private func currentEntry(selection: DictionaryHistoryWordSelection, candidate: AutomaticDictionaryCorrectionCandidate) -> TranscriptionHistoryEntry? {
+    private func currentEntry(selection: DictionaryHistoryWordSelection, candidate: AutomaticDictionaryCorrectionCandidate,
+                              correctionPlan: DictionaryCorrectionReplacementPlan? = nil) -> TranscriptionHistoryEntry? {
         guard PrivateProfileStorage.isReadable(selection.profile), PrivateProfileStorage.acceptsNewWork,
               let entry = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == selection.entryID }) else { return nil }
-        let expected = (selection.sourceText as NSString).replacingCharacters(in: selection.range, with: candidate.correctedText)
+        let expected = (correctionPlan ?? DictionaryCorrectionReplacementPlan(sourceText: selection.sourceText,
+            range: selection.range, replacement: candidate.correctedText))?.text
         let currentText = selection.isOriginal ? entry.sourceTranscriptText : (entry.clipboardText ?? "")
         return currentText == selection.sourceText || currentText == expected ? entry : nil
+    }
+
+    private static func alignmentSelection(history: TranscriptionHistoryEntry, selection: DictionaryHistoryWordSelection,
+                                           candidate: AutomaticDictionaryCorrectionCandidate,
+                                           plan: DictionaryCorrectionReplacementPlan?) -> (text: String, range: NSRange, observed: String) {
+        let currentRange = history.sourceTranscriptText == selection.sourceText ? selection.range :
+            (plan ?? DictionaryCorrectionReplacementPlan(sourceText: selection.sourceText, range: selection.range,
+                replacement: candidate.correctedText))?.mappedRange(selection.range)
+        if let currentRange, let originalRange = history.originalSourceRange(for: currentRange) {
+            let original = (history.rawText as NSString).substring(with: originalRange)
+            if let observed = DictionaryCorrectionEditPolicy.acousticSpelling(original) {
+                return (history.rawText, originalRange, observed)
+            }
+        }
+        return (selection.sourceText, selection.range, candidate.heardText)
     }
 
     nonisolated static func recordingID(entryID: UUID, fileName: String) -> UUID {

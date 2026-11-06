@@ -41,6 +41,7 @@ struct HistoryTextComparisonView: View {
         let sourceText: String
         let profile: PrivateProfileSnapshot
         let candidate: AutomaticDictionaryCorrectionCandidate
+        let plan: DictionaryCorrectionReplacementPlan
     }
 
     private var comparisonInput: ComparisonInput {
@@ -326,36 +327,39 @@ struct HistoryTextComparisonView: View {
     private func commitInlineCorrection(range: NSRange, replacement: String) -> Bool {
         guard let context = self.activeInlineCorrection,
               context.entryID == self.entry.id, context.edit.range == range,
-              let updatedText = context.edit.replacing(with: replacement),
-              TranscriptionHistoryStore.shared.applyWordCorrection(
-                  entryID: context.entryID, expectedText: context.edit.sourceText,
-                  range: range, replacement: replacement, profile: context.profile, isOriginal: true
-              ) else {
-            self.inlineError = "This transcription changed. Select the word again."
-            return false
-        }
-        self.activeInlineCorrection = nil
-        self.inlineError = nil
-        // Explicitly edited text can be a new term. Existing compounds retain all
-        // unchanged components through the same detector used by fresh dictation.
+              let singleEditText = context.edit.replacing(with: replacement),
+              let plan = DictionaryCorrectionReplacementPlan(sourceText: context.edit.sourceText, range: range, replacement: replacement)
+        else { return false }
+        // Detect only the explicit edit. Propagated repetitions are not separate
+        // user edits and must not turn one correction into an ambiguous diff.
         let detected = AutomaticDictionaryCorrectionDetector.candidate(
-            before: context.edit.sourceText, after: updatedText,
+            before: context.edit.sourceText, after: singleEditText,
             insertedRange: NSRange(location: 0, length: (context.edit.sourceText as NSString).length),
             knownCanonicalTerms: context.canonicalTerms
         )
         let explicit = self.explicitInlineCandidate(context: context, replacement: replacement)
         let selectedPhrase = DictionaryInlineTextEdit.wordRanges(in: context.edit.heardText).count > 1 ||
             DictionaryInlineTextEdit.wordRanges(in: replacement).count > 1
-        // A user-selected compound is one dictionary value, including unchanged
-        // components. Single-word edits may still expand a known compound.
         let candidate = selectedPhrase ? explicit : (detected ?? explicit)
-        if let candidate, let range = candidate.sourceUTF16Range,
-           let selection = DictionaryHistoryWordSelection(entryID: context.entryID, sourceText: context.edit.sourceText, range: range, isOriginal: true) {
-            HistoryDictionaryAudioLearningService.shared.enqueueInline(candidate: candidate, selection: selection, expectedText: updatedText)
+        guard TranscriptionHistoryStore.shared.applyWordCorrection(
+            entryID: context.entryID, expectedText: context.edit.sourceText,
+            range: range, replacement: replacement, profile: context.profile, isOriginal: true,
+            confirmationRange: candidate?.sourceUTF16Range
+        ) else {
+            self.inlineError = "This transcription changed. Select the word again."
+            return false
+        }
+        self.activeInlineCorrection = nil
+        self.inlineError = nil
+        if let candidate, let candidateRange = candidate.sourceUTF16Range,
+           let selection = DictionaryHistoryWordSelection(entryID: context.entryID, sourceText: context.edit.sourceText,
+               range: candidateRange, isOriginal: true) {
+            HistoryDictionaryAudioLearningService.shared.enqueueInline(candidate: candidate, selection: selection,
+                expectedText: plan.text, correctionPlan: plan)
         }
         self.savedInlineCorrection = candidate.map {
-            SavedInlineCorrection(entryID: context.entryID, expectedText: updatedText, sourceText: context.edit.sourceText,
-                                  profile: context.profile, candidate: $0)
+            SavedInlineCorrection(entryID: context.entryID, expectedText: plan.text, sourceText: context.edit.sourceText,
+                                  profile: context.profile, candidate: $0, plan: plan)
         }
         return true
     }
@@ -395,10 +399,11 @@ struct HistoryTextComparisonView: View {
             self.savedInlineCorrection = nil
             return
         }
-        self.preparePronunciation(candidate: correction.candidate, selection: selection, expectedText: correction.expectedText)
+        self.preparePronunciation(candidate: correction.candidate, selection: selection, expectedText: correction.expectedText, correctionPlan: correction.plan)
     }
 
-    private func preparePronunciation(candidate: AutomaticDictionaryCorrectionCandidate, selection: DictionaryHistoryWordSelection, expectedText: String) {
+    private func preparePronunciation(candidate: AutomaticDictionaryCorrectionCandidate, selection: DictionaryHistoryWordSelection, expectedText: String,
+                                      correctionPlan: DictionaryCorrectionReplacementPlan? = nil) {
         self.pronunciationTask?.cancel()
         let epoch = self.interactionEpoch
         self.isPreparingPronunciation = true
@@ -409,7 +414,7 @@ struct HistoryTextComparisonView: View {
                     self.pronunciationTask = nil
                 }
             }
-            let enriched = await HistoryDictionaryAudioLearningService.shared.enrich(candidate: candidate, selection: selection)
+            let enriched = await HistoryDictionaryAudioLearningService.shared.enrich(candidate: candidate, selection: selection, correctionPlan: correctionPlan)
             guard !Task.isCancelled, self.interactionEpoch == epoch, self.entry.id == selection.entryID,
                   let current = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == selection.entryID }),
                   (selection.isOriginal ? current.sourceTranscriptText : (current.clipboardText ?? "")) == expectedText,
