@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: coverage-baseline-${{ github.ref }}
   cancel-in-progress: false
@@ -18,6 +22,7 @@ env:
 jobs:
   native:
     name: Coverage ${{ matrix.scope }}
+    if: ${{ !contains(github.event.head_commit.message, '[packages-only]') }}
     runs-on: xcode-27
     timeout-minutes: 45
     strategy:
@@ -83,7 +88,7 @@ jobs:
           SCHEME: ${{ matrix.scheme }}
         run: |
           python3 - <<'PYCODE'
-          import importlib.util,os,plistlib
+          import importlib.util,os,plistlib,subprocess
           from pathlib import Path
           spec=importlib.util.spec_from_file_location('regression','scripts/dev/macos-regression.py')
           module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
@@ -91,7 +96,9 @@ jobs:
           paths=list(products.glob(os.environ['SCHEME']+'_*.xctestrun'))
           assert len(paths)==1,paths
           value=plistlib.loads(paths[0].read_bytes())
-          module.configure_targets(value,os.environ)
+          environment=dict(os.environ)
+          environment['TEST_RUNNER_FLUID_EXPORT_TEST_SANDBOX_TEMP']=subprocess.check_output(['getconf','DARWIN_USER_TEMP_DIR'],text=True).strip()
+          module.configure_targets(value,environment)
           def host(node):
               if isinstance(node,dict):
                   if 'MobileIntegrationTests' in str(node.get('TestBundlePath','')):
@@ -106,7 +113,6 @@ jobs:
         working-directory: ${{ runner.temp }}/coverage-worktree
         env:
           SCOPE: ${{ matrix.scope }}
-          TEST_RUNNER_FLUID_EXPORT_TEST_SANDBOX_TEMP: /tmp
         run: |
           if [[ "$SCOPE" == macos ]]; then
             destination='platform=macOS,arch=arm64'
@@ -124,6 +130,9 @@ jobs:
             xcrun xccov view --report --json .build/coverage/tests.xcresult > .build/coverage/reports/xccov.json
             xcrun xccov view --archive --file-list .build/coverage/tests.xcresult > .build/coverage/reports/coverage-files.txt
             xcrun xcresulttool get test-results summary --path .build/coverage/tests.xcresult --compact > .build/coverage/reports/test-summary.json
+            python3 -S scripts/dev/macos-regression.py summarize .build/coverage/reports/test-summary.json 0
+          else
+            exit 1
           fi
       - name: Upload small metrics and logs
         if: always()
@@ -169,7 +178,22 @@ jobs:
           for package in NativeTextInference PichiGigaAM RussianMorphology TranscribeCpp; do
             scratch="$PWD/.build/coverage/packages/$package"
             swift test --package-path "Vendor/$package" --scratch-path "$scratch" --jobs 2               --enable-code-coverage --xunit-output "$PWD/.build/coverage/reports/$package.xml"               > ".build/coverage/reports/$package.log" 2>&1 || status=1
-            find "$scratch" -path '*/codecov/*.json' -type f -exec cp {} "$PWD/.build/coverage/reports/" \;
+            python3 - "$scratch" "$package" <<'PYCODE'
+            import json,subprocess,sys
+            from pathlib import Path
+            scratch=Path(sys.argv[1]);package=sys.argv[2]
+            reports=Path('.build/coverage/reports')
+            raw=list(scratch.glob('**/codecov/*.profraw'))
+            binaries=[p for p in scratch.glob('**/*.xctest/Contents/MacOS/*') if p.is_file() and not p.is_symlink()]
+            assert raw and binaries,(len(raw),len(binaries))
+            manifest={'raw_profiles':[str(p) for p in raw],'objects':[str(p) for p in binaries]}
+            (reports/(package+'-objects.json')).write_text(json.dumps(manifest,indent=2))
+            profile=reports/(package+'.profdata')
+            subprocess.run(['xcrun','llvm-profdata','merge','-sparse',*[str(p) for p in raw],'-o',str(profile)],check=True)
+            command=['xcrun','llvm-cov','export','-instr-profile='+str(profile),str(binaries[0])]
+            for binary in binaries[1:]:command+=['-object',str(binary)]
+            with (reports/(package+'-all-targets.json')).open('w') as stream:subprocess.run(command,stdout=stream,check=True)
+            PYCODE
           done
           exit "$status"
       - name: Upload package coverage and test accounting
