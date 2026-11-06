@@ -38,16 +38,25 @@ final class MeetingRecoveryTests: XCTestCase {
         window.contentView = host
         defer { window.contentView = nil; window.close() }
         host.layoutSubtreeIfNeeded()
-        func toggle(in element: Any) -> (any NSAccessibilityProtocol)? {
-            guard let node = element as? any NSAccessibilityProtocol else { return nil }
-            if node.accessibilityIdentifier() == "meeting.microphone.recording-toggle" { return node }
-            for child in node.accessibilityChildren() ?? [] {
+        func toggle(in element: Any) -> NSObject? {
+            guard let node = element as? NSObject else { return nil }
+            // SwiftUI AX nodes implement these selectors without declaring AppKit's full
+            // formal protocol. Traverse the native tree, rather than invoking a copied action.
+            let identifier = NSSelectorFromString("accessibilityIdentifier")
+            if node.responds(to: identifier),
+               node.perform(identifier)?.takeUnretainedValue() as? String == "meeting.microphone.recording-toggle" { return node }
+            let children = NSSelectorFromString("accessibilityChildren")
+            guard node.responds(to: children) else { return nil }
+            for child in node.perform(children)?.takeUnretainedValue() as? [Any] ?? [] {
                 if let found = toggle(in: child) { return found }
             }
             return nil
         }
         let button = try XCTUnwrap(toggle(in: host), "The native SwiftUI surface must expose its microphone button")
-        XCTAssertTrue(button.accessibilityPerformPress())
+        let press = NSSelectorFromString("accessibilityPerformPress")
+        XCTAssertTrue(button.responds(to: press))
+        typealias Press = @convention(c) (AnyObject, Selector) -> Bool
+        XCTAssertTrue(unsafeBitCast(button.method(for: press), to: Press.self)(button, press))
         await self.drainCaptureEvents(); await self.drainCaptureEvents()
         XCTAssertEqual(coordinator.microphoneMuteState, .manuallyMuted)
         capture.observeMeetingMute(.unmuted)

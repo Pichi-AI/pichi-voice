@@ -717,7 +717,9 @@ extension MeetingAudioChunkSinkTests {
 /// admission check. No microphone, meeting application, model or shared preferences are used.
 final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
     func testManualAndMeetingMuteExcludeRealWriterAndDiagnosticsThenResumeWithoutReplay() async throws {
-        let fixture = try Fixture(admissionPolicy: .latchedTransitions)
+        let finalized = self.expectation(description: "The first real PCM epoch finalized")
+        finalized.assertForOverFulfill = false
+        let fixture = try Fixture(admissionPolicy: .latchedTransitions, onChunkFinalized: { finalized.fulfill() })
         defer { fixture.removeDirectory() }
         let clock = fixture.clock, gate = fixture.gate, writer = fixture.writer
         let live = Observations()
@@ -748,6 +750,9 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
         clock.set(1_002); control.setManuallyMuted(false)
         clock.set(1_002.12); _ = try offer(0.5, at: 1_002.1)
         clock.set(1_003.2); gate.checkFreshnessAndDrain(); fixture.deliveryQueue.sync {}
+        // Virtual time advances faster than filesystem I/O. Join the first closed chunk
+        // before opening another, preserving production's bounded finalization backpressure.
+        await fulfillment(of: [finalized], timeout: 2)
         XCTAssertFalse(gate.permitsReleasedSample(denied), "Unmute and PTT refinement cannot reopen a manually closed interval")
         clock.set(1_003.3); observe(.muted)
         clock.set(1_003.4); control.setManuallyMuted(true)
@@ -992,7 +997,8 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
         let deliveryQueue = DispatchQueue(label: "meeting.writer-privacy.tests.delivery")
         let writer: MeetingAudioChunkWriter
 
-        init(admissionPolicy: MeetingMicrophonePrivacyGate.Configuration.AdmissionPolicy = .freshObservations) throws {
+        init(admissionPolicy: MeetingMicrophonePrivacyGate.Configuration.AdmissionPolicy = .freshObservations,
+             onChunkFinalized: @escaping @Sendable () -> Void = {}) throws {
             self.directory = FileManager.default.temporaryDirectory.appendingPathComponent("FluidVoice-WriterPrivacy-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: false,
                 attributes: [.posixPermissions: NSNumber(value: Int16(0o700))])
@@ -1007,7 +1013,10 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
                     machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
                 health: .waiting, chunks: [])
             self.writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: self.directory, chunkDuration: 60,
-                eventHandler: { observations.record($0) }, diagnosticSampleObserver: { sample, _ in observations.observe(sample) },
+                eventHandler: { event in
+                    observations.record(event)
+                    if case .chunkFinalized = event { onChunkFinalized() }
+                }, diagnosticSampleObserver: { sample, _ in observations.observe(sample) },
                 sampleAdmission: { gate.permitsReleasedSample($0) })
         }
 

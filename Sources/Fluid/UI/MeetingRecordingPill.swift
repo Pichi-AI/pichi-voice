@@ -422,10 +422,10 @@ struct MeetingRecordingPillContent: View {
             height: MeetingOverlayPresentation.pill.visibleSize.height
         )
         .contentShape(Capsule())
-        // The whole capsule opens the captions window; only the stop button opts out.
+        // Background taps expand captions; native microphone and stop buttons own their taps.
         .onTapGesture { self.pill.expand() }
         .background(self.compactSurface)
-        .accessibilityAddTraits(.isButton)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(self.coordinator.activeSession?.isLocalContentConcealed == true
             ? PichiLocalization.text("recording.protection.concealed.title") : PichiLocalization.text("Show live captions"))
         .accessibilityValue(self.mutePresentation.isMonitored
