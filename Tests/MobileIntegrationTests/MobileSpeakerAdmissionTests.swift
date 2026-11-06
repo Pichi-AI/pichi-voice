@@ -325,7 +325,8 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         // after owner promotion, then merges through the coordinator and durable store.
         // Runtime refresh scoring has separate actual-source tests; this verifies its
         // retained owner result is not erased by unresolved reading text. With no nearby
-        // acoustic anchor, the brief reply remains unnamed and consumes no participant ID.
+        // acoustic anchor, the brief reply reuses an admitted source participant for reading
+        // without consuming another participant ID or inventing native identity evidence.
         let unresolved = MeetingTranscriptSegment(id: UUID(),
             start: .init(value: 20_100, timescale: 1_000),
             end: .init(value: 20_400, timescale: 1_000), sourceTrackID: track.id,
@@ -338,7 +339,9 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         let finalTail = try tail.finish(safeWords: .init(segments: [unresolved]), activity: [],
             watermarks: .init(asrStableThrough: 21, diarizationProcessedThrough: 21, privacySafeThrough: 21),
             attemptID: attempt, epoch: token.analysisEpochID)
-        XCTAssertNil(finalTail.inserted.first?.speakerID)
+        XCTAssertEqual(finalTail.inserted.first?.speakerID, promoted.first?.id)
+        XCTAssertEqual(finalTail.inserted.first?.speakerAttribution?.rule, .readingParticipantContext)
+        XCTAssertNil(finalTail.inserted.first?.speakerAttribution?.selectedToken)
         XCTAssertNil(finalTail.inserted.first?.speakerIdentityIsProvisional)
         XCTAssertEqual(finalTail.inserted.first?.text, unresolved.text)
         XCTAssertEqual(finalTail.speakers.map(\.id), promoted.map(\.id))
