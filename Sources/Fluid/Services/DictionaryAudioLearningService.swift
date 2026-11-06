@@ -13,6 +13,20 @@ final class DictionaryAudioLearningService {
     enum TargetPublication { case rejected, unchanged, created }
     typealias Extractor = @Sendable (DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture
 
+    /// Ownership receipt for one committed correction, without retaining its PCM.
+    struct SavedCorrection: Identifiable {
+        let id: UUID
+        let entry: SettingsStore.CustomDictionaryEntry
+        let heardText: String
+        let correctedText: String
+        let profile: PrivateProfileSnapshot
+        let createdEntry: Bool
+
+        var isCurrent: Bool {
+            PrivateProfileStorage.isReadable(self.profile) && PrivateProfileStorage.acceptsNewWork
+        }
+    }
+
     private struct Request {
         let entry: SettingsStore.CustomDictionaryEntry
         let evidenceID: UUID
@@ -21,6 +35,7 @@ final class DictionaryAudioLearningService {
         let isCurrentBeforePreparation: @MainActor () -> Bool
         let publishTarget: (@MainActor () -> TargetPublication)?
         let didPublishTarget: (@MainActor () -> Void)?
+        let didPersist: (@MainActor (SavedCorrection) -> Void)?
         let explicitHistory: Bool
         let expiresAt: Date
         let pronunciationGeneration: String
@@ -39,6 +54,8 @@ final class DictionaryAudioLearningService {
     private var retired = false
     private var foregroundAdmissions = 0
     private var activeEvidenceID: UUID?
+    private var recentCorrections: [String: (receipt: SavedCorrection, savedAt: Date)] = [:]
+    private var undoTasks: [UUID: Task<Bool, Error>] = [:]
     private let profile = PrivateProfileStorage.current
     var pendingCount: Int { self.queue.count }
 
@@ -70,6 +87,51 @@ final class DictionaryAudioLearningService {
     func cancelForRecording() { self.task?.cancel() }
     func activityDidEnd() { self.drain() }
 
+    /// A user removing one saved example must not have that same event retried.
+    func discardPendingEvidence(_ evidenceID: UUID) {
+        self.queue.removeAll { $0.evidenceID == evidenceID }
+        if self.activeEvidenceID == evidenceID { self.task?.cancel() }
+        self.scheduleExpiry()
+        self.drain()
+    }
+
+    /// Revert only this event. Existing words, other examples and later edits survive.
+    func undoSavedCorrection(_ receipt: SavedCorrection) async throws -> Bool {
+        if let active = self.undoTasks[receipt.id] { return try await active.value }
+        let task = Task { @MainActor in try await self.performUndo(receipt) }
+        self.undoTasks[receipt.id] = task
+        defer { self.undoTasks.removeValue(forKey: receipt.id) }
+        return try await task.value
+    }
+
+    private func performUndo(_ receipt: SavedCorrection) async throws -> Bool {
+        guard receipt.isCurrent, PrivateProfileStorage.isReadable(self.profile), !self.retired else {
+            throw PronunciationDictionaryStoreError.staleEvidence
+        }
+        self.discardPendingEvidence(receipt.id)
+        let profiles = await self.store.allProfiles()
+        let matches = profiles.filter { $0.dictionaryEntryID == receipt.entry.id }.flatMap { profile in
+            profile.enrollments.filter { $0.originalAudioID == receipt.id }.map { (profile, $0) }
+        }
+        guard matches.count == 1, let (stored, capture) = matches.first else { return false }
+        try Task.checkCancellation()
+        guard receipt.isCurrent, !self.retired else { throw PronunciationDictionaryStoreError.staleEvidence }
+        try await self.store.removeSavedSample(capture, dictionaryEntryID: receipt.entry.id, expectedProfileLabel: stored.label)
+        let remaining = await self.store.allProfiles()
+        guard receipt.isCurrent, PrivateProfileStorage.isReadable(self.profile), !self.retired else {
+            throw PronunciationDictionaryStoreError.staleEvidence
+        }
+        if receipt.createdEntry,
+           !remaining.contains(where: { $0.dictionaryEntryID == receipt.entry.id }),
+           !self.queue.contains(where: { $0.entry.id == receipt.entry.id }),
+           SettingsStore.shared.customDictionaryEntries.contains(receipt.entry) {
+            SettingsStore.shared.customDictionaryEntries.removeAll { $0 == receipt.entry }
+        }
+        ASRService.invalidateDictionaryCache()
+        DictionaryEntriesChangeNotice.post()
+        return true
+    }
+
     /// Block restarts before cancelling, then join the worker including provider retirement.
     func pauseForForegroundAdmission() async {
         self.foregroundAdmissions += 1
@@ -87,9 +149,14 @@ final class DictionaryAudioLearningService {
     func prepareForPrivateProfileTransition() async {
         retired = true
         queue.removeAll()
+        recentCorrections.removeAll()
         let work = task, expiry = expiryTask
+        let undos = Array(self.undoTasks.values)
         work?.cancel(); expiry?.cancel()
+        for undo in undos { undo.cancel() }
         await work?.value; await expiry?.value
+        for undo in undos { _ = try? await undo.value }
+        self.undoTasks.removeAll()
         task = nil; expiryTask = nil
     }
 
@@ -110,7 +177,9 @@ final class DictionaryAudioLearningService {
         candidate: AutomaticDictionaryCorrectionCandidate,
         evidence: DictionaryLearningAudioEvidence,
         evidenceID: UUID = UUID(),
-        isValid: @escaping @MainActor () -> Bool
+        isValid: @escaping @MainActor () -> Bool,
+        didSave: (@MainActor (SavedCorrection) -> Void)? = nil,
+        beforePreparation: (@MainActor () async -> Void)? = nil
     ) -> Bool {
         let label = candidate.correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard SettingsStore.shared.automaticDictionaryLearningEnabled,
@@ -134,7 +203,10 @@ final class DictionaryAudioLearningService {
             }, didPublishTarget: {
                 ASRService.invalidateDictionaryCache()
                 DictionaryEntriesChangeNotice.post()
-            }, prepare: { evidence })
+            }, didPersist: didSave, prepare: {
+                await beforePreparation?()
+                return eligible() ? evidence : nil
+            })
     }
 
     private static func retainedBytes(_ evidence: DictionaryLearningAudioEvidence) -> Int {
@@ -164,6 +236,7 @@ final class DictionaryAudioLearningService {
         isCurrentBeforePreparation: (@MainActor () -> Bool)? = nil,
         publishTarget: (@MainActor () -> TargetPublication)? = nil,
         didPublishTarget: (@MainActor () -> Void)? = nil,
+        didPersist: (@MainActor (SavedCorrection) -> Void)? = nil,
         prepare: @escaping @MainActor () async throws -> DictionaryLearningAudioEvidence?
     ) -> Bool {
         guard !retired, PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
@@ -189,6 +262,7 @@ final class DictionaryAudioLearningService {
             isCurrentBeforePreparation: isCurrentBeforePreparation ?? { [isCurrent] in isCurrent(entry) },
             publishTarget: publishTarget,
             didPublishTarget: didPublishTarget,
+            didPersist: didPersist,
             explicitHistory: explicitHistory,
             expiresAt: Date().addingTimeInterval(self.lifetime),
             pronunciationGeneration: DictionaryMatcherExperiment.generation,
@@ -221,6 +295,13 @@ final class DictionaryAudioLearningService {
                 guard let evidence = try await request.prepare(), !evidence.samples.isEmpty, evidence.samples.count <= 238_080 else { return }
                 try Task.checkCancellation()
                 guard request.expiresAt > Date(), (request.publishTarget == nil ? self.isCurrent(request.entry) : request.isCurrentBeforePreparation()), request.isValid(), request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
+                let occurrence = "\(evidence.recordingID):\(evidence.modelKey):\(evidence.sourceWordRange.lowerBound):\(evidence.sourceWordRange.upperBound)"
+                if let previous = self.recentCorrections[occurrence]?.receipt, previous.entry.id != request.entry.id {
+                    _ = try await self.undoSavedCorrection(previous)
+                    self.recentCorrections.removeValue(forKey: occurrence)
+                    try Task.checkCancellation()
+                    guard request.isValid() else { return }
+                }
                 let revision = await self.store.revision(for: request.entry.id)
                 let capture = try await self.extract(evidence)
                 try Task.checkCancellation()
@@ -250,6 +331,18 @@ final class DictionaryAudioLearningService {
                     case .unchanged: break
                     case .created: notifyPublication = true
                     }
+                }
+                if inserted {
+                    let receipt = SavedCorrection(id: request.evidenceID, entry: request.entry,
+                        heardText: evidence.observedText, correctedText: request.entry.replacement,
+                        profile: self.profile, createdEntry: notifyPublication)
+                    self.recentCorrections = self.recentCorrections.filter { Date().timeIntervalSince($0.value.savedAt) < 600 }
+                    if self.recentCorrections.count >= 128,
+                       let oldest = self.recentCorrections.min(by: { $0.value.savedAt < $1.value.savedAt })?.key {
+                        self.recentCorrections.removeValue(forKey: oldest)
+                    }
+                    self.recentCorrections[occurrence] = (receipt, Date())
+                    request.didPersist?(receipt)
                 }
                 DebugLogger.shared.info(
                     inserted ? "Original pronunciation evidence saved" : "Original pronunciation evidence already present",

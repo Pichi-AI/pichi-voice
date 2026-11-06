@@ -196,9 +196,11 @@ final class AutomaticDictionaryCorrectionTracker {
     }
 
     private final class CorrectionApproval {
+        let id = UUID()
         var range: NSRange
         let text: String
         var isValid = true
+        var saved: DictionaryAudioLearningService.SavedCorrection?
         init(range: NSRange, text: String) { self.range = range; self.text = text }
     }
 
@@ -243,6 +245,7 @@ final class AutomaticDictionaryCorrectionTracker {
     private var debounceTask: Task<Void, Never>?
     private var evidencePreparationTask: Task<Void, Never>?
     private var suggestionGeneration = UUID()
+    private var correctionRevocations: [UUID: Task<Void, Never>] = [:]
     private let profile = PrivateProfileStorage.current
 
     private init() {}
@@ -290,11 +293,11 @@ final class AutomaticDictionaryCorrectionTracker {
         self.evidencePreparationTask?.cancel()
         self.evidencePreparationTask = nil
         self.stopObservation()
-        DictionaryCorrectionOverlayController.shared.hide()
+        DictionaryCorrectionOverlayController.shared.hideSuggestion()
     }
 
     func prepareForPrivateProfileTransition() async {
-        let tasks = [evidencePreparationTask, verificationTask, timeoutTask, debounceTask]
+        let tasks = [evidencePreparationTask, verificationTask, timeoutTask, debounceTask] + self.correctionRevocations.values.map(Optional.some)
         cancel()
         for task in tasks { await task?.value }
     }
@@ -348,7 +351,7 @@ final class AutomaticDictionaryCorrectionTracker {
                 if let moved = DictionaryCorrectionReplacementPlan.confirmedRange(approval.range, text: approval.text,
                     replacing: local, withLength: change.newRange.length, in: session.textMap.text) {
                     approval.range = moved
-                } else { approval.isValid = false }
+                } else { self.revoke(approval) }
             }
         }
 
@@ -716,8 +719,11 @@ final class AutomaticDictionaryCorrectionTracker {
     private func enqueueCorrection(_ candidate: AutomaticDictionaryCorrectionCandidate,
                                    context: DictionaryLearningCorrectionContext, range: NSRange) -> Bool {
         guard let originalRange = Range(context.selectedUTF16Range, in: context.deliveredTextBeforeEdit),
-              let heard = DictionaryCorrectionEditPolicy.acousticSpelling(String(context.deliveredTextBeforeEdit[originalRange])),
-              heard != candidate.correctedText,
+              let heard = DictionaryCorrectionEditPolicy.acousticSpelling(String(context.deliveredTextBeforeEdit[originalRange])) else { return false }
+        // Returning to the original spelling retracts the intermediate learning;
+        // it does not authorize a fresh dictionary entry for already-correct ASR.
+        guard heard != candidate.correctedText else { return true }
+        guard
               let resolved = try? DictionaryLearningAlignmentResolver.resolve(recording: context.recording,
                 deliveredTextBeforeEdit: context.deliveredTextBeforeEdit,
                 selectedUTF16Range: context.selectedUTF16Range, observedText: heard) else { return false }
@@ -732,9 +738,30 @@ final class AutomaticDictionaryCorrectionTracker {
         let profile = self.profile
         let corrected = AutomaticDictionaryCorrectionCandidate(heardText: heard, correctedText: candidate.correctedText)
         // Only the bounded resolved clip is retained by the queue, never the full recording.
-        return DictionaryAudioLearningService.shared.learnCorrection(candidate: corrected, evidence: evidence, isValid: {
+        let revocations = Array(self.correctionRevocations.values)
+        return DictionaryAudioLearningService.shared.learnCorrection(candidate: corrected, evidence: evidence, evidenceID: approval.id, isValid: {
             approval.isValid && PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork
+        }, didSave: { receipt in
+            guard approval.isValid else { return }
+            approval.saved = receipt
+            DictionaryCorrectionOverlayController.shared.showSavedCorrection(receipt)
+        }, beforePreparation: {
+            for task in revocations { await task.value }
         })
+    }
+
+    private func revoke(_ approval: CorrectionApproval) {
+        guard approval.isValid else { return }
+        approval.isValid = false
+        let learning = DictionaryAudioLearningService.shared
+        learning.discardPendingEvidence(approval.id)
+        DictionaryCorrectionOverlayController.shared.withdrawSavedCorrection(approval.id)
+        guard let receipt = approval.saved else { return }
+        self.correctionRevocations[approval.id] = Task { @MainActor [weak self] in
+            defer { self?.correctionRevocations.removeValue(forKey: approval.id) }
+            do { _ = try await learning.undoSavedCorrection(receipt) }
+            catch { DebugLogger.shared.warning("Previous correction could not be retracted", source: "DictionaryLearning") }
+        }
     }
 
     private func propagateAcceptedCorrections() {
@@ -772,7 +799,7 @@ final class AutomaticDictionaryCorrectionTracker {
                         if let moved = DictionaryCorrectionReplacementPlan.confirmedRange(approval.range, text: approval.text,
                             replacing: local, withLength: correction.corrected.utf16.count, in: session.textMap.text) {
                             approval.range = moved
-                        } else { approval.isValid = false }
+                        } else { self.revoke(approval) }
                     }
                 }
                 session.lastValue = plan.text

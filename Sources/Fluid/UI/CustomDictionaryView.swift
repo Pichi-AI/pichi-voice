@@ -368,6 +368,11 @@ struct CustomDictionaryView: View {
         .sheet(item: self.$savedRecordingsEntry) { entry in
             DictionarySavedSamplesView(entry: entry, asr: self.asr)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openCustomDictionaryFromVoiceEngine).receive(on: RunLoop.main)) { notice in
+            guard self.isProfileVisible, let id = notice.object as? UUID,
+                  let entry = SettingsStore.shared.customDictionaryEntries.first(where: { $0.id == id }) else { return }
+            self.savedRecordingsEntry = entry
+        }
         .task(id: self.revealTarget) {
             self.revealSearchTarget()
         }
