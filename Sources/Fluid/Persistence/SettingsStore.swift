@@ -2845,11 +2845,11 @@ final class SettingsStore: ObservableObject {
     var onboardingCurrentStep: Int {
         get {
             let raw = self.defaults.integer(forKey: Keys.onboardingCurrentStep)
-            return max(0, min(7, raw))
+            return max(0, min(8, raw))
         }
         set {
             objectWillChange.send()
-            let clamped = max(0, min(7, newValue))
+            let clamped = max(0, min(8, newValue))
             self.defaults.set(clamped, forKey: Keys.onboardingCurrentStep)
         }
     }
