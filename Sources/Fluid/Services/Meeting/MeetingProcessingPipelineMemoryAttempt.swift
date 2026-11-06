@@ -49,6 +49,7 @@ final class MeetingMemoryProcessingAttempt {
     var streamingConsumers: [MeetingAudioTrackID: any MeetingMemoryAudioConsuming] = [:]
     let publicationGate = MeetingProcessingSerializationGate()
     var sourceTimelines: [MeetingAudioTrackID: MeetingPCMSourceTimeline] = [:]
+    private var publishedSourceThroughSamples: [MeetingAudioTrackID: Int] = [:]
     var echoAdmission: MeetingStreamingEchoAdmission?
     var streamingFailureTask: Task<Void, Never>?
 
@@ -108,10 +109,13 @@ final class MeetingMemoryProcessingAttempt {
         }
         batch.livePreview = try projectedPreview(batch.livePreview, trackID: track.id)
         if let through = batch.protectedSourceThroughSample {
-            // A source gap has no measured continuous prefix. Individual mapped words still
-            // retire their own visible estimates; never acknowledge an unknown physical gap.
-            batch.protectedSourceThroughSample = timeline.hasGaps ? nil : timeline.mapEndTime(Double(through) / 16_000)
-                .map { Int(($0 * 16_000).rounded(.down)) }
+            // Projection is pure. Advance the publication cursor only after the protected
+            // checkpoint below joins, so a failed/cancelled save can be retried intact.
+            let from = self.publishedSourceThroughSamples[track.id] ?? 0
+            if through > from {
+                batch.protectedSourceIntervals = try timeline.measuredIntervals(fromSample: from, throughSample: through)
+            }
+            batch.protectedSourceThroughSample = nil
         }
         return batch
     }
@@ -127,8 +131,11 @@ final class MeetingMemoryProcessingAttempt {
             var safe = try projectedBatch(batch)
             if let echoAdmission { safe = try await echoAdmission.admitting(safe) }
             if !safe.segments.isEmpty || !safe.speakers.isEmpty || !safe.speakerRevisions.isEmpty
-                || !safe.echoRevisions.isEmpty || safe.protectedSourceThroughSample != nil {
+                || !safe.echoRevisions.isEmpty || safe.protectedSourceThroughSample != nil || !safe.protectedSourceIntervals.isEmpty {
                 try await checkpoint(safe)
+                if let track = batch.sourceTrack, let through = batch.protectedSourceThroughSample {
+                    self.publishedSourceThroughSamples[track.id] = max(self.publishedSourceThroughSamples[track.id] ?? 0, through)
+                }
             }
             await publicationGate.release()
         } catch {

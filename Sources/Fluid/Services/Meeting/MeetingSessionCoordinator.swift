@@ -2712,6 +2712,13 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.pendingSpeech = capture.acknowledgeProtectedSource(
                 source: track.kind == .microphone ? .you : .them, throughSample: through, transcriptRevision: snapshot.revision)
         }
+        if !batch.protectedSourceIntervals.isEmpty, let track = batch.sourceTrack,
+           self.activeSession?.audioTracks.contains(where: { $0.id == track.id }) == true,
+           let capture = self.pendingSpeechCapture {
+            self.pendingSpeech = capture.acknowledgeProtectedIntervals(
+                source: track.kind == .microphone ? .you : .them,
+                intervals: batch.protectedSourceIntervals, transcriptRevision: snapshot.revision)
+        }
     }
 
     private func reconcilePendingSpeech() {

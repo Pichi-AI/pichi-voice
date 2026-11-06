@@ -65,6 +65,23 @@ final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
 
     func mapEndTime(_ seconds: Double) -> Double? { self.mapTime(seconds, side: .end) }
 
+    /// Map only measured PCM between two joined source cursors. Never fill a physical
+    /// gap, and never include audio beyond the protected compact-source watermark.
+    func measuredIntervals(fromSample: Int, throughSample: Int) throws -> [Range<Double>] {
+        try self.lock.withLock {
+            guard fromSample >= 0, throughSample >= fromSample,
+                  throughSample <= self.acceptedThroughSample else { throw Failure.nonContiguousInput }
+            return self.spans.compactMap { span in
+                let start = max(fromSample, span.compactStart)
+                let end = min(throughSample, span.compactEnd)
+                guard end > start else { return nil }
+                let lower = span.physicalStart + Double(start - span.compactStart) / 16_000
+                let upper = span.physicalStart + Double(end - span.compactStart) / 16_000
+                return lower..<upper
+            }
+        }
+    }
+
     func mapInterval(start: Double, end: Double) -> (start: Double, end: Double)? {
         self.lock.withLock {
             guard start.isFinite, end.isFinite, start >= 0, end >= start else { return nil }

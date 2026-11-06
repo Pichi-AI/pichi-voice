@@ -53,7 +53,7 @@ extension MeetingProcessingPipeline {
             try Task.checkCancellation()
             let batch = emission.safeBatch
             if !batch.segments.isEmpty || !batch.speakerRevisions.isEmpty || emission.hasSpeakerIdentityChanges
-                || batch.protectedSourceThroughSample != nil {
+                || batch.protectedSourceThroughSample != nil || !batch.protectedSourceIntervals.isEmpty {
                 try await checkpoint(batch)
             }
             try await publishPreview(emission)

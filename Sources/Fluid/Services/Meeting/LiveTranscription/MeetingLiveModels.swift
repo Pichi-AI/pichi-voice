@@ -453,6 +453,7 @@ nonisolated struct MeetingPendingSpeechSnapshot: Sendable, Equatable {
 /// Wave cadence is a bounded presentation estimate, never recognized words.
 nonisolated struct MeetingPendingSpeechProjection {
     static let maximumTokens = 64
+    private static let maximumIntervals = 8_192
     static let minimumActivityRMS: Float = 0.0042
     static let quietWaitingSeconds: TimeInterval = 5
     private static let cadenceResetSeconds: TimeInterval = 0.24
@@ -495,10 +496,32 @@ nonisolated struct MeetingPendingSpeechProjection {
         }
     }
 
+    /// Unresolved speech duration, rather than a solid envelope spanning source gaps.
+    /// The same interval subtraction is used for cadence debt and rendered token support.
+    private struct Cadence {
+        var intervals: [Range<Double>] = []
+        mutating func append(_ ranges: [Range<Double>]) {
+            intervals = MeetingPendingSpeechProjection.merged(intervals + ranges)
+        }
+        mutating func consume(_ seconds: Double) -> [Range<Double>]? {
+            guard intervals.reduce(0, { $0 + $1.upperBound - $1.lowerBound }) >= seconds - 0.000_001 else { return nil }
+            var remaining = seconds
+            var consumed: [Range<Double>] = []
+            while remaining > 0.000_001, let first = intervals.first {
+                let count = min(remaining, first.upperBound - first.lowerBound)
+                consumed.append(first.lowerBound..<(first.lowerBound + count))
+                remaining -= count
+                if count >= first.upperBound - first.lowerBound - 0.000_001 { intervals.removeFirst() }
+                else { intervals[0] = (first.lowerBound + count)..<first.upperBound }
+            }
+            return consumed
+        }
+    }
+
     private struct Track {
         var energies: [Float] = []
         var consecutiveActivity = 0
-        var pendingDuration: Double = 0
+        var pending = Cadence()
         var lastEnd: Double?
         var lastActivityEnd: Double?
         var lastProgressEnd: Double?
@@ -506,8 +529,12 @@ nonisolated struct MeetingPendingSpeechProjection {
         var cadenceSeconds: Double = 0.4
         var cadenceObservedThrough: Double?
         var protectedThrough: Double = 0
+        var processedIntervals: [Range<Double>] = []
     }
     private var tracks: [MeetingLiveSpeaker: Track] = [:]
+    /// Public tokens retain only their display envelope. Private support records which
+    /// measured speech still belongs to that token, including after the 64-view coalescing.
+    private var tokenSupport: [UInt64: [Range<Double>]] = [:]
     private var nextID: UInt64 = 0
     private var visibleRevision: UInt64 = 0
     private var reportedCapacity = false
@@ -533,7 +560,7 @@ nonisolated struct MeetingPendingSpeechProjection {
             if start - lastEnd > 0.06 {
                 track.energies.removeAll(keepingCapacity: true)
                 track.consecutiveActivity = 0
-                track.pendingDuration = 0
+                track.pending.intervals.removeAll(keepingCapacity: true)
             }
         }
         track.lastEnd = end
@@ -568,11 +595,11 @@ nonisolated struct MeetingPendingSpeechProjection {
         var track = self.tracks[source] ?? Track()
         if let lastEnd = track.lastEnd {
             guard start >= lastEnd - 0.000_001 else { return }
-            if start - lastEnd > 0.06 { track.pendingDuration = 0 }
+            if start - lastEnd > 0.06 { track.pending.intervals.removeAll(keepingCapacity: true) }
         }
         track.lastEnd = end
         if activity == .speech { track.lastActivityEnd = end }
-        else { track.pendingDuration = 0 }
+        else { track.pending.intervals.removeAll(keepingCapacity: true) }
         self.advance(source: source, start: start, end: end, activity: activity,
             contributesSpeech: activity == .speech, level: level, track: &track)
         self.tracks[source] = track
@@ -586,19 +613,26 @@ nonisolated struct MeetingPendingSpeechProjection {
             self.snapshot.revision &+= 1
         }
         if contributesSpeech, end > track.protectedThrough + 0.000_001 {
-            track.pendingDuration += end - max(start, track.protectedThrough)
+            let measured = max(start, track.protectedThrough)..<end
+            track.pending.append(Self.subtract([measured], coveredBy: track.processedIntervals))
+            guard track.pending.intervals.count <= Self.maximumIntervals else {
+                track.pending.intervals.removeAll(keepingCapacity: true)
+                self.emit(.capacityReached, source: source, start: start, end: end)
+                return
+            }
             // Start at 150 shapes/minute, then gently follow newly visible native speech
             // timing. Activity decides when to mint; cadence is still only a UI estimate.
-            if track.pendingDuration >= track.cadenceSeconds - 0.000_001 {
-                track.pendingDuration -= track.cadenceSeconds
+            if let speech = track.pending.consume(track.cadenceSeconds),
+               let first = speech.first, let last = speech.last {
                 track.lastProgressEnd = end
                 track.reportedQuietWaiting = false
                 if self.snapshot.tokens.count < Self.maximumTokens {
                     let widths: [Double] = [0.72, 1.02, 0.56, 0.88, 0.64, 1.10, 0.80]
                     self.nextID &+= 1
                     self.snapshot.tokens.append(MeetingPendingSpeechToken(
-                        id: self.nextID, source: source, start: max(track.protectedThrough, end - track.cadenceSeconds), end: end,
+                        id: self.nextID, source: source, start: first.lowerBound, end: last.upperBound,
                         widthHint: widths[Int((self.nextID - 1) % UInt64(widths.count))], level: level))
+                    self.tokenSupport[self.nextID] = speech
                     self.snapshot.revision &+= 1
                     self.reportedCapacity = false
                     self.emit(.created, source: source, tokens: [self.snapshot.tokens.last!])
@@ -606,7 +640,14 @@ nonisolated struct MeetingPendingSpeechProjection {
                     // Preserve the same bounded display token and its complete outstanding
                     // source envelope when recognition falls behind. Later speech must not
                     // disappear merely because the renderer reached its view budget.
-                    self.snapshot.tokens[index].end = max(self.snapshot.tokens[index].end, end)
+                    let id = self.snapshot.tokens[index].id
+                    let support = Self.merged((self.tokenSupport[id] ?? []) + speech)
+                    guard support.count <= Self.maximumIntervals else {
+                        self.emit(.capacityReached, source: source, start: start, end: end)
+                        return
+                    }
+                    self.tokenSupport[id] = support
+                    self.snapshot.tokens[index].end = last.upperBound
                     self.snapshot.revision &+= 1
                     self.emit(.extended, source: source, tokens: [self.snapshot.tokens[index]])
                 } else if !self.reportedCapacity {
@@ -616,7 +657,10 @@ nonisolated struct MeetingPendingSpeechProjection {
             }
         }
         if let lastActivityEnd = track.lastActivityEnd,
-           end - lastActivityEnd >= Self.cadenceResetSeconds { track.pendingDuration = 0 }
+           end - lastActivityEnd >= Self.cadenceResetSeconds { track.pending.intervals.removeAll(keepingCapacity: true) }
+        // Older decisions cannot return after monotonic source observation. Pending
+        // cadence/token support has already had every acknowledged part subtracted.
+        track.processedIntervals.removeAll { $0.upperBound <= end + 0.000_001 }
         if let lastProgressEnd = track.lastProgressEnd, end - lastProgressEnd >= Self.quietWaitingSeconds,
            !track.reportedQuietWaiting {
             track.reportedQuietWaiting = true
@@ -680,10 +724,21 @@ nonisolated struct MeetingPendingSpeechProjection {
         guard end > track.protectedThrough else { return }
         let start = track.protectedThrough
         track.protectedThrough = end
-        track.pendingDuration = 0
         tracks[source] = track
         applyCoverage(source: source, start: start, end: end, captionID: nil, visibleUTF16: 0)
         emit(.processedCoverage, source: source, transcriptRevision: transcriptRevision, start: start, end: end)
+    }
+
+    mutating func acknowledgeProtectedIntervals(source: MeetingLiveSpeaker,
+        intervals: [Range<Double>], transcriptRevision: UInt64) {
+        guard snapshot.isCapturing, transcriptRevision == visibleRevision,
+              intervals.count <= Self.maximumIntervals,
+              intervals.allSatisfy({ $0.lowerBound.isFinite && $0.upperBound.isFinite
+                  && $0.lowerBound >= 0 && $0.upperBound > $0.lowerBound }) else { return }
+        for interval in Self.merged(intervals) {
+            applyCoverage(source: source, start: interval.lowerBound, end: interval.upperBound,
+                captionID: nil, visibleUTF16: 0)
+        }
     }
 
     /// A retained-file caption worker successfully decoded this interval without text.
@@ -717,21 +772,32 @@ nonisolated struct MeetingPendingSpeechProjection {
 
     private mutating func applyCoverage(source: MeetingLiveSpeaker, start: TimeInterval, end: TimeInterval,
                                        captionID: UUID?, visibleUTF16: Int) {
+        guard end > start else { return }
+        let coverage = start..<end
+        var track = self.tracks[source] ?? Track()
+        let remembered = Self.merged(track.processedIntervals + [coverage])
+            .filter { $0.upperBound > (track.lastEnd ?? 0) + 0.000_001 }
+        guard remembered.count <= Self.maximumIntervals else {
+            self.emit(.capacityReached, source: source, start: start, end: end)
+            return
+        }
+        track.processedIntervals = remembered
+        track.pending.intervals = Self.subtract(track.pending.intervals, coveredBy: [coverage])
+        self.tracks[source] = track
         var removed: [MeetingPendingSpeechToken] = []
         var trimmed: [MeetingPendingSpeechToken] = []
         self.snapshot.tokens = self.snapshot.tokens.compactMap { token in
             guard token.source == source, token.end > start, token.start < end else { return token }
-            if token.start + 0.000_001 >= start, token.end <= end + 0.000_001 {
+            let support = Self.subtract(self.tokenSupport[token.id] ?? [token.start..<token.end], coveredBy: [coverage])
+            guard let first = support.first, let last = support.last else {
+                self.tokenSupport[token.id] = nil
                 removed.append(token)
                 return nil
             }
-            // A word-shaped estimate can straddle a recognized boundary. Keep its
-            // uncovered part and stable identity instead of deleting other audio.
+            self.tokenSupport[token.id] = support
             var retained = token
-            if start <= token.start { retained.start = min(end, token.end) }
-            else if end >= token.end { retained.end = max(start, token.start) }
-            // Coverage strictly inside an estimate cannot justify erasing either
-            // outside edge. Conservatively retain it until more text covers it.
+            retained.start = first.lowerBound
+            retained.end = last.upperBound
             if retained != token { trimmed.append(token) }
             return retained
         }
@@ -746,6 +812,30 @@ nonisolated struct MeetingPendingSpeechProjection {
             self.emit(.trimmed, source: source, tokens: trimmed, transcriptRevision: self.visibleRevision,
                 captionID: captionID, visibleUTF16: visibleUTF16, start: start, end: end)
         }
+    }
+
+    private static func merged(_ ranges: [Range<Double>]) -> [Range<Double>] {
+        var result: [Range<Double>] = []
+        for range in ranges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if let last = result.last, range.lowerBound <= last.upperBound + 0.000_001 {
+                result[result.count - 1] = last.lowerBound..<max(last.upperBound, range.upperBound)
+            } else { result.append(range) }
+        }
+        return result
+    }
+
+    private static func subtract(_ ranges: [Range<Double>], coveredBy coverage: [Range<Double>]) -> [Range<Double>] {
+        var result: [Range<Double>] = []
+        for range in ranges {
+            var cursor = range.lowerBound
+            for covered in coverage where covered.upperBound > cursor && covered.lowerBound < range.upperBound {
+                if covered.lowerBound > cursor + 0.000_001 { result.append(cursor..<min(covered.lowerBound, range.upperBound)) }
+                cursor = max(cursor, covered.upperBound)
+                if cursor >= range.upperBound - 0.000_001 { break }
+            }
+            if cursor < range.upperBound - 0.000_001 { result.append(cursor..<range.upperBound) }
+        }
+        return result
     }
 
     private func emit(_ kind: DiagnosticEvent.Kind, source: MeetingLiveSpeaker? = nil,
@@ -765,6 +855,7 @@ nonisolated struct MeetingPendingSpeechProjection {
         guard self.snapshot.isCapturing else { return }
         let removed = self.snapshot.tokens
         self.tracks.removeAll()
+        self.tokenSupport.removeAll()
         self.snapshot.tokens.removeAll()
         self.snapshot.isCapturing = false
         self.snapshot.activityBySource.removeAll()
@@ -943,6 +1034,15 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
     func acknowledgeEmptyRecognition(source: MeetingLiveSpeaker, start: Double, end: Double) -> MeetingPendingSpeechSnapshot {
         self.lock.withLock {
             self.projection.acknowledgeEmptyRecognition(source: source, start: start, end: end)
+            return self.projection.snapshot
+        }
+    }
+
+    func acknowledgeProtectedIntervals(source: MeetingLiveSpeaker, intervals: [Range<Double>],
+                                      transcriptRevision: UInt64) -> MeetingPendingSpeechSnapshot {
+        self.lock.withLock {
+            self.projection.acknowledgeProtectedIntervals(source: source, intervals: intervals,
+                transcriptRevision: transcriptRevision)
             return self.projection.snapshot
         }
     }

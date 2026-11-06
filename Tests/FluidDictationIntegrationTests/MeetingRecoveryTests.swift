@@ -13,6 +13,68 @@ import XCTest
 // Existing recovery suite shares setup across crash and corruption scenarios.
 // swiftlint:disable:next type_body_length
 final class MeetingRecoveryTests: XCTestCase {
+    func testProtectedIntervalCheckpointsRetireOnlyTheirSourceWavesAfterRouteGaps() async throws {
+        let suite = "WaveformIntervals.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.fluidMeetEnabled = true
+        settings.selectedSpeechModel = .parakeetTDTv2
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let microphone = self.makeMicrophoneTrack(chunks: [])
+        var application = self.makeMicrophoneTrack(chunks: [])
+        application.kind = .applicationAudio
+        let capture = StubCaptureController()
+        capture.startResult = .init(tracks: [microphone, application], firstPresentationTime: nil)
+        let processing = MemoryCheckpointProcessingController()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
+            audioArbiter: StubArbiter(), settings: settings)
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        var configuration = self.makeConfiguration()
+        configuration.mode = .onlineCall
+        configuration.audioStorageMode = .memoryOnly
+        configuration.languageCode = "en"
+        configuration.speakerLabelsEnabled = false
+        let session = try await coordinator.startRecording(configuration: configuration)
+        capture.stopResult = .init(tracks: [microphone, application], stoppedAt: session.startedAt.addingTimeInterval(20))
+        let clock = Double(session.timebase.startedHostTime) * Double(session.timebase.machTimebaseNumerator)
+            / Double(session.timebase.machTimebaseDenominator) / 1_000_000_000
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
+                                                channels: 1, interleaved: false))
+        for track in [microphone, application] {
+            for base in [0.0, 4.0, 10.0] {
+                for frame in 0..<100 {
+                    let start = base + Double(frame) * 0.02
+                    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 320))
+                    buffer.frameLength = 320
+                    try XCTUnwrap(buffer.floatChannelData?[0]).update(
+                        repeating: 0.018 + 0.011 * Float(sin(start * 6 * .pi)), count: 320)
+                    capture.emitLive(kind: track.kind, sampleBuffer: try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(
+                        from: buffer, presentationTime: CMTime(seconds: clock + start, preferredTimescale: 1_000_000_000))))
+                }
+            }
+        }
+        var batch = MeetingPCMTranscriptBatch(segments: [])
+        batch.sourceTrack = microphone
+        try await processing.checkpoint(batch)
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.contains { $0.source == .you })
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.contains { $0.source == .them })
+        batch.protectedSourceIntervals = [0..<2, 4..<6]
+        try await processing.checkpoint(batch)
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.filter { $0.source == .you }.allSatisfy { $0.start >= 10 - 0.000_001 })
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.contains { $0.source == .them && $0.start < 2 })
+        batch.sourceTrack = application
+        try await processing.checkpoint(batch)
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.allSatisfy { $0.start >= 10 - 0.000_001 })
+        let loaded = try await store.load(id: session.id)
+        let persisted = try XCTUnwrap(loaded)
+        XCTAssertTrue(persisted.transcriptSegments.isEmpty, "Source processing metadata cannot invent transcript words")
+        XCTAssertGreaterThan(coordinator.liveTranscript.revision, 0)
+    }
+
     func testFloatingCaptionCornersStayTransparentAcrossAppearanceAndNativeResizing() async throws {
         let directory = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
