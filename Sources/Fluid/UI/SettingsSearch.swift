@@ -13,7 +13,6 @@ import SwiftUI
 enum SettingsSearchTarget: Hashable {
     case general
     case fluidMeet
-    case ownerVoice
     case launchAtStartup
     case showWindowAtLogin
     case dockVisibility
@@ -79,7 +78,7 @@ enum SettingsSearchTarget: Hashable {
 
     var section: SettingsSection {
         switch self {
-        case .fluidMeet, .ownerVoice:
+        case .fluidMeet:
             return .fluidMeet
 
         case .general,
@@ -245,7 +244,6 @@ enum SettingsSearchIndex {
 
     private static var entries: [Entry] { [
         .init(target: .fluidMeet, title: AppBrand.text("Enable FluidMeet"), terms: ["Enable FluidMeet", "meetings recording disable turn off enable"]),
-        .init(target: .ownerVoice, title: "My voice", terms: ["record my voice own voice profile speaker identity enrollment", "мой голос свой голос записать голос профиль голоса узнать меня"]),
         .init(target: .general, title: "General", terms: ["app settings preferences"]),
         .init(
             target: .launchAtStartup,
