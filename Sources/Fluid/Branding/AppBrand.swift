@@ -137,6 +137,7 @@ nonisolated enum AppBrand {
     static var repositoryURL: URL { URL(string: self.package.links?.repository ?? self.profile.website)! }
     static let updatesEnabled = AppBrand.distribution.updatesAllowedForCurrentSignature
     static var feedbackEndpoint: URL? { self.distribution.feedbackEndpoint.flatMap(URL.init(string:)) }
+    static var privacyPolicyURL: URL? { self.distribution.privacyPolicyURL.flatMap(URL.init(string:)) }
 
     static func text(_ source: String) -> String {
         let profile = self.profile

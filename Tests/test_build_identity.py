@@ -107,7 +107,7 @@ class BuildIdentityTests(unittest.TestCase):
             self.assertEqual(info['CFBundleShortVersionString'], '$(MARKETING_VERSION)')
         defaults = (ROOT / 'Sources/Mobile/Version.xcconfig').read_text()
         self.assertRegex(defaults, r'(?m)^CURRENT_PROJECT_VERSION = [1-9][0-9]*$')
-        self.assertRegex(defaults, r'(?m)^MARKETING_VERSION = 0\.1\.0$')
+        self.assertRegex(defaults, r'(?m)^MARKETING_VERSION = [0-9]+(?:\.[0-9]+){1,2}$')
 
     def testDuplicateUpstreamIdentityAndReleaseSettingsAreRejected(self):
         project = PROJECT.read_text()

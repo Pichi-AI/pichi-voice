@@ -57,13 +57,14 @@ resource_paths = [
     "Sources/Fluid/Localization/Localizable.xcstrings", "Sources/Fluid/Assets.xcassets",
     "Sources/Fluid/Branding/brand-package.json", "Sources/Fluid/Resources/Notices",
     "Sources/Mobile/Resources/brand-distribution.json", "Sources/Mobile/Resources/MobileAssets.xcassets",
+    "Sources/Mobile/Resources/PrivacyInfo.xcprivacy",
 ]
 file_ids, source_builds, resource_builds = [], [], []
 file_refs = {}
 def file_ref(path, label="Mobile file "):
     if path not in file_refs:
         kind = {".swift":"sourcecode.swift", ".xcstrings":"text.json.xcstrings", ".xcassets":"folder.assetcatalog",
-                ".strings":"text.plist.strings", ".json":"text.json", ".xcconfig":"text.xcconfig"}.get(Path(path).suffix, "folder")
+                ".strings":"text.plist.strings", ".xcprivacy":"text.xml", ".json":"text.json", ".xcconfig":"text.xcconfig"}.get(Path(path).suffix, "folder")
         file_refs[path] = obj(label + path, f"isa = PBXFileReference; lastKnownFileType = {kind}; path = {quoted(path)}; sourceTree = SOURCE_ROOT;")
         file_ids.append(file_refs[path])
     return file_refs[path]
