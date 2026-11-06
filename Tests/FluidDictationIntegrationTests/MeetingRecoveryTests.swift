@@ -34,8 +34,11 @@ final class MeetingRecoveryTests: XCTestCase {
         // Invoke the actual native surface's bound action, then verify the real coordinator
         // and attempt control composition. Physical native event routing is a separate check.
         let indicator = MeetingRecordingPillContent(coordinator: coordinator).microphoneIndicator
+        let applied = self.expectation(description: "The capture owner published the button's manual pause")
+        let publication = coordinator.$microphoneMuteState.filter { $0 == .manuallyMuted }.first().sink { _ in applied.fulfill() }
+        defer { publication.cancel() }
         try XCTUnwrap(indicator.onToggle)()
-        await self.drainCaptureEvents(); await self.drainCaptureEvents()
+        await fulfillment(of: [applied], timeout: 2)
         XCTAssertEqual(coordinator.microphoneMuteState, .manuallyMuted)
         capture.observeMeetingMute(.unmuted)
         await self.drainCaptureEvents()
