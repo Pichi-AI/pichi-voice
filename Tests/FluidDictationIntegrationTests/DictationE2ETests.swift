@@ -5649,3 +5649,52 @@ extension DictationE2ETests {
         XCTAssertEqual(controller.presentedCandidateIDs, [proposal.id])
     }
 }
+
+
+extension DictationE2ETests {
+    func testRepeatedPhraseUsesWholeValueWhenEditorCannotWriteSelectedText() throws {
+        let prefix = "Earlier untouched field text. "
+        let dictated = "White Label supports billing. White Label supports themes. White Label supports API."
+        let before = prefix + dictated
+        let edited = prefix + dictated.replacingOccurrences(of: "White Label supports billing", with: "Whitelabel supports billing")
+        let scope = NSRange(location: prefix.utf16.count, length: dictated.utf16.count)
+        let candidate = try XCTUnwrap(AutomaticDictionaryCorrectionDetector.candidate(before: before, after: edited, insertedRange: scope, allowsInsertionAtEnd: true))
+        XCTAssertEqual(candidate.heardText, "White Label")
+        XCTAssertEqual(candidate.correctedText, "Whitelabel")
+        let currentScope = NSRange(location: scope.location, length: edited.utf16.count - scope.location)
+        let match = try XCTUnwrap(DictionaryCorrectionReplacementPlan.exactTermRanges(of: candidate.heardText, in: edited, scope: currentScope).first)
+        let plan = try XCTUnwrap(DictionaryCorrectionReplacementPlan(sourceText: edited, range: match, replacement: candidate.correctedText, scope: currentScope))
+        var editorValue = edited
+        let selection = NSRange(location: edited.utf16.count, length: 0)
+        XCTAssertNotNil(plan.mappedRange(selection))
+        XCTAssertTrue(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { editorValue == edited },
+            writeSelectedText: nil, writeValue: { editorValue = plan.text; return true }))
+        XCTAssertEqual(editorValue, prefix + dictated.replacingOccurrences(of: "White Label", with: "Whitelabel"))
+        XCTAssertTrue(plan.confirmsAppliedText(editorValue, differenceFromExpected: nil))
+        XCTAssertFalse(editorValue.contains("White Label"))
+    }
+
+    func testRepeatWriteFallbackDoesNotOverwriteNewInputOrDuplicateUncertainWrite() {
+        var current = true, writes = 0
+        XCTAssertFalse(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { current },
+            writeSelectedText: { current = false; return false }, writeValue: { writes += 1; return true }))
+        XCTAssertEqual(writes, 0)
+        current = true
+        XCTAssertTrue(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { current },
+            writeSelectedText: { true }, writeValue: { writes += 1; return true }))
+        XCTAssertEqual(writes, 0)
+        XCTAssertTrue(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { current },
+            writeSelectedText: { false }, writeValue: { writes += 1; return true }))
+        XCTAssertEqual(writes, 1)
+        XCTAssertFalse(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { false },
+            writeSelectedText: { XCTFail("Target moved"); return true }, writeValue: { XCTFail("Target moved"); return true }))
+        XCTAssertFalse(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { true }, writeSelectedText: nil, writeValue: nil))
+    }
+
+    func testWhiteLabelHistoryPlanReplacesExactOccurrencesAndPreservesOtherSpellings() throws {
+        let text = "White Label, White Label. White Labeling and White Labele stay distinct."
+        let plan = try XCTUnwrap(DictionaryCorrectionReplacementPlan(sourceText: text,
+            range: (text as NSString).range(of: "White Label"), replacement: "Whitelabel"))
+        XCTAssertEqual(plan.text, "Whitelabel, Whitelabel. White Labeling and White Labele stay distinct.")
+    }
+}

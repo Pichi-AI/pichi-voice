@@ -328,7 +328,8 @@ final class AutomaticDictionaryCorrectionTracker {
                 self.session = session
                 if currentValue == session.lastValue {
                     if let selected = Self.selectedRange(of: session.element),
-                       selected == pending.selectionBefore || selected == NSRange(location: NSMaxRange(session.insertedRange), length: 0) {
+                       selected == pending.selectionBefore || selected == NSRange(location: NSMaxRange(session.insertedRange), length: 0) ||
+                       selected == NSRange(location: session.lastValue.utf16.count, length: 0) {
                         _ = Self.setSelectedRange(pending.selectionAfter, of: session.element)
                     }
                     self.propagateAcceptedCorrections()
@@ -806,9 +807,13 @@ final class AutomaticDictionaryCorrectionTracker {
               CFEqual(focus.element, session.element), !Self.isSecureTextInput(session.element),
               Self.stringValue(of: session.element) == session.lastValue,
               var selection = Self.selectedRange(of: session.element) else { return }
-        var settable = DarwinBoolean(false)
-        guard AXUIElementIsAttributeSettable(session.element, kAXSelectedTextAttribute as CFString, &settable) == .success,
-              settable.boolValue else { return }
+        var selectedTextSettable = DarwinBoolean(false), valueSettable = DarwinBoolean(false)
+        let canWriteSelection = AXUIElementIsAttributeSettable(session.element, kAXSelectedTextAttribute as CFString, &selectedTextSettable) == .success && selectedTextSettable.boolValue
+        let canWriteValue = AXUIElementIsAttributeSettable(session.element, kAXValueAttribute as CFString, &valueSettable) == .success && valueSettable.boolValue
+        guard canWriteSelection || canWriteValue else {
+            DebugLogger.shared.info("DICTIONARY_CORRECTION repeats_skipped reason=no_writable_text_attribute", source: "DictionaryLearning")
+            return
+        }
         for correction in session.acceptedCorrections {
             guard correction.heard != correction.corrected,
                   let first = DictionaryCorrectionReplacementPlan.exactTermRanges(
@@ -819,17 +824,35 @@ final class AutomaticDictionaryCorrectionTracker {
             let delta = plan.text.utf16.count - session.lastValue.utf16.count
             let updatedInsertion = NSRange(location: session.insertedRange.location, length: session.insertedRange.length + delta)
             let replacement = (plan.text as NSString).substring(with: updatedInsertion)
-            guard Self.stringValue(of: session.element) == session.lastValue,
-                  Self.setSelectedRange(session.insertedRange, of: session.element) else { return }
+            let target = session.element, targetPID = session.pid, expectedValue = session.lastValue
+            let expectedSelection = selection, insertion = session.insertedRange
+            var selectionWasChanged = false
+            let isCurrent: () -> Bool = {
+                guard PrivateProfileStorage.isReadable(self.profile), PrivateProfileStorage.acceptsNewWork,
+                      let focus = Self.focusedElementAndPID(), focus.pid == targetPID, CFEqual(focus.element, target),
+                      !Self.isSecureTextInput(target), Self.stringValue(of: target) == expectedValue,
+                      Self.selectedRange(of: target) == (selectionWasChanged ? insertion : expectedSelection) else { return false }
+                return true
+            }
             let pending = PendingRepeat(plan: plan, selectionBefore: selection, selectionAfter: restoredSelection)
             session.pendingRepeat = pending
             self.session = session
-            let result = AXUIElementSetAttributeValue(session.element, kAXSelectedTextAttribute as CFString, replacement as CFString)
-            guard result == .success else {
+            let selectedWrite: (() -> Bool)? = canWriteSelection ? {
+                guard Self.setSelectedRange(insertion, of: target) else { return false }
+                selectionWasChanged = true
+                guard isCurrent() else { return false }
+                return AXUIElementSetAttributeValue(target, kAXSelectedTextAttribute as CFString, replacement as CFString) == .success
+            } : nil
+            let valueWrite: (() -> Bool)? = canWriteValue ? {
+                AXUIElementSetAttributeValue(target, kAXValueAttribute as CFString, plan.text as CFString) == .success
+            } : nil
+            let dispatched = DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: isCurrent,
+                writeSelectedText: selectedWrite, writeValue: valueWrite)
+            guard dispatched else {
                 session.pendingRepeat = nil
                 self.session = session
-                _ = Self.setSelectedRange(selection, of: session.element)
-                DebugLogger.shared.info("DICTIONARY_CORRECTION repeats_skipped ax=\(result.rawValue)", source: "DictionaryLearning")
+                if selectionWasChanged, isCurrent() { _ = Self.setSelectedRange(selection, of: target) }
+                DebugLogger.shared.info("DICTIONARY_CORRECTION repeats_skipped reason=write_rejected_or_editor_changed", source: "DictionaryLearning")
                 return
             }
             // A successful AX request is not a synchronous value acknowledgement.
