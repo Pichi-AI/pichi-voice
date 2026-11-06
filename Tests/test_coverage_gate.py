@@ -80,6 +80,40 @@ class GateTests(unittest.TestCase):
         self.assertEqual(value["result"], "failed")
         self.assertEqual(value["uncovered"], {"tools/source.py": [2]})
 
+    def test_python_check_defers_native_evidence_without_weakening_full_gate(self):
+        plan = self.add_python()
+        self.put("Sources/Fluid/Native.swift", "let native = 1\n")
+        self.commit()
+        plan = self.plan()
+        self.report(plan)
+        args = ["--root", str(self.root), "--base", self.base, "--head", plan["source_sha"],
+                "--reports-dir", str(self.reports)]
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(GATE.main([*args, "--python-only", "--require-scope", "python"]), 0)
+        value = json.loads(output.getvalue())
+        self.assertEqual(value["coverage_scope"], "python")
+        self.assertEqual(value["deferred_scopes"], ["macos"])
+        self.assertEqual(value["changed_executable_lines"], 2)
+        self.assertIn("Sources/Fluid/Native.swift", plan["changed_files"])
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(GATE.main(args), 1)
+            self.assertEqual(GATE.main([*args, "--python-only", "--require-scope", "ios"]), 1)
+        self.report(plan, files={"tools/source.py": dict(executable_lines=[1, 2], covered_lines=[1])})
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(GATE.main([*args, "--python-only"]), 1)
+        self.assertEqual(json.loads(output.getvalue())["uncovered"], {"tools/source.py": [2]})
+
+    def test_python_check_keeps_unsupported_code_visible(self):
+        plan = self.add_python()
+        self.put("scripts/tool.sh", "echo fixture\n")
+        self.commit()
+        plan = self.plan()
+        self.report(plan)
+        with contextlib.redirect_stderr(io.StringIO()) as output:
+            self.assertEqual(GATE.main(["--root", str(self.root), "--base", self.base, "--head", plan["source_sha"],
+                "--reports-dir", str(self.reports), "--python-only"]), 1)
+        self.assertIn("Unsupported", output.getvalue())
+
     def test_full_baseline_requires_selected_reports_even_with_no_diff(self):
         self.put("tools/source.py", "value = 1\n")
         self.base = self.commit()

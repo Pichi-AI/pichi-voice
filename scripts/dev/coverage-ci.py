@@ -21,11 +21,11 @@ PACKAGES = ("NativeTextInference", "PichiGigaAM", "RussianMorphology", "Transcri
 SCOPES = ("macos", "ios", "packages", "python")
 
 
-def command(argv, *, log=None, tolerate=False, cwd=None):
+def command(argv, *, log=None, tolerate=False, cwd=None, env=None):
     with contextlib.ExitStack() as stack:
         output = stack.enter_context(Path(log).open("w")) if log else subprocess.PIPE
         result = subprocess.run([str(x) for x in argv], cwd=cwd, text=True,
-                                stdout=output, stderr=subprocess.STDOUT)
+                                stdout=output, stderr=subprocess.STDOUT, env=env)
     if result.returncode and not tolerate:
         raise RuntimeError(f"{argv[0]} exited {result.returncode}; see {log or result.stdout}")
     return result
@@ -230,6 +230,12 @@ def changed_ui_classes(root):
     return classes
 
 
+def isolated_native_runner():
+    environment = os.environ.get("RUNNER_ENVIRONMENT")
+    return environment == "github-hosted" or (environment == "self-hosted" and
+            os.environ.get("PICHI_ISOLATED_NATIVE_RUNNER") == "1")
+
+
 def has_app_coverage(raw_report, apps):
     if not apps:
         return False
@@ -244,8 +250,8 @@ def has_app_coverage(raw_report, apps):
 
 
 def native(root, output, scope, ui_class):
-    if scope == "macos" and os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
-        raise ValueError("macOS coverage requires a disposable GitHub-hosted user; personal app data must stay isolated")
+    if scope == "macos" and not isolated_native_runner():
+        raise ValueError("macOS coverage requires an explicitly isolated runner; personal app data must stay isolated")
     source = git(root, "rev-parse", "HEAD")
     work = Path(output) / scope / ("run-" + uuid.uuid4().hex)
     work.mkdir(parents=True, exist_ok=True)
@@ -409,9 +415,31 @@ def python(root, output):
     return report(root, "python", output, files, counts, source)
 
 
+def verify(root, output, force_all=False):
+    if os.environ.get("RUNNER_ENVIRONMENT") != "self-hosted" or not isolated_native_runner():
+        raise ValueError("Native verification requires an attested isolated self-hosted Mac")
+    plan_path, needs_path = output / "plan.json", output / "needs.json"
+    plan(root, plan_path, force_all)
+    value = read(plan_path)
+    states = {"plan": {"result": "success"}}
+    checked = command(["bash", "scripts/dev/check.sh"], cwd=root, log=output / "portable.log", tolerate=True)
+    states["portable"] = {"result": "failure" if checked.returncode else "success"}
+    if not checked.returncode:
+        environment = {**os.environ, "PICHI_COVERAGE_PLAN": json.dumps(value)}
+        for scope in value["run_scopes"]:
+            if scope not in SCOPES:
+                raise ValueError("Unknown native verification scope: " + scope)
+            mode = ["native", "--scope", scope] if scope in ("macos", "ios") else [scope]
+            result = command([sys.executable, "scripts/dev/coverage-ci.py", *mode, "--output", output],
+                             cwd=root, log=output / (scope + "-producer.log"), tolerate=True, env=environment)
+            states[scope] = {"result": "failure" if result.returncode else "success"}
+    save(needs_path, states)
+    return finish(root, plan_path, output, needs_path, output / "coverage-gate.json")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("plan", "finish", "native", "packages", "python"))
+    parser.add_argument("mode", choices=("plan", "finish", "native", "packages", "python", "verify"))
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--all", action="store_true")
@@ -431,6 +459,8 @@ def main(argv=None):
             return native(args.root, args.output, args.scope, args.ui_class)
         if args.mode == "packages":
             return packages(args.root, args.output)
+        if args.mode == "verify":
+            return verify(args.root, args.output, args.all)
         return python(args.root, args.output)
     except (ValueError, RuntimeError, OSError, KeyError, StopIteration, ET.ParseError) as error:
         print(f"Coverage producer failed: {error}", file=sys.stderr)

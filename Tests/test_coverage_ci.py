@@ -51,6 +51,8 @@ class CoverageProducerTests(unittest.TestCase):
         self.assertEqual(CI.command([sys.executable, "-c", "raise SystemExit(7)"], tolerate=True).returncode, 7)
         with self.assertRaisesRegex(RuntimeError, "exited 8"):
             CI.command([sys.executable, "-c", "raise SystemExit(8)"])
+        self.assertEqual(CI.command([sys.executable, "-c", "import os; print(os.environ['PICHI_TEST_VALUE'])"],
+            env={**os.environ, "PICHI_TEST_VALUE": "pinned-input"}).stdout.strip(), "pinned-input")
         with patch.object(CI, "command", return_value=completed(" abc\n")):
             self.assertEqual(CI.git(self.root, "rev-parse", "HEAD"), "abc")
 
@@ -212,6 +214,50 @@ class CoverageProducerTests(unittest.TestCase):
             CI.native(self.root, self.out, "macos", "Smoke")
         tool.assert_not_called()
 
+    def test_native_runner_admission_requires_host_identity_and_isolation_attestation(self):
+        for environment, expected in [({}, False), ({"PICHI_ISOLATED_NATIVE_RUNNER": "1"}, False),
+                ({"RUNNER_ENVIRONMENT": "self-hosted"}, False),
+                ({"RUNNER_ENVIRONMENT": "self-hosted", "PICHI_ISOLATED_NATIVE_RUNNER": "1"}, True),
+                ({"RUNNER_ENVIRONMENT": "github-hosted"}, True)]:
+            with self.subTest(environment=environment), patch.dict(os.environ, environment, clear=True):
+                self.assertEqual(CI.isolated_native_runner(), expected)
+
+    def test_native_verification_checks_producer_exit_statuses_and_pins_ui_plan(self):
+        value = dict(base_sha="base", source_sha="head", run_scopes=list(CI.SCOPES))
+        def plan(root, output, force_all):
+            CI.save(output, value)
+        for bad_scope in [None, "ios"]:
+            def tool(argv, **kwargs):
+                if "--scope" in argv and argv[argv.index("--scope") + 1] == bad_scope:
+                    return completed(status=65)
+                return completed()
+            with patch.dict(os.environ, {"RUNNER_ENVIRONMENT": "self-hosted", "PICHI_ISOLATED_NATIVE_RUNNER": "1"}, clear=True), patch.object(CI, "plan", side_effect=plan), patch.object(CI, "command", side_effect=tool) as run:
+                self.assertEqual(CI.verify(self.root, self.out), 1 if bad_scope else 0)
+            producers = [call for call in run.call_args_list if call.kwargs.get("env")]
+            self.assertEqual(len(producers), 4)
+            for call in producers:
+                self.assertEqual(json.loads(call.kwargs["env"]["PICHI_COVERAGE_PLAN"]), value)
+            if bad_scope:
+                self.assertEqual(CI.read(self.out / "coverage-gate.json")["jobs"], ["ios"])
+            else:
+                self.assertIn("--require-scope", run.call_args.args[0])
+
+    def test_native_verification_stops_before_builds_on_failed_preflight(self):
+        for environment in [{}, {"RUNNER_ENVIRONMENT": "github-hosted"}, {"RUNNER_ENVIRONMENT": "self-hosted"}]:
+            with patch.dict(os.environ, environment, clear=True), patch.object(CI, "command") as run, self.assertRaisesRegex(ValueError, "isolated self-hosted"):
+                CI.verify(self.root, self.out)
+            run.assert_not_called()
+        value = dict(base_sha="base", source_sha="head", run_scopes=["ios"])
+        def plan(root, output, force_all):
+            CI.save(output, value)
+        with patch.dict(os.environ, {"RUNNER_ENVIRONMENT": "self-hosted", "PICHI_ISOLATED_NATIVE_RUNNER": "1"}, clear=True), patch.object(CI, "plan", side_effect=plan), patch.object(CI, "command", return_value=completed(status=1)) as run:
+            self.assertEqual(CI.verify(self.root, self.out), 1)
+        self.assertEqual(run.call_count, 1)
+        self.assertIn("portable", CI.read(self.out / "coverage-gate.json")["jobs"])
+        value["run_scopes"] = ["unknown"]
+        with patch.dict(os.environ, {"RUNNER_ENVIRONMENT": "self-hosted", "PICHI_ISOLATED_NATIVE_RUNNER": "1"}, clear=True), patch.object(CI, "plan", side_effect=plan), patch.object(CI, "command", return_value=completed()), self.assertRaisesRegex(ValueError, "Unknown native"):
+            CI.verify(self.root, self.out)
+
     def test_app_coverage_uses_executable_path_and_cannot_accept_embedded_test_bundle(self):
         # Xcode's display name omits Debug even though the actual executable includes it.
         target = dict(name="Pichi Voice.app", buildProductPath="/build/Pichi Voice Debug.app/Contents/MacOS/Pichi Voice Debug", executableLines=10)
@@ -361,7 +407,7 @@ class CoverageProducerTests(unittest.TestCase):
         self.assertEqual(len(list((self.out / "python").glob("run-*"))), 2)
 
     def test_cli_dispatch_and_errors(self):
-        for mode, function in [("plan", "plan"), ("finish", "finish"), ("native", "native"), ("packages", "packages"), ("python", "python")]:
+        for mode, function in [("plan", "plan"), ("finish", "finish"), ("native", "native"), ("packages", "packages"), ("python", "python"), ("verify", "verify")]:
             with patch.object(CI, function, return_value=0) as target:
                 self.assertEqual(CI.main([mode, "--output", str(self.out)]), 0)
                 target.assert_called_once()

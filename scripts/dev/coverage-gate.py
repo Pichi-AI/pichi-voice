@@ -186,6 +186,11 @@ def evaluate(root, plan, reports):
             "uncovered": uncovered}
 
 
+def python_scope(plan):
+    return {**plan, "required_scopes": [scope for scope in plan["required_scopes"] if scope == "python"],
+            "changed_files": {name: added for name, added in plan["changed_files"].items() if name.endswith(".py")}}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--classify", action="store_true")
@@ -193,13 +198,19 @@ def main(argv=None):
     parser.add_argument("--head", required=True)
     parser.add_argument("--reports-dir", type=Path)
     parser.add_argument("--require-scope", choices=sorted(SCOPES), action="append", default=[])
+    parser.add_argument("--python-only", action="store_true", help="Check Python coverage only; report native scopes as pending")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--root", type=Path, default=Path.cwd())
     args = parser.parse_args(argv)
     try:
         plan = classify(args.root, args.base, args.head)
         plan["required_scopes"] = sorted(set(plan["required_scopes"]) | set(args.require_scope))
-        value = plan if args.classify else evaluate(args.root, plan, args.reports_dir)
+        deferred = sorted(set(plan["required_scopes"]) - {"python"}) if args.python_only else []
+        if args.python_only and set(args.require_scope) - {"python"}:
+            raise ValueError("Python-only coverage cannot validate a required native scope")
+        selected = python_scope(plan) if args.python_only else plan
+        value = selected if args.classify else evaluate(args.root, selected, args.reports_dir)
+        value.update(coverage_scope="python" if args.python_only else "all", deferred_scopes=deferred)
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")

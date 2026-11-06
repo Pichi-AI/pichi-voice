@@ -1,0 +1,90 @@
+name: Pichi Voice native verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      full_baseline:
+        description: Validate every coverage scope even when unchanged
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: pichi-native-isolated
+  cancel-in-progress: false
+
+jobs:
+  native:
+    name: Coverage gate
+    runs-on: [self-hosted, macOS, ARM64, pichi-voice-isolated]
+    timeout-minutes: 90
+    env:
+      CI_ROOT: ${{ github.workspace }}/.build/pichi-native-${{ github.run_id }}-${{ github.run_attempt }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Require the prepared isolated runner
+        run: |
+          test "$RUNNER_ENVIRONMENT" = self-hosted
+          test "${PICHI_ISOLATED_NATIVE_RUNNER:-}" = 1
+          test -n "${DEVELOPER_DIR:-}"
+          xcodebuild -version
+          python3 -c 'import sys; assert sys.version_info >= (3, 11)'
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: git worktree add --detach "$CI_ROOT" HEAD
+      - working-directory: ${{ env.CI_ROOT }}
+        run: |
+          python3 -m venv .build/coverage-venv
+          .build/coverage-venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir coverage==7.17.2
+      - name: Execute selected native contracts and full coverage gate
+        timeout-minutes: 80
+        working-directory: ${{ env.CI_ROOT }}
+        env:
+          FULL_BASELINE: ${{ inputs.full_baseline }}
+        run: |
+          pichi_options=()
+          if [[ "$FULL_BASELINE" == true ]]; then pichi_options+=(--all); fi
+          .build/coverage-venv/bin/python scripts/dev/coverage-ci.py verify --output .build/coverage "${pichi_options[@]}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        id: evidence
+        if: always()
+        with:
+          name: native-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.CI_ROOT }}/.build/coverage/*.json
+            ${{ env.CI_ROOT }}/.build/coverage/*.log
+            ${{ env.CI_ROOT }}/.build/coverage/macos/*/*.log
+            ${{ env.CI_ROOT }}/.build/coverage/macos/*/*.json
+            ${{ env.CI_ROOT }}/.build/coverage/ios/*/*.log
+            ${{ env.CI_ROOT }}/.build/coverage/ios/*/*.json
+            ${{ env.CI_ROOT }}/.build/coverage/ios/*/screenshots-*/*.png
+            ${{ env.CI_ROOT }}/.build/coverage/packages/*/*.log
+            ${{ env.CI_ROOT }}/.build/coverage/packages/*/*.lcov
+            ${{ env.CI_ROOT }}/.build/coverage/python/*/tests.log
+            ${{ env.CI_ROOT }}/.build/coverage/python/*/coverage.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Release owned worktree after evidence preservation
+        if: always()
+        env:
+          EVIDENCE_SAVED: ${{ steps.evidence.outcome }}
+        run: |
+          if [[ ! -d "$CI_ROOT" ]]; then exit 0; fi
+          if [[ "$EVIDENCE_SAVED" != success ]]; then
+            echo "::error::Preserve $CI_ROOT; evidence upload did not succeed."
+            exit 1
+          fi
+          rm -rf -- "$CI_ROOT/.build"
+          if [[ -n "$(git -C "$CI_ROOT" status --porcelain --untracked-files=normal)" ]]; then
+            echo "::error::Preserve $CI_ROOT; unexpected source or untracked changes remain."
+            exit 1
+          fi
+          git worktree remove "$CI_ROOT"
