@@ -138,10 +138,12 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
          policy: MeetingSpeakerAttributionPolicy = .standard, limits: Limits = .init(),
          priorSpeakers: [MeetingSessionSpeaker] = []) throws {
         _ = try policy.validated()
-        let lookahead = max(
+        let acousticLookahead = max(
             policy.enableNeighborResolution ? policy.maximumUnknownRunSeconds + 2 * policy.maximumNeighborGapSeconds : 0,
             policy.enableBriefInterruption ? policy.maximumInterruptionWordSeconds + policy.maximumNeighborGapSeconds
                 + policy.maximumBriefInterruptionSeconds + policy.maximumBriefInterruptionGapSeconds : 0)
+        let lookahead = max(acousticLookahead,
+            policy.enableCompleteReadingAssignment ? MeetingReadingSpeakerResolver.contextRadiusSeconds : 0)
         guard limits.maximumRetainedWords > 0, limits.maximumRetainedSeconds.isFinite,
               limits.maximumRetainedSeconds > lookahead,
               limits.maximumActivityIntervals > 0,

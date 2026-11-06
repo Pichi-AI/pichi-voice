@@ -941,8 +941,9 @@ nonisolated enum MeetingTranscriptExporter {
                 barriers[gap.trackID, default: []].append(.init(start: gap.start, end: gap.end))
             }
             let format = PichiLocalization.text("Speaker %lld")
+            let scopes = MeetingReadingSpeakerResolver.readingScopes(for: source)
             if let reading = try? MeetingReadingSpeakerResolver.resolve(segments: projected, speakers: session.speakers,
-                barriersByTrack: barriers, scopeForSegment: { .init(trackID: $0.sourceTrackID, ordinal: 0) },
+                barriersByTrack: barriers, scopeForSegment: { scopes[$0.id] },
                 fallbackSpeaker: { scope in
                     MeetingReadingSpeakerResolver.fallbackSpeaker(namespace: session.id, scope: scope,
                         trackKind: session.audioTracks.first { $0.id == scope.trackID }?.kind ?? .microphone,

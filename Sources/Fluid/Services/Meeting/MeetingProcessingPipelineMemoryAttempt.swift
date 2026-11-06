@@ -629,16 +629,22 @@ extension MeetingProcessingPipeline {
             }
         }
         try Task.checkCancellation()
-        if attempt.request.configuration.speakerLabelsEnabled, let track {
+        if attempt.request.configuration.speakerLabelsEnabled, track != nil,
+           attempt.request.configuration.effectiveSpeakerProcessingMode != .streaming
+            || attempt.request.configuration.speakerAttributionPolicy?.enableCompleteReadingAssignment == true {
             // Recognition/replay has already passed the existing privacy gate. Final batch
             // diarization can still abstain; use the same protected reading identity policy
             // as streaming without replaying speech or inventing native speaker evidence.
+            let scopes = MeetingReadingSpeakerResolver.readingScopes(for: batch.segments)
+            let readingBarriers = Dictionary(grouping: session.transcriptCoverageGaps ?? [], by: \.trackID)
+                .mapValues { $0.map { MeetingSpeakerAttributionInterval(start: $0.start, end: $0.end) } }
             batch = try MeetingStreamingProtectedWordTail.finalizingProtectedTranscript(batch,
                 attemptID: attempt.request.attemptID,
                 policy: attempt.request.configuration.speakerAttributionPolicy,
                 speakerNameFormat: batch.speakerNameFormat ?? PichiLocalization.text("Speaker %lld"),
-                trackKinds: [track.id: track.kind],
-                epochForSegment: { _ in .init(trackID: track.id, ordinal: 0) })
+                trackKinds: Dictionary(session.audioTracks.map { ($0.id, $0.kind) }, uniquingKeysWith: { first, _ in first }),
+                barriersByTrack: readingBarriers,
+                epochForSegment: { scopes[$0.id] })
         }
         progress(.finalizing)
         // Stop-time pending records can predate or differ from the admitted PCM request.

@@ -27,6 +27,34 @@ nonisolated enum MeetingReadingSpeakerResolver {
             generatedParticipantNumber: 1, identityIsProvisional: true)
     }
 
+    /// Saved tokenless words inherit a neighboring *scope*, never a model slot or identity.
+    /// A reset between neighbors chooses the incoming scope so older voices cannot compete
+    /// across it. Actual native evidence and explicit coverage barriers remain unchanged.
+    static func readingScopes(for segments: [MeetingTranscriptSegment]) -> [MeetingTranscriptSegmentID: MeetingAnalysisEpochID] {
+        var result: [MeetingTranscriptSegmentID: MeetingAnalysisEpochID] = [:]
+        func nativeScope(_ segment: MeetingTranscriptSegment) -> MeetingAnalysisEpochID? {
+            let tokens = segment.nativeSpeakerAssignment?.tokens ?? segment.speakerAttribution?.rawAssignment.tokens ?? []
+            return tokens.first?.analysisEpochID ?? segment.speakerAttribution?.selectedToken?.analysisEpochID
+        }
+        for (track, rows) in Dictionary(grouping: segments, by: \.sourceTrackID) {
+            let ordered = rows.enumerated().sorted { ($0.element.start, $0.element.end, $0.offset)
+                < ($1.element.start, $1.element.end, $1.offset) }.map(\.element)
+            var next: [MeetingAnalysisEpochID?] = Array(repeating: nil, count: ordered.count)
+            var following: MeetingAnalysisEpochID?
+            for index in ordered.indices.reversed() {
+                if let scope = nativeScope(ordered[index]) { following = scope }
+                next[index] = following
+            }
+            var previous: MeetingAnalysisEpochID?
+            for index in ordered.indices {
+                let scope = nativeScope(ordered[index]) ?? next[index] ?? previous ?? .init(trackID: track, ordinal: 0)
+                result[ordered[index].id] = scope
+                if let native = nativeScope(ordered[index]) { previous = native }
+            }
+        }
+        return result
+    }
+
     private struct Anchor {
         let index: Int
         let id: SessionSpeakerID
@@ -222,6 +250,7 @@ nonisolated enum MeetingReadingSpeakerResolver {
                     // A confirmed/manual selection is authoritative. Existing context remains
                     // a reading choice and is not added to the immutable anchor index above.
                     if let id = activeID(source.speakerID),
+                       source.speakerAttribution?.rule != .readingParticipantContext || source.isUserSpeakerAssigned == true,
                        source.speakerID != placeholder.id || !mayResolvePlaceholder || manualPlaceholder {
                         if source.speakerID != id, source.isUserSpeakerAssigned != true {
                             result.segments[index].speakerID = id

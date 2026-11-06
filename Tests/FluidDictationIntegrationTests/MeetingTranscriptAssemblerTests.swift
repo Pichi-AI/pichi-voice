@@ -115,6 +115,38 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertNil(session.transcriptSegments[1].speakerID)
     }
 
+    func testReadingScopePreservesBothOnlineTracksAndEpochReset() throws {
+        var (session, epoch) = self.readingFixture([(0, 10, 0), (12, 12.1, nil), (13, 14, 1)])
+        let nextEpoch = MeetingAnalysisEpochID(trackID: epoch.trackID, ordinal: 1, generation: 1)
+        session.transcriptSegments[2].nativeSpeakerAssignment = .assigned(.init(analysisEpochID: nextEpoch, label: "later"))
+        let (other, _) = self.readingFixture([(0, 6, 0), (8, 8.1, nil), (9, 15, 0)])
+        session.transcriptSegments += other.transcriptSegments
+        session.speakers += other.speakers
+        let scopes = MeetingReadingSpeakerResolver.readingScopes(for: session.transcriptSegments)
+        XCTAssertEqual(scopes[session.transcriptSegments[1].id], nextEpoch)
+        let finalized = try MeetingStreamingProtectedWordTail.finalizingProtectedTranscript(
+            .init(segments: session.transcriptSegments, speakers: session.speakers),
+            attemptID: session.id, policy: .standard, speakerNameFormat: "Speaker %lld",
+            epochForSegment: { scopes[$0.id] })
+        XCTAssertEqual(finalized.segments[1].speakerID, session.speakers[1].id)
+        XCTAssertEqual(finalized.segments[4].speakerID, other.speakers[0].id)
+        XCTAssertEqual(finalized.segments.map(\.sourceTrackID), session.transcriptSegments.map(\.sourceTrackID))
+    }
+
+    func testLiveCommitWaitsForCompleteReadingContext() throws {
+        let (session, epoch) = self.readingFixture([(0, 2, 0), (2.2, 2.24, nil)])
+        let attempt = UUID()
+        var tail = try MeetingStreamingProtectedWordTail(attemptID: attempt, epoch: epoch,
+            speakerNameFormat: "Speaker %lld", priorSpeakers: session.speakers)
+        XCTAssertGreaterThanOrEqual(tail.policyLookahead, MeetingReadingSpeakerResolver.contextRadiusSeconds)
+        let update = try tail.update(safeWords: .init(segments: session.transcriptSegments, speakers: session.speakers),
+            activity: [], watermarks: .init(asrStableThrough: 9, diarizationProcessedThrough: 9, privacySafeThrough: 9),
+            attemptID: attempt, epoch: epoch)
+        XCTAssertFalse(update.committedIDs.contains(session.transcriptSegments[1].id),
+            "A later dominant participant inside the reading horizon must still be able to revise this word")
+        tail.cancel()
+    }
+
     func testMixedUtteranceSelectsDominantReadingVoiceWithoutChangingAcousticAssignment() throws {
         let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
         let a = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "a")

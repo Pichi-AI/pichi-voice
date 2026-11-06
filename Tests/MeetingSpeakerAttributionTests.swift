@@ -910,6 +910,7 @@ struct MeetingSpeakerAttributionTests {
         let oldRoundTrip = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self, from: JSONEncoder().encode(oldPolicy))
         self.check(oldRoundTrip == oldPolicy && oldRoundTrip.fingerprint == oldFingerprint)
         var priorObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
+        priorObject.removeValue(forKey: "enableCompleteReadingAssignment")
         priorObject.removeValue(forKey: "enableProvisionalSpeakerIdentities")
         priorObject.removeValue(forKey: "enableStableSpeakerOpening")
         priorObject.removeValue(forKey: "enableMainSpeakerContinuation")
@@ -926,6 +927,7 @@ struct MeetingSpeakerAttributionTests {
         self.check(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONEncoder().encode(priorPolicy)).fingerprint == priorPolicy.fingerprint)
         var beforeAcoustic = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
+        beforeAcoustic.removeValue(forKey: "enableCompleteReadingAssignment")
         beforeAcoustic.removeValue(forKey: "enableProvisionalSpeakerIdentities")
         beforeAcoustic.removeValue(forKey: "enableStableSpeakerOpening")
         beforeAcoustic.removeValue(forKey: "enableIndependentAcousticAnchors")
