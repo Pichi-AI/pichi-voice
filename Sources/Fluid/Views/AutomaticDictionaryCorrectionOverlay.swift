@@ -90,7 +90,9 @@ final class DictionaryCorrectionOverlayController {
     }
 
     func withdrawSuggestion(_ id: UUID) {
-        guard self.state.sessions.contains(where: { $0.candidate.id == id && $0.screen == .choice }) else { return }
+        guard self.state.sessions.contains(where: {
+            $0.candidate.id == id && !$0.isSavedCorrection && $0.screen != .training && $0.capturePhase == .idle
+        }) else { return }
         self.remove(id: id)
     }
 
@@ -107,7 +109,9 @@ final class DictionaryCorrectionOverlayController {
         }
         let next = AutomaticDictionaryTrainingSession(candidate: bounded, asr: AppServices.shared.asr, audioLearning: self.audioLearning)
         if let origin = candidate.observationID,
-           let index = self.state.sessions.firstIndex(where: { $0.screen == .choice && $0.candidate.observationID == origin }) {
+           let index = self.state.sessions.firstIndex(where: {
+               !$0.isSavedCorrection && $0.screen != .training && $0.capturePhase == .idle && $0.candidate.observationID == origin
+           }) {
             let previous = self.state.sessions[index]
             self.release(previous)
             self.configure(next, outcome: onOutcome)

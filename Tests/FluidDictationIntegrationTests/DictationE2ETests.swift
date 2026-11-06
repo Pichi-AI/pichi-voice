@@ -5534,3 +5534,25 @@ extension DictationE2ETests {
         await worker.prepareForPrivateProfileTransition()
     }
 }
+
+extension DictationE2ETests {
+    func testGroupedCorrectionReplacesCompletedFallbackRowForSameSource() throws {
+        let settings = SettingsStore.shared, previous = SettingsStore.shared.customDictionaryEntries
+        defer { settings.customDictionaryEntries = previous }
+        settings.customDictionaryEntries = []
+        let controller = DictionaryCorrectionOverlayController()
+        defer { controller.concealPrivatePresentation() }
+        var intermediate = AutomaticDictionaryCorrectionCandidate(heardText: "Btea", correctedText: "Beto")
+        intermediate.observationID = "synthetic-recording:12:4"
+        var final = AutomaticDictionaryCorrectionCandidate(heardText: "Btea", correctedText: "Beta")
+        final.observationID = intermediate.observationID
+        controller.show(candidate: intermediate) { _ in }
+        let row = try XCTUnwrap(controller.presentedSessions.first)
+        row.addOnlyCorrection()
+        XCTAssertEqual(row.screen, .success)
+        controller.show(candidate: final) { _ in }
+        XCTAssertEqual(controller.presentedCandidateIDs, [final.id])
+        controller.withdrawSuggestion(final.id)
+        XCTAssertTrue(controller.presentedCandidateIDs.isEmpty)
+    }
+}
