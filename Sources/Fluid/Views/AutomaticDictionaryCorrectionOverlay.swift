@@ -89,6 +89,11 @@ final class DictionaryCorrectionOverlayController {
         if self.session?.savedCorrection?.id == id { self.hide() }
     }
 
+    func withdrawSuggestion(_ id: UUID) {
+        self.notices.removeAll { if case let .suggestion(candidate, _, _) = $0 { return candidate.id == id }; return false }
+        if self.session?.screen == .choice, self.session?.candidate.id == id { self.hide() }
+    }
+
     private func canPresent(_ receipt: DictionaryAudioLearningService.SavedCorrection) -> Bool {
         receipt.isCurrent && SettingsStore.shared.customDictionaryEntries.contains(receipt.entry)
     }

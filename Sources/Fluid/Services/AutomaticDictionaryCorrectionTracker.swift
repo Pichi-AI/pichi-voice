@@ -196,12 +196,12 @@ final class AutomaticDictionaryCorrectionTracker {
     }
 
     private final class CorrectionApproval {
-        let id = UUID()
+        let id: UUID
         var range: NSRange
         let text: String
         var isValid = true
         var saved: DictionaryAudioLearningService.SavedCorrection?
-        init(range: NSRange, text: String) { self.range = range; self.text = text }
+        init(id: UUID = UUID(), range: NSRange, text: String) { self.id = id; self.range = range; self.text = text }
     }
 
     private struct PendingRepeat {
@@ -713,7 +713,12 @@ final class AutomaticDictionaryCorrectionTracker {
         let pronunciationGeneration = DictionaryMatcherExperiment.generation
         let preparationID = candidate.id
         guard self.evidencePreparationTasks.count < 32 else { return }
-        self.evidencePreparationTasks[preparationID] = Task { @MainActor [weak self, context] in
+        let approval = CorrectionApproval(id: candidate.id,
+            range: NSRange(location: candidate.sourceUTF16Range?.location ?? 0, length: candidate.correctedText.utf16.count),
+            text: candidate.correctedText)
+        self.session?.approvals.removeAll { !$0.isValid }
+        self.session?.approvals.append(approval)
+        self.evidencePreparationTasks[preparationID] = Task { @MainActor [weak self, context, approval] in
             defer { self?.evidencePreparationTasks.removeValue(forKey: preparationID) }
             let observedText = candidate.heardText
             let evidence = await Task.detached(priority: .utility) {
@@ -726,7 +731,7 @@ final class AutomaticDictionaryCorrectionTracker {
                     observedText: observedText
                 )
             }.value
-            guard !Task.isCancelled, let self, self.suggestionGeneration == generation,
+            guard !Task.isCancelled, approval.isValid, let self, self.suggestionGeneration == generation,
                   SettingsStore.shared.automaticDictionaryLearningEnabled,
                   !SettingsStore.shared.shouldShowOnboarding,
                   !AppServices.shared.asr.isRunning
@@ -781,9 +786,11 @@ final class AutomaticDictionaryCorrectionTracker {
     private func revoke(_ approval: CorrectionApproval) {
         guard approval.isValid else { return }
         approval.isValid = false
+        self.evidencePreparationTasks[approval.id]?.cancel()
         let learning = DictionaryAudioLearningService.shared
         learning.discardPendingEvidence(approval.id)
         DictionaryCorrectionOverlayController.shared.withdrawSavedCorrection(approval.id)
+        DictionaryCorrectionOverlayController.shared.withdrawSuggestion(approval.id)
         guard let receipt = approval.saved else { return }
         self.correctionRevocations[approval.id] = Task { @MainActor [weak self] in
             defer { self?.correctionRevocations.removeValue(forKey: approval.id) }
