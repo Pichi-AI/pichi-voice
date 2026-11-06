@@ -253,6 +253,10 @@ builds/
 !/docs/development/automatic-recording-titles.md
 !/docs/development/upstream-1.6.12-beta1-20261013.md
 !/docs/development/codex.md
+!/docs/development/testing.md
+!/docs/development/agent-workflow.md
+!/docs/development/initial-verification-2026-10.md
+!/docs/development/instruction-refactor-2026-11-05.md
 !/docs/development/upstream.md
 !/docs/development/least-change-refactoring.md
 !/docs/development/pichi-sso-delivery-plan.md
