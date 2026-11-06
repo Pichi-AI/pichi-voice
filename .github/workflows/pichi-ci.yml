@@ -5,21 +5,20 @@ on:
     branches: [main, 'codex/**']
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
-      run_macos:
-        description: Run the full macOS integration suite
+      full_baseline:
+        description: Run all coverage scopes against this immutable revision
         type: boolean
-        required: false
-        default: false
-      run_ios:
-        description: Compile the shared sources for iPhone and iPad Simulator
-        type: boolean
-        required: false
         default: false
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    shell: bash
 
 concurrency:
   group: pichi-ci-${{ github.event.pull_request.number || github.ref }}
@@ -36,40 +35,189 @@ jobs:
           persist-credentials: false
       - run: bash scripts/dev/setup.sh --allow-primary
 
-  macos:
-    name: macOS integration tests
-    if: (github.event_name == 'workflow_dispatch' && inputs.run_macos) || vars.PICHI_VOICE_MACOS_CI == 'true'
-    runs-on: macos-latest
-    timeout-minutes: 30
+  plan:
+    name: Select coverage scopes
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      macos: ${{ steps.plan.outputs.macos }}
+      ios: ${{ steps.plan.outputs.ios }}
+      packages: ${{ steps.plan.outputs.packages }}
+      python: ${{ steps.plan.outputs.python }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - name: Create isolated build worktree
-        run: git worktree add --detach ../pichi-voice-ci HEAD
-      - name: Run macOS tests
-        working-directory: ../pichi-voice-ci
-        run: bash scripts/dev/macos.sh test
+      - id: plan
+        run: python3 -S scripts/dev/coverage-ci.py plan --output coverage-plan.json ${{ inputs.full_baseline && '--all' || '' }} >> "$GITHUB_OUTPUT"
+
+  macos:
+    name: macOS coverage
+    needs: plan
+    if: needs.plan.outputs.macos == 'true'
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      CI_ROOT: ${{ github.workspace }}/.build/pichi-coverage
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: git worktree add --detach "$CI_ROOT" HEAD
+      - working-directory: ${{ env.CI_ROOT }}
+        run: python3 -S scripts/dev/coverage-ci.py native --scope macos --output .build/coverage
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: coverage-report-macos
+          path: ${{ env.CI_ROOT }}/.build/coverage/macos.json
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: coverage-diagnostics-macos
+          path: |
+            ${{ env.CI_ROOT }}/.build/coverage/macos/*.log
+            ${{ env.CI_ROOT }}/.build/coverage/macos/summary-*.json
+          retention-days: 1
 
   ios:
-    name: iOS simulator build
-    if: github.event_name == 'workflow_dispatch' && inputs.run_ios
-    runs-on: macos-latest
-    timeout-minutes: 20
+    name: iOS coverage
+    needs: plan
+    if: needs.plan.outputs.ios == 'true'
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      CI_ROOT: ${{ github.workspace }}/.build/pichi-coverage
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - name: Create isolated build worktree
-        run: git worktree add --detach ../pichi-voice-ios-ci HEAD
-      - name: Check shared-source membership
-        working-directory: ../pichi-voice-ios-ci
-        run: python3 scripts/dev/update-mobile-project.py --check
-      - name: Build iPhone and iPad Simulator app
-        working-directory: ../pichi-voice-ios-ci
-        run: |
-          xcodebuild -project Fluid.xcodeproj -scheme PichiVoiceMobile \
-            -configuration Debug -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath .build/ios/DerivedData \
-            -clonedSourcePackagesDirPath .build/ios/SourcePackages -jobs 4 \
-            CODE_SIGN_IDENTITY= CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build
+      - run: git worktree add --detach "$CI_ROOT" HEAD
+      - working-directory: ${{ env.CI_ROOT }}
+        run: python3 -S scripts/dev/coverage-ci.py native --scope ios --output .build/coverage
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: coverage-report-ios
+          path: ${{ env.CI_ROOT }}/.build/coverage/ios.json
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: coverage-diagnostics-ios
+          path: |
+            ${{ env.CI_ROOT }}/.build/coverage/ios/*.log
+            ${{ env.CI_ROOT }}/.build/coverage/ios/summary-*.json
+            ${{ env.CI_ROOT }}/.build/coverage/ios/device-*.json
+            ${{ env.CI_ROOT }}/.build/coverage/ios/screenshots-*/*.png
+          retention-days: 1
+
+  packages:
+    name: Package coverage
+    needs: plan
+    if: needs.plan.outputs.packages == 'true'
+    runs-on: xcode-27
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      CI_ROOT: ${{ github.workspace }}/.build/pichi-coverage
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: git worktree add --detach "$CI_ROOT" HEAD
+      - working-directory: ${{ env.CI_ROOT }}
+        run: python3 -S scripts/dev/coverage-ci.py packages --output .build/coverage
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: coverage-report-packages
+          path: ${{ env.CI_ROOT }}/.build/coverage/packages.json
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: coverage-diagnostics-packages
+          path: |
+            ${{ env.CI_ROOT }}/.build/coverage/packages/*.log
+            ${{ env.CI_ROOT }}/.build/coverage/packages/*.lcov
+          retention-days: 1
+
+  python:
+    name: Python coverage
+    needs: plan
+    if: needs.plan.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CI_ROOT: ${{ github.workspace }}/.build/pichi-coverage
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - run: git worktree add --detach "$CI_ROOT" HEAD
+      - run: python3 -m pip install --disable-pip-version-check --no-cache-dir coverage==7.17.2
+      - working-directory: ${{ env.CI_ROOT }}
+        run: python3 scripts/dev/coverage-ci.py python --output .build/coverage
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: coverage-report-python
+          path: ${{ env.CI_ROOT }}/.build/coverage/python.json
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: coverage-diagnostics-python
+          path: |
+            ${{ env.CI_ROOT }}/.build/coverage/python/tests.log
+            ${{ env.CI_ROOT }}/.build/coverage/python/coverage.json
+          retention-days: 1
+
+  coverage:
+    name: Coverage gate
+    if: always() && github.event_name != 'push'
+    needs: [plan, portable, macos, ios, packages, python]
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      PICHI_COVERAGE_PLAN: ${{ needs.plan.outputs.plan }}
+      PICHI_COVERAGE_NEEDS: ${{ toJSON(needs) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: needs.plan.result == 'success'
+        with:
+          pattern: coverage-report-*
+          path: .build/coverage-reports
+          merge-multiple: true
+      - name: Enforce changed executable lines and producer results
+        if: always()
+        run: python3 -S scripts/dev/coverage-ci.py finish --reports-dir .build/coverage-reports --output .build/coverage-gate.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: coverage-gate-result
+          path: .build/coverage-gate.json
+          if-no-files-found: warn
+          retention-days: 1
