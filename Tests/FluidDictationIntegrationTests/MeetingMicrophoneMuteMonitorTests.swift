@@ -687,3 +687,89 @@ final class MeetingCommunicationModuleIntegrationTests: XCTestCase {
         XCTAssertNil(MeetingCommunicationAXProbe.documentIdentity("https://user:password@telemost.yandex.ru/j/room"))
     }
 }
+
+private final nonisolated class ModuleObserverTestProbe: MeetingCommunicationObservationReading, @unchecked Sendable {
+    private let lock = NSLock()
+    private var microphone: CommunicationMicrophoneState? = .muted
+    private var focused = true
+    private var requestHandler: (@Sendable () -> Void)?
+    private var focusDocuments: [String?] = []
+    func configure(microphone: CommunicationMicrophoneState?, focused: Bool = true,
+                   onRequest: (@Sendable () -> Void)? = nil) {
+        self.lock.withLock { self.microphone = microphone; self.focused = focused; self.requestHandler = onRequest }
+    }
+    func request(application: MeetingApplicationIdentity, boundWindowID: UInt32?, boundDocument: String?,
+                 modules: MeetingCommunicationModuleSnapshot,
+                 completion: @escaping @Sendable ([MeetingCommunicationObservation]) -> Void) {
+        let (mic, handler) = self.lock.withLock { (self.microphone, self.requestHandler) }
+        if let mic {
+            let snapshot = CommunicationObservationSnapshot(bundleIdentifier: application.bundleIdentifier,
+                processID: application.processID ?? 42, windowID: 77, documentURL: "https://call.example.com/room",
+                controls: [.init(role: "AXButton", labels: ["Leave call"]),
+                    .init(role: "AXButton", labels: [mic == .muted ? "Turn on microphone" : "Turn off microphone"])])
+            completion([.init(snapshot: snapshot, evidence: modules.registry.resolve(snapshot: snapshot)!, acquiredAtHostTime: mach_absolute_time())])
+        } else { completion([]) }
+        handler?()
+    }
+    func ownsFocus(application: MeetingApplicationIdentity, windowID: UInt32, boundDocument: String?) -> Bool {
+        self.lock.withLock { self.focusDocuments.append(boundDocument); return self.focused }
+    }
+    var documents: [String?] { self.lock.withLock { self.focusDocuments } }
+}
+
+private final nonisolated class ModuleObserverTestCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [MeetingMicrophoneMuteState] = []
+    private let arrivals: [XCTestExpectation]
+    init(_ arrivals: [XCTestExpectation]) { self.arrivals = arrivals }
+    func append(_ observation: MeetingMicrophoneMuteObservation) {
+        let index = self.lock.withLock { self.values.append(observation.state); return self.values.count - 1 }
+        if index < self.arrivals.count { self.arrivals[index].fulfill() }
+    }
+    var states: [MeetingMicrophoneMuteState] { self.lock.withLock { self.values } }
+}
+
+final class MeetingModuleMicrophoneObserverTests: XCTestCase {
+    func testSameWindowDocumentLossRetiresTemporaryGrantButPreservesPermanentUnmute() async throws {
+        let module = try SemanticCommunicationModule(descriptor: .init(id: "test.owned-call", displayName: "Synthetic call",
+            browserBundleIdentifiers: ["com.google.Chrome"], urlRules: [.init(host: "call.example.com")],
+            callRules: .init(connected: [.init(labels: ["Leave call"])]),
+            microphoneRules: .init(muted: [.init(labels: ["Turn on microphone"])], unmuted: [.init(labels: ["Turn off microphone"])]),
+            pushToTalkChords: [.init()]))
+        let snapshot = MeetingCommunicationModuleSnapshot(registry: try .init(modules: [module]), registrations: [.init(module: module)])
+        let arrivals = (0..<5).map { self.expectation(description: "microphone transition \($0)") }
+        let capture = ModuleObserverTestCapture(arrivals)
+        let probe = ModuleObserverTestProbe()
+        let observer = MeetingModuleMicrophoneObserver(application: .init(bundleIdentifier: "com.google.Chrome", processID: 42, displayName: "Synthetic browser"),
+            snapshot: snapshot, probe: probe) { capture.append($0) }
+        observer.start(externallyDriven: true)
+        await self.fulfillment(of: [arrivals[0]], timeout: 2)
+        observer.requestPoll()
+        await self.fulfillment(of: [arrivals[1]], timeout: 2)
+        observer.handleSharedPTT(.key(held: true, timestampNanoseconds: nil))
+        probe.configure(microphone: .unmuted)
+        observer.requestPoll()
+        await self.fulfillment(of: [arrivals[2]], timeout: 2)
+        probe.configure(microphone: nil, focused: false)
+        observer.requestPoll()
+        await self.fulfillment(of: [arrivals[3]], timeout: 2)
+        XCTAssertFalse(probe.documents.isEmpty)
+        XCTAssertEqual(probe.documents.compactMap { $0 }, Array(repeating: "https://call.example.com/room", count: probe.documents.count))
+
+        // A fresh rendered mute rearms the release fence; the next explicit unmute is permanent.
+        let rearmed = self.expectation(description: "fresh muted frame")
+        probe.configure(microphone: .muted, onRequest: { rearmed.fulfill() })
+        observer.requestPoll()
+        await self.fulfillment(of: [rearmed], timeout: 2)
+        probe.configure(microphone: .unmuted)
+        observer.requestPoll()
+        await self.fulfillment(of: [arrivals[4]], timeout: 2)
+        observer.handleSharedPTT(.disabled)
+        let missing = self.expectation(description: "missing document after permanent unmute")
+        probe.configure(microphone: nil, focused: false, onRequest: { missing.fulfill() })
+        observer.requestPoll()
+        await self.fulfillment(of: [missing], timeout: 2)
+        await observer.stop()
+        XCTAssertEqual(capture.states, [.unmuted, .muted, .unmuted, .muted, .unmuted])
+    }
+}

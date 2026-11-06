@@ -11,9 +11,16 @@ nonisolated struct MeetingCommunicationObservation: Sendable {
     let acquiredAtHostTime: UInt64
 }
 
+nonisolated protocol MeetingCommunicationObservationReading: Sendable {
+    func request(application: MeetingApplicationIdentity, boundWindowID: UInt32?, boundDocument: String?,
+                 modules: MeetingCommunicationModuleSnapshot,
+                 completion: @escaping @Sendable ([MeetingCommunicationObservation]) -> Void)
+    func ownsFocus(application: MeetingApplicationIdentity, windowID: UInt32, boundDocument: String?) -> Bool
+}
+
 /// Shared, bounded native reader. Discovery scans once per second; active reads use only
 /// validated cached call controls. Text inputs, chat text and participant names are not sampled.
-final nonisolated class MeetingCommunicationAXProbe: @unchecked Sendable {
+final nonisolated class MeetingCommunicationAXProbe: MeetingCommunicationObservationReading, @unchecked Sendable {
     static let shared = MeetingCommunicationAXProbe()
     typealias Completion = @Sendable ([MeetingCommunicationObservation]) -> Void
     private let queue = DispatchQueue(label: "meeting.communication.ax", qos: .utility)
@@ -184,15 +191,24 @@ final nonisolated class MeetingCommunicationAXProbe: @unchecked Sendable {
         return url.string
     }
 
-    static func ownsFocusedWindow(application: MeetingApplicationIdentity, windowID: UInt32) -> Bool {
-        guard let pid = application.processID, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return false }
+    func ownsFocus(application: MeetingApplicationIdentity, windowID: UInt32, boundDocument: String?) -> Bool {
+        guard let pid = application.processID, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+              NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == application.bundleIdentifier else { return false }
         do {
             var reader = MeetingMuteControlLocator.Reader()
             let app = AXUIElementCreateApplication(pid)
             guard let value = try reader.value(app, kAXFocusedWindowAttribute as String),
                   CFGetTypeID(value) == AXUIElementGetTypeID(),
-                  let owned = self.shared.queue.sync(execute: { self.shared.cache["\(pid):\(windowID)"]?.window }) else { return false }
-            return CFEqual(value, owned)
+                  let owned = self.queue.sync(execute: { self.cache["\(pid):\(windowID)"] }),
+                  CFEqual(value, owned.window) else { return false }
+            // A tab switch can keep the same focused window. Validate the pinned web area
+            // before retaining a temporary grant or attributing another key-down to this call.
+            if let boundDocument {
+                guard owned.document == boundDocument, let path = owned.areaPath, let area = path.last,
+                      try reader.validate(path),
+                      try reader.string(area, "AXURL").flatMap(Self.documentIdentity) == boundDocument else { return false }
+            }
+            return true
         } catch { return false }
     }
 }

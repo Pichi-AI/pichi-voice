@@ -7,6 +7,7 @@ import PichiCallObservation
 final nonisolated class MeetingModuleMicrophoneObserver: MeetingMicrophoneObservationPolling, @unchecked Sendable {
     private let application: MeetingApplicationIdentity?
     private let modules: MeetingCommunicationModuleSnapshot
+    private let probe: any MeetingCommunicationObservationReading
     private let handler: MeetingMicrophoneMuteMonitor.Handler
     private let queue = DispatchQueue(label: "meeting.communication.microphone", qos: .utility)
     private var running = false
@@ -22,8 +23,9 @@ final nonisolated class MeetingModuleMicrophoneObserver: MeetingMicrophoneObserv
     private var rendered: (any MeetingMicrophoneObservationPolling)?
 
     init(application: MeetingApplicationIdentity?, snapshot: MeetingCommunicationModuleSnapshot,
+         probe: any MeetingCommunicationObservationReading = MeetingCommunicationAXProbe.shared,
          handler: @escaping MeetingMicrophoneMuteMonitor.Handler) {
-        self.application = application; self.modules = snapshot; self.handler = handler
+        self.application = application; self.modules = snapshot; self.probe = probe; self.handler = handler
     }
 
     func start(externallyDriven: Bool) {
@@ -39,7 +41,7 @@ final nonisolated class MeetingModuleMicrophoneObserver: MeetingMicrophoneObserv
             guard self.running else { return }
             if let rendered = self.rendered { rendered.requestPoll(); return }
             if self.transition.temporaryUnmute, let application = self.application, let window = self.windowID,
-               !MeetingCommunicationAXProbe.ownsFocusedWindow(application: application, windowID: window) {
+               !self.probe.ownsFocus(application: application, windowID: window, boundDocument: self.document) {
                 self.ownedChord = nil
                 let now = mach_absolute_time()
                 if self.transition.retireTemporaryGrant(at: now) { self.publish(.muted, at: now, unsafeStart: now, refine: true) }
@@ -48,7 +50,7 @@ final nonisolated class MeetingModuleMicrophoneObserver: MeetingMicrophoneObserv
                   !self.modules.registry.candidates(bundleIdentifier: application.bundleIdentifier).isEmpty else { return }
             self.pending = true
             let generation = self.generation
-            MeetingCommunicationAXProbe.shared.request(application: application, boundWindowID: self.windowID,
+            self.probe.request(application: application, boundWindowID: self.windowID,
                 boundDocument: self.document, modules: self.modules) { [weak self] observations in
                 self?.queue.async { [weak self] in
                     guard let self, self.running, self.generation == generation else { return }
@@ -108,7 +110,7 @@ final nonisolated class MeetingModuleMicrophoneObserver: MeetingMicrophoneObserv
                 if held {
                     guard let chord = MeetingPTTChordMatcher.chord(in: chords, keyCode: code, flags: flags) else { return }
                     guard let application = self.application, let window = self.windowID,
-                          MeetingCommunicationAXProbe.ownsFocusedWindow(application: application, windowID: window) else { return }
+                          self.probe.ownsFocus(application: application, windowID: window, boundDocument: self.document) else { return }
                     self.ownedChord = chord
                     self.transition.keyDown(at: timestamp.map(MeetingMicrophoneMuteMonitor.hostTime(nanoseconds:)))
                 } else {
