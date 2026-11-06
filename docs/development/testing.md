@@ -87,6 +87,14 @@ python3 -m venv .build/coverage-venv
 .build/coverage-venv/bin/python scripts/dev/coverage-ci.py verify --output .build/coverage
 ```
 
+To validate a PR before the new native workflow exists on main, dispatch through the existing CI entry point:
+
+```sh
+gh workflow run pichi-ci.yml --ref codex/<task> -f native_only=true
+```
+
+That manual mode calls the same native workflow and skips the hosted Linux job. It has no hosted native fallback. Use `-f full_baseline=true` when intentionally validating unchanged main or every scope. Ordinary PR events still select only the inexpensive portable job.
+
 The full **Coverage gate** requires successful selected producers, nonempty real test execution, exact source identity, normalized tracked paths and reports for every affected production file. New/changed executable lines must all have hits. Missing or malformed evidence fails closed. Test-only edits require their owning tests without putting test code in the production denominator. Declarative configuration and generated/binary resources are validated by their consumers, not given invented line hits. The native workflow keeps its worktree and independent Git metadata outside checkout cleanup. A separate cancellation-safe step verifies recorded simulator identity before releasing it. Compact evidence must be saved before removing the worktree; failed simulator cleanup/uploads or unexpected changes retain its recovery state.
 
 The implementation is [coverage-gate.py](../../scripts/dev/coverage-gate.py), with synthetic Git/report regressions in [test_coverage_gate.py](../../Tests/test_coverage_gate.py). Its default mode checks the complete change. Explicit `--python-only` is a scoped check and records deferred native scopes. [coverage-ci.py](../../scripts/dev/coverage-ci.py) owns producer orchestration, format conversion and isolated verification; its contracts are tested in [test_coverage_ci.py](../../Tests/test_coverage_ci.py). Native coverage comes from raw xccov line records and package coverage includes every XCTest binary. Physical line sets differ from weighted function/instantiation counts in aggregate Xcode summaries. Python reports include unexecuted tracked source and subprocess instrumentation. Children explicitly using `-S` cannot use site startup; required new behavior still needs measured unit coverage.

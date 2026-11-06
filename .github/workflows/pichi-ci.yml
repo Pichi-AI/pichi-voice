@@ -7,6 +7,15 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened]
   workflow_dispatch:
+    inputs:
+      native_only:
+        description: Run full native verification on the isolated owned Mac
+        type: boolean
+        default: false
+      full_baseline:
+        description: Validate every native coverage scope even when unchanged
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,6 +31,7 @@ concurrency:
 jobs:
   portable:
     name: Portable checks and Python coverage
+    if: github.event_name != 'workflow_dispatch' || inputs.native_only != true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -65,3 +75,10 @@ jobs:
             ${{ env.CI_ROOT }}/.build/coverage/python/*/coverage.json
           if-no-files-found: warn
           retention-days: 1
+
+  native_dispatch:
+    name: Native dispatch
+    if: github.event_name == 'workflow_dispatch' && inputs.native_only == true
+    uses: ./.github/workflows/pichi-native.yml
+    with:
+      full_baseline: ${{ inputs.full_baseline }}

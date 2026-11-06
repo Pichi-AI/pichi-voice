@@ -1,6 +1,12 @@
 name: Pichi Voice native verification
 
 on:
+  workflow_call:
+    inputs:
+      full_baseline:
+        description: Validate every coverage scope even when unchanged
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       full_baseline:
