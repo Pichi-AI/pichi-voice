@@ -74,7 +74,7 @@ body:
       render: text
     validations:
       required: false
-  - type: textarea
+  - type: upload
     id: media
     attributes:
       label: Screenshots or screen recording
