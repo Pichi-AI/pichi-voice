@@ -199,6 +199,40 @@ private final class DetectorHarness {
 
 @MainActor
 final class MeetingAutoDetectorTests: XCTestCase {
+    func testModuleRingingDoesNotOfferRecordingAndConnectedDoes() {
+        let h = DetectorHarness()
+        let bundle = "ru.keepcoder.Telegram"
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: bundle, processID: 77), at: h.clock.now())
+        h.detector.handleWindowSnapshot([.init(processID: 77, windowID: 701, title: "Call", layer: 0, communicationCallState: .ringing)], at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        XCTAssertTrue(h.prompts.isEmpty)
+        h.detector.handleWindowSnapshot([.init(processID: 77, windowID: 701, title: "Call", layer: 0, communicationCallState: .inCall)], at: h.clock.now())
+        XCTAssertEqual(h.prompts.count, 1)
+        XCTAssertEqual(h.detector.automaticTarget?.windowID, 701)
+    }
+
+    func testModuleDoesNotChooseBetweenTwoConnectedNativeWindows() {
+        let h = DetectorHarness()
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "ru.keepcoder.Telegram", processID: 77), at: h.clock.now())
+        h.detector.handleWindowSnapshot([701, 702].map { .init(processID: 77, windowID: $0, title: "Call", layer: 0, communicationCallState: .inCall) }, at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        XCTAssertTrue(h.prompts.isEmpty)
+        XCTAssertNil(h.detector.automaticTarget)
+    }
+
+    func testExplicitNativeEndAsksAfterGraceDespiteRecentSpeech() throws {
+        let h = DetectorHarness()
+        let episode = try XCTUnwrap(h.confirmTeams())
+        XCTAssertTrue(h.detector.startTapped(episodeID: episode))
+        h.flags.lastSpeechAt = h.clock.now()
+        h.detector.handleWindowSnapshot([.init(processID: 300, windowID: 950, title: "Call", layer: 0, communicationCallState: .ended)], at: h.clock.now())
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0)
+        h.advance(MeetingAutoDetector.browserPostCallGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+    }
+
     func testAutomaticSourcePublishesConfirmedTargetWithoutConsumingPrompt() throws {
         let h = DetectorHarness()
         var changes: [MeetingAutoDetector.ResolvedTarget?] = []
@@ -1956,9 +1990,11 @@ final class MeetingAutoDetectorTests: XCTestCase {
         }
     }
 
-    func testAppsThatOnlyShapeThePickerAreNeverDetected() {
+    func testManualOnlySourcesStayManualWhileRegisteredModulesBecomeDetectable() {
+        let newlyRegistered: Set<String> = ["com.tinyspeck.slackmacgap", "ru.keepcoder.Telegram"]
         for bundle in MeetingAppRegistry.otherCallAppBundleIdentifiers {
-            XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: bundle), bundle)
+            if newlyRegistered.contains(bundle) { XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: bundle), .nativeTier1, bundle) }
+            else { XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: bundle), bundle) }
             XCTAssertNotNil(MeetingAppRegistry.pickerRank(forBundleIdentifier: bundle), bundle)
         }
         XCTAssertNil(MeetingAppRegistry.pickerRank(forBundleIdentifier: "com.apple.Music"))
@@ -1984,7 +2020,7 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: "us.zoom.xos"), .nativeTier1)
         XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: "com.google.Chrome"), .browserTier2)
         XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: "com.google.Chrome.app.abcdef"), .browserTier2)
-        XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: "com.tinyspeck.slackmacgap"))
+        XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: "com.tinyspeck.slackmacgap"), .nativeTier1)
         XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: "com.apple.FaceTime"))
     }
 

@@ -814,6 +814,9 @@
 		F55932CD21E9D28005AE10C0 /* MeetingCaptureStorageAdmissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B5E6DADC27DE8E247EC335 /* MeetingCaptureStorageAdmissionTests.swift */; };
 		C0DE123A0000000000000002 /* DictationContextCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */; };
 		E01100000000000000000002 /* EditModeRouteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01100000000000000000001 /* EditModeRouteTests.swift */; };
+		C011AB000000000000000003 /* PichiCallObservation in Frameworks */ = {isa = PBXBuildFile; productRef = C011AB000000000000000002; };
+		C011AB000000000000000004 /* PichiCallObservation in Frameworks */ = {isa = PBXBuildFile; productRef = C011AB000000000000000002; };
+		C011AB000000000000000005 /* PichiCallObservation in Frameworks */ = {isa = PBXBuildFile; productRef = C011AB000000000000000002; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1094,6 +1097,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C011AB000000000000000003 /* PichiCallObservation in Frameworks */,
 				AEC300000000000000000003 /* FluidAEC3Bridge in Frameworks */,
 				C41C41000000000000000003 /* PichiGigaAM in Frameworks */,
 				C41C41000000000000000006 /* PichiTextPrivacy in Frameworks */,
@@ -1112,6 +1116,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				803000000000000000000003 /* MediaRemoteAdapter in Frameworks */,
+				C011AB000000000000000005 /* PichiCallObservation in Frameworks */,
 				7CDB0A302F3C4D5600FB7CAD /* XCTest.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1120,6 +1125,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C011AB000000000000000004 /* PichiCallObservation in Frameworks */,
 				AEC300000000000000000004 /* FluidAEC3Bridge in Frameworks */,
 				C41C41000000000000000004 /* PichiGigaAM in Frameworks */,
 				C41C41000000000000000007 /* PichiTextPrivacy in Frameworks */,
@@ -1405,6 +1411,7 @@
 			);
 			name = fluid;
 			packageProductDependencies = (
+				C011AB000000000000000002 /* PichiCallObservation */,
 				AEC300000000000000000002 /* FluidAEC3Bridge */,
 				C41C41000000000000000002 /* PichiGigaAM */,
 				C41C41000000000000000005 /* PichiTextPrivacy */,
@@ -1436,6 +1443,7 @@
 			);
 			name = FluidDictationIntegrationTests;
 			packageProductDependencies = (
+				C011AB000000000000000002 /* PichiCallObservation */,
 				803000000000000000000004 /* MediaRemoteAdapter */,
 				2E9B00000000000000000005 /* ZeppelinEmbed */,
 			);
@@ -1462,6 +1470,7 @@
 			);
 			name = FluidASRBaselineHost;
 			packageProductDependencies = (
+				C011AB000000000000000002 /* PichiCallObservation */,
 				AEC300000000000000000002 /* FluidAEC3Bridge */,
 				C41C41000000000000000002 /* PichiGigaAM */,
 				C41C41000000000000000005 /* PichiTextPrivacy */,
@@ -1557,6 +1566,7 @@
 			mainGroup = 7C078D862E3B339200FB7CAC;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				C011AB000000000000000001 /* XCLocalSwiftPackageReference "PichiCallObservation" */,
 				AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */,
 				C41C41000000000000000001 /* XCLocalSwiftPackageReference "PichiGigaAM" */,
 				1F20C0000000000000000001 /* XCLocalSwiftPackageReference "RussianMorphology" */,
@@ -2365,6 +2375,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		C011AB000000000000000001 /* XCLocalSwiftPackageReference "PichiCallObservation" */ = {isa = XCLocalSwiftPackageReference; relativePath = Vendor/PichiCallObservation; };
 		1F20C0000000000000000001 /* XCLocalSwiftPackageReference "RussianMorphology" */ = {isa = XCLocalSwiftPackageReference; relativePath = Vendor/RussianMorphology; };
 		7C9A71002F58B00000FB7CAF /* XCLocalSwiftPackageReference "TranscribeCpp" */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -2431,6 +2442,7 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		C011AB000000000000000002 /* PichiCallObservation */ = {isa = XCSwiftPackageProductDependency; package = C011AB000000000000000001; productName = PichiCallObservation; };
 		1F20C0000000000000000002 /* PichiRussianMorphology */ = {isa = XCSwiftPackageProductDependency; package = 1F20C0000000000000000001 /* XCLocalSwiftPackageReference "RussianMorphology" */; productName = PichiRussianMorphology; };
 		C41C41000000000000000005 /* PichiTextPrivacy */ = {isa = XCSwiftPackageProductDependency; package = C41C41000000000000000001 /* XCLocalSwiftPackageReference "PichiGigaAM" */; productName = PichiTextPrivacy; };
 		A51A10000000000000000002 /* NativeTextInference */ = {

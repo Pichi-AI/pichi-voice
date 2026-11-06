@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import PichiCallObservation
 @testable import FluidVoice_Debug
 
 final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
@@ -433,5 +434,256 @@ final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
         private var values: [MeetingMicrophoneMuteObservation] = []
         func append(_ observation: MeetingMicrophoneMuteObservation) { self.lock.lock(); self.values.append(observation); self.lock.unlock() }
         var states: [MeetingMicrophoneMuteState] { self.lock.lock(); defer { self.lock.unlock() }; return self.values.map(\.state) }
+    }
+}
+
+private actor CallObservationBarrier {
+    private var entered = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var released = false
+    func park() async {
+        self.entered = true
+        let waiters = self.entryWaiters; self.entryWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        if !self.released { await withCheckedContinuation { self.releaseWaiters.append($0) } }
+    }
+    func waitUntilEntered() async {
+        if !self.entered { await withCheckedContinuation { self.entryWaiters.append($0) } }
+    }
+    func release() {
+        self.released = true
+        let waiters = self.releaseWaiters; self.releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
+private final nonisolated class CallObservationTestMicrophone: MeetingMicrophoneObservationPolling, @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts = (starts: 0, polls: 0, keys: 0, stops: 0)
+    private var managed = false
+    let handler: MeetingMicrophoneMuteMonitor.Handler
+    let stopBarrier: CallObservationBarrier?
+    init(handler: @escaping MeetingMicrophoneMuteMonitor.Handler, stopBarrier: CallObservationBarrier? = nil) {
+        self.handler = handler; self.stopBarrier = stopBarrier
+    }
+    func start(externallyDriven: Bool) { self.lock.withLock { self.counts.starts += 1; self.managed = externallyDriven } }
+    func requestPoll() { self.lock.withLock { self.counts.polls += 1 } }
+    func handleSharedPTT(_ event: MeetingMutePTTListener.Event) { self.lock.withLock { self.counts.keys += 1 } }
+    func stop() async {
+        self.lock.withLock { self.counts.stops += 1 }
+        await self.stopBarrier?.park()
+    }
+    func emit(_ state: MeetingMicrophoneMuteState) {
+        self.handler(.init(state: state, observedAtHostTime: 100, generation: 1))
+    }
+    var snapshot: (Int, Int, Int, Int, Bool) {
+        self.lock.withLock { (self.counts.starts, self.counts.polls, self.counts.keys, self.counts.stops, self.managed) }
+    }
+}
+
+private final nonisolated class CallObservationTestKeys: MeetingCallKeyListening, @unchecked Sendable {
+    private let lock = NSLock()
+    private var starts = 0, stops = 0
+    var canListen = true
+    var handler: (@Sendable (MeetingMutePTTListener.Event) -> Void)?
+    func start() -> Bool { self.lock.withLock { self.starts += 1; return self.canListen } }
+    func stop() { self.lock.withLock { self.stops += 1 } }
+    var snapshot: (Int, Int) { self.lock.withLock { (self.starts, self.stops) } }
+}
+
+private final nonisolated class CallObservationTestStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var microphones: [CallObservationTestMicrophone] = []
+    private var states: [MeetingMicrophoneMuteState] = []
+    var stopBarrier: CallObservationBarrier?
+    func make(_ handler: @escaping MeetingMicrophoneMuteMonitor.Handler) -> CallObservationTestMicrophone {
+        let mic = CallObservationTestMicrophone(handler: handler, stopBarrier: self.stopBarrier)
+        self.lock.withLock { self.microphones.append(mic) }; return mic
+    }
+    func observe(_ observation: MeetingMicrophoneMuteObservation) { self.lock.withLock { self.states.append(observation.state) } }
+    var drivers: [CallObservationTestMicrophone] { self.lock.withLock { self.microphones } }
+    var delivered: [MeetingMicrophoneMuteState] { self.lock.withLock { self.states } }
+}
+
+@MainActor
+private final class CallObservationTestDetection: MeetingCallDetectionDriving {
+    var starts = 0, stops = 0, polls = 0
+    var pollBarrier: CallObservationBarrier?
+    func startManagedObservation() { self.starts += 1 }
+    func stopManagedObservation() { self.stops += 1 }
+    func pollManagedObservation() async { self.polls += 1; await self.pollBarrier?.park() }
+}
+
+@MainActor
+final class MeetingCallObservationServiceTests: XCTestCase {
+    private func service(store: CallObservationTestStore, keys: CallObservationTestKeys) -> MeetingCallObservationService {
+        MeetingCallObservationService(automaticScheduling: false,
+            microphoneFactory: { _, handler in store.make(handler) },
+            keyListenerFactory: { handler in keys.handler = handler; return keys })
+    }
+
+    func testSharedScheduleAndSinglePassiveKeyListenerAcrossObservers() async throws {
+        let store = CallObservationTestStore(), keys = CallObservationTestKeys()
+        let service = self.service(store: store, keys: keys)
+        let detection = CallObservationTestDetection()
+        XCTAssertNil(service.pollingIntervalNanoseconds)
+        service.attachDetection(detection); service.attachDetection(detection)
+        XCTAssertEqual(detection.starts, 1)
+        XCTAssertEqual(service.pollingIntervalNanoseconds, 2_000_000_000)
+        let first = service.makeMicrophoneObservation(application: nil, handler: store.observe)
+        let second = service.makeMicrophoneObservation(application: nil, handler: store.observe)
+        try first.start(); try first.start(); try second.start()
+        XCTAssertEqual(service.activeMicrophoneObservationCount, 2)
+        XCTAssertEqual(service.pollingIntervalNanoseconds, 250_000_000)
+        XCTAssertEqual(keys.snapshot.0, 1)
+        XCTAssertTrue(store.drivers.allSatisfy { $0.snapshot.0 == 1 && $0.snapshot.4 })
+        service.pollOnce(at: 10)
+        keys.handler?(.disabled)
+        XCTAssertTrue(store.drivers.allSatisfy { $0.snapshot.1 == 1 && $0.snapshot.2 == 1 })
+        await first.stop(); await first.stop()
+        XCTAssertEqual(keys.snapshot.1, 0)
+        keys.handler?(.disabled)
+        XCTAssertEqual(store.drivers[0].snapshot.2, 1)
+        XCTAssertEqual(store.drivers[1].snapshot.2, 2)
+        await second.stop()
+        XCTAssertEqual(keys.snapshot.1, 1)
+        XCTAssertEqual(service.pollingIntervalNanoseconds, 2_000_000_000)
+        service.detachDetection(detection)
+        XCTAssertNil(service.pollingIntervalNanoseconds)
+        XCTAssertEqual(detection.stops, 1)
+        await service.shutdown()
+    }
+
+    func testRetiredObservationCannotPublishAfterStopAndCannotRestart() async throws {
+        let store = CallObservationTestStore(), keys = CallObservationTestKeys()
+        keys.canListen = false
+        let service = self.service(store: store, keys: keys)
+        let token = service.makeMicrophoneObservation(application: nil, handler: store.observe)
+        try token.start()
+        let microphone = try XCTUnwrap(store.drivers.first)
+        microphone.emit(.muted)
+        await token.stop()
+        microphone.emit(.unmuted)
+        try token.start()
+        XCTAssertEqual(store.delivered, [.muted])
+        XCTAssertEqual(store.drivers.count, 1)
+        XCTAssertEqual(microphone.snapshot.3, 1)
+        XCTAssertEqual(keys.snapshot.1, 1)
+        await service.shutdown()
+    }
+
+    func testConcurrentStopJoinsSameNativeRetirementAndFencesDeliveryFirst() async throws {
+        let store = CallObservationTestStore(), keys = CallObservationTestKeys()
+        let barrier = CallObservationBarrier(); store.stopBarrier = barrier
+        let service = self.service(store: store, keys: keys)
+        let token = service.makeMicrophoneObservation(application: nil, handler: store.observe)
+        try token.start()
+        let microphone = try XCTUnwrap(store.drivers.first)
+        let first = Task { await token.stop() }
+        await barrier.waitUntilEntered()
+        let second = Task { await token.stop() }
+        microphone.emit(.unmuted)
+        XCTAssertTrue(store.delivered.isEmpty)
+        XCTAssertEqual(service.activeMicrophoneObservationCount, 0)
+        await barrier.release()
+        await first.value; await second.value
+        XCTAssertEqual(microphone.snapshot.3, 1)
+        await service.shutdown()
+    }
+
+    func testDetachedSlowDetectorCannotCreateOverlappingNativePolls() async {
+        let store = CallObservationTestStore(), keys = CallObservationTestKeys()
+        let service = self.service(store: store, keys: keys)
+        let first = CallObservationTestDetection(), second = CallObservationTestDetection()
+        let barrier = CallObservationBarrier(); first.pollBarrier = barrier
+        service.attachDetection(first); service.pollOnce(at: 0)
+        await barrier.waitUntilEntered()
+        service.detachDetection(first); service.attachDetection(second)
+        service.pollOnce(at: 100)
+        XCTAssertEqual(first.polls, 1)
+        XCTAssertEqual(second.polls, 0)
+        await barrier.release()
+        await service.shutdown()
+        XCTAssertEqual(first.stops, 1)
+        XCTAssertEqual(second.stops, 1)
+        XCTAssertFalse(service.hasDetectionDriver)
+    }
+
+    func testObserverLimitRejectsBeforeAllocatingAnotherNativeDriver() async throws {
+        let store = CallObservationTestStore(), keys = CallObservationTestKeys()
+        let service = self.service(store: store, keys: keys)
+        var tokens: [MeetingCallMicrophoneObservation] = []
+        for _ in 0..<8 {
+            let token = service.makeMicrophoneObservation(application: nil, handler: store.observe)
+            try token.start(); tokens.append(token)
+        }
+        let excess = service.makeMicrophoneObservation(application: nil, handler: store.observe)
+        XCTAssertThrowsError(try excess.start())
+        XCTAssertEqual(store.drivers.count, 8)
+        await service.shutdown()
+        XCTAssertTrue(store.drivers.allSatisfy { $0.snapshot.3 == 1 })
+        XCTAssertEqual(keys.snapshot.0, 1)
+        XCTAssertEqual(keys.snapshot.1, 1)
+        for token in tokens { await token.stop() }
+    }
+}
+
+final class MeetingCommunicationModuleIntegrationTests: XCTestCase {
+    func testRegisteredProfilesValidateAndResearchEntriesCannotObserve() throws {
+        let snapshot = MeetingCommunicationModuleHost.snapshot
+        XCTAssertEqual(snapshot.registrations.count, 12)
+        XCTAssertEqual(Set(snapshot.registry.modules.map { $0.descriptor.id }).count, 12)
+        for module in snapshot.registry.modules { XCTAssertNoThrow(try module.descriptor.validate()) }
+        XCTAssertTrue(snapshot.registry.modules.filter { $0.descriptor.validation == .researchOnly }
+            .allSatisfy { $0.descriptor.nativeBundleIdentifiers.isEmpty && $0.descriptor.browserBundleIdentifiers.isEmpty })
+        XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: "com.tinyspeck.slackmacgap"), .nativeTier1)
+        XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: "ru.keepcoder.Telegram"), .nativeTier1)
+        XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: "unknown.call.application"))
+    }
+
+    func testRussianWebModuleUsesKnownDocumentAndCallControls() throws {
+        let registry = MeetingCommunicationModuleHost.snapshot.registry
+        func evidence(_ labels: [String], host: String = "telemost.yandex.ru") -> CommunicationModuleEvidence? {
+            registry.resolve(snapshot: .init(bundleIdentifier: "com.google.Chrome", processID: 42, windowID: 9,
+                documentURL: "https://" + host + "/j/synthetic-call", controls: labels.map { .init(role: "AXButton", labels: [$0]) }))
+        }
+        XCTAssertEqual(evidence(["Выйти из встречи", "Включить микрофон"])?.microphoneState, .muted)
+        XCTAssertEqual(evidence(["Выйти из встречи", "Отключить микрофон"])?.microphoneState, .unmuted)
+        XCTAssertEqual(evidence(["Отключить микрофон"])?.callState, .indeterminate)
+        XCTAssertNil(evidence(["Выйти из встречи", "Отключить микрофон"], host: "telemost.yandex.ru.evil.test"))
+        XCTAssertEqual(evidence(["Выйти из встречи", "Включить микрофон участника"])?.microphoneState, .indeterminate)
+    }
+
+    func testPTTModifiersArePerModuleAndIgnoreCapsLock() {
+        let space = CommunicationPushToTalkChord()
+        let optionSpace = CommunicationPushToTalkChord(modifiers: [.option])
+        XCTAssertNotNil(MeetingPTTChordMatcher.chord(in: [space], keyCode: 49, flags: 0))
+        XCTAssertNil(MeetingPTTChordMatcher.chord(in: [space], keyCode: 49, flags: CGEventFlags.maskCommand.rawValue))
+        XCTAssertNil(MeetingPTTChordMatcher.chord(in: [optionSpace], keyCode: 49, flags: 0))
+        XCTAssertNotNil(MeetingPTTChordMatcher.chord(in: [optionSpace], keyCode: 49, flags: CGEventFlags.maskAlternate.union(.maskAlphaShift).rawValue))
+        XCTAssertNil(MeetingPTTChordMatcher.chord(in: [optionSpace], keyCode: 50, flags: CGEventFlags.maskAlternate.rawValue))
+    }
+
+    func testLostPTTControlRetiresOnlyATemporaryGrant() {
+        var permanent = MeetingMuteTransitionState()
+        XCTAssertFalse(permanent.observe(.unmuted, at: 100))
+        XCTAssertFalse(permanent.retireTemporaryGrant(at: 200))
+        XCTAssertEqual(permanent.state, .unmuted)
+        var temporary = MeetingMuteTransitionState()
+        XCTAssertTrue(temporary.observe(.muted, at: 100))
+        temporary.keyDown(at: 110)
+        XCTAssertTrue(temporary.observe(.unmuted, at: 120))
+        XCTAssertTrue(temporary.retireTemporaryGrant(at: 130))
+        XCTAssertEqual(temporary.state, .muted)
+        XCTAssertFalse(temporary.observe(.unmuted, at: 125))
+        XCTAssertFalse(temporary.observe(.muted, at: 140))
+        XCTAssertTrue(temporary.observe(.unmuted, at: 150))
+    }
+
+    func testDocumentIdentityDropsSecretsButPreservesSelectedRoomAndOrigin() {
+        XCTAssertEqual(MeetingCommunicationAXProbe.documentIdentity("https://telemost.yandex.ru/j/room?token=private#fragment"), "https://telemost.yandex.ru/j/room")
+        XCTAssertNotEqual(MeetingCommunicationAXProbe.documentIdentity("https://telemost.yandex.ru/j/room"), MeetingCommunicationAXProbe.documentIdentity("https://telemost.yandex.ru/j/another"))
+        XCTAssertNil(MeetingCommunicationAXProbe.documentIdentity("https://user:password@telemost.yandex.ru/j/room"))
     }
 }

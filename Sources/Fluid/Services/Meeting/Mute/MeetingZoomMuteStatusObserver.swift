@@ -7,13 +7,8 @@ import Foundation
 /// Zoom exposes the local tile's rendered computer-audio status even when its toolbar is hidden.
 /// Its temporary-unmute HUD is another explicit rendered transition. Neither needs OCR or a
 /// permanent screenshot of a toolbar. All labels stay in memory and are never logged.
-final nonisolated class MeetingZoomMuteStatusObserver {
-    struct Snapshot {
-        let callWindowID: UInt32?
-        let state: MeetingMicrophoneMuteState?
-        let temporaryHUDVisible: Bool?
-        static let unavailable = Snapshot(callWindowID: nil, state: nil, temporaryHUDVisible: nil)
-    }
+final nonisolated class MeetingZoomMuteStatusObserver: MeetingRenderedAudioStatusObserving {
+    typealias Snapshot = MeetingRenderedAudioStatusSnapshot
 
     private struct CachedTile {
         let processID: Int32

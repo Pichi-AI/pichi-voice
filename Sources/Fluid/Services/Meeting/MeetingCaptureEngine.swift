@@ -22,7 +22,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         var streamingTee: MeetingMultiTrackCaptureTee?
         var comparisonProbe: MeetingAudioComparisonProbe?
         var privacyGate: MeetingMicrophonePrivacyGate?
-        var muteMonitor: MeetingMicrophoneMuteMonitor?
+        var muteMonitor: MeetingCallMicrophoneObservation?
     }
 
     private var activeCapture: ActiveCapture?
@@ -88,7 +88,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         if let comparisonProbe { eventHandler(.audioComparisonProbeStarted(comparisonProbe)) }
         let privacyGate = configuration.mode == .onlineCall
             ? MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions)) : nil
-        let muteMonitor: MeetingMicrophoneMuteMonitor?
+        let muteMonitor: MeetingCallMicrophoneObservation?
         if let privacyGate {
             // Admission follows remembered transitions, not the availability of a toolbar frame.
             privacyGate.setAdmitted(true, observedAtHostTime: mach_absolute_time())
@@ -97,7 +97,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             // Audio follows the selected process. Discovery must find its current unique call,
             // rather than requiring a stale home-window hint saved during setup.
             application?.windowID = nil
-            muteMonitor = MeetingMicrophoneMuteMonitor(application: application) { observation in
+            muteMonitor = await MeetingCallObservationService.shared.makeMicrophoneObservation(application: application) { observation in
                 let admitted = observation.state == .unmuted
                 if admitted, let earlierRelease = observation.unsafeStartHostTime,
                    let resumedAt = observation.refinementUntilHostTime {
@@ -112,7 +112,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 eventHandler(.microphoneMuteStateChanged(observation.state))
             }
             eventHandler(.microphoneMuteStateChanged(.unmuted))
-            muteMonitor?.start()
+            try await muteMonitor?.start()
         } else {
             muteMonitor = nil
             eventHandler(.microphoneMuteStateChanged(.notApplicable))

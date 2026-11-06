@@ -3,6 +3,7 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import PichiCallObservation
 @preconcurrency import ScreenCaptureKit
 
 nonisolated struct MeetingMicrophoneMuteObservation: Sendable {
@@ -46,7 +47,10 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
     private var boundDocumentURL: String?
     private var transition = MeetingMuteTransitionState()
     private var lastPublishedState: MeetingMicrophoneMuteState?
-    private let zoomStatus = MeetingZoomMuteStatusObserver()
+    private let renderedStatus: (any MeetingRenderedAudioStatusObserving)?
+    private let platform: MeetingMuteControlLocator.Platform?
+    private let pushToTalkChords: [CommunicationPushToTalkChord]
+    private var ownedChord: CommunicationPushToTalkChord?
     private var pttListener: MeetingMutePTTListener?
 
     private struct PendingRequest {
@@ -74,9 +78,14 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         }
     }
 
-    init(application: MeetingApplicationIdentity?, handler: @escaping Handler) {
+    init(application: MeetingApplicationIdentity?, controlPlatform: MeetingMuteControlLocator.Platform? = nil,
+         renderedStatus: (any MeetingRenderedAudioStatusObserving)? = nil,
+         pushToTalkChords: [CommunicationPushToTalkChord] = [.init()], handler: @escaping Handler) {
         self.application = application
         self.handler = handler
+        self.platform = controlPlatform
+        self.renderedStatus = renderedStatus
+        self.pushToTalkChords = pushToTalkChords
     }
 
     deinit {
@@ -84,7 +93,7 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         self.pttListener?.stop()
     }
 
-    func start() {
+    func start(externallyDriven: Bool = false) {
         self.queue.async { [weak self] in
             guard let self, !self.started, !self.stopped else { return }
             self.started = true
@@ -94,17 +103,24 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
             guard self.platform != nil, self.application?.processID.map({ $0 > 0 }) == true else {
                 return
             }
-            let listener = MeetingMutePTTListener { [weak self] event in
-                self?.queue.async { [weak self] in self?.handlePTT(event) }
+            if !externallyDriven {
+                let listener = MeetingMutePTTListener { [weak self] event in self?.handleSharedPTT(event) }
+                self.pttListener = listener
+                _ = listener.start()
             }
-            self.pttListener = listener
-            _ = listener.start()
+            guard !externallyDriven else { return }
             let timer = DispatchSource.makeTimerSource(queue: self.queue)
             timer.schedule(deadline: .now(), repeating: .milliseconds(250), leeway: .milliseconds(20))
             timer.setEventHandler { [weak self] in self?.poll() }
             self.timer = timer
             timer.resume()
         }
+    }
+
+    func requestPoll() { self.queue.async { [weak self] in self?.poll() } }
+
+    func handleSharedPTT(_ event: MeetingMutePTTListener.Event) {
+        self.queue.async { [weak self] in self?.handlePTT(event) }
     }
 
     /// After this returns, no observation callback from this monitor can execute. A late SDK
@@ -124,25 +140,23 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
                 self.content = nil
                 self.unboundGeometry.removeAll()
                 self.locator.invalidate()
-                self.zoomStatus.invalidate()
+                self.renderedStatus?.invalidate()
                 continuation.resume()
             }
-        }
-    }
-
-    private var platform: MeetingMuteControlLocator.Platform? {
-        switch self.application?.bundleIdentifier {
-        case "us.zoom.xos": return .zoom
-        case "com.google.Chrome": return .googleMeet
-        default: return nil
         }
     }
 
     private func poll() {
         guard self.running, self.platform != nil, AXIsProcessTrusted() else { return }
         let began = mach_absolute_time()
-        if self.platform == .zoom, let pid = self.application?.processID {
-            let snapshot = self.zoomStatus.sample(processID: pid, boundWindowID: self.boundWindowID)
+        if self.transition.temporaryUnmute, let pid = self.application?.processID,
+           (NSWorkspace.shared.frontmostApplication?.processIdentifier != pid
+                || !(self.renderedStatus?.ownsFocusedWindow(processID: pid) == true || self.locator.ownsFocusedWindow(processID: pid))) {
+            self.ownedChord = nil
+            if self.transition.retireTemporaryGrant(at: began) { self.publish(.muted, at: began, unsafeStart: began, refineBoundary: true) }
+        }
+        if let renderedStatus = self.renderedStatus, let pid = self.application?.processID {
+            let snapshot = renderedStatus.sample(processID: pid, boundWindowID: self.boundWindowID)
             if let windowID = snapshot.callWindowID {
                 if snapshot.state != nil || snapshot.temporaryHUDVisible == true { self.boundWindowID = windowID }
                 var changed = self.transition.observe(snapshot.state, at: began)
@@ -311,14 +325,24 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         let now = mach_absolute_time()
         switch event {
         case .disabled:
-            self.transition.keyListenerUnavailable()
-        case let .key(held, timestamp):
+            self.ownedChord = nil
+            if self.transition.retireTemporaryGrant(at: now) { self.publish(.muted, at: now, unsafeStart: now, refineBoundary: true) }
+        case let .modifiersChanged(timestamp, flags):
+            guard let owned = self.ownedChord, !MeetingPTTChordMatcher.modifiersMatch(owned, flags: flags) else { return }
+            self.ownedChord = nil
+            let boundary = timestamp.map(Self.hostTime(nanoseconds:)) ?? now
+            if self.transition.keyUp(processedAt: now, releasedAt: boundary) { self.publish(.muted, at: now, unsafeStart: boundary, refineBoundary: true) }
+        case let .key(held, timestamp, code, flags):
             if held {
+                guard let chord = MeetingPTTChordMatcher.chord(in: self.pushToTalkChords, keyCode: code, flags: flags) else { return }
                 guard let pid = self.application?.processID,
                       NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
-                      self.zoomStatus.ownsFocusedWindow(processID: pid) || self.locator.ownsFocusedWindow(processID: pid) else { return }
+                      self.renderedStatus?.ownsFocusedWindow(processID: pid) == true || self.locator.ownsFocusedWindow(processID: pid) else { return }
+                self.ownedChord = chord
                 self.transition.keyDown(at: timestamp.map(Self.hostTime(nanoseconds:)))
             } else {
+                guard self.ownedChord?.keyCode == code else { return }
+                self.ownedChord = nil
                 let boundary = MeetingMuteTransitionState.releaseBoundary(
                     eventTime: timestamp.map(Self.hostTime(nanoseconds:)), processedAt: now)
                 if self.transition.keyUp(processedAt: now, releasedAt: boundary.unsafeStart > 0 ? boundary.unsafeStart : nil) {
@@ -333,7 +357,7 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         }
     }
 
-    private static func hostTime(nanoseconds: UInt64) -> UInt64 {
+    static func hostTime(nanoseconds: UInt64) -> UInt64 {
         let divisor = UInt64(self.timebase.numer), multiplier = UInt64(self.timebase.denom)
         return (nanoseconds / divisor) * multiplier + (nanoseconds % divisor) * multiplier / divisor
     }
@@ -342,7 +366,7 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         var info = mach_timebase_info_data_t(); mach_timebase_info(&info); return info
     }()
 
-    private static func elapsed(since start: UInt64, until end: UInt64) -> Double {
+    static func elapsed(since start: UInt64, until end: UInt64) -> Double {
         guard end >= start else { return .infinity }
         return Double(end - start) * Double(self.timebase.numer) / Double(self.timebase.denom) / 1_000_000_000
     }

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import PichiCallObservation
 
 /// Standalone meeting-detection state machine. Zero dependency on `MeetingSessionCoordinator` —
 /// it reads activity state through `DetectionActivityGate` and never materializes the lazy
@@ -92,6 +93,8 @@ final class MeetingAutoDetector {
         var windowEvidenceWindowID: UInt32?
         var hasLiveWindow = false
         var windowLostAt: Date?
+        var communicationCallState: CommunicationCallState?
+        var explicitCallEndedAt: Date?
     }
 
     private enum AudioEvidenceSource: Equatable {
@@ -159,6 +162,7 @@ final class MeetingAutoDetector {
     private var dismissedBundleUntil: [String: Date] = [:]
     private var dismissalTimestamps: [Date] = []
     private var pollTask: Task<Void, Never>?
+    private var externallyDriven = false
     private var runGeneration: UInt64 = 0
     private var candidateIncarnation: UInt64 = 0
     private var lastBrowserPollAt: [Int32: Date] = [:]
@@ -196,8 +200,9 @@ final class MeetingAutoDetector {
 
     // MARK: - Lifecycle
 
-    func start() {
-        guard self.pollTask == nil else { return }
+    func start(externallyDriven: Bool = false) {
+        guard self.pollTask == nil, !self.externallyDriven else { return }
+        self.externallyDriven = externallyDriven
         self.runGeneration &+= 1
         let runGeneration = self.runGeneration
         self.workspaceEvents.onEvent = { [weak self] event in self?.handleWorkspaceEvent(event, at: self?.clock.now() ?? Date()) }
@@ -208,6 +213,7 @@ final class MeetingAutoDetector {
         self.micActivity.start()
         self.installTransientDisarmObservers()
 
+        guard !externallyDriven else { return }
         self.pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -223,6 +229,7 @@ final class MeetingAutoDetector {
         self.runGeneration &+= 1
         self.pollTask?.cancel()
         self.pollTask = nil
+        self.externallyDriven = false
         self.workspaceEvents.stop()
         self.micActivity.stop()
         self.titleEnrichmentInFlight.removeAll()
@@ -243,7 +250,9 @@ final class MeetingAutoDetector {
             if self.isNativeDetectionEnabled() || self.watchedRecording?.tier == .nativeTier1 {
                 let nativePIDs = Set(self.records.filter { $0.value.tier == .nativeTier1 && self.shouldObserve($0.value) }.keys)
                 if !nativePIDs.isEmpty {
-                    self.handleWindowSnapshot(self.windowSnapshotProvider.snapshot(interestPIDs: nativePIDs), at: now)
+                    let snapshots = await self.windowSnapshotProvider.snapshot(interestPIDs: nativePIDs)
+                    guard self.isCurrentRun(runGeneration) else { return }
+                    self.handleWindowSnapshot(snapshots, at: now)
                 }
             }
             if self.isBrowserDetectionEnabled() || self.watchedRecording?.tier == .browserTier2 {
@@ -256,7 +265,7 @@ final class MeetingAutoDetector {
     }
 
     private func isCurrentRun(_ generation: UInt64) -> Bool {
-        !Task.isCancelled && self.runGeneration == generation && self.pollTask != nil
+        !Task.isCancelled && self.runGeneration == generation && (self.pollTask != nil || self.externallyDriven)
     }
 
     private var shouldPollAudio: Bool { self.isNativeDetectionEnabled() || self.watchedRecording != nil }
@@ -546,6 +555,14 @@ final class MeetingAutoDetector {
         for pid in self.records.keys where self.records[pid]?.tier == .nativeTier1 {
             guard let bundleIdentifier = self.records[pid]?.bundleIdentifier else { continue }
             let ownedWindows = snapshots.filter { $0.processID == pid && $0.layer == 0 }
+            let explicit = ownedWindows.compactMap(\.communicationCallState).filter { $0 != .indeterminate }
+            if Set(explicit).count == 1, let state = explicit.first {
+                self.records[pid]?.communicationCallState = state
+                if state == .ended {
+                    if self.records[pid]?.explicitCallEndedAt == nil { self.records[pid]?.explicitCallEndedAt = now }
+                } else { self.records[pid]?.explicitCallEndedAt = nil }
+            }
+
             let matched = self.matchingNativeWindow(ownedWindows, bundleIdentifier: bundleIdentifier)
 
             if matched == nil, bundleIdentifier == "us.zoom.xos",
@@ -608,10 +625,11 @@ final class MeetingAutoDetector {
     /// Webex have no generically nameable meeting window, so presence + frontmost-at-edge is the
     /// whole attribution for them.
     private func matchingNativeWindow(_ windows: [WindowSnapshot], bundleIdentifier: String) -> WindowSnapshot? {
-        if bundleIdentifier == "us.zoom.xos" {
-            return windows.first { MeetingAppRegistry.isZoomMeetingWindowTitle($0.title ?? "") }
-        }
-        return windows.first
+        let explicit = windows.filter { $0.communicationCallState == .inCall || $0.communicationCallState == .onHold }
+        if explicit.count == 1 { return explicit[0] }
+        guard explicit.isEmpty else { return nil }
+        let matching = windows.filter { MeetingCommunicationModuleHost.matchesNativeWindow($0, bundleIdentifier: bundleIdentifier) }
+        return matching.count == 1 ? matching[0] : nil
     }
 
     private func publishHealth(_ health: Health) {
@@ -624,8 +642,10 @@ final class MeetingAutoDetector {
     // MARK: - Browser evidence (Tier 2)
 
     func handleBrowserTabURL(_ url: BrowserTabURL?, pid: Int32, bundleIdentifier: String, at now: Date) {
-        if let url { self.noteBrowserCallState(url, pid: pid, bundleIdentifier: bundleIdentifier, at: now) }
-        if let url, url.callState == .ended, MeetingBrowserCallEvidence.supports(url) {
+        if let url {
+            if let state = url.communicationCallState, state != .indeterminate { self.records[pid]?.communicationCallState = state }
+            self.noteBrowserCallState(url, pid: pid, bundleIdentifier: bundleIdentifier, at: now) }
+        if let url, url.callState == .ended, (MeetingBrowserCallEvidence.supports(url) || url.communicationModuleID != nil) {
             self.records[pid]?.windowEvidenceAt = nil
             let key = "pid:\(pid)|url:\(url.host)\(url.path)"
             if let episode = self.episodesByKey[key], !episode.consumed {
@@ -657,7 +677,7 @@ final class MeetingAutoDetector {
     }
 
     private func noteBrowserCallState(_ url: BrowserTabURL, pid: Int32, bundleIdentifier: String, at now: Date) {
-        guard MeetingBrowserCallEvidence.supports(url),
+        guard MeetingBrowserCallEvidence.supports(url) || url.communicationModuleID != nil,
               var watched = self.watchedRecording, watched.tier == .browserTier2,
               watched.pid == pid, watched.bundleIdentifier == bundleIdentifier, self.isStillRunning(watched)
         else { return }
@@ -705,6 +725,7 @@ final class MeetingAutoDetector {
             return
         }
 
+        guard record.communicationCallState != .ringing, record.communicationCallState != .onHold, record.communicationCallState != .ended else { return }
         let readiness = self.activityGate.preflightState()
         guard readiness != .busy else {
             self.logConfirmRejected("busy", record: record)
@@ -1001,6 +1022,11 @@ final class MeetingAutoDetector {
         if let record = self.records[watched.pid], self.isStillRunning(watched) {
             watched.appGoneAt = nil
             var moments: [Date] = []
+            if record.communicationCallState == .onHold {
+                self.logEndWatchStatus("explicit-call-on-hold", bundleIdentifier: watched.bundleIdentifier)
+                return
+            }
+            if let ended = record.explicitCallEndedAt { moments.append(ended.addingTimeInterval(Self.browserPostCallGraceSeconds)) }
             if record.tier == .browserTier2 {
                 // We only ever read the front tab, so a meeting tab that is no longer in front says
                 // nothing: the call may be running behind another tab. The microphone decides.
@@ -1031,7 +1057,8 @@ final class MeetingAutoDetector {
         }
         // Speech can explain an ambiguous disconnect. A positive post-call page is already an
         // explicit end; its question still leaves capture running until the user chooses Stop.
-        let hasExplicitBrowserEnd = watched.tier == .browserTier2 && watched.browserCallEndedAt != nil
+        let hasExplicitBrowserEnd = (watched.tier == .browserTier2 && watched.browserCallEndedAt != nil)
+            || self.records[watched.pid]?.explicitCallEndedAt != nil
         let stillTalking = !hasExplicitBrowserEnd && self.lastSpeechAt().map { now.timeIntervalSince($0) < Self.speechQuietSeconds } == true
         let shouldAsk = askAt.map { now >= $0 } == true && !stillTalking && !watched.asked
         // Every sign of the end is gone again: the call resumed. An audio query we cannot read is

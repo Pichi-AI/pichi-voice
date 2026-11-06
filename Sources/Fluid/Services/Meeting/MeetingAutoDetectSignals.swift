@@ -4,6 +4,7 @@ import AVFoundation
 import CoreAudio
 import Darwin
 import Foundation
+import PichiCallObservation
 
 // MARK: - Protocols (unit-testable via fakes; no CoreAudio/AX/NSWorkspace in tests)
 
@@ -129,6 +130,7 @@ nonisolated struct WindowSnapshot: Sendable, Equatable {
     /// Never logged — window titles are PII (repo invariant).
     var title: String?
     var layer: Int
+    var communicationCallState: CommunicationCallState? = nil
 }
 
 /// Readiness is deliberately separate from meeting identity. A busy recorder is not a setup
@@ -150,7 +152,7 @@ nonisolated enum DetectionSetupReason: String, Sendable, Equatable {
 protocol WindowSnapshotProviding: AnyObject {
     /// `.optionAll` + `excludeDesktopElements`, NOT `.optionOnScreenOnly` — a minimized meeting
     /// window must not fail confirmation. Only windows owned by `interestPIDs` are returned.
-    func snapshot(interestPIDs: Set<Int32>) -> [WindowSnapshot]
+    func snapshot(interestPIDs: Set<Int32>) async -> [WindowSnapshot]
     /// Optional AX enrichment for redacted CG titles. Implementations must bound the AX call.
     func titles(processID: Int32) async -> [String]
 }
@@ -159,6 +161,8 @@ nonisolated struct BrowserTabURL: Sendable, Equatable {
     var host: String
     var path: String
     var callState: MeetingBrowserCallState = .unknown
+    var communicationCallState: CommunicationCallState? = nil
+    var communicationModuleID: String? = nil
 }
 
 @MainActor
@@ -889,10 +893,10 @@ final class CGWindowSnapshotProvider: WindowSnapshotProviding {
     private nonisolated static let maxAXWindows = 8
     private let axQueue = DispatchQueue(label: "com.fluidvoice.meeting.autodetect.ax-title", qos: .utility)
 
-    func snapshot(interestPIDs: Set<Int32>) -> [WindowSnapshot] {
+    func snapshot(interestPIDs: Set<Int32>) async -> [WindowSnapshot] {
         let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else { return [] }
-        return list.compactMap { info in
+        var snapshots: [WindowSnapshot] = list.compactMap { info in
             guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int32,
                   interestPIDs.contains(ownerPID),
                   let windowNumber = info[kCGWindowNumber as String] as? UInt32,
@@ -901,6 +905,25 @@ final class CGWindowSnapshotProvider: WindowSnapshotProviding {
             let title = info[kCGWindowName as String] as? String
             return WindowSnapshot(processID: ownerPID, windowID: windowNumber, title: title, layer: layer)
         }
+        // The shared reader supplies explicit UI phases for registered modules. Legacy
+        // title/audio evidence remains available if AX is temporarily unavailable.
+        for pid in interestPIDs.sorted().prefix(16) {
+            guard let app = NSRunningApplication(processIdentifier: pid), let bundle = app.bundleIdentifier,
+                  !MeetingCommunicationModuleHost.snapshot.registry.candidates(bundleIdentifier: bundle).isEmpty else { continue }
+            let application = MeetingApplicationIdentity(bundleIdentifier: bundle, processID: pid, displayName: app.localizedName ?? bundle)
+            let observations: [MeetingCommunicationObservation] = await withCheckedContinuation { continuation in
+                MeetingCommunicationAXProbe.shared.request(application: application, modules: MeetingCommunicationModuleHost.snapshot) {
+                    continuation.resume(returning: $0)
+                }
+            }
+            guard !Task.isCancelled else { return [] }
+            for observation in observations {
+                if let index = snapshots.firstIndex(where: { $0.windowID == observation.snapshot.windowID && $0.processID == pid }) {
+                    snapshots[index].communicationCallState = observation.evidence.callState
+                }
+            }
+        }
+        return snapshots
     }
 
     func titles(processID: Int32) async -> [String] {

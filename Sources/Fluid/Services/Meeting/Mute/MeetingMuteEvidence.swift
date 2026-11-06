@@ -203,6 +203,15 @@ nonisolated struct MeetingMuteTransitionState {
         self.latestEvidenceAt = max(self.latestEvidenceAt, time)
     }
 
+    /// Losing control of a known temporary grant is different from a missing toolbar frame.
+    /// Retire only the temporary grant; a persistent unmute is unchanged.
+    mutating func retireTemporaryGrant(at time: UInt64) -> Bool {
+        guard self.temporaryUnmute || self.temporaryObservedDuringHold || (self.held && self.possiblePTT) else {
+            self.keyListenerUnavailable(); return false
+        }
+        return self.keyUp(processedAt: time, releasedAt: time)
+    }
+
     /// An unavailable key listener supplies no conference transition. Keep the rendered state.
     mutating func keyListenerUnavailable() { self.held = false; self.possiblePTT = false }
 
