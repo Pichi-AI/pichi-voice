@@ -625,6 +625,7 @@ final class AutomaticDictionaryCorrectionTracker {
     }
 
     private func evaluate(_ pending: PendingCorrection) {
+        defer { self.propagateAcceptedCorrections() }
         let detected = AutomaticDictionaryCorrectionDetector.candidate(
             before: pending.beforeValue,
             after: pending.afterValue,
@@ -687,7 +688,6 @@ final class AutomaticDictionaryCorrectionTracker {
             var prepared = candidate
             prepared.negativeCorrection = negative
             DictionaryCorrectionOverlayController.shared.show(candidate: prepared) { _ in }
-            self.propagateAcceptedCorrections()
             return
         }
 
@@ -697,9 +697,8 @@ final class AutomaticDictionaryCorrectionTracker {
            !SettingsStore.shared.shouldShowOnboarding, let sourceRange = candidate.sourceUTF16Range {
             let admitted = self.enqueueCorrection(candidate, context: context,
                 range: NSRange(location: sourceRange.location, length: candidate.correctedText.utf16.count))
-            if admitted { self.propagateAcceptedCorrections(); return }
+            if admitted { return }
         }
-        self.propagateAcceptedCorrections()
 
         guard let candidate else { return }
         guard SettingsStore.shared.automaticDictionaryLearningEnabled,
