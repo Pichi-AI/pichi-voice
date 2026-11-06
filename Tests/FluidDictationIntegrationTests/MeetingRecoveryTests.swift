@@ -37,12 +37,17 @@ final class MeetingRecoveryTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = host
         defer { window.contentView = nil; window.close() }
+        window.orderFront(nil)
+        await self.drainCaptureEvents()
         host.layoutSubtreeIfNeeded()
+        var nativeNodes: [String] = []
         func toggle(in element: Any) -> NSObject? {
-            guard let node = element as? NSObject else { return nil }
+            guard nativeNodes.count < 100, let node = element as? NSObject else { return nil }
             // SwiftUI AX nodes implement these selectors without declaring AppKit's full
             // formal protocol. Traverse the native tree, rather than invoking a copied action.
             let identifier = NSSelectorFromString("accessibilityIdentifier")
+            let observedID = node.responds(to: identifier) ? node.perform(identifier)?.takeUnretainedValue() as? String : nil
+            nativeNodes.append("\(type(of: node)): \(observedID ?? "no identifier")")
             if node.responds(to: identifier),
                node.perform(identifier)?.takeUnretainedValue() as? String == "meeting.microphone.recording-toggle" { return node }
             let children = NSSelectorFromString("accessibilityChildren")
@@ -52,7 +57,7 @@ final class MeetingRecoveryTests: XCTestCase {
             }
             return nil
         }
-        let button = try XCTUnwrap(toggle(in: host), "The native SwiftUI surface must expose its microphone button")
+        let button = try XCTUnwrap(toggle(in: host), "The native SwiftUI surface must expose its microphone button: \(nativeNodes)")
         let press = NSSelectorFromString("accessibilityPerformPress")
         XCTAssertTrue(button.responds(to: press))
         typealias Press = @convention(c) (AnyObject, Selector) -> Bool
