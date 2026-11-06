@@ -325,8 +325,10 @@ def python(root, output):
     work = Path(output) / "python"
     work.mkdir(parents=True, exist_ok=True)
     tracked = git(root, "ls-files", "*.py").splitlines()
-    cov = coverage.Coverage(data_file=str(work / ".coverage"), branch=True, source=[str(root / p) for p in ("scripts", "tools", ".codex", "Vendor")])
-    cov.set_option("run:patch", ["subprocess"])
+    config = work / "coveragerc"
+    sources = "\n".join("    " + str(root / p) for p in ("scripts", "tools", ".codex", "Vendor"))
+    config.write_text("[run]\nbranch = True\nparallel = True\npatch = subprocess\ndata_file = " + str(work / ".coverage") + "\nsource =\n" + sources + "\n")
+    cov = coverage.Coverage(config_file=str(config))
     cov.start()
     suite = unittest.TestSuite()
     try:
