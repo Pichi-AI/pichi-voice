@@ -86,6 +86,7 @@ jobs:
           path: |
             ${{ env.CI_ROOT }}/.build/coverage/macos/*/*.log
             ${{ env.CI_ROOT }}/.build/coverage/macos/*/summary-*.json
+            ${{ env.CI_ROOT }}/.build/coverage/macos/*/coverage-targets-*.json
           retention-days: 1
 
   ios:
@@ -120,6 +121,7 @@ jobs:
           path: |
             ${{ env.CI_ROOT }}/.build/coverage/ios/*/*.log
             ${{ env.CI_ROOT }}/.build/coverage/ios/*/summary-*.json
+            ${{ env.CI_ROOT }}/.build/coverage/ios/*/coverage-targets-*.json
             ${{ env.CI_ROOT }}/.build/coverage/ios/*/device-*.json
             ${{ env.CI_ROOT }}/.build/coverage/ios/*/screenshots-*/*.png
           retention-days: 1

@@ -199,7 +199,7 @@ class CoverageProducerTests(unittest.TestCase):
             if "summary" in argv:
                 return completed(json.dumps(summary()))
             if "--report" in argv:
-                return completed(json.dumps(dict(targets=[dict(name="App.app", executableLines=app_lines)])))
+                return completed(json.dumps(dict(targets=[dict(name="App.app", buildProductPath="/build/App.app/Contents/MacOS/App", executableLines=app_lines)])))
             if "--archive" in argv:
                 return completed(json.dumps(archive(self.root)))
             return completed(json.dumps([dict(nodeType="Test Case", nodeIdentifier=name + "/testA()", result="Passed" if ui_pass else "Skipped") for name in ["Smoke", *changed]]))
@@ -211,6 +211,17 @@ class CoverageProducerTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True), patch.object(CI, "command") as tool, self.assertRaisesRegex(ValueError, "personal app data"):
             CI.native(self.root, self.out, "macos", "Smoke")
         tool.assert_not_called()
+
+    def test_app_coverage_uses_executable_path_and_cannot_accept_embedded_test_bundle(self):
+        # Xcode's display name omits Debug even though the actual executable includes it.
+        target = dict(name="Pichi Voice.app", buildProductPath="/build/Pichi Voice Debug.app/Contents/MacOS/Pichi Voice Debug", executableLines=10)
+        self.assertTrue(CI.has_app_coverage(dict(targets=[target]), {"Pichi Voice Debug.app"}))
+        mobile = dict(name="Display name", buildProductPath="/build/Mobile.app/Mobile", executableLines=1)
+        self.assertTrue(CI.has_app_coverage(dict(targets=[mobile]), {"Mobile.app"}))
+        test = dict(target, buildProductPath="/build/Pichi Voice Debug.app/Contents/PlugIns/Tests.xctest/Contents/MacOS/Tests")
+        for targets, apps in [([test], {"Pichi Voice Debug.app"}), ([dict(target, executableLines=0), test], {"Pichi Voice Debug.app"}),
+                              ([dict(target, executableLines=True)], {"Pichi Voice Debug.app"}), ([target], {"Other.app"}), ([target], set())]:
+            self.assertFalse(CI.has_app_coverage(dict(targets=targets), apps))
 
     def test_native_enables_app_instrumentation_and_does_not_hide_test_exit(self):
         status, calls = self.run_native()

@@ -230,6 +230,19 @@ def changed_ui_classes(root):
     return classes
 
 
+def has_app_coverage(raw_report, apps):
+    if not apps:
+        return False
+    for app in apps:
+        executable = Path(app).stem
+        suffixes = ((app, "Contents", "MacOS", executable), (app, executable))
+        if not any(type(target.get("executableLines")) is int and target["executableLines"] > 0 and
+                   any(Path(target.get("buildProductPath", "")).parts[-len(suffix):] == suffix for suffix in suffixes)
+                   for target in raw_report["targets"]):
+            return False
+    return True
+
+
 def native(root, output, scope, ui_class):
     if scope == "macos" and os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise ValueError("macOS coverage requires a disposable GitHub-hosted user; personal app data must stay isolated")
@@ -272,7 +285,9 @@ def native(root, output, scope, ui_class):
                 totals[key] += counts[key]
             failed |= result.returncode != 0 or summary["result"] != "Passed"
             raw_report = json.loads(command(["xcrun", "xccov", "view", "--report", "--json", bundle]).stdout)
-            if not apps or any(not any(t["name"] == app and t["executableLines"] > 0 for t in raw_report["targets"]) for app in apps):
+            save(work / f"coverage-targets-{index}.json", {"expected_apps": sorted(apps), "targets": [
+                {key: target.get(key) for key in ("name", "buildProductPath", "executableLines")} for target in raw_report["targets"]]})
+            if not has_app_coverage(raw_report, apps):
                 raise ValueError("App coverage is disabled or missing")
             archive = json.loads(command(["xcrun", "xccov", "view", "--archive", "--json", bundle]).stdout)
             join_files(files, xccov_files(archive, root))
