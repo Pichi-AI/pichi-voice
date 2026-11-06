@@ -364,6 +364,13 @@ struct MeetingRecordingPillContent: View {
         .init(state: self.coordinator.activeSession?.mode == .onlineCall ? self.coordinator.microphoneMuteState : .notApplicable)
     }
 
+    var microphoneIndicator: MeetingMicrophoneMuteIndicator {
+        let sessionID = self.coordinator.activeSession?.id
+        return MeetingMicrophoneMuteIndicator(state: self.coordinator.microphoneMuteState, onToggle: {
+            Task { await self.coordinator.toggleMicrophoneRecording(expectedSessionID: sessionID) }
+        })
+    }
+
     private var interfaceLanguage: PichiInterfaceLanguage {
         PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language
     }
@@ -403,10 +410,7 @@ struct MeetingRecordingPillContent: View {
     private var compactPill: some View {
         HStack(spacing: 7) {
             if self.mutePresentation.isMonitored {
-                MeetingMicrophoneMuteIndicator(state: self.coordinator.microphoneMuteState, onToggle: {
-                    let sessionID = self.coordinator.activeSession?.id
-                    Task { await self.coordinator.toggleMicrophoneRecording(expectedSessionID: sessionID) }
-                })
+                self.microphoneIndicator
                     .disabled(self.isStopping || self.coordinator.isMicrophoneControlPending)
             } else {
                 MeetingRecordingLevelBars(level: self.microphoneLevel, animated: !self.reduceMotion)

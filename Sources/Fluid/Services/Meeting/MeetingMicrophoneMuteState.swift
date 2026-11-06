@@ -1,7 +1,7 @@
 import Foundation
 
-/// Last observed meeting transition. Online capture starts enabled and retains that state
-/// until an explicit mute/unmute signal changes it; missing UI does not introduce a new state.
+/// Effective recording state after conference transitions and local intent. Online capture
+/// starts enabled; missing conference UI preserves the last automatic state.
 nonisolated enum MeetingMicrophoneMuteState: String, Equatable, Sendable {
     case notApplicable
     case unmuted

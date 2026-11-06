@@ -110,7 +110,7 @@ nonisolated enum MeetingCaptureEvent: Sendable {
     /// Presentation-only status. The writer owns persisted capture eras; this cannot restart capture.
     case microphoneEchoProtectionChanged(MeetingMicrophoneEchoProtection)
     #if os(macOS)
-    /// Observed conference mute status. Unknown/checking means local microphone capture is denied.
+    /// Effective microphone recording status after local intent and conference transitions.
     case microphoneMuteStateChanged(MeetingMicrophoneMuteState)
     #endif
     case chunkFinalized(trackID: MeetingAudioTrackID, chunk: MeetingAudioChunk, format: MeetingAudioFormat)
