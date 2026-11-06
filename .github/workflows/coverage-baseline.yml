@@ -179,22 +179,33 @@ jobs:
           for package in NativeTextInference PichiGigaAM RussianMorphology TranscribeCpp; do
             scratch="$PWD/.build/coverage/packages/$package"
             swift test --package-path "Vendor/$package" --scratch-path "$scratch" --jobs 2               --enable-code-coverage --xunit-output "$PWD/.build/coverage/reports/$package.xml"               > ".build/coverage/reports/$package.log" 2>&1 || status=1
-            python3 - "$scratch" "$package" <<'PYCODE'
-            import json,subprocess,sys
-            from pathlib import Path
-            scratch=Path(sys.argv[1]);package=sys.argv[2]
-            reports=Path('.build/coverage/reports')
-            raw=list(scratch.glob('**/codecov/*.profraw'))
-            binaries=[p for p in scratch.glob('**/*.xctest/Contents/MacOS/*') if p.is_file() and not p.is_symlink()]
-            assert raw and binaries,(len(raw),len(binaries))
-            manifest={'raw_profiles':[str(p) for p in raw],'objects':[str(p) for p in binaries]}
-            (reports/(package+'-objects.json')).write_text(json.dumps(manifest,indent=2))
-            profile=reports/(package+'.profdata')
-            subprocess.run(['xcrun','llvm-profdata','merge','-sparse',*[str(p) for p in raw],'-o',str(profile)],check=True)
-            command=['xcrun','llvm-cov','export','-instr-profile='+str(profile),str(binaries[0])]
-            for binary in binaries[1:]:command+=['-object',str(binary)]
-            with (reports/(package+'-all-targets.json')).open('w') as stream:subprocess.run(command,stdout=stream,check=True)
-            PYCODE
+            python3 - "$scratch" "$package" <<'PYCODE' || status=1
+          import json,subprocess,sys
+          from pathlib import Path
+          scratch=Path(sys.argv[1]);package=sys.argv[2]
+          reports=Path('.build/coverage/reports')
+          raw=list(scratch.rglob('*.profraw'))
+          candidates=[]
+          for description in scratch.glob('*/debug/description.json'):
+              for item in json.loads(description.read_text()).get('builtTestProducts',[]):
+                  if item.get('binaryPath'):candidates.append(Path(item['binaryPath']))
+          candidates+=list(scratch.glob('*/debug/*Tests*'))
+          candidates+=list(scratch.glob('**/*.xctest/Contents/MacOS/*'))
+          binaries=[]
+          for path in candidates:
+              if path.is_file():
+                  with path.open('rb') as stream:magic=stream.read(4)
+                  if magic in [b'\xcf\xfa\xed\xfe',b'\xfe\xed\xfa\xcf',b'\xca\xfe\xba\xbe']:
+                      if path.resolve() not in binaries:binaries.append(path.resolve())
+          manifest={'raw_profiles':[str(p) for p in raw],'objects':[str(p) for p in binaries]}
+          (reports/(package+'-objects.json')).write_text(json.dumps(manifest,indent=2))
+          assert raw and binaries,(len(raw),len(binaries))
+          profile=reports/(package+'.profdata')
+          subprocess.run(['xcrun','llvm-profdata','merge','-sparse',*[str(p) for p in raw],'-o',str(profile)],check=True)
+          command=['xcrun','llvm-cov','export','-instr-profile='+str(profile),str(binaries[0])]
+          for binary in binaries[1:]:command+=['-object',str(binary)]
+          with (reports/(package+'-all-targets.json')).open('w') as stream:subprocess.run(command,stdout=stream,check=True)
+          PYCODE
           done
           exit "$status"
       - name: Upload package coverage and test accounting
