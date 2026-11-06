@@ -153,6 +153,13 @@ nonisolated enum MeetingTranscriptExporter {
     ) -> MeetingSpeakerPresentation {
         let first = paragraph.captionSegment
         let projected = paragraph.projectedSpeakerID
+        if let speaker = paragraph.projectedSpeakerRecord {
+            return MeetingSpeakerPresentation(identity: "\(speaker.id.uuidString)|assigned",
+                label: .estimated(.init(displayName: speaker.displayName, isLocalUser: speaker.isLocalUser,
+                    usesCustomDisplayName: speaker.usesCustomDisplayName,
+                    isProvisional: speaker.identityIsProvisional == true)),
+                participantID: speaker.id, participantIndex: paragraph.projectedSpeakerIndex)
+        }
         let label = projected.flatMap { self.speakerName($0, in: session, speakerNames: speakerNames) }
             .map(MeetingSpeakerPresentation.Label.estimated)
             ?? self.speakerLabelValue(for: first, in: session, speakerNames: speakerNames)
@@ -322,6 +329,10 @@ nonisolated enum MeetingTranscriptExporter {
         /// A legacy incoming turn can begin with an unresolved source member. Keep its
         /// reading identity separate from that member's immutable stored evidence.
         var projectedSpeakerID: SessionSpeakerID? = nil
+        /// Archive reading can supply one stable participant when no identity was ever saved.
+        /// Original members remain unchanged, so correction and playback retain their revisions.
+        var projectedSpeakerRecord: MeetingSessionSpeaker? = nil
+        var projectedSpeakerIndex: Int? = nil
         /// Each displayed paragraph repeats its known participant beside its timestamp.
         /// An unresolved paragraph does not invent a participant header.
         var showsSpeakerLabel = true
@@ -357,6 +368,11 @@ nonisolated enum MeetingTranscriptExporter {
         speakerNames: [SessionSpeakerID: String], language: PichiInterfaceLanguage = .english,
         bundle: Bundle = .main
     ) -> String {
+        if let speaker = paragraph.projectedSpeakerRecord {
+            return self.speakerLabel(for: .estimated(.init(displayName: speaker.displayName,
+                isLocalUser: speaker.isLocalUser, usesCustomDisplayName: speaker.usesCustomDisplayName,
+                isProvisional: speaker.identityIsProvisional == true)), language: language, bundle: bundle)
+        }
         if let projected = paragraph.projectedSpeakerID {
             let resolved = self.resolvedAliasID(projected, in: session)
             if session.activeSpeakers.contains(where: { $0.id == resolved }),
@@ -375,6 +391,10 @@ nonisolated enum MeetingTranscriptExporter {
         bundle: Bundle = .main
     ) -> String? {
         guard paragraph.showsSpeakerLabel else { return nil }
+        if paragraph.projectedSpeakerRecord != nil {
+            return self.speakerLabel(for: paragraph, in: session, speakerNames: speakerNames,
+                language: language, bundle: bundle)
+        }
         if let projected = paragraph.projectedSpeakerID {
             guard let name = self.speakerName(projected, in: session, speakerNames: speakerNames) else { return nil }
             return self.speakerLabel(for: .estimated(name), language: language, bundle: bundle)
@@ -904,8 +924,41 @@ nonisolated enum MeetingTranscriptExporter {
         let continuations = self.mainSpeakerReadingOwners(for: segments, in: session, recoveredOwners: canonicalMappings)
         let contextualOwners = legacyBridges.merging(canonicalMappings) { _, canonical in canonical }
             .merging(continuations) { _, continuation in continuation }
-        let readingOwners = contextualOwners.merging(self.boundaryReadingOwners(
+        var readingOwners = contextualOwners.merging(self.boundaryReadingOwners(
             for: segments, in: session, existingOwners: contextualOwners)) { contextual, _ in contextual }
+        var readingSpeakers = session.speakers
+        if session.speakerLabelsEnabled != false {
+            let source = session.transcriptSegments.isEmpty ? segments : session.transcriptSegments
+            let projected = source.map { original -> MeetingTranscriptSegment in
+                guard let id = readingOwners[original.id], original.isUserSpeakerAssigned != true else { return original }
+                var value = original
+                value.speakerID = id
+                value.speakerAttribution = .init(readingParticipant: id, source: original, policy: .standard)
+                return value
+            }
+            var barriers: [MeetingAudioTrackID: [MeetingSpeakerAttributionInterval]] = [:]
+            for gap in session.transcriptCoverageGaps ?? [] where gap.start.isFinite && gap.end.isFinite && gap.end > gap.start {
+                barriers[gap.trackID, default: []].append(.init(start: gap.start, end: gap.end))
+            }
+            let format = PichiLocalization.text("Speaker %lld")
+            if let reading = try? MeetingReadingSpeakerResolver.resolve(segments: projected, speakers: session.speakers,
+                barriersByTrack: barriers, scopeForSegment: { .init(trackID: $0.sourceTrackID, ordinal: 0) },
+                fallbackSpeaker: { scope in
+                    MeetingReadingSpeakerResolver.fallbackSpeaker(namespace: session.id, scope: scope,
+                        trackKind: session.audioTracks.first { $0.id == scope.trackID }?.kind ?? .microphone,
+                        speakerNameFormat: format)
+                }) {
+                readingSpeakers = MeetingSessionSpeaker.numberingGeneratedParticipants(reading.speakers, speakerNameFormat: format)
+                for (original, resolved) in zip(source, reading.segments) {
+                    if let id = resolved.speakerID, original.hasReadableContent,
+                       original.speakerID != id || original.attributionState != .assigned {
+                        readingOwners[original.id] = id
+                    }
+                }
+            }
+        }
+        let readingSpeakerIndices = Dictionary(readingSpeakers.enumerated().map { ($0.element.id, $0.offset) },
+                                               uniquingKeysWith: { first, _ in first })
         // Nonlexical members are typography only when adjacent to actual readable speech.
         // Preserve the original members and timing, but never let their unsupported identity
         // open a paragraph. Standalone artifacts remain available in canonical JSON/evidence.
@@ -981,6 +1034,11 @@ nonisolated enum MeetingTranscriptExporter {
         paragraphs.removeAll { !$0.segments.contains(where: \.hasReadableContent) }
         for index in paragraphs.indices {
             let paragraph = paragraphs[index], first = paragraph.captionSegment
+            if let id = paragraph.projectedSpeakerID, let speakerIndex = readingSpeakerIndices[id],
+               !session.speakers.contains(where: { $0.id == id }) {
+                paragraphs[index].projectedSpeakerRecord = readingSpeakers[speakerIndex]
+                paragraphs[index].projectedSpeakerIndex = speakerIndex
+            }
             let presentation = self.speakerPresentation(for: first, in: session, speakerNames: names)
             // Each timestamp starts a displayed paragraph, so repeat its known name even
             // when an unresolved paragraph intervened. Unsupported names remain absent.
@@ -1171,10 +1229,17 @@ nonisolated enum MeetingTranscriptExporter {
                 speakerID: presentations[paragraph.id]?.participantID,
                 text: paragraph.text)
         }
+        var exportSpeakers = session.readableSpeakers
+        var exportedIDs = Set(exportSpeakers.map(\.id))
+        for paragraph in paragraphs {
+            if let speaker = paragraph.projectedSpeakerRecord, exportedIDs.insert(speaker.id).inserted {
+                exportSpeakers.append(speaker)
+            }
+        }
         let document = PortableTranscript(
             sessionID: session.id, title: title, languageCode: session.languageCode,
             startedAt: session.startedAt, endedAt: session.endedAt, durationSeconds: durationSeconds,
-            speakers: session.readableSpeakers.map {
+            speakers: exportSpeakers.map {
                 .init(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser,
                     identityIsProvisional: $0.identityIsProvisional)
             }, segments: segments)

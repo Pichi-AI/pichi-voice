@@ -28,7 +28,10 @@ struct MeetingSpeakerAttributionTests {
 
     static func resolve(
         _ units: [MeetingFinalTextUnit], _ activity: [MeetingBackendSpeakerActivity],
-        policy: MeetingSpeakerAttributionPolicy = .standard, barriers: Set<String> = [],
+        // This corpus also verifies replay of the frozen policy before complete reading.
+        // Current-default coverage lives beside the native assembler integration regressions.
+        policy: MeetingSpeakerAttributionPolicy = .init(enableProvisionalSpeakerIdentities: true,
+            enableStableSpeakerOpening: true), barriers: Set<String> = [],
         epochs: Set<MeetingAnalysisEpochID> = [],
         contextualBarriers: [MeetingSpeakerAttributionContextBarrier] = []
     ) throws -> [MeetingSpeakerAttributionDecision] {

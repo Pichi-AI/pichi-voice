@@ -27,6 +27,129 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
     // fixtures exercise that replay contract explicitly instead of inheriting today's default.
     private let provisionalPolicy = MeetingSpeakerAttributionPolicy(enableProvisionalSpeakerIdentities: true)
 
+    private func readingFixture(_ spans: [(Double, Double, Int?)]) -> (MeetingSession, MeetingAnalysisEpochID) {
+        let track = UUID(), attempt = UUID()
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+            machTimebaseDenominator: 1, firstPresentationTime: nil)
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic participant coverage",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture")),
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000), timebase: timebase)
+        session.state = .completed
+        session.endedAt = session.startedAt.addingTimeInterval(60)
+        session.audioStorageMode = .memoryOnly
+        session.transcriptTimeDomain = .meetingRelative
+        session.audioTracks = [.init(id: track, kind: .microphone, sourceIdentifier: "fixture",
+            sourceDisplayName: "Fixture", format: nil, timebase: timebase, health: .waiting, chunks: [])]
+        session.speakers = (0..<3).map { number in
+            let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "voice-\(number)")
+            return .init(id: MeetingTranscriptAssembler.speakerID(attemptID: attempt, token: token),
+                displayName: "Speaker \(number + 1)", diarizationClusterID: "\(epoch):voice-\(number)",
+                trackKind: .microphone, isLocalUser: false, identityCandidates: [],
+                generatedParticipantNumber: number + 1, identityIsProvisional: false)
+        }
+        session.transcriptSegments = spans.enumerated().map { position, span in
+            .init(id: UUID(), start: .init(value: Int64((span.0 * 1000).rounded()), timescale: 1000),
+                end: .init(value: Int64((span.1 * 1000).rounded()), timescale: 1000), sourceTrackID: track,
+                speakerID: span.2.map { session.speakers[$0].id }, text: "Synthetic \(position)", revision: 0,
+                status: .final, overlap: .none, completeness: .complete,
+                attributionState: span.2 == nil ? .unassigned : .assigned,
+                nativePrecision: .word, nativeUnitID: "synthetic-\(position)",
+                nativeSpeakerAssignment: span.2.map { .assigned(.init(analysisEpochID: epoch, label: "voice-\($0)")) } ?? .unassigned,
+                nativeTiming: .init(start: span.0, end: span.1))
+        }
+        return (session, epoch)
+    }
+
+    private func resolveReading(_ session: MeetingSession, epoch: MeetingAnalysisEpochID,
+                                barriers: [MeetingSpeakerAttributionInterval] = []) throws -> MeetingReadingSpeakerResolver.Result {
+        try MeetingReadingSpeakerResolver.resolve(segments: session.transcriptSegments, speakers: session.speakers,
+            barriersByTrack: [epoch.trackID: barriers], scopeForSegment: { _ in epoch },
+            fallbackSpeaker: { MeetingTranscriptAssembler().readingFallbackSpeaker(attemptID: session.id, epoch: $0) })
+    }
+
+    func testDominantContextIncludesSpeakerBehindBriefInterveningTurns() throws {
+        let (session, epoch) = self.readingFixture([(0, 10, 0), (10, 10.1, 1), (10.1, 10.2, nil), (10.2, 10.3, 2)])
+        let result = try self.resolveReading(session, epoch: epoch)
+        XCTAssertEqual(result.segments[2].speakerID, session.speakers[0].id)
+        XCTAssertEqual(result.speakers.count, 3)
+        XCTAssertEqual(result.segments[1].speakerID, session.speakers[1].id, "A genuine assigned short reply remains intact")
+        XCTAssertEqual(result.segments[3].speakerID, session.speakers[2].id)
+    }
+
+    func testReadingOwnershipDoesNotCrossCoverageBarrierOrReplaceManualCorrection() throws {
+        var (session, epoch) = self.readingFixture([(0, 10, 0), (12, 12.2, nil), (13, 14, 1), (15, 16, 2)])
+        session.transcriptSegments[3].isUserSpeakerAssigned = true
+        let result = try self.resolveReading(session, epoch: epoch, barriers: [.init(start: 10.5, end: 11.5)])
+        XCTAssertEqual(result.segments[1].speakerID, session.speakers[1].id)
+        XCTAssertEqual(result.segments[3], session.transcriptSegments[3])
+    }
+
+    func testCompleteReadingSummaryPassesProductionStoreValidationAndReopen() async throws {
+        var (session, epoch) = self.readingFixture([(0, 6, 0), (8, 8.04, nil), (9.5, 15, 0)])
+        let result = try self.resolveReading(session, epoch: epoch)
+        session.transcriptSegments = result.segments
+        session.speakers = result.speakers
+        XCTAssertNoThrow(try session.validateTranscriptStructure())
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("speaker-coverage-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingSessionStore(rootDirectory: root)
+        try await store.create(session)
+        let reopened = try await MeetingSessionStore(rootDirectory: root).loadTranscript(id: session.id)
+        let loaded = try XCTUnwrap(reopened)
+        XCTAssertEqual(loaded.transcriptSegments, session.transcriptSegments)
+        XCTAssertTrue(loaded.transcriptSegments.allSatisfy { $0.speakerID != nil })
+        let paragraphs = try await MeetingTranscriptExporter.readingParagraphs(for: loaded)
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertTrue(paragraphs.allSatisfy { $0.showsSpeakerLabel })
+    }
+
+    func testArchiveProjectionNamesEveryReadableFragmentWithoutRewritingSavedMembers() throws {
+        let (session, _) = self.readingFixture([(0, 6, 0), (8, 8.04, nil), (9.5, 15, 0)])
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: session.transcriptSegments, in: session)
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertEqual(paragraphs.flatMap(\.segments), session.transcriptSegments)
+        XCTAssertTrue(paragraphs.allSatisfy { $0.showsSpeakerLabel })
+        let presentations = MeetingTranscriptExporter.speakerPresentations(in: session)
+        XCTAssertEqual(Set(presentations.values.compactMap(\.participantID)), [session.speakers[0].id])
+        XCTAssertNil(session.transcriptSegments[1].speakerID)
+    }
+
+    func testMixedUtteranceSelectsDominantReadingVoiceWithoutChangingAcousticAssignment() throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let a = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "a")
+        let b = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "b")
+        let unit = MeetingFinalTextUnit(id: "mixture", trackID: epoch.trackID, analysisEpochID: epoch,
+            precision: .utterance, text: "One indivisible mixed phrase", analysisStart: 0, analysisEnd: 10,
+            speaker: .unassigned, analysisSpanIDs: [])
+        let activity: [MeetingBackendSpeakerActivity] = [.init(token: a, start: 0, end: 10),
+            .init(token: b, start: 3, end: 7)]
+        let raw = try MeetingSpeakerAttribution.acousticAssignments(units: [unit], activity: activity)
+        guard case let .ambiguous(candidates) = raw[unit.id] else { return XCTFail("Mixed native evidence must stay ambiguous") }
+        XCTAssertEqual(Set(candidates), [a, b])
+        let decision = try XCTUnwrap(MeetingSpeakerAttribution.resolve(units: [unit], activity: activity).first)
+        XCTAssertEqual(decision.selectedToken, a)
+        XCTAssertEqual(decision.rule, .foregroundDominance)
+        XCTAssertFalse(decision.rule.isIndependentAcousticSelection)
+        let old = try XCTUnwrap(MeetingSpeakerAttribution.resolve(units: [unit], activity: activity,
+            policy: .init(enableProvisionalSpeakerIdentities: true, enableStableSpeakerOpening: true)).first)
+        XCTAssertNil(old.selectedToken)
+    }
+
+    func testCompleteReadingPolicyIsFrozenAndOlderEncodedPolicyDoesNotOptIn() throws {
+        let old = MeetingSpeakerAttributionPolicy(enableProvisionalSpeakerIdentities: true,
+            enableStableSpeakerOpening: true)
+        XCTAssertNotEqual(old.fingerprint, MeetingSpeakerAttributionPolicy.standard.fingerprint)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(old)) as? [String: Any])
+        json.removeValue(forKey: "enableCompleteReadingAssignment")
+        let decoded = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
+            from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertFalse(decoded.enableCompleteReadingAssignment)
+        XCTAssertEqual(decoded.fingerprint, old.fingerprint)
+        XCTAssertEqual(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
+            from: JSONEncoder().encode(MeetingSpeakerAttributionPolicy.standard)), .standard)
+    }
+
     func testCanonicalFinalPublicationNamesUnresolvedSpeechWithoutChangingNativeEvidence() throws {
         let chunk = self.chunk(sequence: 0, start: 100, end: 110)
         let mic = self.track(kind: .microphone, chunks: [chunk],
@@ -48,8 +171,9 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         let result = try assemble(self.provisionalPolicy)
         let legacy = try assemble(.init())
         let standard = try assemble(.standard)
-        XCTAssertTrue(standard.segments.allSatisfy { $0.speakerID == nil && $0.speakerIdentityIsProvisional == nil })
-        XCTAssertTrue(standard.speakers.isEmpty, "Unqualified speech cannot open a participant under stable opening")
+        XCTAssertTrue(standard.segments.allSatisfy { $0.speakerID != nil && $0.speakerIdentityIsProvisional == true })
+        XCTAssertEqual(standard.speakers.count, 1, "Unresolved speech shares one reading participant instead of creating a person per bout")
+        XCTAssertEqual(Set(standard.segments.compactMap(\.speakerID)).count, 1)
         XCTAssertEqual(standard.sidecar.units, result.sidecar.units)
         XCTAssertEqual(standard.sidecar.dispositions, result.sidecar.dispositions)
         XCTAssertTrue(result.segments.allSatisfy { $0.speakerID != nil && $0.speakerIdentityIsProvisional == true })
@@ -60,6 +184,53 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(result.sidecar.units, legacy.sidecar.units)
         XCTAssertEqual(result.sidecar.speakerActivity, legacy.sidecar.speakerActivity)
         XCTAssertEqual(result.sidecar.dispositions, legacy.sidecar.dispositions)
+    }
+
+    func testCompleteReadingAssignmentKeepsLongUntimedSpeechWithItsContinuingParticipant() throws {
+        let attempt = UUID(), track = UUID()
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "voice-a")
+        let units: [MeetingFinalTextUnit] = [
+            .init(id: "before", trackID: track, analysisEpochID: epoch, precision: .word,
+                  text: "Synthetic beginning", analysisStart: 0, analysisEnd: 6,
+                  speaker: .assigned(token), analysisSpanIDs: []),
+            .init(id: "long-uncertain", trackID: track, analysisEpochID: epoch, precision: .utterance,
+                  text: "A complete uncertain phrase remains readable", analysisStart: 7, analysisEnd: 15,
+                  speaker: .unassigned, analysisSpanIDs: []),
+            .init(id: "after", trackID: track, analysisEpochID: epoch, precision: .word,
+                  text: "Synthetic continuation", analysisStart: 16, analysisEnd: 22,
+                  speaker: .assigned(token), analysisSpanIDs: [])]
+        let source = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: attempt, epoch: epoch,
+            offset: 0, duration: 22, units: units)
+        let result = try MeetingStreamingProtectedWordTail.finalizingProtectedTranscript(source,
+            attemptID: attempt, policy: .standard, speakerNameFormat: "Speaker %lld",
+            epochForSegment: { _ in epoch })
+        let owner = try XCTUnwrap(source.segments.first?.speakerID)
+        XCTAssertEqual(result.segments.map(\.speakerID), [owner, owner, owner])
+        XCTAssertEqual(result.speakers, source.speakers)
+        XCTAssertEqual(result.segments.map(\.id), source.segments.map(\.id))
+        XCTAssertEqual(result.segments.map(\.text), source.segments.map(\.text))
+        XCTAssertEqual(result.segments.map(\.nativeTiming), source.segments.map(\.nativeTiming))
+        XCTAssertEqual(result.segments.map(\.nativeSpeakerAssignment), source.segments.map(\.nativeSpeakerAssignment))
+        let replay = try MeetingStreamingProtectedWordTail.finalizingProtectedTranscript(result,
+            attemptID: attempt, policy: .standard, speakerNameFormat: "Speaker %lld",
+            epochForSegment: { _ in epoch })
+        XCTAssertEqual(replay.segments, result.segments)
+        XCTAssertEqual(replay.speakers, result.speakers)
+    }
+
+    func testCompleteReadingAssignmentDoesNotCreateParticipantsForPunctuation() throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0), attempt = UUID()
+        let units: [MeetingFinalTextUnit] = [
+            .init(id: "punctuation", trackID: epoch.trackID, analysisEpochID: epoch, precision: .word,
+                  text: "...", analysisStart: 0, analysisEnd: 1, speaker: .unassigned, analysisSpanIDs: [])]
+        let source = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: attempt, epoch: epoch,
+            offset: 0, duration: 1, units: units)
+        let result = try MeetingStreamingProtectedWordTail.finalizingProtectedTranscript(source,
+            attemptID: attempt, policy: .standard, speakerNameFormat: "Speaker %lld",
+            epochForSegment: { _ in epoch })
+        XCTAssertTrue(result.speakers.isEmpty)
+        XCTAssertEqual(result.segments, source.segments)
     }
 
     func testPCMWindowUsesExistingIdentityAndOffsetWithoutCreatingAudioManifest() throws {
