@@ -38,7 +38,12 @@ def read(path):
 def save(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    temporary = path.with_name(path.name + ".tmp-" + uuid.uuid4().hex)
+    try:
+        temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def git(root, *args):
@@ -273,8 +278,11 @@ def native(root, output, scope, ui_class):
                 device = next(x["identifier"] for x in inventory["devicetypes"] if x["name"] == kind)
                 runtime = next(x["identifier"] for x in inventory["runtimes"] if x["name"] == "iOS 27.0" and x["isAvailable"])
                 name = "coverage-" + uuid.uuid4().hex[:8]
+                record = {"name": name, "type": device, "runtime": runtime}
+                record_path = work / f"device-{index}.json"
+                save(record_path, record)
                 udid = command(["xcrun", "simctl", "create", name, device, runtime]).stdout.strip()
-                save(work / f"device-{index}.json", {"udid": udid, "name": name, "type": device, "runtime": runtime})
+                save(record_path, {**record, "udid": udid})
                 destination = "platform=iOS Simulator,id=" + udid
             bundle = work / f"tests-{index}.xcresult"
             required_classes = {ui_class} | (changed_classes if index == 0 else set())
@@ -442,16 +450,23 @@ def verify(root, output, force_all=False):
 
 def cleanup(root, output):
     output.relative_to(root)
-    records = [read(path) for path in output.glob("ios/run-*/device-*.json")]
+    records = [(path, read(path)) for path in output.glob("ios/run-*/device-*.json")]
     if not records:
         return 0
     inventory = json.loads(command(["xcrun", "simctl", "list", "--json"]).stdout)
     devices = {device["udid"]: (runtime, device) for runtime, items in inventory["devices"].items() for device in items}
     removed = set()
-    for record in records:
+    for path, record in records:
         name = record.get("name", "")
         if not re.fullmatch(r"coverage-[0-9a-f]{8}", name):
             raise ValueError("Missing simulator ownership proof")
+        if "udid" not in record:
+            matches = [device for runtime, device in devices.values() if device["name"] == name and
+                       runtime == record["runtime"] and device["deviceTypeIdentifier"] == record["type"]]
+            if len(matches) != 1:
+                raise ValueError("Interrupted simulator creation needs reconciliation")
+            record["udid"] = matches[0]["udid"]
+            save(path, record)
         current = devices.get(record["udid"])
         if current is None:
             continue

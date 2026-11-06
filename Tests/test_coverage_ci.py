@@ -56,6 +56,14 @@ class CoverageProducerTests(unittest.TestCase):
         with patch.object(CI, "command", return_value=completed(" abc\n")):
             self.assertEqual(CI.git(self.root, "rev-parse", "HEAD"), "abc")
 
+    def test_interrupted_save_preserves_previous_ownership_record(self):
+        path = self.out / "device.json"
+        CI.save(path, {"name": "coverage-1234abcd"})
+        with patch.object(Path, "replace", side_effect=InterruptedError("interrupted write")), self.assertRaises(InterruptedError):
+            CI.save(path, {"name": "coverage-1234abcd", "udid": "owned"})
+        self.assertEqual(CI.read(path), {"name": "coverage-1234abcd"})
+        self.assertEqual(list(self.out.glob("*.tmp-*")), [])
+
     def test_compiler_lines_and_paths_do_not_include_external_or_test_code(self):
         data = archive(self.root)
         data[str(self.root.parent / "external.swift")] = [dict(line=1, isExecutable=True, executionCount=99)]
@@ -311,6 +319,39 @@ class CoverageProducerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 CI.cleanup(self.root, self.root.parent)
         run.assert_not_called()
+
+    def test_interrupted_simulator_creation_is_reconciled_from_durable_intent(self):
+        devices = []
+        def tool(argv, **kwargs):
+            if argv[:3] == ["xcrun", "simctl", "list"]:
+                return completed(json.dumps(dict(devicetypes=[dict(name="iPhone 17", identifier="phone")],
+                    runtimes=[dict(name="iOS 27.0", identifier="runtime", isAvailable=True)], devices={"runtime": devices})))
+            if argv[:3] == ["xcrun", "simctl", "create"]:
+                devices.append(dict(udid="owned", name=argv[3], deviceTypeIdentifier="phone", state="Shutdown"))
+                raise KeyboardInterrupt()
+            if argv[:3] == ["xcrun", "simctl", "delete"]:
+                self.assertEqual(argv[3], "owned")
+                devices.clear()
+            return completed()
+        with patch.object(CI, "command", side_effect=tool), patch.object(CI, "git", return_value="head"), patch.object(CI, "changed_ui_classes", return_value=set()), patch.object(CI, "configure_run", return_value=(self.out / "coverage.xctestrun", {"App.app"})):
+            with self.assertRaises(KeyboardInterrupt):
+                CI.native(self.root, self.out, "ios", "Smoke")
+            path = next(self.out.glob("ios/run-*/device-0.json"))
+            self.assertNotIn("udid", CI.read(path))
+            self.assertEqual(CI.cleanup(self.root, self.out), 0)
+            self.assertEqual(CI.read(path)["udid"], "owned")
+        self.assertEqual(devices, [])
+
+    def test_uncertain_creation_retains_intent_without_deleting_by_guess(self):
+        path = self.out / "ios/run-fixture/device-0.json"
+        record = dict(name="coverage-1234abcd", type="phone", runtime="runtime")
+        CI.save(path, record)
+        device = dict(udid="one", name=record["name"], deviceTypeIdentifier="phone", state="Shutdown")
+        for devices in [[], [device, {**device, "udid": "two"}]]:
+            with patch.object(CI, "command", return_value=completed(json.dumps(dict(devices={"runtime": devices})))) as run, self.assertRaisesRegex(ValueError, "needs reconciliation"):
+                CI.cleanup(self.root, self.out)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(CI.read(path), record)
 
     def test_app_coverage_uses_executable_path_and_cannot_accept_embedded_test_bundle(self):
         # Xcode's display name omits Debug even though the actual executable includes it.
