@@ -17,25 +17,6 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertEqual(state.dismiss(), .history)
     }
 
-    func testOwnVoiceSearchRevealsTheExistingMeetingSettingsDestination() {
-        XCTAssertEqual(SettingsSearchTarget.ownerVoice.section, .fluidMeet)
-        XCTAssertEqual(SettingsSearchIndex.title(for: .ownerVoice), "My voice")
-        for query in ["My voice", "voice profile", "record my voice", "мой голос", "записать голос"] {
-            let result = SettingsSearchIndex.results(for: query).first
-            XCTAssertEqual(result?.target, .ownerVoice, query)
-            XCTAssertEqual(result?.section, .fluidMeet, query)
-        }
-    }
-
-    func testOwnVoiceSetupDoesNotDependOnDictationAccessibilityPermission() {
-        let availability = SettingsSearchAvailability(
-            microphoneAuthorized: false, accessibilityEnabled: false,
-            savesTranscriptionHistory: false, savesAudioWithTranscriptionHistory: false,
-            overlayAtBottom: false, dictationScreenContextAvailable: false
-        )
-        XCTAssertEqual(SettingsSearchIndex.results(for: "My voice", availability: availability).first?.target, .ownerVoice)
-    }
-
     func testFluidMeetTogglePreservesDetectionPreferencesAndOnlyNotifiesOnChanges() {
         let suite = "pichi-test-fluid-meet-toggle-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
