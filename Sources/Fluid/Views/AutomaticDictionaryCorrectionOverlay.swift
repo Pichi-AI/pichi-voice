@@ -41,7 +41,7 @@ final class DictionaryCorrectionOverlayController {
     }
 
     /// Hide the independent panel synchronously without cancelling its admitted recorder.
-    private func concealPrivatePresentation() {
+    func concealPrivatePresentation() {
         generation &+= 1
         notices.removeAll()
         let wasSavedCorrection = session?.isSavedCorrection == true

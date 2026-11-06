@@ -5383,6 +5383,7 @@ extension DictationE2ETests {
 
     func testCorrectionOverlayQueuesSecondAndThirdSuggestions() async {
         let controller = DictionaryCorrectionOverlayController()
+        defer { controller.concealPrivatePresentation() }
         let first = AutomaticDictionaryCorrectionCandidate(heardText: "Alhpa", correctedText: "Alpha")
         let second = AutomaticDictionaryCorrectionCandidate(heardText: "Btea", correctedText: "Beta")
         let third = AutomaticDictionaryCorrectionCandidate(heardText: "Gmma", correctedText: "Gamma")
@@ -5413,6 +5414,7 @@ extension DictationE2ETests {
 
     func testCorrectionOverlayReplacesQueuedIntermediateSpellingForSameOccurrence() async {
         let controller = DictionaryCorrectionOverlayController()
+        defer { controller.concealPrivatePresentation() }
         let first = AutomaticDictionaryCorrectionCandidate(heardText: "Alhpa", correctedText: "Alpha")
         var intermediate = AutomaticDictionaryCorrectionCandidate(heardText: "Btea", correctedText: "Beto")
         intermediate.observationID = "synthetic-recording:12:4"
@@ -5429,6 +5431,8 @@ extension DictationE2ETests {
         controller.show(candidate: first) { _ in }
         controller.show(candidate: intermediate) { _ in }
         controller.show(candidate: final) { _ in }
+        controller.withdrawSuggestion(final.id)
+        controller.show(candidate: final) { _ in }
         controller.dismiss()
         await fulfillment(of: [finalShown], timeout: 2)
         XCTAssertEqual(shown, [first.id, final.id])
@@ -5438,6 +5442,8 @@ extension DictationE2ETests {
     }
 
     func testIdempotentAudioCorrectionStillAcknowledgesWithoutUndoingEarlierSample() async throws {
+        let controller = DictionaryCorrectionOverlayController()
+        defer { controller.concealPrivatePresentation() }
         let settings = SettingsStore.shared
         let oldEntries = settings.customDictionaryEntries
         let oldEnabled = settings.automaticDictionaryLearningEnabled
@@ -5453,12 +5459,23 @@ extension DictationE2ETests {
             sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
         let acknowledged = expectation(description: "Both distinct correction events acknowledged")
         acknowledged.expectedFulfillmentCount = 2
+        let repeatedNoticeShown = expectation(description: "Second worker completion reaches the popup")
+        controller.onPresentation = { session in
+            if session.savedCorrection?.wasAlreadyPresent == true {
+                XCTAssertEqual(session.successTitle, "Already in Dictionary")
+                repeatedNoticeShown.fulfill()
+            }
+        }
         var receipts: [DictionaryAudioLearningService.SavedCorrection] = []
         for _ in 0..<2 {
             XCTAssertTrue(worker.learnCorrection(candidate: .init(heardText: "qeue", correctedText: "QueueE2EЁжик"),
-                evidence: evidence, isValid: { true }, didSave: { receipts.append($0); acknowledged.fulfill() }))
+                evidence: evidence, isValid: { true }, didSave: {
+                    receipts.append($0); controller.showSavedCorrection($0); acknowledged.fulfill()
+                }))
         }
         await fulfillment(of: [acknowledged], timeout: 5)
+        controller.dismiss()
+        await fulfillment(of: [repeatedNoticeShown], timeout: 2)
         XCTAssertEqual(receipts.count, 2)
         if receipts.count == 2 {
             XCTAssertFalse(receipts[0].wasAlreadyPresent)
