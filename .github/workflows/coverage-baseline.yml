@@ -12,7 +12,7 @@ defaults:
     shell: bash
 
 concurrency:
-  group: coverage-baseline-${{ github.ref }}
+  group: coverage-baseline-${{ github.run_id }}
   cancel-in-progress: false
 
 env:
