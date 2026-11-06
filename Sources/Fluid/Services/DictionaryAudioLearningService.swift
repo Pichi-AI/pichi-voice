@@ -291,6 +291,7 @@ final class DictionaryAudioLearningService {
                 self.scheduleExpiry()
             }
             guard request.isCurrentBeforePreparation(), request.isValid(), request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
+            var preparedRevision: PronunciationDictionaryStore.Revision?
             do {
                 guard let evidence = try await request.prepare(), !evidence.samples.isEmpty, evidence.samples.count <= 238_080 else { return }
                 try Task.checkCancellation()
@@ -303,6 +304,7 @@ final class DictionaryAudioLearningService {
                     guard request.isValid() else { return }
                 }
                 let revision = await self.store.revision(for: request.entry.id)
+                preparedRevision = revision
                 let capture = try await self.extract(evidence)
                 try Task.checkCancellation()
                 guard request.expiresAt > Date(), (request.publishTarget == nil ? self.isCurrent(request.entry) : request.isCurrentBeforePreparation()), request.isValid(), request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
@@ -350,6 +352,15 @@ final class DictionaryAudioLearningService {
                 )
             } catch is CancellationError {
                 retry = Task.isCancelled && request.expiresAt > Date()
+            } catch PronunciationDictionaryStoreError.staleEvidence {
+                // Removing another example changes this word's store revision.
+                // Retry the still-admitted event with a fresh snapshot; renamed,
+                // removed or concealed targets remain rejected by their guards.
+                if let preparedRevision, request.expiresAt > Date(), request.isValid(),
+                   request.isCurrentBeforePreparation(), request.pronunciationGeneration == DictionaryMatcherExperiment.generation {
+                    let currentRevision = await self.store.revision(for: request.entry.id)
+                    retry = currentRevision != preparedRevision
+                }
             } catch {
                 DebugLogger.shared.warning(
                     "Original pronunciation evidence was not saved: \(error.localizedDescription)",
