@@ -801,6 +801,10 @@ final class MobileNavigationUITests: XCTestCase {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Synthetic saved-history launch regression requires an owned simulator")
         #else
+        // Without the fixture this test cannot tell a missing file from a list that failed to load.
+        guard ProcessInfo.processInfo.environment["PICHI_NAVIGATION_FIXTURE_STAGED"] == "1" else {
+            throw XCTSkip("Stage NavigationMeeting.json and set TEST_RUNNER_PICHI_NAVIGATION_FIXTURE_STAGED=1")
+        }
         let rowID = "history.session.DDD86147-F0B9-4B13-88B5-099B1E0D8BA5"
         let launchArguments = app.launchArguments
         for appearance in ["light", "dark"] {
@@ -1228,6 +1232,7 @@ final class MobileNavigationUITests: XCTestCase {
 
     func testProtectedTranscriptExportOpensNativeShareSheetInBothLanguages() throws {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9016"
+        var fixtureSeen = false
         for (language, appearance, meetingsTitle) in [("en", "light", "Recordings"), ("ru", "dark", "Записи")] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
@@ -1238,7 +1243,7 @@ final class MobileNavigationUITests: XCTestCase {
             openNavigation("meetings", title: meetingsTitle)
             capture("protected-export-\(language)-history")
             let meeting = app.buttons["history.session.\(fixtureID)"]
-            XCTAssertTrue(meeting.waitForExistence(timeout: 5), "Stage the approved protected synthetic fixture")
+            try requireFixture(meeting, timeout: 5, seen: &fixtureSeen, "Stage the approved protected synthetic fixture")
             meeting.tap()
             let more = app.buttons["transcript.more"]
             XCTAssertTrue(more.waitForExistence(timeout: 5))
@@ -1587,6 +1592,7 @@ final class MobileNavigationUITests: XCTestCase {
         throw XCTSkip("Legacy participant fixtures are simulator-only")
         #else
         let fixtureID = "8EEC0000-2026-4000-8000-000000000021"
+        var fixtureSeen = false
         for (language, appearance, meetings) in [
             ("en", "light", "Recordings"),
             ("ru", "dark", "Записи")
@@ -1596,7 +1602,7 @@ final class MobileNavigationUITests: XCTestCase {
                 app.launch()
                 openNavigation("meetings", title: meetings)
                 let meeting = app.buttons["history.session.\(fixtureID)"]
-                XCTAssertTrue(meeting.waitForExistence(timeout: 5), "Stage the synthetic legacy participant fixture")
+                try requireFixture(meeting, timeout: 5, seen: &fixtureSeen, "Stage the synthetic legacy participant fixture")
                 meeting.tap()
                 XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
                 let firstCaption = app.staticTexts["Участник 2"].firstMatch
@@ -1766,6 +1772,7 @@ final class MobileNavigationUITests: XCTestCase {
         throw XCTSkip("Synthetic saved-meeting navigation review is simulator-only")
         #else
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9025"
+        var fixtureSeen = false
         let lastID = "00000000-0000-0000-0000-202610210105"
         for (language, appearance, meetings) in [("en", "light", "Recordings"), ("ru", "dark", "Записи")] {
             app.terminate()
@@ -1774,7 +1781,7 @@ final class MobileNavigationUITests: XCTestCase {
             capture("navigation-surface-\(language)-ready")
             openNavigation("meetings", title: meetings)
             let meeting = app.buttons["history.session.\(fixtureID)"]
-            XCTAssertTrue(meeting.waitForExistence(timeout: 10))
+            try requireFixture(meeting, timeout: 10, seen: &fixtureSeen, "Stage ParticipantCorrectionMeeting.json in the simulator store")
             meeting.tap()
             let scroll = app.scrollViews["meeting.transcript"]
             XCTAssertTrue(scroll.waitForExistence(timeout: 10))
@@ -1966,6 +1973,7 @@ final class MobileNavigationUITests: XCTestCase {
         throw XCTSkip("Synthetic address presentation is verified only in owned simulators")
         #else
         let fixtureID = "A02B2152-C9AF-4E50-88A5-BE1B97120210"
+        var fixtureSeen = false
         for (language, appearance, meetingsTitle, expected) in [
             ("en", "light", "Recordings", "1 Example Street, Example City"),
             ("ru", "dark", "Записи", "ул. Примерная, 1, Примерск"),
@@ -1979,9 +1987,7 @@ final class MobileNavigationUITests: XCTestCase {
             capture("location-\(language)-\(appearance)-launched")
             openNavigation("meetings", title: meetingsTitle)
             let meeting = app.buttons["history.session.\(fixtureID)"]
-            guard meeting.waitForExistence(timeout: 10) else {
-                throw XCTSkip("Stage LocationMeeting.json in the owned simulator")
-            }
+            try requireFixture(meeting, timeout: 10, seen: &fixtureSeen, "Stage LocationMeeting.json in the owned simulator")
             // The place names the recording; the start is on the row's second line.
             XCTAssertTrue(meeting.label.contains(expected) && !meeting.label.contains("\(expected) · "), meeting.label)
             capture("location-\(language)-\(appearance)-history")
@@ -2138,6 +2144,17 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertLessThanOrEqual(name.frame.height, 60,
                 "Participant names must remain compact labels rather than tall, narrow word fragments",
                 file: file, line: line)
+        }
+    }
+
+    /// Skips only while the fixture has never been seen. After that a missing row is a real failure.
+    private func requireFixture(_ row: XCUIElement, timeout: TimeInterval, seen: inout Bool, _ stage: String) throws {
+        if row.waitForExistence(timeout: timeout) {
+            seen = true
+        } else if seen {
+            XCTFail("A staged row disappeared after it was seen")
+        } else {
+            throw XCTSkip(stage)
         }
     }
 
