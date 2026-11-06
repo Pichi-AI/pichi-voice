@@ -22,10 +22,12 @@ The result has two independent axes:
 
 | Axis | Values | Meaning |
 | --- | --- | --- |
-| Call | `indeterminate`, `ringing`, `inCall`, `onHold`, `ended` | Positive phase evidence from the selected call surface |
+| Call | `indeterminate`, `prejoin`, `ringing`, `inCall`, `onHold`, `ended` | Positive phase evidence from the selected call surface |
 | Microphone | `indeterminate`, `muted`, `unmuted` | Positive evidence about the local user's transmission control |
 
 `indeterminate` is an internal absence of evidence. It is never a new user-visible microphone state and never resets the host's remembered state. Pichi starts an observation attempt unmuted by product policy. Explicit mute/unmute transitions latch until a later explicit transition. Ringing, hold and end may close transmission admission without pretending the user clicked mute.
+
+`prejoin` prevents a preview/device-test surface from offering a connected-call recording. It does not itself publish microphone mute. The host also defers window/document binding until one connected surface is identified, because the preview and actual call can use different windows. This preserves the default-on policy without pinning an obsolete preview.
 
 Keyboard down alone must never produce unmute. A declared PTT chord only associates a subsequent visible unmute with a temporary grant. Key-up closes that grant using acquisition time. Focus/listener loss closes only a known temporary grant, preserving ordinary persistent unmute. The current host default for this loss policy is an implementation choice awaiting separate product confirmation.
 
@@ -50,7 +52,7 @@ The authoritative decoder and validation are in [CommunicationObservation.swift]
 | `nativeBundleIdentifiers` | Exact native owner identities |
 | `browserBundleIdentifiers` | Browser identities; host also recognizes their `.app.` PWA namespace and still requires a matching URL |
 | `urlRules` | Host, optional subdomains and segment-bounded allowed/excluded path prefixes; credentials rejected |
-| `callRules` | `connected`, `ended`, `ringing`, `held` selector arrays |
+| `callRules` | `connected`, `ended`, `ringing`, `held`, `prejoin` selector arrays; omitted `prejoin` defaults empty |
 | `microphoneRules` | `muted` and `unmuted` selector arrays |
 | Selector | `role` (default AXButton), `identifier`, `labels`, `ancestorIdentifier`, `expectedValue`, `allowsShortcutSuffix` |
 | `pushToTalkChords` | macOS physical key code plus exact modifiers; no remapped key assumption without evidence |
@@ -59,11 +61,17 @@ The authoritative decoder and validation are in [CommunicationObservation.swift]
 
 `allowsShortcutSuffix` permits a tightly constrained keyboard shortcut suffix such as `(Cmd+Shift+M)`. It does not permit arbitrary parenthetical participant names. Conflicting phase/self-mic controls yield indeterminate evidence. The descriptor data is limited to 64 KiB; the validator also bounds modules, rules, selectors, labels and chord counts. Programmatic construction must still call validation.
 
+The native host normalizes finite numeric AX values to strings. Checkbox/switch values therefore reach `expectedValue` as `"0"`, `"1"` or `"2"` rather than disappearing because they were not NSString. Structured values and oversized strings are rejected. A mixed value does not prove either mic state unless the module explicitly declares its semantics.
+
+Actual client variants may need different selectors. The Teams module selects its observed consumer-site contract separately from enterprise/native rules inside the module. Common scheduling and capture do not switch on that product variant. Confirm identifiers and self-toolbar ancestry in the real client; translated labels copied from documentation alone do not establish a working detector.
+
 ## Host lifecycle and cost
 
 `MeetingCallObservationService` owns discovery attachment, active recording tokens, one adaptive scheduler and one passive PTT listener. Discovery ticks every 2 seconds. Active microphone observation ticks every 250 ms; the shared AX probe limits rediscovery to once per second, validates cached ancestry and bounds native requests. The Zoom/Meet adapter retains its existing small image capture path. These are configured budgets, not measured CPU or transition latency guarantees.
 
 Stop closes delivery before joining the adapter. Old callbacks cannot affect a later recording. Each recording pins an immutable registry snapshot; active and draining observers share a capacity bound. Modules must not add timers, permissions, audio devices, logging of user text, network activity or unowned background processes.
+
+Native host registrations can supply a bounded native call-status adapter for hidden toolbars. Zoom reuses its existing self-tile reader, restricted to its real meeting window identifier. Supplementary evidence fills a missing phase only; it cannot override an explicit prejoin/end/hold or a conflicting phase result, nor use a different window. This host adapter is separate from the portable data-only SDK. No additional screenshot or polling loop is introduced.
 
 ## Verification
 
