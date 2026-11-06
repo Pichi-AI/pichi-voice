@@ -119,15 +119,15 @@ nonisolated struct DictionaryCorrectionReplacementPlan {
         self.text = result
     }
 
-    /// Editors differ in which AX write attribute they expose. A failed selected
-    /// text write may fall back to the full planned value only while the exact
-    /// original snapshot/target is still current. Never retry an uncertain write.
+    /// Editors differ in which AX write attribute they expose. Use the full
+    /// planned value only when selected-text writing is unavailable. A failed
+    /// attempted write may be uncertain even while AX still returns old text.
     @MainActor
     static func dispatchReplacement(isCurrent: () -> Bool,
                                     writeSelectedText: (() -> Bool)?,
                                     writeValue: (() -> Bool)?) -> Bool {
         guard isCurrent() else { return false }
-        if let writeSelectedText, writeSelectedText() { return true }
+        if let writeSelectedText { return writeSelectedText() }
         guard isCurrent(), let writeValue else { return false }
         return writeValue()
     }

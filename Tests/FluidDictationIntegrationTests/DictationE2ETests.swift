@@ -5683,8 +5683,13 @@ extension DictationE2ETests {
         XCTAssertTrue(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { current },
             writeSelectedText: { true }, writeValue: { writes += 1; return true }))
         XCTAssertEqual(writes, 0)
-        XCTAssertTrue(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { current },
+        // A timeout can leave cached AX text unchanged. An attempted selected
+        // write must never be followed by a second full-value dispatch.
+        XCTAssertFalse(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { current },
             writeSelectedText: { false }, writeValue: { writes += 1; return true }))
+        XCTAssertEqual(writes, 0)
+        XCTAssertTrue(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { current },
+            writeSelectedText: nil, writeValue: { writes += 1; return true }))
         XCTAssertEqual(writes, 1)
         XCTAssertFalse(DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: { false },
             writeSelectedText: { XCTFail("Target moved"); return true }, writeValue: { XCTFail("Target moved"); return true }))
