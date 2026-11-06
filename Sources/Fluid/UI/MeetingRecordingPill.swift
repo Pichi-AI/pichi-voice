@@ -403,8 +403,11 @@ struct MeetingRecordingPillContent: View {
     private var compactPill: some View {
         HStack(spacing: 7) {
             if self.mutePresentation.isMonitored {
-                MeetingMicrophoneMuteIndicator(state: self.coordinator.microphoneMuteState)
-                    .frame(width: 20, height: 20)
+                MeetingMicrophoneMuteIndicator(state: self.coordinator.microphoneMuteState, onToggle: {
+                    let sessionID = self.coordinator.activeSession?.id
+                    Task { await self.coordinator.toggleMicrophoneRecording(expectedSessionID: sessionID) }
+                })
+                    .disabled(self.isStopping || self.coordinator.isMicrophoneControlPending)
             } else {
                 MeetingRecordingLevelBars(level: self.microphoneLevel, animated: !self.reduceMotion)
                     .frame(width: 20, height: 11)

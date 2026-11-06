@@ -120,6 +120,18 @@ final class MeetingSessionCoordinator: ObservableObject {
     @Published private(set) var trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth] = [:]
     #if os(macOS)
     @Published private(set) var microphoneMuteState: MeetingMicrophoneMuteState = .notApplicable
+    @Published private(set) var isMicrophoneControlPending = false
+
+    /// Used by both native microphone buttons. The capture owner applies admission before
+    /// publishing state; a retired view cannot change the next recording's local intent.
+    func toggleMicrophoneRecording(expectedSessionID: MeetingSessionID?) async {
+        guard !self.isMicrophoneControlPending, self.isRecording,
+              let session = self.activeSession, session.id == expectedSessionID,
+              session.mode == .onlineCall else { return }
+        self.isMicrophoneControlPending = true
+        defer { self.isMicrophoneControlPending = false }
+        try? await self.capture.setMicrophoneManuallyMuted(self.microphoneMuteState != .manuallyMuted, sessionID: session.id)
+    }
     #endif
     @Published private(set) var liveTranscript: MeetingLiveTranscriptSnapshot = .empty
     @Published private(set) var pendingSpeech: MeetingPendingSpeechSnapshot = .empty

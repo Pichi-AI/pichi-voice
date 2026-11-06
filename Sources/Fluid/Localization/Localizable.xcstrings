@@ -67096,6 +67096,91 @@
           }
         }
       }
+    },
+    "Enable microphone recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable microphone recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включить запись микрофона"
+          }
+        }
+      }
+    },
+    "Pause microphone recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause microphone recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приостановить запись микрофона"
+          }
+        }
+      }
+    },
+    "Microphone recording paused manually": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone recording paused manually"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись микрофона выключена вручную"
+          }
+        }
+      }
+    },
+    "Pause recording your voice in Pichi. Other participants continue to be recorded.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause recording your voice in Pichi. Other participants continue to be recorded."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приостановить запись своего голоса в Pichi. Запись других участников продолжится."
+          }
+        }
+      }
+    },
+    "Your voice stays paused until you enable it here. Meeting unmute does not resume it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your voice stays paused until you enable it here. Meeting unmute does not resume it."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваш голос не записывается, пока вы не включите его здесь. Включение микрофона во встрече не возобновит запись."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

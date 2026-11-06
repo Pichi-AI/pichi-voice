@@ -3,6 +3,32 @@ import XCTest
 @testable import FluidVoice_Debug
 
 final class MeetingMicrophoneMuteMonitorTests: XCTestCase {
+    func testZoomOwnMenuUsesExactCommandIdentityAndEnabledAction() {
+        typealias Action = MeetingZoomMuteStatusObserver.AudioMenuAction
+        func action(_ title: String, id: String = "onMuteAudio:", role: String = "AXMenuItem", enabled: Bool = true) -> Action {
+            .init(role: role, identifier: id, title: title, enabled: enabled)
+        }
+        XCTAssertEqual(MeetingZoomMuteStatusObserver.ownAudioMenuState([action("Mute audio")]), .unmuted)
+        XCTAssertEqual(MeetingZoomMuteStatusObserver.ownAudioMenuState([action("Unmute audio")]), .muted)
+        for actions in [[], [action("Mute all", id: "onMuteAll:")], [action("Unmute audio", enabled: false)],
+                        [action("Unmute audio", role: "AXStaticText")], [action("Peer, Computer audio muted")],
+                        [action("Unmute audio", id: "peer")], [action("Mute audio"), action("Unmute audio")]] {
+            XCTAssertNil(MeetingZoomMuteStatusObserver.ownAudioMenuState(actions))
+        }
+    }
+
+    func testManualMutePresentationExplainsLocalIntentInBothLanguages() {
+        let manual = MeetingMicrophoneMutePresentation(state: .manuallyMuted)
+        XCTAssertTrue(manual.blocksMicrophone)
+        XCTAssertEqual(manual.symbolName, "mic.slash.fill")
+        XCTAssertEqual(manual.actionTitle(language: .english), "Enable microphone recording")
+        XCTAssertEqual(manual.title(language: .russian), "Запись микрофона выключена вручную")
+        XCTAssertEqual(manual.actionTitle(language: .russian), "Включить запись микрофона")
+        let meeting = MeetingMicrophoneMutePresentation(state: .muted)
+        XCTAssertEqual(meeting.actionTitle(language: .english), "Pause microphone recording")
+        XCTAssertNotEqual(meeting.title(language: .russian), manual.title(language: .russian))
+    }
+
     func testOverlappingSourceWindowsRequireUniqueExactTitle() {
         let frame = CGRect(x: 0, y: 25, width: 1_400, height: 900)
         let home = MeetingMuteControlLocator.WindowDescriptor(windowID: 10, processID: 42,

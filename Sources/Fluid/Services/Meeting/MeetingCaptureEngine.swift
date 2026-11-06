@@ -23,6 +23,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         var comparisonProbe: MeetingAudioComparisonProbe?
         var privacyGate: MeetingMicrophonePrivacyGate?
         var muteMonitor: MeetingMicrophoneMuteMonitor?
+        var microphoneControl: MeetingMicrophoneRecordingControl?
     }
 
     private var activeCapture: ActiveCapture?
@@ -89,29 +90,19 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         let privacyGate = configuration.mode == .onlineCall
             ? MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions)) : nil
         let muteMonitor: MeetingMicrophoneMuteMonitor?
-        if let privacyGate {
+        let microphoneControl = privacyGate.map { gate in
+            MeetingMicrophoneRecordingControl(gate: gate) { eventHandler(.microphoneMuteStateChanged($0)) }
+        }
+        if privacyGate != nil {
             // Admission follows remembered transitions, not the availability of a toolbar frame.
-            privacyGate.setAdmitted(true, observedAtHostTime: mach_absolute_time())
             var application = configuration.effectiveApplicationAudioScope == .selectedApplication
                 ? configuration.application : nil
             // Audio follows the selected process. Discovery must find its current unique call,
             // rather than requiring a stale home-window hint saved during setup.
             application?.windowID = nil
             muteMonitor = MeetingMicrophoneMuteMonitor(application: application) { observation in
-                let admitted = observation.state == .unmuted
-                if admitted, let earlierRelease = observation.unsafeStartHostTime,
-                   let resumedAt = observation.refinementUntilHostTime {
-                    privacyGate.refineHistoricalRelease(unsafeStartHostTime: earlierRelease,
-                        resumedAtHostTime: resumedAt)
-                }
-                privacyGate.setAdmitted(
-                    admitted,
-                    observedAtHostTime: observation.observedAtHostTime,
-                    unsafeStartHostTime: admitted ? nil : observation.unsafeStartHostTime ?? observation.observedAtHostTime
-                )
-                eventHandler(.microphoneMuteStateChanged(observation.state))
+                microphoneControl?.observe(observation)
             }
-            eventHandler(.microphoneMuteStateChanged(.unmuted))
             muteMonitor?.start()
         } else {
             muteMonitor = nil
@@ -279,7 +270,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 streamingTee: streamingTee,
                 comparisonProbe: comparisonProbe,
                 privacyGate: privacyGate,
-                muteMonitor: muteMonitor
+                muteMonitor: muteMonitor,
+                microphoneControl: microphoneControl
             )
             // Re-snapshot: a VPIO commit during start() promotes provenance on the writer's own track.
             let settledTracks = await withTaskGroup(of: MeetingAudioTrack.self, returning: [MeetingAudioTrack].self) { group in
@@ -298,6 +290,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 captureScope: runtime.captureScope
             )
         } catch {
+            microphoneControl?.finish()
             privacyGate?.close()
             await muteMonitor?.stop()
             await privacyGate?.stop()
@@ -309,6 +302,13 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             if let comparisonProbe { await comparisonProbe.stop() }
             throw error
         }
+    }
+
+    func setMicrophoneManuallyMuted(_ muted: Bool, sessionID: MeetingSessionID) async throws {
+        guard let active = self.activeCapture, self.stopTask == nil else { throw MeetingCaptureError.noActiveCapture }
+        guard active.sessionID == sessionID else { throw MeetingCaptureError.wrongActiveSession }
+        guard let control = active.microphoneControl else { throw MeetingCaptureError.noActiveCapture }
+        control.setManuallyMuted(muted)
     }
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
@@ -325,6 +325,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         let task = Task<MeetingCaptureStopResult, Error> {
             // Freeze the last confirmed interval, then join approved delayed PCM while the
             // producing runtime and writers still exist. Uncertain tail audio is discarded.
+            activeCapture.microphoneControl?.finish()
             await activeCapture.muteMonitor?.stop()
             await activeCapture.privacyGate?.stop()
             #if DEBUG

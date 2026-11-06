@@ -7,6 +7,7 @@ struct MeetingRecordingCanvas: View {
     let liveTranscript: MeetingLiveTranscriptSnapshot
     var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
     var microphoneMuteState: MeetingMicrophoneMuteState = .notApplicable
+    var onToggleMicrophone: (() -> Void)? = nil
     let isStopping: Bool
     let onStop: () -> Void
 
@@ -134,7 +135,8 @@ struct MeetingRecordingCanvas: View {
         MeetingTrackHealthRow(
             title: PichiLocalization.text("Microphone"), systemImage: "mic",
             health: self.trackHealth[.microphone] ?? .waiting,
-            microphoneMuteState: self.session.mode == .onlineCall ? self.microphoneMuteState : .notApplicable
+            microphoneMuteState: self.session.mode == .onlineCall ? self.microphoneMuteState : .notApplicable,
+            onToggleMicrophone: self.isStopping ? nil : self.onToggleMicrophone
         )
     }
 
@@ -1246,6 +1248,7 @@ private struct MeetingTrackHealthRow: View {
     let systemImage: String
     let health: MeetingTrackHealth
     var microphoneMuteState: MeetingMicrophoneMuteState = .notApplicable
+    var onToggleMicrophone: (() -> Void)? = nil
 
     @Environment(\.theme) private var theme
     @Environment(\.locale) private var locale
@@ -1264,7 +1267,7 @@ private struct MeetingTrackHealthRow: View {
     }
 
     private var statusColor: Color {
-        if self.microphoneMuteState == .muted { return self.theme.palette.readableText(Color(nsColor: .systemRed)) }
+        if self.mutePresentation.blocksMicrophone { return self.theme.palette.readableText(Color(nsColor: .systemRed)) }
         return switch self.health.status {
         case .healthy: self.theme.palette.success
         case .degraded, .unavailable: self.theme.palette.warning
@@ -1273,7 +1276,7 @@ private struct MeetingTrackHealthRow: View {
     }
 
     private var statusIcon: String {
-        if self.microphoneMuteState == .muted { return "lock.circle.fill" }
+        if self.mutePresentation.blocksMicrophone { return "lock.circle.fill" }
         return switch self.health.status {
         case .healthy: "checkmark.circle.fill"
         case .degraded, .unavailable: "exclamationmark.circle.fill"
@@ -1289,7 +1292,7 @@ private struct MeetingTrackHealthRow: View {
                     Text(self.title)
                 } icon: {
                     if self.mutePresentation.isMonitored {
-                        MeetingMicrophoneMuteIndicator(state: self.microphoneMuteState)
+                        MeetingMicrophoneMuteIndicator(state: self.microphoneMuteState, onToggle: self.onToggleMicrophone)
                     } else {
                         Image(systemName: self.systemImage)
                     }

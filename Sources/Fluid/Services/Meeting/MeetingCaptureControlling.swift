@@ -16,8 +16,19 @@ nonisolated protocol MeetingCaptureControlling: Sendable {
     ) async throws -> MeetingCaptureStartResult
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult
+    #if os(macOS)
+    func setMicrophoneManuallyMuted(_ muted: Bool, sessionID: MeetingSessionID) async throws
+    #endif
     func shutdownForTermination() async
 }
+
+#if os(macOS)
+nonisolated extension MeetingCaptureControlling {
+    func setMicrophoneManuallyMuted(_ muted: Bool, sessionID: MeetingSessionID) async throws {
+        throw MeetingCaptureError.noActiveCapture
+    }
+}
+#endif
 
 
 nonisolated enum MeetingCaptureError: LocalizedError {

@@ -716,6 +716,61 @@ extension MeetingAudioChunkSinkTests {
 /// Synthetic PCM crosses the actual quarantine and writer, including the writer's second
 /// admission check. No microphone, meeting application, model or shared preferences are used.
 final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
+    func testManualAndMeetingMuteExcludeRealWriterAndDiagnosticsThenResumeWithoutReplay() async throws {
+        let fixture = try Fixture(admissionPolicy: .latchedTransitions)
+        defer { fixture.removeDirectory() }
+        let clock = fixture.clock, gate = fixture.gate, writer = fixture.writer
+        let live = Observations()
+        let control = MeetingMicrophoneRecordingControl(gate: gate, hostTime: { clock.now() }, publish: { _ in })
+        func observe(_ state: MeetingMicrophoneMuteState, release: Double? = nil, resumed: Double? = nil) {
+            control.observe(.init(state: state, observedAtHostTime: clock.now(), generation: 1,
+                unsafeStartHostTime: release.map(Clock.ticks), refinementUntilHostTime: resumed.map(Clock.ticks)))
+        }
+        func offer(_ marker: Float, at time: Double) throws -> CMSampleBuffer {
+            let sample = try self.sample(marker: marker, at: time)
+            _ = gate.submit(sample, deliveryQueue: fixture.deliveryQueue) { sample in
+                guard gate.permitsReleasedSample(sample) else { return }
+                live.observe(sample)
+                writer.enqueue(sample)
+            }
+            return sample
+        }
+        clock.set(1_000.12)
+        _ = try offer(0.25, at: 1_000.1)
+        clock.set(1_001.2); gate.checkFreshnessAndDrain(); fixture.deliveryQueue.sync {}
+        clock.set(1_001.3); control.setManuallyMuted(true)
+        clock.set(1_001.52)
+        let denied = try offer(0.9, at: 1_001.5)
+        clock.set(1_001.6); observe(.unmuted)
+        clock.set(1_001.7); observe(.unmuted, release: 1_001.4, resumed: 1_001.6)
+        clock.set(1_001.82); _ = try offer(0.9, at: 1_001.8)
+        XCTAssertEqual(gate.statistics.retainedBuffers, 0, "Manual mute must not quarantine disabled speech for later replay")
+        clock.set(1_002); control.setManuallyMuted(false)
+        clock.set(1_002.12); _ = try offer(0.5, at: 1_002.1)
+        clock.set(1_003.2); gate.checkFreshnessAndDrain(); fixture.deliveryQueue.sync {}
+        XCTAssertFalse(gate.permitsReleasedSample(denied), "Unmute and PTT refinement cannot reopen a manually closed interval")
+        clock.set(1_003.3); observe(.muted)
+        clock.set(1_003.4); control.setManuallyMuted(true)
+        clock.set(1_003.5); control.setManuallyMuted(false)
+        clock.set(1_003.62); _ = try offer(0.9, at: 1_003.6)
+        clock.set(1_004); observe(.unmuted)
+        clock.set(1_004.12); _ = try offer(0.75, at: 1_004.1)
+        clock.set(1_005.3); gate.checkFreshnessAndDrain(); fixture.deliveryQueue.sync {}
+        control.finish()
+        control.setManuallyMuted(true)
+        await gate.stop()
+        let track = await writer.stop()
+        let samples = try self.readSamples(track, in: fixture.directory)
+        XCTAssertEqual(live.markers, [0.25, 0.5, 0.75])
+        XCTAssertEqual(fixture.observations.markers, [0.25, 0.5, 0.75])
+        XCTAssertTrue(samples.contains { abs($0 - 0.25) < 0.001 })
+        XCTAssertTrue(samples.contains { abs($0 - 0.5) < 0.001 })
+        XCTAssertTrue(samples.contains { abs($0 - 0.75) < 0.001 })
+        XCTAssertFalse(samples.contains { abs($0 - 0.9) < 0.001 })
+        XCTAssertEqual(gate.statistics.retainedBuffers, 0)
+        XCTAssertEqual(fixture.observations.writerFailures, 0)
+    }
+
     func testLatchedTransitionsKeepRecordingWithoutVisibleControlsAndExcludeMuteTail() async throws {
         let fixture = try Fixture(admissionPolicy: .latchedTransitions)
         defer { fixture.gate.close(); fixture.removeDirectory() }

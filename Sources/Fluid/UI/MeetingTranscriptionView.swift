@@ -462,6 +462,9 @@ struct MeetingTranscriptionView: View {
             state: self.canvasState,
             pendingSpeech: self.profileService.isPrivateDataVisible ? self.coordinator.pendingSpeech : .empty,
             microphoneMuteState: self.coordinator.microphoneMuteState,
+            onToggleMicrophone: self.coordinator.isMicrophoneControlPending ? nil : {
+                Task { await self.coordinator.toggleMicrophoneRecording(expectedSessionID: activeSessionID) }
+            },
             applications: self.applications,
             microphones: self.microphones,
             readiness: self.readiness,
@@ -1767,6 +1770,7 @@ struct MeetingTranscriptionCanvas: View {
     let state: MeetingTranscriptionCanvasState
     var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
     var microphoneMuteState: MeetingMicrophoneMuteState = .notApplicable
+    var onToggleMicrophone: (() -> Void)? = nil
     let applications: [MeetingApplicationOption]
     let microphones: [MeetingMicrophoneOption]
     let readiness: MeetingSetupReadiness
@@ -1866,6 +1870,7 @@ struct MeetingTranscriptionCanvas: View {
                         liveTranscript: liveTranscript,
                         pendingSpeech: self.pendingSpeech,
                         microphoneMuteState: self.microphoneMuteState,
+                        onToggleMicrophone: self.onToggleMicrophone,
                         isStopping: false,
                         onStop: self.onStop
                     )
