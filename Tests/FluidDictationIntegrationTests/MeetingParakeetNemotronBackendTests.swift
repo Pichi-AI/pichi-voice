@@ -3073,6 +3073,62 @@ private func XCTAssertAsyncThrowsError<T>(
 // Only native ASR/diarization and application resource participants are synthetic here.
 @MainActor
 extension MeetingParakeetNemotronBackendTests {
+    func testProtectedIntervalPublicationContinuesAfterGapsForBothSources() async throws {
+        let fixture = try self.onlinePipelineFixture(service: OnlinePipelineService(), runtime: OnlinePipelineRuntime())
+        fixture.publication.collectBatches = true
+        defer { fixture.publication.beforeApply = nil }
+        for track in fixture.session.audioTracks {
+            let timeline = try MeetingPCMSourceTimeline(originSeconds: 100)
+            try timeline.record(sourceStartSample: 0, frameCount: 16_000, presentationTime: 110)
+            try timeline.record(sourceStartSample: 16_000, frameCount: 16_000, presentationTime: 113)
+            fixture.attempt.sourceTimelines[track.id] = timeline
+        }
+        for track in fixture.session.audioTracks {
+            var first = MeetingPCMTranscriptBatch(segments: [])
+            first.sourceTrack = track
+            first.protectedSourceThroughSample = 16_000
+            fixture.publication.beforeApply = { batch in
+                XCTAssertEqual(batch.protectedSourceIntervals, [10..<11])
+                XCTAssertNil(batch.protectedSourceThroughSample)
+                XCTAssertEqual(try fixture.attempt.projectedBatch(first).protectedSourceIntervals, [10..<11],
+                               "A checkpoint cannot acknowledge its own source before publication joins")
+            }
+            try await fixture.attempt.publish(first)
+            fixture.publication.beforeApply = nil
+            XCTAssertTrue(try fixture.attempt.projectedBatch(first).protectedSourceIntervals.isEmpty)
+            var next = first
+            next.protectedSourceThroughSample = 32_000
+            XCTAssertEqual(try fixture.attempt.projectedBatch(next).protectedSourceIntervals, [13..<14])
+            try await fixture.attempt.publish(next)
+        }
+        XCTAssertEqual(fixture.publication.receivedBatches.count, 4, "Coverage-only empty ASR windows still reach the real publication boundary")
+        XCTAssertTrue(fixture.publication.receivedBatches.allSatisfy { $0.segments.isEmpty })
+        let encoded = String(decoding: try JSONEncoder().encode(fixture.publication.session), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("protectedSourceIntervals"), "Ephemeral source acknowledgement never becomes stored transcript data")
+    }
+
+    func testFailedProtectedIntervalCheckpointCanRetryTheSameMeasuredAudio() async throws {
+        let fixture = try self.onlinePipelineFixture(service: OnlinePipelineService(), runtime: OnlinePipelineRuntime())
+        fixture.publication.collectBatches = true
+        defer { fixture.publication.beforeApply = nil }
+        let track = fixture.session.audioTracks[0]
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: 0)
+        try timeline.record(sourceStartSample: 0, frameCount: 16_000, presentationTime: 0)
+        try timeline.record(sourceStartSample: 16_000, frameCount: 16_000, presentationTime: 4)
+        fixture.attempt.sourceTimelines[track.id] = timeline
+        var batch = MeetingPCMTranscriptBatch(segments: [])
+        batch.sourceTrack = track
+        batch.protectedSourceThroughSample = 32_000
+        fixture.publication.beforeApply = { _ in throw CancellationError() }
+        do { try await fixture.attempt.publish(batch); XCTFail("The synthetic checkpoint is cancelled") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        fixture.publication.beforeApply = nil
+        XCTAssertEqual(try fixture.attempt.projectedBatch(batch).protectedSourceIntervals, [0..<1, 4..<5])
+        try await fixture.attempt.publish(batch)
+        XCTAssertTrue(try fixture.attempt.projectedBatch(batch).protectedSourceIntervals.isEmpty)
+        XCTAssertEqual(fixture.publication.receivedBatches.count, 1)
+    }
+
     func testRetainedOnlineStreamingPlaybackPreservesItsPersistedClockOrigin() throws {
         let chunk = self.makePCMChunk(sequence: 0, start: 102, end: 108)
         let track = self.makeMicTrack(chunks: [chunk], eraStart: 0)
@@ -3417,8 +3473,12 @@ private final class OnlinePipelinePublication {
     var preview: [MeetingAudioTrackKind: MeetingLivePartial] = [:]
     var previewSources = Set<MeetingAudioTrackKind>()
     var persistentStore: MeetingSessionStore?
+    var beforeApply: ((MeetingPCMTranscriptBatch) throws -> Void)?
+    var collectBatches = false
+    var receivedBatches: [MeetingPCMTranscriptBatch] = []
     init(_ session: MeetingSession) { self.session = session }
     func apply(_ batch: MeetingPCMTranscriptBatch) async throws {
+        try self.beforeApply?(batch)
         var indices = Dictionary(uniqueKeysWithValues: session.transcriptSegments.enumerated().map { ($0.element.id, $0.offset) })
         for segment in batch.segments {
             if let index = indices[segment.id] { session.transcriptSegments[index] = segment }
@@ -3436,6 +3496,7 @@ private final class OnlinePipelinePublication {
         session.transcriptTimeDomain = .meetingRelative
         try session.validateTranscriptStructure()
         if let persistentStore { try await persistentStore.save(session) }
+        if self.collectBatches { self.receivedBatches.append(batch) }
     }
 }
 
