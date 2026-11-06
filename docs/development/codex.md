@@ -196,7 +196,7 @@ The bounded-context `qwen3.5:4b` adapter was measured at approximately 3.15 GiB 
 
 ## Test exceptions
 
-`Tests/quarantine.json` lists known failures, each with an owner, a reason and an expiry date. `Tests/skip-registry.json` gives every skipped test a reason and the layer that should run it. `scripts/dev/check-test-policy.py` runs in `check.sh`, so an expired quarantine fails the repository check. With `--skipped <list.json>` it also fails on a skip that is not registered.
+`Tests/quarantine.json` lists known failures, each with an owner, a reason and an expiry date at most 90 days away. An entry keeps its test out of the run. `Tests/skip-registry.json` gives every skipped test a reason and the layer that should run it. `scripts/dev/check-test-policy.py` runs in `check.sh`, so an expired entry fails the repository check. With `--results <map.json>` it compares a finished run with the registry in both directions: a skip without an entry fails, and so does an entry for a test that no longer exists.
 
 ## CI and cleanup
 

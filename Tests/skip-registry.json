@@ -213,6 +213,10 @@
    "layer": "L3-real-model",
    "reason": "Explicitly stage the approved Tiny groundtruth fixtures"
   },
+  "FluidDictationIntegrationTests/OverlayCaptionPresentationTests/testProcessingShimmerStopsAcrossEveryBottomSize()": {
+   "layer": "L1-visual",
+   "reason": "The overlay never reached the screen, so its animation stayed unverified"
+  },
   "FluidDictationIntegrationTests/ParakeetCompactModelDemoTests/testOptInNativeOnboardingAndSettingsReview()": {
    "layer": "L3-real-model",
    "reason": "Explicitly enable the native model review with an English test WAV"
@@ -262,7 +266,7 @@
    "reason": "Opt-in semantic regression using public synthetic text and an installed local model."
   },
   "FluidDictationIntegrationTests/PichiMeetingSummaryTests/testLiveUnansweredQuestionCannotBeResolvedByUnrelatedLaterStatusWhenEnabled()": {
-   "layer": "manual-private-data",
+   "layer": "L3-real-model",
    "reason": "Opt-in semantic regression using synthetic speech, never a private recording."
   },
   "FluidDictationIntegrationTests/PichiTextModelEvalTests/testRussianTextModelEvaluationWhenExplicitlyEnabled()": {
@@ -294,40 +298,40 @@
    "reason": "A valid Developer ID Application: signing identity is required for signed bundle fixtures."
   },
   "FluidDictationIntegrationTests/UpdateInstallationPipelineTests/testCancelledTaskBeforePreparationDoesNotTouchOriginalStageOrBackup()": {
-   "layer": "L4-signed-release",
-   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di"
+   "layer": "disabled-downstream",
+   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally disabled."
   },
   "FluidDictationIntegrationTests/UpdateInstallationPipelineTests/testDevelopmentCandidateIsRejectedAsReleaseButAcceptedAsRollbackAndRetained()": {
-   "layer": "L4-signed-release",
-   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di"
+   "layer": "disabled-downstream",
+   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally disabled."
   },
   "FluidDictationIntegrationTests/UpdateInstallationPipelineTests/testInstalledBuildChangedSinceApprovalRejectsPreparation()": {
-   "layer": "L4-signed-release",
-   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di"
+   "layer": "disabled-downstream",
+   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally disabled."
   },
   "FluidDictationIntegrationTests/UpdateInstallationPipelineTests/testInstalledVersionChangedSinceApprovalRejectsPreparation()": {
-   "layer": "L4-signed-release",
-   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di"
+   "layer": "disabled-downstream",
+   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally disabled."
   },
   "FluidDictationIntegrationTests/UpdateInstallationPipelineTests/testPreexistingBackupDestinationIsPreservedAndOriginalIsUntouched()": {
-   "layer": "L4-signed-release",
-   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di"
+   "layer": "disabled-downstream",
+   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally disabled."
   },
   "FluidDictationIntegrationTests/UpdateInstallationPipelineTests/testRegularFileAtBackupParentAbortsWithoutReplacingOriginal()": {
-   "layer": "L4-signed-release",
-   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di"
+   "layer": "disabled-downstream",
+   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally disabled."
   },
   "FluidDictationIntegrationTests/UpdateInstallationPipelineTests/testReleaseInstallationHasVerifiedBackupAndCanRecoverWithoutConsumingSource()": {
-   "layer": "L4-signed-release",
-   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di"
+   "layer": "disabled-downstream",
+   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally disabled."
   },
   "FluidDictationIntegrationTests/UpdateInstallationPipelineTests/testReleaseWithoutApprovedVersionIsRejectedBeforeAnyStagingOrBackup()": {
-   "layer": "L4-signed-release",
-   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di"
+   "layer": "disabled-downstream",
+   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally disabled."
   },
   "FluidDictationIntegrationTests/UpdateInstallationPipelineTests/testTamperedCandidateCannotReplaceOriginalOrCreateBackup()": {
-   "layer": "L4-signed-release",
-   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally di"
+   "layer": "disabled-downstream",
+   "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally disabled."
   },
   "FluidDictationIntegrationTests/VoiceProcessingAsrQualityTests/testVpioEffectOnOwnVoiceTranscription()": {
    "layer": "L3-real-model",

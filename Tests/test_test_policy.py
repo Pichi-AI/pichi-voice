@@ -47,6 +47,10 @@ class QuarantineTests(unittest.TestCase):
         self.assertTrue(POLICY.quarantine_problems(quarantine(entry(), entry()), TODAY))
         self.assertTrue(POLICY.quarantine_problems({"entries": []}, TODAY))
 
+    def test_expiry_cannot_be_far_away(self):
+        self.assertEqual(POLICY.quarantine_problems(quarantine(entry(expires="2027-02-03")), TODAY), [])
+        self.assertIn("90 days", POLICY.quarantine_problems(quarantine(entry(expires="2027-02-04")), TODAY)[0])
+
     def test_probe_ids_are_accepted(self):
         for test in ("probe:ui_contrast", "probe:test-memory-audio-archive"):
             self.assertEqual(POLICY.quarantine_problems(quarantine(entry(test=test)), TODAY), [])
@@ -67,7 +71,20 @@ class SkipRegistryTests(unittest.TestCase):
 
     def test_new_skip_is_reported(self):
         other = "FluidDictationIntegrationTests/SearchIndexTests/testOther()"
-        self.assertEqual(POLICY.unregistered_skips([self.test, other], self.registry()), [other])
+        problems = POLICY.result_problems({self.test: "Skipped", other: "Skipped"}, self.registry())
+        self.assertEqual(len(problems), 1)
+        self.assertIn(other, problems[0])
+
+    def test_a_registered_test_may_pass(self):
+        self.assertEqual(POLICY.result_problems({self.test: "Passed"}, self.registry()), [])
+
+    def test_a_deleted_test_is_reported_for_a_bundle_that_ran(self):
+        other = "FluidDictationIntegrationTests/SearchIndexTests/testOther()"
+        problems = POLICY.result_problems({other: "Passed"}, self.registry())
+        self.assertIn("no such test", problems[0])
+
+    def test_a_bundle_that_did_not_run_says_nothing(self):
+        self.assertEqual(POLICY.result_problems({"PichiVoiceMobileIntegrationTests/AClass/testOne()": "Passed"}, self.registry()), [])
 
     def test_repository_policy_files_are_valid(self):
         import json

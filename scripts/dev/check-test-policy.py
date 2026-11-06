@@ -5,7 +5,7 @@ A red result must stay meaningful, so nothing may be silently ignored for long.
 """
 
 import argparse
-from datetime import date
+from datetime import date, timedelta
 import json
 from pathlib import Path
 import re
@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 QUARANTINE = ROOT / "Tests/quarantine.json"
 SKIPS = ROOT / "Tests/skip-registry.json"
 LAYERS = frozenset({"L1-visual", "L2-needs-runner", "L3-real-model", "L4-hardware-or-manual", "L4-signed-release",
-                    "manual-private-data", "diagnostic-tool"})
+                    "manual-private-data", "diagnostic-tool", "disabled-downstream"})
+LONGEST_QUARANTINE = timedelta(days=90)
 TEST_ID = re.compile(r"(?:probe:[a-z0-9_-]+|[A-Za-z0-9_]+/[A-Za-z0-9_]+/[A-Za-z0-9_]+(?:\(\))?)")
 SKIP_ID = re.compile(r"[A-Za-z0-9_]+/[A-Za-z0-9_]+/[A-Za-z0-9_]+(?:\(\))?")
 
@@ -43,6 +44,8 @@ def quarantine_problems(value, today):
             continue
         if expires < today:
             problems.append(f"{test}: quarantine expired on {expires}. Fix the test or renew it with a reason")
+        elif expires > today + LONGEST_QUARANTINE:
+            problems.append(f"{test}: expires more than {LONGEST_QUARANTINE.days} days from now")
     return problems
 
 
@@ -61,19 +64,25 @@ def registry_problems(value):
     return problems
 
 
-def unregistered_skips(skipped, registry):
-    return sorted(set(skipped) - set(registry["tests"]))
+def result_problems(results, registry):
+    """Compare a finished run with the registry in both directions, for the bundles that ran."""
+    known = registry["tests"]
+    problems = [f"{test}: skipped without a reason and layer in Tests/skip-registry.json"
+                for test, result in sorted(results.items()) if result == "Skipped" and test not in known]
+    bundles = {test.split("/", 1)[0] for test in results}
+    problems += [f"{test}: registered as skipped, but the run has no such test"
+                 for test in sorted(known) if test.split("/", 1)[0] in bundles and test not in results]
+    return problems
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--skipped", type=Path, help="JSON list of skipped test ids from a finished run")
+    parser.add_argument("--results", type=Path, help="JSON map of test id to result from a finished run")
     arguments = parser.parse_args()
     registry = json.loads(SKIPS.read_text())
     problems = quarantine_problems(json.loads(QUARANTINE.read_text()), date.today()) + registry_problems(registry)
-    if arguments.skipped:
-        problems += [f"{test}: skipped without a reason and layer in Tests/skip-registry.json"
-                     for test in unregistered_skips(json.loads(arguments.skipped.read_text()), registry)]
+    if arguments.results:
+        problems += result_problems(json.loads(arguments.results.read_text()), registry)
     for problem in problems:
         print(problem, file=sys.stderr)
     if problems:
