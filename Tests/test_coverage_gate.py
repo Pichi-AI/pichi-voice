@@ -113,13 +113,21 @@ class GateTests(unittest.TestCase):
             GATE.evaluate(self.root, plan, self.reports)
 
     def test_unsafe_paths_and_line_values_are_rejected(self):
-        for value in [None, "", "/absolute.py", "a/../x.py", "a//x.py", "a\\x.py", "a\nx.py"]:
+        for value in [None, "", ".", "/absolute.py", "a/../x.py", "a//x.py", "a\\x.py", "a\nx.py"]:
             with self.subTest(path=value), self.assertRaises(ValueError):
                 GATE.path_name(value)
         for value in [None, [0], [-1], [True]]:
             with self.assertRaises(ValueError):
                 GATE.lines(value)
         self.assertEqual(GATE.path_name("tools/данные [1].py"), "tools/данные [1].py")
+
+    def test_resources_require_their_consumers_without_fake_line_counts(self):
+        for name in ["Sources/Brand/logo.png", "Vendor/Adapter/Package.resolved", "tools/config.json"]:
+            self.put(name, "fixture\n")
+        self.commit()
+        plan = self.plan()
+        self.assertEqual(set(plan["required_scopes"]), GATE.SCOPES)
+        self.assertEqual(plan["changed_files"], {})
 
     def test_owning_test_and_config_jobs_are_required_without_test_line_denominator(self):
         for name in ["Tests/MobileUITests/Smoke.swift", "Tests/MobileIntegrationTests/Unit.swift", "Tests/test_tool.py",
@@ -131,6 +139,11 @@ class GateTests(unittest.TestCase):
         plan = self.plan()
         self.assertEqual(set(plan["required_scopes"]), {"macos", "ios", "python", "packages"})
         self.assertEqual(plan["changed_files"], {})
+
+    def test_collector_changes_validate_every_report_consumer(self):
+        self.put("scripts/dev/coverage-ci.py", "value = 1\n")
+        self.commit()
+        self.assertEqual(set(self.plan()["required_scopes"]), GATE.SCOPES)
 
     def test_shared_and_package_native_sources_route_to_real_consumers(self):
         self.put("Sources/Mobile/shared-sources.txt", "Sources/Fluid/Shared.swift\n")
@@ -168,6 +181,13 @@ class GateTests(unittest.TestCase):
         self.commit()
         self.assertEqual(self.plan()["changed_files"], {})
         self.assertEqual(self.plan()["required_scopes"], ["python"])
+
+    def test_removing_unsupported_code_adds_no_executable_lines(self):
+        self.put("scripts/old.sh", "echo old\n")
+        self.base = self.commit()
+        self.run_git("rm", "scripts/old.sh")
+        self.commit()
+        self.assertEqual(self.plan()["unsupported"], [])
 
     def test_unknown_and_binary_executable_source_cannot_get_na(self):
         self.put("scripts/tool.sh", "echo fixture\n")

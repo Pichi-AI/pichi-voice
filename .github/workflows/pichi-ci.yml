@@ -5,7 +5,7 @@ on:
     branches: [main, 'codex/**']
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       full_baseline:
@@ -59,7 +59,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.macos == 'true'
     runs-on: xcode-27
-    timeout-minutes: 30
+    timeout-minutes: 25
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
       CI_ROOT: ${{ github.workspace }}/.build/pichi-coverage
@@ -92,7 +92,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.ios == 'true'
     runs-on: xcode-27
-    timeout-minutes: 30
+    timeout-minutes: 25
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
       CI_ROOT: ${{ github.workspace }}/.build/pichi-coverage
@@ -127,7 +127,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.packages == 'true'
     runs-on: xcode-27
-    timeout-minutes: 15
+    timeout-minutes: 12
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
       CI_ROOT: ${{ github.workspace }}/.build/pichi-coverage

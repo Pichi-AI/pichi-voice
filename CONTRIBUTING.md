@@ -16,7 +16,7 @@ Describe what changed and why, then report checks actually run against the candi
 
 ## Review and publication
 
-Review the full diff and obtain an independent automated review of the integrated revision before publishing a PR to this repository. Address material findings and rerun affected checks. Use the [PR template](.github/pull_request_template.md) to make the result reviewable. Do not report generated explanations or earlier-revision checks as fresh observations.
+Review the full diff and obtain an independent automated review of the integrated revision before publishing a PR to this repository. Address material findings and rerun affected checks. The stable Coverage gate must pass before merging: all added or changed executable lines need coverage, and missing reports or required test jobs are failures. Use the [PR template](.github/pull_request_template.md) to make the result reviewable. Do not report generated explanations or earlier-revision checks as fresh observations.
 
 AI assistance does not change responsibility for the diff or accuracy of evidence. Briefly describe relevant AI assistance and what was independently reviewed and tested. Publication and merge follow the owner's authorization and repository access controls; these instructions do not grant authority outside the assigned task.
 

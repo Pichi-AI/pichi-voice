@@ -67,6 +67,13 @@ class CoverageProducerTests(unittest.TestCase):
             with self.subTest(row=row), self.assertRaises(ValueError):
                 CI.xccov_files({str(self.root / "Sources/A.swift"): [row]}, self.root)
 
+    def test_archive_aliases_preserve_unexecuted_regions(self):
+        data = archive(self.root)
+        data["Sources/A.swift"] = [dict(line=4, isExecutable=True, executionCount=0)]
+        row = CI.xccov_files(data, self.root)["Sources/A.swift"]
+        self.assertEqual(row["executable_lines"], [1, 2, 4])
+        self.assertEqual(row["covered_lines"], [1])
+
     def test_lcov_merges_hits_without_counting_duplicate_lines(self):
         text = f"TN:\nSF:{self.root}/Sources/A.swift\nDA:1,2\nDA:2,0\nDA:1,1\nend_of_record\nSF:/outside/a.swift\nDA:7,1\n"
         files = CI.lcov_files(text, self.root)
@@ -176,9 +183,14 @@ class CoverageProducerTests(unittest.TestCase):
             if "--archive" in argv:
                 return completed(json.dumps(archive(self.root)))
             return completed(json.dumps([dict(nodeType="Test Case", nodeIdentifier="Smoke/testA()", result="Passed" if ui_pass else "Skipped")]))
-        with patch.object(CI, "git", side_effect=lambda root, *args: "head" if args == ("rev-parse", "HEAD") else ""), patch.object(CI, "configure_run", return_value=(self.out / "coverage.xctestrun", {"App.app"})), patch.object(CI, "command", side_effect=tool):
+        with patch.dict(os.environ, {"RUNNER_ENVIRONMENT": "github-hosted"}), patch.object(CI, "git", side_effect=lambda root, *args: "head" if args == ("rev-parse", "HEAD") else ""), patch.object(CI, "configure_run", return_value=(self.out / "coverage.xctestrun", {"App.app"})), patch.object(CI, "command", side_effect=tool):
             status = CI.native(self.root, self.out, scope, "Smoke")
         return status, calls
+
+    def test_native_rejects_personal_macos_data_before_launching_tools(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(CI, "command") as tool, self.assertRaisesRegex(ValueError, "personal app data"):
+            CI.native(self.root, self.out, "macos", "Smoke")
+        tool.assert_not_called()
 
     def test_native_enables_app_instrumentation_and_does_not_hide_test_exit(self):
         status, calls = self.run_native()

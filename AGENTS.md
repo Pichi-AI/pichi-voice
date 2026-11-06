@@ -49,7 +49,7 @@ Delegate independent work when it shortens delivery. Give agents bounded scope, 
 
 ## Verification
 
-Deliver a small, usable and verified increment. State acceptance behavior, affected contracts and bounded checks before expensive work. Required unit and integration tests are the baseline; add broader checks for concrete risks or named consumers. Stop when acceptance and selected checks pass with no material finding. Reuse unchanged evidence with its actual revision and scope, and repeat only checks invalidated by a change.
+Deliver a small, usable and verified increment. State acceptance behavior, affected contracts and bounded checks before expensive work. Required unit and integration tests are the baseline. The Coverage gate must pass before merging, with 100% of added or changed compiler-executable source lines covered; missing measurement is a failure. Add broader checks for concrete risks or named consumers. Stop when acceptance and selected checks pass with no material finding. Reuse unchanged evidence with its actual revision and scope, and repeat only checks invalidated by a change.
 
 Native acceptance uses the actual combined app and exact frozen signed build. Verify changed states, relevant light/dark appearances, localization and accessibility. For mobile UI changes, validate both iPhone and iPad simulators and show native evidence for user review before physical testing. Protect active recordings and existing installations. Follow the [native acceptance procedure](docs/development/agent-workflow.md#native-acceptance) for signing, permissions, captures and ownership.
 

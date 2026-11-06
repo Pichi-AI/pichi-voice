@@ -88,7 +88,7 @@ def xccov_files(archive, root):
                 executable.add(line)
                 if hits:
                     covered.add(line)
-        files[path] = {"executable_lines": sorted(executable), "covered_lines": sorted(covered)}
+        join_files(files, {path: {"executable_lines": sorted(executable), "covered_lines": sorted(covered)}})
     return files
 
 
@@ -185,8 +185,9 @@ def configure_run(root, products, scheme):
     spec = importlib.util.spec_from_file_location("coverage_regression", root / "scripts/dev/macos-regression.py")
     helper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(helper)
-    environment = dict(os.environ)
-    environment["PICHI_TEST_PYTHON_EXECUTABLE"] = sys.executable
+    # This CI cohort never consumes personal model/recording or external-account opt-ins.
+    environment = {"CI": "true", "GITHUB_ACTIONS": os.environ.get("GITHUB_ACTIONS", "false"),
+                   "PICHI_INTERFACE_LANGUAGE": "en", "PICHI_TEST_PYTHON_EXECUTABLE": sys.executable}
     helper.configure_targets(value, environment)
     temp = command(["getconf", "DARWIN_USER_TEMP_DIR"]).stdout.strip()
     apps = set()
@@ -212,6 +213,8 @@ def configure_run(root, products, scheme):
 
 
 def native(root, output, scope, ui_class):
+    if scope == "macos" and os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
+        raise ValueError("macOS coverage requires a disposable GitHub-hosted user; personal app data must stay isolated")
     source = git(root, "rev-parse", "HEAD")
     work = Path(output) / scope
     work.mkdir(parents=True, exist_ok=True)
@@ -329,7 +332,7 @@ def python(root, output):
     work.mkdir(parents=True, exist_ok=True)
     tracked = git(root, "ls-files", "*.py").splitlines()
     config = work / "coveragerc"
-    sources = "\n".join("    " + str(root / p) for p in ("scripts", "tools", ".codex", "Vendor"))
+    sources = "    " + str(root)
     config.write_text("[run]\nbranch = True\nparallel = True\npatch = subprocess\ndata_file = " + str(work / ".coverage") + "\nsource =\n" + sources + "\n")
     cov = coverage.Coverage(config_file=str(config))
     cov.start()
@@ -360,7 +363,7 @@ def python(root, output):
     files = {}
     for name, row in read(work / "coverage.json")["files"].items():
         path = source_path(root, root / name)
-        files[path] = {"executable_lines": sorted(set(row["executed_lines"]) | set(row["missing_lines"])), "covered_lines": row["executed_lines"]}
+        join_files(files, {path: {"executable_lines": sorted(set(row["executed_lines"]) | set(row["missing_lines"])), "covered_lines": row["executed_lines"]}})
     counts = {"passed": result.testsRun - len(result.failures) - len(result.errors) - len(result.skipped) - len(result.expectedFailures) - len(result.unexpectedSuccesses),
               "failed": len(result.failures) + len(result.errors) + len(result.expectedFailures) + len(result.unexpectedSuccesses), "skipped": len(result.skipped)}
     return report(root, "python", output, files, counts, source)

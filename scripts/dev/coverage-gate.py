@@ -27,7 +27,7 @@ def path_name(value):
     if not isinstance(value, str) or not value or any(c in value for c in "\\\r\n\t\0"):
         raise ValueError("Unsafe coverage source path")
     path = PurePosixPath(value)
-    if path.is_absolute() or str(path) != value or ".." in path.parts:
+    if not path.parts or path.is_absolute() or str(path) != value or ".." in path.parts:
         raise ValueError("Coverage paths must be normalized repository-relative names")
     return value
 
@@ -89,10 +89,17 @@ def classify(root, base, head):
         if name.startswith("Fluid.xcodeproj/") or name == "Sources/Mobile/shared-sources.txt":
             scopes.update(("macos", "ios"))
             continue
+        if suffix in STATIC and name.startswith(("Sources/", "Configuration/", "Vendor/", "tools/")):
+            scopes.update(("macos", "ios") if name.startswith(("Sources/", "Configuration/")) else ("packages", "macos", "ios") if name.startswith("Vendor/") else ("python",))
+            continue
         if suffix not in NATIVE | {".py"}:
+            if status == "D":
+                continue
             if suffix in UNSUPPORTED or suffix not in STATIC and PurePosixPath(name).name not in ("LICENSE", "COPYING", "NOTICE", "CODEOWNERS", ".gitkeep"):
                 unsupported.append(name)
             continue
+        if name in ("scripts/dev/coverage-ci.py", "scripts/dev/coverage-gate.py"):
+            scopes.update(SCOPES)
         if name.startswith("Vendor/") and suffix in NATIVE:
             scopes.update(("packages", "macos"))
             if not name.startswith("Vendor/NativeTextInference/"):
