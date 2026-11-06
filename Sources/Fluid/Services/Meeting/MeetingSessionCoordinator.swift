@@ -167,6 +167,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var pendingSpeechCapture: MeetingPendingSpeechCapture?
     private var pendingSpeechTeardownTask: Task<Void, Never>?
     private let speechActivityModel: MeetingCaptureSpeechActivityWorker.Factory?
+    private let prepareSpeechActivity: @MainActor () async throws -> Void
     private var pendingSpeechDiagnosticID: UUID?
     private var captureGeneration: UUID? {
         didSet {
@@ -301,6 +302,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         audioArbiter: any MeetingAudioActivityArbitrating,
         preferredMicrophoneUID: @escaping @MainActor () -> String? = { nil },
         speechActivityModel: MeetingCaptureSpeechActivityWorker.Factory? = nil,
+        prepareSpeechActivity: @escaping @MainActor () async throws -> Void = {},
         settings: SettingsStore = .shared,
         locationResolver: (any MeetingLocationResolving)? = nil,
         defaultConfigurationResolver: (@MainActor (MeetingCaptureMode, String) async throws -> MeetingCaptureConfiguration)? = nil,
@@ -316,6 +318,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.processing = processing
         self.audioArbiter = audioArbiter
         self.speechActivityModel = speechActivityModel
+        self.prepareSpeechActivity = prepareSpeechActivity
         self.preferredMicrophoneUID = preferredMicrophoneUID
         self.settings = settings
         self.locationResolver = locationResolver
@@ -623,6 +626,26 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
         guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
               self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
+        if self.speechActivityModel != nil {
+            // The synchronous model factory only opens an existing local artifact. Its
+            // optional resource operation must also run for installed/explicit ASR routes,
+            // before permission prompts or the exclusive recording lease are acquired.
+            do {
+                try await self.prepareSpeechActivity()
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                try Task.checkCancellation()
+                DebugLogger.shared.warning(
+                    "Optional speech activity preparation failed; capture and recognition remain available.",
+                    source: "MeetingSessionCoordinator")
+            }
+            try Task.checkCancellation()
+            guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
+            guard self.startReservation == reservation, self.terminationTask == nil,
+                  self.settings.selectedSpeechModel.rawValue == selectedModelID,
+                  self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
+        }
         let dependencyDescriptor = initialDescriptor
             ?? PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.settings.selectedSpeechModel.rawValue)
         if configuration.speakerLabelsEnabled != false, let dependencyDescriptor,

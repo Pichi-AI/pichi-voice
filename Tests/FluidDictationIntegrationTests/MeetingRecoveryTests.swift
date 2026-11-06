@@ -143,6 +143,158 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertFalse(coordinator.hasPendingStart)
     }
 
+    private func makeSpeechActivityPreparationConfiguration() -> MeetingCaptureConfiguration {
+        var configuration = self.makeConfiguration()
+        configuration.speakerLabelsEnabled = false
+        return configuration
+    }
+
+    func testSpeechActivityPreparationRunsBeforeEachPermissionPreflight() async throws {
+        let settings = SettingsStore.shared
+        let original = settings.fluidMeetEnabled
+        defer { settings.fluidMeetEnabled = original }
+        settings.fluidMeetEnabled = true
+        let directory = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let capture = StubCaptureController()
+        capture.preflightError = CocoaError(.fileReadUnknown)
+        let arbiter = StubArbiter()
+        var preparations = 0
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: directory), capture: capture,
+            processing: StubProcessingController(), audioArbiter: arbiter,
+            speechActivityModel: { throw CocoaError(.fileNoSuchFile) },
+            prepareSpeechActivity: {
+                XCTAssertEqual(capture.preflightCount, preparations)
+                XCTAssertEqual(arbiter.acquireCount, 0)
+                preparations += 1
+            })
+        for _ in 0..<2 {
+            do {
+                _ = try await coordinator.startRecording(configuration: self.makeSpeechActivityPreparationConfiguration())
+                XCTFail("The synthetic permission boundary must stop capture")
+            } catch {
+                XCTAssertEqual((error as? CocoaError)?.code, .fileReadUnknown)
+            }
+        }
+        XCTAssertEqual(preparations, 2, "Activity preparation is not conditional on an ASR download or speaker setup")
+        XCTAssertEqual(capture.preflightCount, 2)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertFalse(coordinator.hasPendingStart)
+    }
+
+    func testSpeechActivityPreparationFailureIsFailOpenButCancellationIsNot() async throws {
+        let settings = SettingsStore.shared
+        let original = settings.fluidMeetEnabled
+        defer { settings.fluidMeetEnabled = original }
+        settings.fluidMeetEnabled = true
+        for cancelled in [false, true] {
+            let directory = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let capture = StubCaptureController()
+            capture.preflightError = CocoaError(.fileReadUnknown)
+            let arbiter = StubArbiter()
+            let coordinator = MeetingSessionCoordinator(
+                store: MeetingSessionStore(rootDirectory: directory), capture: capture,
+                processing: StubProcessingController(), audioArbiter: arbiter,
+                speechActivityModel: { throw CocoaError(.fileNoSuchFile) },
+                prepareSpeechActivity: {
+                    if cancelled { throw CancellationError() }
+                    throw CocoaError(.fileNoSuchFile)
+                })
+            do {
+                _ = try await coordinator.startRecording(configuration: self.makeSpeechActivityPreparationConfiguration())
+                XCTFail("A cancelled start or the synthetic permission boundary must stop capture")
+            } catch {
+                if cancelled { XCTAssertTrue(error is CancellationError) }
+                else { XCTAssertEqual((error as? CocoaError)?.code, .fileReadUnknown) }
+            }
+            XCTAssertEqual(capture.preflightCount, cancelled ? 0 : 1,
+                "Unavailable optional activity evidence cannot block ordinary capture")
+            XCTAssertEqual(capture.startCount, 0)
+            XCTAssertEqual(arbiter.acquireCount, 0)
+            XCTAssertFalse(coordinator.hasPendingStart)
+        }
+    }
+
+    func testCancellingSpeechActivityPreparationCannotAcquireAudioOrCapture() async throws {
+        let settings = SettingsStore.shared
+        let original = settings.fluidMeetEnabled
+        defer { settings.fluidMeetEnabled = original }
+        settings.fluidMeetEnabled = true
+        let directory = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        let entered = expectation(description: "Activity resources are being prepared")
+        let gate = PermissionPreflightGate()
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: directory), capture: capture,
+            processing: StubProcessingController(), audioArbiter: arbiter,
+            speechActivityModel: { throw CocoaError(.fileNoSuchFile) },
+            prepareSpeechActivity: { entered.fulfill(); await gate.wait() })
+        let start = Task { try await coordinator.startRecording(configuration: self.makeSpeechActivityPreparationConfiguration()) }
+        self.addTeardownBlock { await gate.open(); _ = await start.result }
+        await fulfillment(of: [entered], timeout: 2)
+        start.cancel()
+        await gate.open()
+        do { _ = try await start.value; XCTFail("Cancellation must survive optional resource preparation") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(capture.preflightCount, 0)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertFalse(coordinator.hasPendingStart)
+    }
+
+    func testSelectionChangeDuringSpeechActivityPreparationCancelsFrozenAdmission() async throws {
+        let settings = SettingsStore.shared
+        let originalEnabled = settings.fluidMeetEnabled
+        let originalModel = settings.selectedSpeechModel
+        defer { settings.fluidMeetEnabled = originalEnabled; settings.selectedSpeechModel = originalModel }
+        settings.fluidMeetEnabled = true
+        settings.selectedSpeechModel = .whisperTiny
+        let directory = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: directory), capture: capture,
+            processing: StubProcessingController(), audioArbiter: arbiter,
+            speechActivityModel: { throw CocoaError(.fileNoSuchFile) },
+            prepareSpeechActivity: { settings.selectedSpeechModel = .parakeetTDTv2 })
+        do {
+            _ = try await coordinator.startRecording(configuration: self.makeSpeechActivityPreparationConfiguration())
+            XCTFail("Activity preparation cannot revive a stale recording selection")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(capture.preflightCount, 0)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertFalse(coordinator.hasPendingStart)
+    }
+
+    func testNoSpeechActivityProviderDoesNotPrepareItsResources() async throws {
+        let settings = SettingsStore.shared
+        let original = settings.fluidMeetEnabled
+        defer { settings.fluidMeetEnabled = original }
+        settings.fluidMeetEnabled = true
+        let directory = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let capture = StubCaptureController()
+        capture.preflightError = CocoaError(.fileReadUnknown)
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: directory), capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter(),
+            prepareSpeechActivity: { XCTFail("A composition without activity inference has nothing to prepare") })
+        do {
+            _ = try await coordinator.startRecording(configuration: self.makeSpeechActivityPreparationConfiguration())
+            XCTFail("The synthetic permission boundary must stop capture")
+        } catch { XCTAssertEqual((error as? CocoaError)?.code, .fileReadUnknown) }
+        XCTAssertEqual(capture.preflightCount, 1)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertFalse(coordinator.hasPendingStart)
+    }
+
     func testEchoWarningRendersWithoutInvokingRecordingActions() throws {
         var session = self.makeSession(state: .recording)
         session.mode = .onlineCall

@@ -977,8 +977,9 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
 }
 
 
-/// Platform tees supply normalized measured 16kHz mono PCM. A source-owned
-/// worker loads one optional model and owns its recurrent state. Admission only retains
+/// The mobile tee supplies normalized 16kHz mono PCM; desktop native PCM is converted
+/// through the existing capture converter on this worker. One source-owned worker
+/// loads one optional model and owns its recurrent state. Admission only retains
 /// bounded sample buffers; conversion, inference and model loading never run on capture.
 /// Unknown coverage always fails open for ASR. No audio file or model download is created.
 final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable {
@@ -993,6 +994,9 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
         let buffer: CMSampleBuffer
         let start: Double
         let count: Int
+        let format: MeetingPCMFormatContract
+        var seconds: Double { Double(count) / format.sampleRate }
+        var bytes: Int { count * format.channelCount * MemoryLayout<Float>.stride }
         let epoch: UInt64
     }
     private struct Evidence {
@@ -1010,7 +1014,8 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     private let queue = DispatchQueue(label: "meeting.speech-activity", qos: .utility)
     private let lock = NSLock()
     private var inputs: [Input] = []
-    private var pendingSamples = 0
+    private var pendingSeconds: Double = 0
+    private var pendingBytes = 0
     private var scheduled = false
     private var closed = false
     private var unavailable = false
@@ -1022,6 +1027,9 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     private var sampleStart = 0.0
     private var previousEnd: Double?
     private var previousEpoch: UInt64?
+    private var previousFormat: MeetingPCMFormatContract?
+    private var converter: MeetingCapturePCMConverter?
+    private var detectorEpoch: UInt64 = 0
     private let session = UUID()
     private let source: MeetingLiveSpeaker
     private let publish: @Sendable (Double, Double, MeetingSpeechActivity) -> Void
@@ -1058,28 +1066,30 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
 
     func offer(_ buffer: CMSampleBuffer, start: Double) {
         let count = CMSampleBufferGetNumSamples(buffer)
-        guard start.isFinite, start >= 0, count > 0, count <= 16_000,
+        guard start.isFinite, start >= 0, count > 0, count <= 65_536,
               CMSampleBufferIsValid(buffer), CMSampleBufferDataIsReady(buffer),
               let description = CMSampleBufferGetFormatDescription(buffer),
               let format = try? MeetingPCMFormatContract(formatDescription: description),
-              format.sampleRate == 16_000, format.channelCount == 1,
+              (8_000...192_000).contains(format.sampleRate), (1...8).contains(format.channelCount),
+              Double(count) / format.sampleRate <= 1,
               let block = CMSampleBufferGetDataBuffer(buffer),
-              CMBlockBufferGetDataLength(block) <= count * MemoryLayout<Float>.stride else {
+              CMBlockBufferGetDataLength(block) <= count * format.channelCount * MemoryLayout<Float>.stride else {
             MeetingTimelineTrace.shared?.record("vad_input_rejected", fields: ["captureID": session.uuidString,
-                "reason": "normalized-pcm-contract", "sampleCount": String(count)])
+                "reason": "native-pcm-contract", "sampleCount": String(count)])
             return
         }
         let shouldSchedule = lock.withLock { () -> Bool in
             guard !closed else { return false }
             // At most two seconds of admitted PCM and sixteen retained buffers. Overflow
             // invalidates evidence immediately; recognition never waits for this worker.
-            if inputs.count >= 16 || pendingSamples + count > 32_000 {
+            let input = Input(buffer: buffer, start: start, count: count, format: format, epoch: epoch)
+            if inputs.count >= 16 || pendingSeconds + input.seconds > 2 || pendingBytes + input.bytes > 2 * 1024 * 1024 {
                 MeetingTimelineTrace.shared?.record("vad_queue_overflow", fields: ["captureID": session.uuidString,
-                    "discardedBuffers": String(inputs.count), "discardedSamples": String(pendingSamples), "epoch": String(epoch)])
-                inputs.removeAll(); pendingSamples = 0; epoch &+= 1; evidence.removeAll(); evidenceGeneration &+= 1
+                    "discardedBuffers": String(inputs.count), "discardedBytes": String(pendingBytes), "epoch": String(epoch)])
+                inputs.removeAll(); pendingSeconds = 0; pendingBytes = 0; epoch &+= 1; evidence.removeAll(); evidenceGeneration &+= 1
             }
-            inputs.append(Input(buffer: buffer, start: start, count: count, epoch: epoch))
-            pendingSamples += count
+            inputs.append(Input(buffer: buffer, start: start, count: count, format: format, epoch: epoch))
+            pendingSeconds += input.seconds; pendingBytes += input.bytes
             guard !scheduled else { return false }
             scheduled = true
             return true
@@ -1133,12 +1143,14 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
             guard start.isFinite, end.isFinite, start >= 0, end > start else { return result(false, "invalid-range") }
             guard !closed, !unavailable else { return result(false, closed ? "closed" : "unavailable") }
             var cursor = start, overlaps = 0
-            for item in evidence where item.end > start && item.start < end {
+            // Adjacent 256ms windows can differ by a floating-point rounding unit.
+            // Use the same microsecond tolerance as the gap/coverage checks below.
+            for item in evidence where item.end > start + 0.000_001 && item.start < end - 0.000_001 {
                 guard item.start <= cursor + 0.000_001 else { return result(false, "unscored-gap") }
                 guard item.activity == .nonSpeech else { return result(false, "speech-or-unknown") }
                 cursor = max(cursor, item.end); overlaps += 1
             }
-            if cursor >= end - 0.000_001 { return result(true, "complete-nonspeech") }
+            if overlaps > 0, cursor >= end - 0.000_001 { return result(true, "complete-nonspeech") }
             let mayAwait = overlaps > 0 && end - cursor <= 2 * 0.256 + 0.000_001
             return result(false, "unscored-tail", mayAwait: mayAwait)
         }
@@ -1154,7 +1166,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     }
 
     func stop() {
-        lock.withLock { closed = true; inputs.removeAll(); pendingSamples = 0; evidence.removeAll(); evidenceGeneration &+= 1 }
+        lock.withLock { closed = true; inputs.removeAll(); pendingSeconds = 0; pendingBytes = 0; evidence.removeAll(); evidenceGeneration &+= 1 }
     }
 
     /// Queue barrier joins an in-flight non-preemptible CoreML prediction and releases its
@@ -1162,7 +1174,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     func join() async {
         await withCheckedContinuation { continuation in
             queue.async { [self] in
-                detector = nil; samples.removeAll(); previousEnd = nil
+                detector = nil; converter = nil; samples.removeAll(); previousEnd = nil; previousFormat = nil
                 continuation.resume()
             }
         }
@@ -1171,39 +1183,57 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     private func drain() {
         while let input = lock.withLock({ () -> Input? in
             guard !closed, !inputs.isEmpty else { scheduled = false; return nil }
-            let next = inputs.removeFirst(); pendingSamples -= next.count; return next
+            let next = inputs.removeFirst()
+            pendingSeconds = max(0, pendingSeconds - next.seconds); pendingBytes = max(0, pendingBytes - next.bytes)
+            return next
         }) {
             autoreleasepool { process(input) }
         }
     }
 
     private func process(_ input: Input) {
-        let expectedEnd = input.start + Double(input.count) / 16_000
-        let changed = previousEpoch != input.epoch || previousEnd.map { abs($0 - input.start) > 1.0 / 32_000 } != false
+        let expectedEnd = input.start + input.seconds
+        let changed = previousEpoch != input.epoch || previousFormat != input.format
+            || previousEnd.map { abs($0 - input.start) > 1.0 / 32_000 } != false
         if changed {
+            detectorEpoch &+= 1
             MeetingTimelineTrace.shared?.record("vad_reset", fields: ["captureID": session.uuidString,
                 "epoch": String(input.epoch), "sourceStartSeconds": String(input.start)])
-            samples.removeAll(keepingCapacity: true); sampleStart = input.start
+            samples.removeAll(keepingCapacity: true); converter = nil; sampleStart = input.start
             lock.withLock { evidence.removeAll(); evidenceGeneration &+= 1 }
         }
-        previousEpoch = input.epoch; previousEnd = expectedEnd
-        guard let copied = MeetingLiveSampleCopy.copy(input.buffer),
-              copied.buffer.format.sampleRate == 16_000, copied.buffer.format.channelCount == 1,
-              copied.buffer.format.commonFormat == .pcmFormatFloat32,
+        previousEpoch = input.epoch; previousEnd = expectedEnd; previousFormat = input.format
+        let copied: MeetingLiveSampleCopy.Sample?
+        let normalizedStart: Double
+        do {
+            guard let native = MeetingLiveSampleCopy.copy(input.buffer) else { throw MeetingCapturePCMError.invalidBuffer }
+            if input.format.sampleRate == 16_000, input.format.channelCount == 1 {
+                copied = native
+                normalizedStart = input.start
+            } else {
+                if converter == nil { converter = try MeetingCapturePCMConverter() }
+                let mono = try MeetingCapturePCMConverter.ownedMonoCopy(of: native.buffer)
+                guard let normalized = try converter?.convert(mono,
+                    presentationTime: CMTime(seconds: input.start, preferredTimescale: 1_000_000_000)) else { return }
+                copied = MeetingLiveSampleCopy.copy(normalized)
+                normalizedStart = CMSampleBufferGetPresentationTimeStamp(normalized).seconds
+            }
+        } catch { copied = nil; normalizedStart = input.start }
+        guard let copied,
               let pcm = copied.buffer.floatChannelData?[0] else {
-            samples.removeAll(keepingCapacity: true); previousEnd = nil
+            samples.removeAll(keepingCapacity: true); converter = nil; previousEnd = nil
             emit(start: input.start, end: expectedEnd, activity: .unknown, epoch: input.epoch)
             return
         }
-        if samples.isEmpty { sampleStart = input.start }
-        samples.append(contentsOf: UnsafeBufferPointer(start: pcm, count: input.count))
+        if samples.isEmpty { sampleStart = normalizedStart }
+        samples.append(contentsOf: UnsafeBufferPointer(start: pcm, count: Int(copied.buffer.frameLength)))
         while samples.count >= 4096 {
             let frame = Array(samples.prefix(4096))
             samples.removeFirst(4096)
             let start = sampleStart; sampleStart += 0.256
             let began = ProcessInfo.processInfo.systemUptime
             let result = detector?.process(samples: frame, valid: [Bool](repeating: true, count: 4096),
-                start: start, session: session, epoch: input.epoch,
+                start: start, session: session, epoch: detectorEpoch,
                 route: source == .you ? "normalized-microphone-16k" : "normalized-application-audio-16k",
                 cancelled: { self.lock.withLock { self.closed || self.epoch != input.epoch } })
             MeetingTimelineTrace.shared?.record("vad_frame", fields: ["captureID": session.uuidString,
@@ -1218,7 +1248,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
                 // Only repeated actual model failures disable the attempt. Transient
                 // budget cooldown frames remain unknown and keep this worker available.
                 lock.withLock {
-                    unavailable = true; evidence.removeAll(); evidenceGeneration &+= 1; inputs.removeAll(); pendingSamples = 0
+                    unavailable = true; evidence.removeAll(); evidenceGeneration &+= 1; inputs.removeAll(); pendingSeconds = 0; pendingBytes = 0
                 }
                 detector = nil; samples.removeAll(keepingCapacity: false)
                 return
