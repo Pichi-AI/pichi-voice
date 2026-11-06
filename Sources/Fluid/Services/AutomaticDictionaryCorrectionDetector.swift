@@ -120,6 +120,9 @@ enum AutomaticDictionaryCorrectionDetector {
         else {
             return nil
         }
+        // The audio/approval range must describe the spelling, excluding sentence
+        // punctuation trimmed from heardText. History follows this exact span.
+        sourceRange = (before as NSString).range(of: heard, options: .literal, range: oldTokenRange)
 
         // A spelling repair may leave part of a saved compound term unchanged.
         // Keep that exact occurrence together, including its original audio range.

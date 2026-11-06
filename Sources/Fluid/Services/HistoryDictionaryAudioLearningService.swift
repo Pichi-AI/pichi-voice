@@ -144,11 +144,7 @@ final class HistoryDictionaryAudioLearningService {
             guard history.correctedRawText != nil,
                   history.sourceFragments.contains(where: { $0.range == selection.range && $0.isValid(in: history.sourceTranscriptText) }) else { return nil }
         }
-        let matches = entries.filter { $0.replacement.caseInsensitiveCompare(corrected) == .orderedSame }
-        guard matches.count <= 1 else { return nil }
-        return matches.first ?? SettingsStore.CustomDictionaryEntry(
-            id: Self.stableID("history-acoustic-entry:" + corrected.lowercased()), triggers: [], replacement: corrected
-        )
+        return DictionaryAudioLearningService.correctionTarget(label: corrected, entries: entries)
     }
 
     static func entryStillEligible(_ entry: SettingsStore.CustomDictionaryEntry, entries: [SettingsStore.CustomDictionaryEntry], allowMissing: Bool) -> Bool {

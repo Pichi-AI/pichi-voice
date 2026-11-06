@@ -2,6 +2,7 @@
 import FluidAudio
 #endif
 import Foundation
+import CryptoKit
 
 /// Existing correction UI owns approval. This service owns only the optional background evidence.
 @MainActor
@@ -98,6 +99,52 @@ final class DictionaryAudioLearningService {
     ) {
         guard !evidence.samples.isEmpty, evidence.samples.count <= 238_080 else { return }
         self.enqueue(entry: entry, evidenceID: evidenceID, explicitHistory: false, isValid: { true }, prepare: { evidence })
+    }
+
+    /// A completed correction already approves the spelling. Keep original-audio
+    /// publication in this worker, including retries, cancellation and profile ownership.
+    @discardableResult
+    func learnCorrection(
+        candidate: AutomaticDictionaryCorrectionCandidate,
+        evidenceID: UUID = UUID(),
+        isValid: @escaping @MainActor () -> Bool,
+        prepare: @escaping @MainActor () async throws -> DictionaryLearningAudioEvidence?
+    ) -> Bool {
+        let label = candidate.correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard SettingsStore.shared.automaticDictionaryLearningEnabled,
+              DictionaryCorrectionEditPolicy.isTerm(label) else { return false }
+        guard let entry = Self.correctionTarget(label: label, entries: SettingsStore.shared.customDictionaryEntries) else { return false }
+        let wasNew = !SettingsStore.shared.customDictionaryEntries.contains(entry)
+        let eligible: @MainActor () -> Bool = {
+            guard SettingsStore.shared.automaticDictionaryLearningEnabled, isValid() else { return false }
+            let current = SettingsStore.shared.customDictionaryEntries.filter {
+                $0.id == entry.id || $0.replacement.caseInsensitiveCompare(entry.replacement) == .orderedSame
+            }
+            return current.isEmpty ? wasNew : current.count == 1 && current[0] == entry
+        }
+        return self.enqueue(entry: entry, evidenceID: evidenceID, explicitHistory: false, isValid: eligible,
+            isCurrentBeforePreparation: eligible, publishTarget: {
+                guard eligible() else { return .rejected }
+                if SettingsStore.shared.customDictionaryEntries.contains(entry) { return .unchanged }
+                SettingsStore.shared.customDictionaryEntries.append(entry)
+                return .created
+            }, didPublishTarget: {
+                ASRService.invalidateDictionaryCache()
+                DictionaryEntriesChangeNotice.post()
+            }, prepare: prepare)
+    }
+
+    static func correctionTarget(label: String, entries: [SettingsStore.CustomDictionaryEntry]) -> SettingsStore.CustomDictionaryEntry? {
+        guard DictionaryCorrectionEditPolicy.isTerm(label) else { return nil }
+        let matches = entries.filter { $0.replacement.caseInsensitiveCompare(label) == .orderedSame }
+        guard matches.count <= 1 else { return nil }
+        if let existing = matches.first { return existing }
+        var bytes = Array(SHA256.hash(data: Data(("history-acoustic-entry:" + label.lowercased()).utf8)).prefix(16))
+        bytes[6] = (bytes[6] & 0x0f) | 0x80
+        bytes[8] = (bytes[8] & 0x3f) | 0x80
+        let identifier = UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                                     bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
+        return SettingsStore.CustomDictionaryEntry(id: identifier, triggers: [], replacement: label)
     }
 
     /// History preparation shares the same bounded, joined, profile-owned worker as enrollment.
