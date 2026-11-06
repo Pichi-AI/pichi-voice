@@ -555,15 +555,18 @@ final class MeetingAutoDetector {
         for pid in self.records.keys where self.records[pid]?.tier == .nativeTier1 {
             guard let bundleIdentifier = self.records[pid]?.bundleIdentifier else { continue }
             let ownedWindows = snapshots.filter { $0.processID == pid && $0.layer == 0 }
-            let explicit = ownedWindows.compactMap(\.communicationCallState).filter { $0 != .indeterminate }
+            let matched = self.matchingNativeWindow(ownedWindows, bundleIdentifier: bundleIdentifier)
+            // The selected connected window owns the phase, even if a preview remains open.
+            // Otherwise an earlier prejoin value can suppress the actual call indefinitely.
+            let explicit: [CommunicationCallState]
+            if let state = matched?.communicationCallState, state != .indeterminate { explicit = [state] }
+            else { explicit = ownedWindows.compactMap(\.communicationCallState).filter { $0 != .indeterminate } }
             if Set(explicit).count == 1, let state = explicit.first {
                 self.records[pid]?.communicationCallState = state
                 if state == .ended {
                     if self.records[pid]?.explicitCallEndedAt == nil { self.records[pid]?.explicitCallEndedAt = now }
                 } else { self.records[pid]?.explicitCallEndedAt = nil }
             }
-
-            let matched = self.matchingNativeWindow(ownedWindows, bundleIdentifier: bundleIdentifier)
 
             if matched == nil, bundleIdentifier == "us.zoom.xos",
                let unreadableWindow = ownedWindows.first(where: { $0.title == nil })

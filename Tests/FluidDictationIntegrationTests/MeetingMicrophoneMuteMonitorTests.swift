@@ -693,31 +693,40 @@ private final nonisolated class ModuleObserverTestProbe: MeetingCommunicationObs
     private var microphone: CommunicationMicrophoneState? = .muted
     private var callState: CommunicationCallState = .inCall
     private var windowID: UInt32 = 77
+    private var alsoPreview = false
     private var requestedBounds: [UInt32?] = []
     private var focused = true
     private var requestHandler: (@Sendable () -> Void)?
     private var focusDocuments: [String?] = []
     func configure(microphone: CommunicationMicrophoneState?, focused: Bool = true,
-                   callState: CommunicationCallState = .inCall, windowID: UInt32 = 77,
+                   callState: CommunicationCallState = .inCall, windowID: UInt32 = 77, alsoPreview: Bool = false,
                    onRequest: (@Sendable () -> Void)? = nil) {
         self.lock.withLock {
             self.microphone = microphone; self.focused = focused; self.callState = callState
-            self.windowID = windowID; self.requestHandler = onRequest
+            self.windowID = windowID; self.alsoPreview = alsoPreview; self.requestHandler = onRequest
         }
     }
     func request(application: MeetingApplicationIdentity, boundWindowID: UInt32?, boundDocument: String?,
                  modules: MeetingCommunicationModuleSnapshot,
                  completion: @escaping @Sendable ([MeetingCommunicationObservation]) -> Void) {
-        let (mic, phase, window, handler) = self.lock.withLock {
+        let (mic, phase, window, alsoPreview, handler) = self.lock.withLock {
             self.requestedBounds.append(boundWindowID)
-            return (self.microphone, self.callState, self.windowID, self.requestHandler)
+            return (self.microphone, self.callState, self.windowID, self.alsoPreview, self.requestHandler)
         }
         if let mic, boundWindowID == nil || boundWindowID == window {
             let snapshot = CommunicationObservationSnapshot(bundleIdentifier: application.bundleIdentifier,
                 processID: application.processID ?? 42, windowID: window, documentURL: "https://call.example.com/room",
                 controls: [.init(role: "AXButton", labels: [phase == .prejoin ? "Join now" : "Leave call"]),
                     .init(role: "AXButton", labels: [mic == .muted ? "Turn on microphone" : "Turn off microphone"])])
-            completion([.init(snapshot: snapshot, evidence: modules.registry.resolve(snapshot: snapshot)!, acquiredAtHostTime: mach_absolute_time())])
+            var values = [MeetingCommunicationObservation(snapshot: snapshot,
+                evidence: modules.registry.resolve(snapshot: snapshot)!, acquiredAtHostTime: mach_absolute_time())]
+            if alsoPreview, boundWindowID == nil {
+                let preview = CommunicationObservationSnapshot(bundleIdentifier: application.bundleIdentifier,
+                    processID: application.processID ?? 42, windowID: 77, documentURL: snapshot.documentURL,
+                    controls: [.init(role: "AXButton", labels: ["Join now"])])
+                values.append(.init(snapshot: preview, evidence: modules.registry.resolve(snapshot: preview)!, acquiredAtHostTime: mach_absolute_time()))
+            }
+            completion(values)
         } else { completion([]) }
         handler?()
     }
@@ -757,7 +766,7 @@ final class MeetingModuleMicrophoneObserverTests: XCTestCase {
         probe.configure(microphone: .unmuted, callState: .prejoin, windowID: 77, onRequest: { preview.fulfill() })
         observer.requestPoll()
         await self.fulfillment(of: [preview], timeout: 2)
-        probe.configure(microphone: .muted, windowID: 88)
+        probe.configure(microphone: .muted, windowID: 88, alsoPreview: true)
         observer.requestPoll()
         await self.fulfillment(of: [arrivals[1]], timeout: 2)
         probe.configure(microphone: .unmuted, windowID: 88)

@@ -207,9 +207,14 @@ final class MeetingAutoDetectorTests: XCTestCase {
         h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
         XCTAssertTrue(h.prompts.isEmpty)
         XCTAssertNil(h.detector.automaticTarget)
-        h.detector.handleWindowSnapshot([.init(processID: 77, windowID: 701, title: "Zoom Meeting", layer: 0, communicationCallState: .inCall)], at: h.clock.now())
+        h.detector.handleWindowSnapshot([.init(processID: 77, windowID: 701, title: "Zoom Meeting", layer: 0, communicationCallState: .indeterminate)], at: h.clock.now())
+        XCTAssertTrue(h.prompts.isEmpty, "A temporarily unreadable preview does not prove connection")
+        h.detector.handleWindowSnapshot([
+            .init(processID: 77, windowID: 701, title: "Zoom Meeting", layer: 0, communicationCallState: .prejoin),
+            .init(processID: 77, windowID: 702, title: "Zoom Meeting", layer: 0, communicationCallState: .inCall),
+        ], at: h.clock.now())
         XCTAssertEqual(h.prompts.count, 1)
-        XCTAssertEqual(h.detector.automaticTarget?.windowID, 701)
+        XCTAssertEqual(h.detector.automaticTarget?.windowID, 702)
     }
     func testModuleRingingDoesNotOfferRecordingAndConnectedDoes() {
         let h = DetectorHarness()
