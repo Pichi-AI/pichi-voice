@@ -977,6 +977,17 @@ final class MeetingRecordedCommunicationSurfaceTests: XCTestCase {
         XCTAssertEqual(teams?.callState, .prejoin)
     }
 
+    func testObservedMTSOwnerControlsBeforeJoiningDoNotProveConnectedCall() {
+        // Real owner preview in my.mts-link.ru, 2026-11-06: end-event controls are
+        // present even before joining; the microphone was unavailable/disabled.
+        let value = self.evidence(url: "https://my.mts-link.ru/anonymized-room", controls: [
+            .init(role: "AXButton", labels: ["Присоединиться к встрече"]),
+            .init(role: "AXButton", labels: ["Завершить встречу"]),
+            .init(role: "AXButton", labels: ["Включить микрофон"])])
+        XCTAssertNotEqual(value?.callState, .inCall)
+        XCTAssertEqual(value?.microphoneState, .indeterminate)
+    }
+
     func testObservedTelemostConnectingToolbarIsNotEnoughToConfirmCall() {
         let value = self.evidence(url: "https://telemost.yandex.ru/j/anonymized-room", controls: [
             .init(role: "AXButton", labels: ["Выключить микрофон"]),
