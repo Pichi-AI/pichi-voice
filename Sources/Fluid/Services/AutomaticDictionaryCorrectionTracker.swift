@@ -196,12 +196,19 @@ final class AutomaticDictionaryCorrectionTracker {
     }
 
     private final class CorrectionApproval {
-        let id = UUID()
+        let id: UUID
         var range: NSRange
         let text: String
         var isValid = true
         var saved: DictionaryAudioLearningService.SavedCorrection?
-        init(range: NSRange, text: String) { self.range = range; self.text = text }
+        init(id: UUID = UUID(), range: NSRange, text: String) { self.id = id; self.range = range; self.text = text }
+    }
+
+    private struct PendingRepeat {
+        let id = UUID()
+        let plan: DictionaryCorrectionReplacementPlan
+        let selectionBefore: NSRange
+        let selectionAfter: NSRange
     }
 
     private struct ObservationSession {
@@ -218,6 +225,7 @@ final class AutomaticDictionaryCorrectionTracker {
         var textMap: DictionaryCorrectionTextMap
         var approvals: [CorrectionApproval] = []
         var acceptedCorrections: [(heard: String, corrected: String, sourceRange: NSRange)] = []
+        var pendingRepeat: PendingRepeat?
     }
 
     private static let maximumFieldLength = 100_000
@@ -243,7 +251,8 @@ final class AutomaticDictionaryCorrectionTracker {
     private var verificationTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
     private var debounceTask: Task<Void, Never>?
-    private var evidencePreparationTask: Task<Void, Never>?
+    private var evidencePreparationTasks: [UUID: Task<Void, Never>] = [:]
+    private var repeatVerificationTask: Task<Void, Never>?
     private var suggestionGeneration = UUID()
     private var correctionRevocations: [UUID: Task<Void, Never>] = [:]
     private let profile = PrivateProfileStorage.current
@@ -290,14 +299,15 @@ final class AutomaticDictionaryCorrectionTracker {
 
     func cancel() {
         self.suggestionGeneration = UUID()
-        self.evidencePreparationTask?.cancel()
-        self.evidencePreparationTask = nil
+        self.evidencePreparationTasks.values.forEach { $0.cancel() }
+        self.evidencePreparationTasks.removeAll()
         self.stopObservation()
         DictionaryCorrectionOverlayController.shared.hideSuggestion()
     }
 
     func prepareForPrivateProfileTransition() async {
-        let tasks = [evidencePreparationTask, verificationTask, timeoutTask, debounceTask] + self.correctionRevocations.values.map(Optional.some)
+        let tasks = [verificationTask, timeoutTask, debounceTask, repeatVerificationTask] +
+            (Array(self.evidencePreparationTasks.values) + Array(self.correctionRevocations.values)).map(Optional.some)
         cancel()
         for task in tasks { await task?.value }
     }
@@ -305,8 +315,32 @@ final class AutomaticDictionaryCorrectionTracker {
     func handleObservedValueChange() {
         guard var session = self.session,
               let currentValue = Self.stringValue(of: session.element),
-              currentValue != session.lastValue,
-              (currentValue as NSString).length <= Self.maximumFieldLength,
+              (currentValue as NSString).length <= Self.maximumFieldLength else { return }
+
+        if let pending = session.pendingRepeat {
+            if currentValue == session.lastValue { return } // Cached pre-write AX value.
+            session.pendingRepeat = nil
+            self.repeatVerificationTask?.cancel()
+            self.repeatVerificationTask = nil
+            let difference = AutomaticDictionaryCorrectionDetector.textChange(before: pending.plan.text, after: currentValue)
+            if pending.plan.confirmsAppliedText(currentValue, differenceFromExpected: difference?.oldRange) {
+                guard self.commitRepeat(pending.plan, to: &session) else { self.cancel(); return }
+                self.session = session
+                if currentValue == session.lastValue {
+                    if let selected = Self.selectedRange(of: session.element),
+                       selected == pending.selectionBefore || selected == NSRange(location: NSMaxRange(session.insertedRange), length: 0) ||
+                       selected == NSRange(location: session.lastValue.utf16.count, length: 0) {
+                        _ = Self.setSelectedRange(pending.selectionAfter, of: session.element)
+                    }
+                    self.propagateAcceptedCorrections()
+                    return
+                }
+            } else {
+                // A rejected/normalized write must not end observation of later edits.
+                self.session = session
+            }
+        }
+        guard currentValue != session.lastValue,
               let change = AutomaticDictionaryCorrectionDetector.textChange(
                   before: session.lastValue,
                   after: currentValue
@@ -592,6 +626,7 @@ final class AutomaticDictionaryCorrectionTracker {
     }
 
     private func evaluate(_ pending: PendingCorrection) {
+        defer { self.propagateAcceptedCorrections() }
         let detected = AutomaticDictionaryCorrectionDetector.candidate(
             before: pending.beforeValue,
             after: pending.afterValue,
@@ -605,10 +640,13 @@ final class AutomaticDictionaryCorrectionTracker {
             value.sourceUTF16Range.flatMap { DictionaryCorrectionReplacementPlan(sourceText: pending.sourceMap.text,
                 range: $0, replacement: value.correctedText) }
         }
-        let candidate = repetitionPlan.flatMap {
+        var candidate = repetitionPlan.flatMap {
             AutomaticDictionaryCorrectionDetector.confirmedCandidate(detected, in: $0) ??
                 AutomaticDictionaryCorrectionDetector.confirmedCandidate(repeated, in: $0)
         } ?? (repetitionPlan == nil ? detected : nil)
+        if let range = candidate?.sourceUTF16Range, let original = pending.sourceMap.originalRange(for: range) {
+            candidate?.observationID = "\(self.session?.learningRecording?.id.uuidString ?? self.suggestionGeneration.uuidString):\(original.location):\(original.length)"
+        }
         if let candidate {
             DictionaryVoiceSpellingLearner.shared.reject(editedText: candidate.heardText)
         }
@@ -651,7 +689,6 @@ final class AutomaticDictionaryCorrectionTracker {
             var prepared = candidate
             prepared.negativeCorrection = negative
             DictionaryCorrectionOverlayController.shared.show(candidate: prepared) { _ in }
-            self.propagateAcceptedCorrections()
             return
         }
 
@@ -661,34 +698,28 @@ final class AutomaticDictionaryCorrectionTracker {
            !SettingsStore.shared.shouldShowOnboarding, let sourceRange = candidate.sourceUTF16Range {
             let admitted = self.enqueueCorrection(candidate, context: context,
                 range: NSRange(location: sourceRange.location, length: candidate.correctedText.utf16.count))
-            if admitted { self.propagateAcceptedCorrections(); return }
+            if admitted { return }
         }
-        self.propagateAcceptedCorrections()
 
         guard let candidate else { return }
         guard SettingsStore.shared.automaticDictionaryLearningEnabled,
               !SettingsStore.shared.shouldShowOnboarding,
-              !AppServices.shared.asr.isRunning,
-              !DictionaryCorrectionOverlayController.shared.isPresented
+              !AppServices.shared.asr.isRunning
         else {
             DebugLogger.shared.info("DICTIONARY_CORRECTION suggestion_skipped reason=inactive_or_busy", source: "DictionaryLearning")
             return
         }
-        guard !self.isAlreadySaved(candidate) else {
-            DebugLogger.shared.info("DICTIONARY_CORRECTION suggestion_skipped reason=already_saved", source: "DictionaryLearning")
-            return
-        }
-        guard context != nil || AutomaticDictionarySuggestionPolicy.shared.shouldShow(
-            candidate,
-            requiredOccurrences: SettingsStore.shared.automaticDictionarySuggestionFrequency.rawValue
-        ) else {
-            DebugLogger.shared.info("DICTIONARY_CORRECTION suggestion_skipped reason=frequency_or_cooldown", source: "DictionaryLearning")
-            return
-        }
-
         let generation = self.suggestionGeneration
         let pronunciationGeneration = DictionaryMatcherExperiment.generation
-        self.evidencePreparationTask = Task { @MainActor [weak self, context] in
+        let preparationID = candidate.id
+        guard self.evidencePreparationTasks.count < 32 else { return }
+        let approval = CorrectionApproval(id: candidate.id,
+            range: NSRange(location: candidate.sourceUTF16Range?.location ?? 0, length: candidate.correctedText.utf16.count),
+            text: candidate.correctedText)
+        self.session?.approvals.removeAll { !$0.isValid }
+        self.session?.approvals.append(approval)
+        self.evidencePreparationTasks[preparationID] = Task { @MainActor [weak self, context, approval] in
+            defer { self?.evidencePreparationTasks.removeValue(forKey: preparationID) }
             let observedText = candidate.heardText
             let evidence = await Task.detached(priority: .utility) {
                 guard DictionaryMatcherExperiment.sharedFeaturesEnabled, pronunciationGeneration == DictionaryMatcherExperiment.generation,
@@ -700,15 +731,13 @@ final class AutomaticDictionaryCorrectionTracker {
                     observedText: observedText
                 )
             }.value
-            guard !Task.isCancelled, let self, self.suggestionGeneration == generation,
+            guard !Task.isCancelled, approval.isValid, let self, self.suggestionGeneration == generation,
                   SettingsStore.shared.automaticDictionaryLearningEnabled,
                   !SettingsStore.shared.shouldShowOnboarding,
-                  !self.isAlreadySaved(candidate), !AppServices.shared.asr.isRunning,
-                  !DictionaryCorrectionOverlayController.shared.isPresented
+                  !AppServices.shared.asr.isRunning
             else { return }
             var prepared = candidate
             prepared.audioEvidence = DictionaryMatcherExperiment.sharedFeaturesEnabled && pronunciationGeneration == DictionaryMatcherExperiment.generation ? evidence : nil
-            self.evidencePreparationTask = nil
             DebugLogger.shared.info(
                 "DICTIONARY_CORRECTION suggestion_prepared originalAudio=\(prepared.audioEvidence != nil)",
                 source: "DictionaryLearning"
@@ -757,9 +786,11 @@ final class AutomaticDictionaryCorrectionTracker {
     private func revoke(_ approval: CorrectionApproval) {
         guard approval.isValid else { return }
         approval.isValid = false
+        self.evidencePreparationTasks[approval.id]?.cancel()
         let learning = DictionaryAudioLearningService.shared
         learning.discardPendingEvidence(approval.id)
         DictionaryCorrectionOverlayController.shared.withdrawSavedCorrection(approval.id)
+        DictionaryCorrectionOverlayController.shared.withdrawSuggestion(approval.id)
         guard let receipt = approval.saved else { return }
         self.correctionRevocations[approval.id] = Task { @MainActor [weak self] in
             defer { self?.correctionRevocations.removeValue(forKey: approval.id) }
@@ -771,14 +802,18 @@ final class AutomaticDictionaryCorrectionTracker {
     private func propagateAcceptedCorrections() {
         guard SettingsStore.shared.automaticDictionaryLearningEnabled,
               PrivateProfileStorage.isReadable(self.profile), PrivateProfileStorage.acceptsNewWork,
-              var session = self.session, session.pendingCorrection == nil,
+              var session = self.session, session.pendingCorrection == nil, session.pendingRepeat == nil,
               let focus = Self.focusedElementAndPID(), focus.pid == session.pid,
               CFEqual(focus.element, session.element), !Self.isSecureTextInput(session.element),
               Self.stringValue(of: session.element) == session.lastValue,
               var selection = Self.selectedRange(of: session.element) else { return }
-        var settable = DarwinBoolean(false)
-        guard AXUIElementIsAttributeSettable(session.element, kAXSelectedTextAttribute as CFString, &settable) == .success,
-              settable.boolValue else { return }
+        var selectedTextSettable = DarwinBoolean(false), valueSettable = DarwinBoolean(false)
+        let canWriteSelection = AXUIElementIsAttributeSettable(session.element, kAXSelectedTextAttribute as CFString, &selectedTextSettable) == .success && selectedTextSettable.boolValue
+        let canWriteValue = AXUIElementIsAttributeSettable(session.element, kAXValueAttribute as CFString, &valueSettable) == .success && valueSettable.boolValue
+        guard canWriteSelection || canWriteValue else {
+            DebugLogger.shared.info("DICTIONARY_CORRECTION repeats_skipped reason=no_writable_text_attribute", source: "DictionaryLearning")
+            return
+        }
         for correction in session.acceptedCorrections {
             guard correction.heard != correction.corrected,
                   let first = DictionaryCorrectionReplacementPlan.exactTermRanges(
@@ -789,34 +824,80 @@ final class AutomaticDictionaryCorrectionTracker {
             let delta = plan.text.utf16.count - session.lastValue.utf16.count
             let updatedInsertion = NSRange(location: session.insertedRange.location, length: session.insertedRange.length + delta)
             let replacement = (plan.text as NSString).substring(with: updatedInsertion)
-            // Replace only our anchored dictation. Check the field immediately before
-            // writing, then restore the user's caret after the exact range edits.
-            guard Self.stringValue(of: session.element) == session.lastValue,
-                  Self.setSelectedRange(session.insertedRange, of: session.element) else { return }
-            let result = AXUIElementSetAttributeValue(session.element, kAXSelectedTextAttribute as CFString, replacement as CFString)
-            let observed = Self.stringValue(of: session.element)
-            if observed == plan.text {
-                for edit in plan.ranges.reversed() {
-                    let local = NSRange(location: edit.location - session.insertedRange.location, length: edit.length)
-                    guard session.textMap.replace(range: local, replacement: correction.corrected) else { self.cancel(); return }
-                    for approval in session.approvals where approval.isValid {
-                        if let moved = DictionaryCorrectionReplacementPlan.confirmedRange(approval.range, text: approval.text,
-                            replacing: local, withLength: correction.corrected.utf16.count, in: session.textMap.text) {
-                            approval.range = moved
-                        } else { self.revoke(approval) }
-                    }
-                }
-                session.lastValue = plan.text
-                session.insertedRange = updatedInsertion
-                selection = restoredSelection
+            let target = session.element, targetPID = session.pid, expectedValue = session.lastValue
+            let expectedSelection = selection, insertion = session.insertedRange
+            var selectionWasChanged = false
+            let isCurrent: () -> Bool = {
+                guard PrivateProfileStorage.isReadable(self.profile), PrivateProfileStorage.acceptsNewWork,
+                      let focus = Self.focusedElementAndPID(), focus.pid == targetPID, CFEqual(focus.element, target),
+                      !Self.isSecureTextInput(target), Self.stringValue(of: target) == expectedValue,
+                      Self.selectedRange(of: target) == (selectionWasChanged ? insertion : expectedSelection) else { return false }
+                return true
+            }
+            let pending = PendingRepeat(plan: plan, selectionBefore: selection, selectionAfter: restoredSelection)
+            session.pendingRepeat = pending
+            self.session = session
+            let selectedWrite: (() -> Bool)? = canWriteSelection ? {
+                guard Self.setSelectedRange(insertion, of: target) else { return false }
+                selectionWasChanged = true
+                guard isCurrent() else { return false }
+                return AXUIElementSetAttributeValue(target, kAXSelectedTextAttribute as CFString, replacement as CFString) == .success
+            } : nil
+            let valueWrite: (() -> Bool)? = canWriteValue ? {
+                AXUIElementSetAttributeValue(target, kAXValueAttribute as CFString, plan.text as CFString) == .success
+            } : nil
+            let dispatched = DictionaryCorrectionReplacementPlan.dispatchReplacement(isCurrent: isCurrent,
+                writeSelectedText: selectedWrite, writeValue: valueWrite)
+            guard dispatched else {
+                session.pendingRepeat = nil
                 self.session = session
-                _ = Self.setSelectedRange(selection, of: session.element)
-            } else {
-                if observed == session.lastValue { _ = Self.setSelectedRange(selection, of: session.element) }
-                else { self.cancel() }
-                DebugLogger.shared.info("DICTIONARY_CORRECTION repeats_skipped ax=\(result.rawValue)", source: "DictionaryLearning")
+                if selectionWasChanged, isCurrent() { _ = Self.setSelectedRange(selection, of: target) }
+                DebugLogger.shared.info("DICTIONARY_CORRECTION repeats_skipped reason=write_rejected_or_editor_changed", source: "DictionaryLearning")
                 return
             }
+            // A successful AX request is not a synchronous value acknowledgement.
+            self.handleObservedValueChange()
+            self.verifyRepeat(pending.id)
+            return
+        }
+    }
+
+    private func commitRepeat(_ plan: DictionaryCorrectionReplacementPlan, to session: inout ObservationSession) -> Bool {
+        let delta = plan.text.utf16.count - session.lastValue.utf16.count
+        for edit in plan.ranges.reversed() {
+            let local = NSRange(location: edit.location - session.insertedRange.location, length: edit.length)
+            guard session.textMap.replace(range: local, replacement: plan.replacement) else { return false }
+            for approval in session.approvals where approval.isValid {
+                if let moved = DictionaryCorrectionReplacementPlan.confirmedRange(approval.range, text: approval.text,
+                    replacing: local, withLength: plan.replacement.utf16.count, in: session.textMap.text) {
+                    approval.range = moved
+                } else { self.revoke(approval) }
+            }
+        }
+        session.lastValue = plan.text
+        session.insertedRange.length += delta
+        return true
+    }
+
+    private func verifyRepeat(_ id: UUID) {
+        guard self.session?.pendingRepeat?.id == id else { return }
+        self.repeatVerificationTask?.cancel()
+        self.repeatVerificationTask = Task { @MainActor [weak self] in
+            for _ in 0..<10 {
+                do { try await Task.sleep(for: .milliseconds(20)) } catch { return }
+                guard let self, self.session?.pendingRepeat?.id == id else { return }
+                self.handleObservedValueChange()
+            }
+            guard let self, let session = self.session, let pending = session.pendingRepeat, pending.id == id else { return }
+            // Keep the expected echo for a later notification, but release an
+            // unchanged editor selection when the write did not take effect.
+            if Self.stringValue(of: session.element) == session.lastValue,
+               Self.selectedRange(of: session.element) == session.insertedRange,
+               let focus = Self.focusedElementAndPID(), focus.pid == session.pid, CFEqual(focus.element, session.element) {
+                _ = Self.setSelectedRange(pending.selectionBefore, of: session.element)
+            }
+            self.repeatVerificationTask = nil
+            DebugLogger.shared.info("DICTIONARY_CORRECTION repeats_waiting_for_editor", source: "DictionaryLearning")
         }
     }
 
@@ -824,15 +905,6 @@ final class AutomaticDictionaryCorrectionTracker {
         var value = CFRange(location: range.location, length: range.length)
         guard let encoded = AXValueCreate(.cfRange, &value) else { return false }
         return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, encoded) == .success
-    }
-
-    private func isAlreadySaved(_ candidate: AutomaticDictionaryCorrectionCandidate) -> Bool {
-        let trigger = candidate.heardText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return SettingsStore.shared.customDictionaryEntries.contains { entry in
-            entry.triggers.contains {
-                $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == trigger
-            }
-        }
     }
 
     private nonisolated static func stringValue(of element: AXUIElement) -> String? {
@@ -892,6 +964,8 @@ final class AutomaticDictionaryCorrectionTracker {
     }
 
     private func stopObservation() {
+        self.repeatVerificationTask?.cancel()
+        self.repeatVerificationTask = nil
         if let recording = self.session?.learningRecording {
             DictionaryVoiceSpellingLearner.shared.cancel(recordingID: recording.id)
         }

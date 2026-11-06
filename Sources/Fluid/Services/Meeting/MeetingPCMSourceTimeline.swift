@@ -14,15 +14,16 @@ final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
         var physicalEnd: Double { physicalStart + Double(compactEnd - compactStart) / 16_000 }
     }
     private let lock = NSLock()
-    private let originSeconds: Double
+    private var originSeconds: Double?
     private let maximumSpans: Int
     private var spans: [Span] = []
     private var acceptedThroughSample = 0
     private var lastPhysicalEnd: Double?
     private var observedGaps = false
 
-    init(originSeconds: Double, maximumSpans: Int = 8_192) throws {
-        guard originSeconds.isFinite, originSeconds >= 0, maximumSpans > 0, maximumSpans <= 8_192 else {
+    init(originSeconds: Double? = nil, maximumSpans: Int = 8_192) throws {
+        guard originSeconds.map({ $0.isFinite && $0 >= 0 }) != false,
+              maximumSpans > 0, maximumSpans <= 8_192 else {
             throw Failure.invalidConfiguration
         }
         self.originSeconds = originSeconds
@@ -36,7 +37,11 @@ final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
         try self.lock.withLock {
             guard sourceStartSample == self.acceptedThroughSample, frameCount > 0,
                   frameCount <= Int.max - sourceStartSample else { throw Failure.nonContiguousInput }
-            let physicalStart = presentationTime - self.originSeconds
+            guard presentationTime.isFinite, presentationTime >= 0 else { throw Failure.invalidTimestamp }
+            // In-room capture and VAD share the first measured PCM origin. Online sources
+            // are both bound to the attempt's fixed session origin instead.
+            let origin = self.originSeconds ?? presentationTime
+            let physicalStart = presentationTime - origin
             guard physicalStart.isFinite, physicalStart >= -1.0 / 16_000 else { throw Failure.invalidTimestamp }
             let measuredStart = max(0, physicalStart)
             let gap = self.lastPhysicalEnd.map { measuredStart - $0 } ?? measuredStart
@@ -45,6 +50,7 @@ final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
             let coalesce = !discontinuous && self.spans.last?.compactEnd == sourceStartSample
             guard coalesce || self.spans.count < self.maximumSpans else { throw Failure.spanBudgetExceeded }
             let end = sourceStartSample + frameCount
+            self.originSeconds = origin
             if coalesce {
                 self.spans[self.spans.count - 1].compactEnd = end
             } else {
@@ -64,6 +70,23 @@ final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
     }
 
     func mapEndTime(_ seconds: Double) -> Double? { self.mapTime(seconds, side: .end) }
+
+    /// Map only measured PCM between two joined source cursors. Never fill a physical
+    /// gap, and never include audio beyond the protected compact-source watermark.
+    func measuredIntervals(fromSample: Int, throughSample: Int) throws -> [Range<Double>] {
+        try self.lock.withLock {
+            guard fromSample >= 0, throughSample >= fromSample,
+                  throughSample <= self.acceptedThroughSample else { throw Failure.nonContiguousInput }
+            return self.spans.compactMap { span in
+                let start = max(fromSample, span.compactStart)
+                let end = min(throughSample, span.compactEnd)
+                guard end > start else { return nil }
+                let lower = span.physicalStart + Double(start - span.compactStart) / 16_000
+                let upper = span.physicalStart + Double(end - span.compactStart) / 16_000
+                return lower..<upper
+            }
+        }
+    }
 
     func mapInterval(start: Double, end: Double) -> (start: Double, end: Double)? {
         self.lock.withLock {
