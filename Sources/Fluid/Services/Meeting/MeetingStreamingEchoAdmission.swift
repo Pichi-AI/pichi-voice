@@ -26,6 +26,7 @@ actor MeetingStreamingEchoAdmission {
         let unpublishedFlags: Int
         let pendingRevisions: Int
         let mutableFromSeconds: Double
+        let expiredEvidenceUnits: Int
         let closed: Bool
     }
 
@@ -54,6 +55,7 @@ actor MeetingStreamingEchoAdmission {
     private var latestFlags: [MeetingTranscriptSegmentID: Bool] = [:]
     private var unpublished = Set<MeetingTranscriptSegmentID>()
     private var pendingRevisions: [MeetingTranscriptSegmentID: Bool] = [:]
+    private var expiredEvidenceUnits = 0
     private var closed = false
 
     init(tracks: [MeetingAudioTrack], limits: Limits = .init(),
@@ -141,9 +143,13 @@ actor MeetingStreamingEchoAdmission {
                 guard let projected = self.presentationInterval(track.id, native.start, native.end) else { continue }
                 guard projected.start.isFinite, projected.end.isFinite, projected.start >= 0,
                       projected.end > projected.start else { throw Failure.invalidObservation }
-                // A genuinely delayed source cannot revise expired raw context silently. A
-                // normal capture gap contains no old units and therefore never waits or fails.
-                guard projected.start + 0.001 >= self.mutableFrom else { throw Failure.lateEvidence }
+                // A pause can leave valid pre-pause ASR pending while the other source
+                // advances the bounded echo horizon. Preserve the original word/echo flag
+                // for ordinary privacy admission, without reviving expired raw context.
+                if projected.start + 0.001 < self.mutableFrom {
+                    if self.expiredEvidenceUnits < Int.max { self.expiredEvidenceUnits += 1 }
+                    continue
+                }
                 let id = segment.id.uuidString
                 let positioned = MeetingPositionedEchoUnit(id: id, trackID: track.id, text: segment.text,
                     presentation: .init(start: projected.start, end: projected.end))
@@ -230,7 +236,8 @@ actor MeetingStreamingEchoAdmission {
         .init(retainedRawUnits: self.sources.values.reduce(0) { $0 + $1.units.count },
             retainedRawUTF8Bytes: self.sources.values.reduce(0) { $0 + $1.units.reduce(0) { $0 + $1.positioned.text.utf8.count } },
             unpublishedFlags: self.unpublished.count, pendingRevisions: self.pendingRevisions.count,
-            mutableFromSeconds: self.mutableFrom, closed: self.closed)
+            mutableFromSeconds: self.mutableFrom, expiredEvidenceUnits: self.expiredEvidenceUnits,
+            closed: self.closed)
     }
 
     private var mutableFrom: Double { max(0, self.latestPresentation - self.limits.historySeconds) }

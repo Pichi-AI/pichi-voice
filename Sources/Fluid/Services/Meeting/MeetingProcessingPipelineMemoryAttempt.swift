@@ -55,7 +55,13 @@ final class MeetingMemoryProcessingAttempt {
 
     func observeEcho(_ observation: MeetingStreamingPCMObservation, track: MeetingAudioTrack) async throws -> MeetingStreamingPCMObservation {
         guard let echoAdmission else { return observation }
-        let result = try await echoAdmission.observe(track: track, observation: observation)
+        let result: MeetingStreamingPCMObservation
+        do { result = try await echoAdmission.observe(track: track, observation: observation) }
+        catch let error as MeetingStreamingEchoAdmission.Failure {
+            // This enum has scalar cases only. Never log the observation or raw words.
+            DebugLogger.shared.warning("echo_admission_failure reason=\(String(describing: error))", source: "MeetingStreamingPCM")
+            throw error
+        }
         if let revisions = await echoAdmission.pendingRevisionBatch() { try await publish(revisions) }
         return result
     }
