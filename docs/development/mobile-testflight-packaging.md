@@ -6,6 +6,10 @@ Use an isolated worktree, a pinned source revision and private build directories
 
 `Sources/Mobile/Version.xcconfig` supplies shared app and Live Activity extension defaults. Override `CURRENT_PROJECT_VERSION` once on the archive command so both bundles receive the same unique build number. Verify the latest number in App Store Connect first. Supply `PICHI_MOBILE_BUNDLE_IDENTIFIER`, rather than globally overriding `PRODUCT_BUNDLE_IDENTIFIER`, because the extension has its own identifier.
 
+The default mobile application identity is `ai.pichi.voice`, shared with the native macOS release through `Configuration/PichiBrand.xcconfig`. Live Activity extends that identity as `ai.pichi.voice.activity`. The signed mobile account configuration must match the application identifier; callback URLs and Keychain access groups derive from the actual installed bundle.
+
+The earlier `ai.pichi.voice.mobile` TestFlight record and its builds retain their original identity. Apple does not allow changing a record's bundle ID after a build upload, so the unified identity needs its own suitable app record. Preserve the old installation and its local data. The new bundle is a separate installation with a separate sandbox and Keychain namespace, requiring fresh setup/login. Existing audio/transcript share operations can export content from the old app; copying encrypted profile directories alone does not migrate their device-only keys or restore complete history. A shared bundle ID across macOS and iOS does not itself synchronize user data. See [Apple app information](https://developer.apple.com/help/app-store-connect/reference/app-information/app-information/) and [adding platforms](https://developer.apple.com/help/app-store-connect/create-an-app-record/add-platforms/).
+
 Keep DerivedData and SourcePackages inside the current worktree. Set `PICHI_SOURCE_REVISION` to the pinned full SHA. Select an existing authorized signing identity and team; do not change entitlements or reset permissions. Run the regular Xcode archive operation before preparing an export copy.
 
 ## Prepare the ONNX metadata in an owned archive copy
