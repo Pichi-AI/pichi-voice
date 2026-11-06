@@ -81,7 +81,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         )
         if savedCorrection != nil {
             self.screen = .success
-            self.successTitle = "Saved to Dictionary"
+            self.successTitle = savedCorrection?.wasAlreadyPresent == true ? "Already in Dictionary" : "Saved to Dictionary"
         }
         // Observe the generation too: SwiftUI may coalesce a rapid OFF then ON.
         self.pronunciationSettingsObserver = NotificationCenter.default.publisher(for: DictionaryMatcherExperiment.didChangeNotification)
@@ -98,7 +98,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     func undoSavedCorrection() {
-        guard let receipt = self.savedCorrection, receipt.isCurrent, self.isProfileVisible,
+        guard let receipt = self.savedCorrection, !receipt.wasAlreadyPresent, receipt.isCurrent, self.isProfileVisible,
               !self.isCancelled, !self.isUndoingSavedCorrection, !self.didUndoSavedCorrection else { return }
         self.onInteraction?()
         self.isUndoingSavedCorrection = true
@@ -330,6 +330,10 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         self.refreshCoverageAfterVariantRemoval()
     }
 
+    private var ownsTrainingEndpoint: Bool {
+        self.activeCaptureToken.map { self.asr.dictionaryCaptureToken == $0 } ?? false
+    }
+
     func cancel() {
         self.isCancelled = true
         self.undoTask?.cancel()
@@ -337,7 +341,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         self.trainingGeneration = nil
         self.discardCurrentCapture = true
         self.isAutomaticCaptureEnabled = false
-        DictionaryTrainingEndpointMonitor.shared.stop()
+        if self.ownsTrainingEndpoint { DictionaryTrainingEndpointMonitor.shared.stop() }
         switch self.capturePhase {
         case .starting:
             self.stopRequestedDuringStart = true
@@ -355,7 +359,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         self.trainingGeneration = nil
         self.discardCurrentCapture = true
         self.isAutomaticCaptureEnabled = false
-        DictionaryTrainingEndpointMonitor.shared.stop()
+        if self.ownsTrainingEndpoint { DictionaryTrainingEndpointMonitor.shared.stop() }
         if self.capturePhase == .starting {
             self.stopRequestedDuringStart = true
             Task { await self.asr.cancelPendingPronunciationTrainingStart() }

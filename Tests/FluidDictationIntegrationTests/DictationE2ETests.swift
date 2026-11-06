@@ -5355,3 +5355,204 @@ extension DictationE2ETests {
     }
 }
 #endif
+
+extension DictationE2ETests {
+    func testDelayedRepeatEchoPreservesFollowingCorrectionProvenance() throws {
+        let original = "😀 baad alpha baad gamma"
+        var map = DictionaryCorrectionTextMap(originalText: original)
+        XCTAssertTrue(map.replace(range: (original as NSString).range(of: "baad"), replacement: "Good"))
+        let beforeEcho = map.text
+        let repeated = try XCTUnwrap(DictionaryCorrectionReplacementPlan(sourceText: beforeEcho,
+            range: (beforeEcho as NSString).range(of: "baad"), replacement: "Good"))
+        let stale = AutomaticDictionaryCorrectionDetector.textChange(before: repeated.text, after: beforeEcho)
+        XCTAssertFalse(repeated.confirmsAppliedText(beforeEcho, differenceFromExpected: stale?.oldRange))
+        let edited = repeated.text.replacingOccurrences(of: "alpha", with: "better")
+        let change = AutomaticDictionaryCorrectionDetector.textChange(before: repeated.text, after: edited)
+        XCTAssertTrue(repeated.confirmsAppliedText(edited, differenceFromExpected: change?.oldRange))
+        for range in repeated.ranges.reversed() { XCTAssertTrue(map.replace(range: range, replacement: repeated.replacement)) }
+        let next = try XCTUnwrap(AutomaticDictionaryCorrectionDetector.candidate(before: map.text, after: edited,
+            insertedRange: NSRange(location: 0, length: map.text.utf16.count)))
+        XCTAssertEqual(next.correctedText, "better")
+        XCTAssertEqual(map.originalRange(for: try XCTUnwrap(next.sourceUTF16Range)), (original as NSString).range(of: "alpha"))
+        XCTAssertTrue(map.replace(range: try XCTUnwrap(next.sourceUTF16Range), replacement: next.correctedText))
+        XCTAssertEqual(map.originalRange(for: (map.text as NSString).range(of: "gamma")), (original as NSString).range(of: "gamma"))
+        let rejectedWriteEdit = beforeEcho.replacingOccurrences(of: "alpha", with: "better")
+        let rejected = AutomaticDictionaryCorrectionDetector.textChange(before: repeated.text, after: rejectedWriteEdit)
+        XCTAssertFalse(repeated.confirmsAppliedText(rejectedWriteEdit, differenceFromExpected: rejected?.oldRange))
+    }
+
+    func testCorrectionOverlayShowsAllCorrectionsAndDismissesOnlyChosenRow() {
+        let controller = DictionaryCorrectionOverlayController()
+        defer { controller.concealPrivatePresentation() }
+        let first = AutomaticDictionaryCorrectionCandidate(heardText: "Alhpa", correctedText: "Alpha")
+        let second = AutomaticDictionaryCorrectionCandidate(heardText: "Btea", correctedText: "Beta")
+        let third = AutomaticDictionaryCorrectionCandidate(heardText: "Gmma", correctedText: "Gamma")
+        controller.show(candidate: first) { _ in }
+        controller.show(candidate: second) { _ in }
+        controller.show(candidate: third) { _ in }
+        XCTAssertEqual(controller.presentedCandidateIDs, [first.id, second.id, third.id])
+        let deadline = controller.displayDeadline, generation = controller.progressGeneration
+        controller.dismiss(id: second.id)
+        XCTAssertEqual(controller.presentedCandidateIDs, [first.id, third.id])
+        XCTAssertEqual(controller.displayDeadline, deadline)
+        XCTAssertEqual(controller.progressGeneration, generation)
+        controller.dismiss()
+        XCTAssertTrue(controller.presentedCandidateIDs.isEmpty)
+    }
+
+    func testCorrectionOverlayReplacesIntermediateSpellingInPlace() {
+        let controller = DictionaryCorrectionOverlayController()
+        defer { controller.concealPrivatePresentation() }
+        let first = AutomaticDictionaryCorrectionCandidate(heardText: "Alhpa", correctedText: "Alpha")
+        var intermediate = AutomaticDictionaryCorrectionCandidate(heardText: "Btea", correctedText: "Beto")
+        intermediate.observationID = "synthetic-recording:12:4"
+        var final = AutomaticDictionaryCorrectionCandidate(heardText: "Btea", correctedText: "Beta")
+        final.observationID = intermediate.observationID
+        controller.show(candidate: first) { _ in }
+        controller.show(candidate: intermediate) { _ in }
+        controller.show(candidate: final) { _ in }
+        XCTAssertEqual(controller.presentedCandidateIDs, [first.id, final.id])
+        controller.withdrawSuggestion(final.id)
+        XCTAssertEqual(controller.presentedCandidateIDs, [first.id])
+    }
+
+    func testGroupedCorrectionCountdownRestartsOnlyOnNewWord() {
+        var now = ContinuousClock.now
+        let initial = now
+        let controller = DictionaryCorrectionOverlayController(now: { now })
+        defer { controller.concealPrivatePresentation() }
+        let first = AutomaticDictionaryCorrectionCandidate(heardText: "Alhpa", correctedText: "Alpha")
+        let second = AutomaticDictionaryCorrectionCandidate(heardText: "Btea", correctedText: "Beta")
+        controller.show(candidate: first) { _ in }
+        XCTAssertEqual(controller.displayDeadline, initial.advanced(by: .seconds(10)))
+        now = now.advanced(by: .seconds(8))
+        controller.expireIfDue()
+        XCTAssertEqual(controller.presentedCandidateIDs, [first.id])
+        controller.show(candidate: second) { _ in }
+        let deadline = initial.advanced(by: .seconds(18)), generation = controller.progressGeneration
+        XCTAssertEqual(controller.displayDeadline, deadline)
+        controller.dismiss(id: first.id)
+        XCTAssertEqual(controller.displayDeadline, deadline)
+        XCTAssertEqual(controller.progressGeneration, generation)
+        now = initial.advanced(by: .seconds(11))
+        controller.expireIfDue()
+        XCTAssertEqual(controller.presentedCandidateIDs, [second.id])
+        now = deadline
+        controller.expireIfDue()
+        XCTAssertTrue(controller.presentedCandidateIDs.isEmpty)
+    }
+
+    func testIdempotentAudioCorrectionStillAcknowledgesWithoutUndoingEarlierSample() async throws {
+        let controller = DictionaryCorrectionOverlayController()
+        defer { controller.concealPrivatePresentation() }
+        let settings = SettingsStore.shared
+        let oldEntries = settings.customDictionaryEntries
+        let oldEnabled = settings.automaticDictionaryLearningEnabled
+        defer { settings.customDictionaryEntries = oldEntries; settings.automaticDictionaryLearningEnabled = oldEnabled }
+        settings.automaticDictionaryLearningEnabled = true
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let worker = DictionaryAudioLearningService(store: store,
+            extract: { evidence in PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: evidence.modelKey) },
+            canProcess: { true })
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: "qeue",
+            sourceWordRange: 0..<1, sourceSampleRange: 0..<1, focalSampleRange: 0..<1, samples: [0])
+        let acknowledged = expectation(description: "Both distinct correction events acknowledged")
+        acknowledged.expectedFulfillmentCount = 2
+        let repeatedNoticeShown = expectation(description: "Second worker completion reaches the popup")
+        controller.onPresentation = { session in
+            if session.savedCorrection?.wasAlreadyPresent == true {
+                XCTAssertEqual(session.successTitle, "Already in Dictionary")
+                repeatedNoticeShown.fulfill()
+            }
+        }
+        var receipts: [DictionaryAudioLearningService.SavedCorrection] = []
+        for _ in 0..<2 {
+            XCTAssertTrue(worker.learnCorrection(candidate: .init(heardText: "qeue", correctedText: "QueueE2EЁжик"),
+                evidence: evidence, isValid: { true }, didSave: {
+                    receipts.append($0); controller.showSavedCorrection($0); acknowledged.fulfill()
+                }))
+        }
+        await fulfillment(of: [acknowledged], timeout: 5)
+        await fulfillment(of: [repeatedNoticeShown], timeout: 2)
+        XCTAssertEqual(controller.presentedSessions.count, 2)
+        XCTAssertEqual(receipts.count, 2)
+        if receipts.count == 2 {
+            XCTAssertFalse(receipts[0].wasAlreadyPresent)
+            XCTAssertTrue(receipts[1].wasAlreadyPresent)
+            let undone = try await worker.undoSavedCorrection(receipts[1])
+            XCTAssertFalse(undone, "A repeated acknowledgement cannot delete the earlier reference")
+        }
+        let profiles = await store.allProfiles()
+        XCTAssertEqual(profiles.first?.enrollments.count, 1)
+        await worker.prepareForPrivateProfileTransition()
+    }
+}
+
+extension DictationE2ETests {
+    func testGroupedUndoRemovesOnlyChosenSaveWithoutRestartingSharedProgress() async throws {
+        let settings = SettingsStore.shared
+        let previousEntries = settings.customDictionaryEntries, previousEnabled = settings.automaticDictionaryLearningEnabled
+        defer { settings.customDictionaryEntries = previousEntries; settings.automaticDictionaryLearningEnabled = previousEnabled }
+        settings.automaticDictionaryLearningEnabled = true
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let worker = DictionaryAudioLearningService(store: store,
+            extract: { evidence in PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: evidence.modelKey) },
+            canProcess: { true })
+        let controller = DictionaryCorrectionOverlayController(audioLearning: worker)
+        defer { controller.concealPrivatePresentation() }
+        let recording = UUID(), saved = expectation(description: "Both saves visible in one panel")
+        saved.expectedFulfillmentCount = 2
+        for (index, word) in ["GroupedAlphaE2E", "GroupedBetaE2E"].enumerated() {
+            let evidence = DictionaryLearningAudioEvidence(recordingID: recording, modelKey: "parakeet-v3", observedText: "mistyped",
+                sourceWordRange: index..<(index + 1), sourceSampleRange: 0..<2, focalSampleRange: index..<(index + 1), samples: [0, 0])
+            XCTAssertTrue(worker.learnCorrection(candidate: .init(heardText: "mistyped", correctedText: word), evidence: evidence,
+                isValid: { true }, didSave: { controller.showSavedCorrection($0); saved.fulfill() }))
+        }
+        await fulfillment(of: [saved], timeout: 5)
+        XCTAssertEqual(controller.presentedSessions.count, 2)
+        let first = try XCTUnwrap(controller.presentedSessions.first)
+        let second = try XCTUnwrap(controller.presentedSessions.last)
+        let firstReceipt = try XCTUnwrap(first.savedCorrection), secondReceipt = try XCTUnwrap(second.savedCorrection)
+        let deadline = controller.displayDeadline, generation = controller.progressGeneration
+        let undone = expectation(description: "Chosen row Undo finished")
+        let originalSuccess = first.onSuccess
+        first.onSuccess = { originalSuccess?(); undone.fulfill() }
+        first.undoSavedCorrection()
+        await fulfillment(of: [undone], timeout: 2)
+        XCTAssertTrue(first.didUndoSavedCorrection)
+        XCTAssertFalse(second.didUndoSavedCorrection)
+        XCTAssertEqual(controller.presentedSessions.count, 2)
+        XCTAssertEqual(controller.displayDeadline, deadline)
+        XCTAssertEqual(controller.progressGeneration, generation)
+        let profiles = await store.allProfiles()
+        XCTAssertFalse(profiles.contains { $0.dictionaryEntryID == firstReceipt.entry.id })
+        XCTAssertTrue(profiles.contains { $0.dictionaryEntryID == secondReceipt.entry.id })
+        await worker.prepareForPrivateProfileTransition()
+    }
+}
+
+extension DictationE2ETests {
+    func testGroupedCorrectionReplacesCompletedFallbackRowForSameSource() throws {
+        let settings = SettingsStore.shared, previous = SettingsStore.shared.customDictionaryEntries
+        defer { settings.customDictionaryEntries = previous }
+        settings.customDictionaryEntries = []
+        let controller = DictionaryCorrectionOverlayController()
+        defer { controller.concealPrivatePresentation() }
+        var intermediate = AutomaticDictionaryCorrectionCandidate(heardText: "Btea", correctedText: "Beto")
+        intermediate.observationID = "synthetic-recording:12:4"
+        var final = AutomaticDictionaryCorrectionCandidate(heardText: "Btea", correctedText: "Beta")
+        final.observationID = intermediate.observationID
+        controller.show(candidate: intermediate) { _ in }
+        let row = try XCTUnwrap(controller.presentedSessions.first)
+        row.addOnlyCorrection()
+        XCTAssertEqual(row.screen, .success)
+        controller.show(candidate: final) { _ in }
+        XCTAssertEqual(controller.presentedCandidateIDs, [final.id])
+        controller.withdrawSuggestion(final.id)
+        XCTAssertTrue(controller.presentedCandidateIDs.isEmpty)
+    }
+}

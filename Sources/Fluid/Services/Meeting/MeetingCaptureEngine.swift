@@ -3409,6 +3409,35 @@ nonisolated enum MeetingRawMicrophoneProtection {
         }
         return .unfiltered
     }
+
+    /// A route observation is independent of PCM delivery. In particular, mute quarantine can
+    /// leave the last observed sample at the previous splice for the entire one-shot rebind.
+    /// Keep the unknown interval, then persist a new boundary even if no new PCM has arrived.
+    static func persistResume(
+        _ protection: MeetingMicrophoneEchoProtection,
+        observedAtSeconds: Double,
+        writer: MeetingAudioChunkWriter,
+        gate: MeetingMicrophoneTranscriptGate,
+        epoch: UInt64
+    ) async throws -> Bool {
+        guard protection.admitsTranscript, observedAtSeconds.isFinite, observedAtSeconds >= 0 else { return false }
+        var recorded = false
+        try await writer.updateTrackMetadata { track in
+            guard gate.invalidationEpoch == epoch,
+                  var eras = track.captureEras, !eras.isEmpty,
+                  observedAtSeconds > (eras.last?.startSeconds ?? -.infinity)
+            else { return }
+            var resumed = eras[eras.index(before: eras.endIndex)]
+            resumed.echoProtection = protection
+            resumed.startSeconds = observedAtSeconds
+            resumed.settledConfig = nil
+            resumed.clockDrift = nil
+            eras.append(resumed)
+            track.captureEras = eras
+            recorded = true
+        }
+        return recorded
+    }
 }
 
 final nonisolated class MeetingMicrophoneTranscriptGate: @unchecked Sendable {
@@ -3417,6 +3446,7 @@ final nonisolated class MeetingMicrophoneTranscriptGate: @unchecked Sendable {
     static let routeNotificationSafetySeconds: Double = 0.5
     private let lock = NSLock()
     private var protection: MeetingMicrophoneEchoProtection
+    private var admissionStartSeconds: Double?
     private var latestPresentationSeconds: Double?
     /// Bumped by every `invalidate()`. A promotion captured before a route/lifecycle close can
     /// then never reopen admission afterwards, even if it wins the lock race against the close.
@@ -3427,7 +3457,10 @@ final nonisolated class MeetingMicrophoneTranscriptGate: @unchecked Sendable {
     }
 
     func update(_ protection: MeetingMicrophoneEchoProtection) {
-        self.lock.withLock { self.protection = protection }
+        self.lock.withLock {
+            self.protection = protection
+            self.admissionStartSeconds = nil
+        }
     }
 
     var invalidationEpoch: UInt64 {
@@ -3436,10 +3469,12 @@ final nonisolated class MeetingMicrophoneTranscriptGate: @unchecked Sendable {
 
     /// Opens admission only when no invalidation has landed since `epoch` was captured.
     @discardableResult
-    func updateIfNotInvalidated(_ protection: MeetingMicrophoneEchoProtection, since epoch: UInt64) -> Bool {
+    func updateIfNotInvalidated(_ protection: MeetingMicrophoneEchoProtection, since epoch: UInt64,
+                                notBeforePresentationSeconds: Double? = nil) -> Bool {
         self.lock.withLock {
             guard self.invalidationCounter == epoch else { return false }
             self.protection = protection
+            self.admissionStartSeconds = notBeforePresentationSeconds
             return true
         }
     }
@@ -3460,7 +3495,10 @@ final nonisolated class MeetingMicrophoneTranscriptGate: @unchecked Sendable {
                     self.latestPresentationSeconds = max(self.latestPresentationSeconds ?? seconds, seconds)
                 }
             }
-            return (epoch == nil || epoch == self.invalidationCounter) && self.protection.admitsTranscript
+            let afterResume = self.admissionStartSeconds.map { boundary in
+                time.isValid && time.isNumeric && CMTimeGetSeconds(time) >= boundary
+            } ?? true
+            return (epoch == nil || epoch == self.invalidationCounter) && self.protection.admitsTranscript && afterResume
         }
     }
 
@@ -3474,6 +3512,7 @@ final nonisolated class MeetingMicrophoneTranscriptGate: @unchecked Sendable {
     func invalidate() -> InvalidationBoundary? {
         self.lock.withLock {
             self.protection = .unprotected
+            self.admissionStartSeconds = nil
             self.invalidationCounter &+= 1
             return self.latestPresentationSeconds.map { observed in
                 InvalidationBoundary(
@@ -4967,28 +5006,34 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         }
     }
 
-    /// Reopens a raw era only after a matching protected boundary is durable. The gap between the
-    /// rewound invalidation cut and this observation absorbs route-notification latency.
-    private func persistRawRouteResume(_ protection: MeetingMicrophoneEchoProtection) async -> Bool {
-        guard protection.admitsTranscript,
-              let boundarySeconds = self.transcriptGate.latestObservedSeconds()
-        else { return false }
+    /// Resume from fresh route evidence, not the last (possibly quarantined) PCM timestamp.
+    /// A newer route notification or stop can invalidate this asynchronous persistence attempt.
+    private func persistRawRouteResume() async {
         await self.routeProtectionTasks.drain()
-        var recorded = false
-        try? await self.microphoneWriter.updateTrackMetadata { track in
-            guard var eras = track.captureEras, !eras.isEmpty,
-                  boundarySeconds > (eras.last?.startSeconds ?? -.infinity)
-            else { return }
-            var resumed = eras[eras.index(before: eras.endIndex)]
-            resumed.echoProtection = protection
-            resumed.startSeconds = boundarySeconds
-            resumed.settledConfig = nil
-            resumed.clockDrift = nil
-            eras.append(resumed)
-            track.captureEras = eras
-            recorded = true
+        guard let generation = self.stateLock.withLock({
+            self.phase == .avCapture && !self.stopRequested ? self.transitionGeneration : nil
+        }) else { return }
+        let epoch = self.transcriptGate.invalidationEpoch
+        let observedAt = AVAudioTime.seconds(forHostTime: mach_absolute_time())
+        let protection = MeetingRawMicrophoneProtection.classify(
+            MeetingCaptureEngine.currentOutputRouteSnapshot()
+        )
+        do {
+            guard try await MeetingRawMicrophoneProtection.persistResume(
+                protection, observedAtSeconds: observedAt, writer: self.microphoneWriter,
+                gate: self.transcriptGate, epoch: epoch
+            ) else { return }
+            let opened = self.stateLock.withLock {
+                self.phase == .avCapture && self.transitionGeneration == generation
+                    && !self.routeChangeDirty && !self.stopRequested
+                    && self.transcriptGate.updateIfNotInvalidated(
+                        protection, since: epoch, notBeforePresentationSeconds: observedAt
+                    )
+            }
+            if opened { self.eventHandler(.microphoneEchoProtectionChanged(protection)) }
+        } catch {
+            self.handleOutputRouteListenerFailure()
         }
-        return recorded
     }
 
     /// A route event observed during a commit keeps the gate closed; `finishTransition` replays it
@@ -5450,12 +5495,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 return (true, replay)
             }
             if restored.restored {
-                let protection = MeetingRawMicrophoneProtection.classify(
-                    MeetingCaptureEngine.currentOutputRouteSnapshot()
-                )
-                if await self.persistRawRouteResume(protection) {
-                    self.publishTranscriptProtection(protection)
-                }
+                await self.persistRawRouteResume()
                 self.startAVCaptureWatchdog(generation: previousGeneration, component: oldComponent)
                 if restored.replay { self.handleRouteChange() }
                 self.armSafeVoiceProcessingRecoveryIfViable()

@@ -7,6 +7,8 @@ struct AutomaticDictionaryCorrectionCandidate: Equatable, Identifiable {
     var sourceUTF16Range: NSRange?
     var audioEvidence: DictionaryLearningAudioEvidence?
     var negativeCorrection: DictionaryNegativeCorrection?
+    /// Identity of the original edited occurrence, independent of changing text offsets.
+    var observationID: String?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.heardText == rhs.heardText && lhs.correctedText == rhs.correctedText
