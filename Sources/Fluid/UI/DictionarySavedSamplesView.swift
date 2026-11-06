@@ -140,6 +140,7 @@ struct DictionarySavedSamplesView: View {
         self.error = nil
         defer { self.deleting = false }
         let store = PronunciationDictionaryStore.shared
+        DictionaryAudioLearningService.shared.preserveDictionaryEntry(self.entry.id)
         if let evidenceID = sample.capture.originalAudioID {
             DictionaryAudioLearningService.shared.discardPendingEvidence(evidenceID)
         }

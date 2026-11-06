@@ -217,7 +217,7 @@ final class AutomaticDictionaryCorrectionTracker {
         var pendingCorrection: PendingCorrection?
         var textMap: DictionaryCorrectionTextMap
         var approvals: [CorrectionApproval] = []
-        var acceptedCorrections: [(heard: String, corrected: String)] = []
+        var acceptedCorrections: [(heard: String, corrected: String, sourceRange: NSRange)] = []
     }
 
     private static let maximumFieldLength = 100_000
@@ -634,8 +634,12 @@ final class AutomaticDictionaryCorrectionTracker {
         self.debounceTask = nil
         self.session?.pendingCorrection = nil
 
-        if let repeated {
-            self.session?.acceptedCorrections.append((repeated.heardText, repeated.correctedText))
+        if let repeated, let range = repeated.sourceUTF16Range,
+           let originalRange = pending.sourceMap.originalRange(for: range) {
+            // The same spoken span has one current correction. In particular,
+            // restoring the original spelling must not reapply an earlier typo.
+            self.session?.acceptedCorrections.removeAll { NSIntersectionRange($0.sourceRange, originalRange).length > 0 }
+            self.session?.acceptedCorrections.append((repeated.heardText, repeated.correctedText, originalRange))
             if self.session?.acceptedCorrections.count ?? 0 > 64 { self.session?.acceptedCorrections.removeFirst() }
         }
 

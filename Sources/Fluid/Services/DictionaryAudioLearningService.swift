@@ -55,6 +55,7 @@ final class DictionaryAudioLearningService {
     private var foregroundAdmissions = 0
     private var activeEvidenceID: UUID?
     private var recentCorrections: [String: (receipt: SavedCorrection, savedAt: Date)] = [:]
+    private var createdEntries: [UUID: (entry: SettingsStore.CustomDictionaryEntry, savedAt: Date)] = [:]
     private var undoTasks: [UUID: Task<Bool, Error>] = [:]
     private let profile = PrivateProfileStorage.current
     var pendingCount: Int { self.queue.count }
@@ -95,6 +96,9 @@ final class DictionaryAudioLearningService {
         self.drain()
     }
 
+    /// Deleting a sample from the dictionary explicitly keeps its word.
+    func preserveDictionaryEntry(_ id: UUID) { self.createdEntries.removeValue(forKey: id) }
+
     /// Revert only this event. Existing words, other examples and later edits survive.
     func undoSavedCorrection(_ receipt: SavedCorrection) async throws -> Bool {
         if let active = self.undoTasks[receipt.id] { return try await active.value }
@@ -122,10 +126,12 @@ final class DictionaryAudioLearningService {
             throw PronunciationDictionaryStoreError.staleEvidence
         }
         if receipt.createdEntry,
+           self.createdEntries[receipt.entry.id]?.entry == receipt.entry,
            !remaining.contains(where: { $0.dictionaryEntryID == receipt.entry.id }),
            !self.queue.contains(where: { $0.entry.id == receipt.entry.id }),
            SettingsStore.shared.customDictionaryEntries.contains(receipt.entry) {
             SettingsStore.shared.customDictionaryEntries.removeAll { $0 == receipt.entry }
+            self.createdEntries.removeValue(forKey: receipt.entry.id)
         }
         ASRService.invalidateDictionaryCache()
         DictionaryEntriesChangeNotice.post()
@@ -150,6 +156,7 @@ final class DictionaryAudioLearningService {
         retired = true
         queue.removeAll()
         recentCorrections.removeAll()
+        createdEntries.removeAll()
         let work = task, expiry = expiryTask
         let undos = Array(self.undoTasks.values)
         work?.cancel(); expiry?.cancel()
@@ -335,9 +342,17 @@ final class DictionaryAudioLearningService {
                     }
                 }
                 if inserted {
+                    self.createdEntries = self.createdEntries.filter { Date().timeIntervalSince($0.value.savedAt) < 600 }
+                    if notifyPublication || self.createdEntries[request.entry.id]?.entry == request.entry {
+                        self.createdEntries[request.entry.id] = (request.entry, Date())
+                    }
+                    if self.createdEntries.count > 128,
+                       let oldest = self.createdEntries.min(by: { $0.value.savedAt < $1.value.savedAt })?.key {
+                        self.createdEntries.removeValue(forKey: oldest)
+                    }
                     let receipt = SavedCorrection(id: request.evidenceID, entry: request.entry,
                         heardText: evidence.observedText, correctedText: request.entry.replacement,
-                        profile: self.profile, createdEntry: notifyPublication)
+                        profile: self.profile, createdEntry: self.createdEntries[request.entry.id]?.entry == request.entry)
                     self.recentCorrections = self.recentCorrections.filter { Date().timeIntervalSince($0.value.savedAt) < 600 }
                     if self.recentCorrections.count >= 128,
                        let oldest = self.recentCorrections.min(by: { $0.value.savedAt < $1.value.savedAt })?.key {
