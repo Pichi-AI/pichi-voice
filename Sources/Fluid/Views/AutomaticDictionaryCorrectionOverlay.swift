@@ -20,7 +20,7 @@ final class DictionaryCorrectionOverlayController {
     private let state = DictionaryCorrectionOverlayState()
     private var deadline: ContinuousClock.Instant?
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<PichiLocalizedContent<DictionaryCorrectionOverlayGroupView>>?
+    private var hostingView: NSHostingView<PichiLocalizedContent<DictionaryCorrectionOverlayRoot>>?
     private var profileCancellable: AnyCancellable?
     private var languageCancellable: AnyCancellable?
     private var rowCancellables: [UUID: AnyCancellable] = [:]
@@ -240,7 +240,7 @@ final class DictionaryCorrectionOverlayController {
                 SettingsStore.shared.automaticDictionaryLearningEnabled = false; self?.hideSuggestion()
             },
             onLayout: { [weak self] in DispatchQueue.main.async { self?.resizeAndPositionPanel(animated: true) } })
-        if let hostingView = self.hostingView { hostingView.rootView = PichiLocalizedContent { view } }
+        if let hostingView = self.hostingView { hostingView.rootView = PichiLocalizedContent { DictionaryCorrectionOverlayRoot(content: view) } }
         else { self.createPanel(rootView: view) }
         self.resizeAndPositionPanel(animated: true)
         self.panel?.alphaValue = 1
@@ -253,7 +253,7 @@ final class DictionaryCorrectionOverlayController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
         panel.isMovableByWindowBackground = false; panel.hidesOnDeactivate = false; panel.animationBehavior = .none
-        let hostingView = NSHostingView(rootView: PichiLocalizedContent { rootView })
+        let hostingView = NSHostingView(rootView: PichiLocalizedContent { DictionaryCorrectionOverlayRoot(content: rootView) })
         hostingView.wantsLayer = true; hostingView.layer?.backgroundColor = .clear
         panel.contentView = hostingView
         self.panel = panel; self.hostingView = hostingView
@@ -712,7 +712,18 @@ extension Notification.Name {
     static let openMicrophoneSettingsRequested = Notification.Name("OpenMicrophoneSettingsRequested")
 }
 
-private struct DictionaryCorrectionOverlayGroupView: View {
+/// Independent panels need the same live theme owner as the main window.
+private struct DictionaryCorrectionOverlayRoot: View {
+    @ObservedObject private var settings = SettingsStore.shared
+    let content: DictionaryCorrectionOverlayGroupView
+
+    var body: some View {
+        AdaptiveAppTheme(accent: self.settings.accentColor) { self.content }
+    }
+}
+
+private struct DictionaryCorrectionOverlayGroupView: View {    @Environment(\.theme) private var theme
+
     @ObservedObject var state: DictionaryCorrectionOverlayState
     let onDismissAll: () -> Void
     let onDismissRow: (UUID) -> Void
@@ -735,18 +746,20 @@ private struct DictionaryCorrectionOverlayGroupView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "text.book.closed")
-                Text("Corrections").font(.fluidSystem(size: 12, weight: .semibold))
+                Image(systemName: "text.book.closed.fill").foregroundStyle(self.theme.palette.accentText)
+                Text("Personal Dictionary").font(self.theme.typography.bodySmallStrong)
                 Spacer()
                 Button(action: self.onDismissAll) {
                     Image(systemName: "xmark").font(.fluidSystem(size: 10, weight: .semibold))
                         .frame(width: 24, height: 24).contentShape(Circle())
                 }
-                .buttonStyle(.plain).help("Dismiss")
+                .buttonStyle(.plain)
+                .help("Close notification. Saved words stay in the dictionary.")
+                .accessibilityLabel("Close notification")
                 .disabled(self.state.sessions.contains(where: \.isUndoingSavedCorrection))
             }
-            .foregroundStyle(.white.opacity(0.75))
-            .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 4)
+            .foregroundStyle(self.theme.palette.secondaryText)
+            .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 4)
             ScrollView {
                 VStack(spacing: 0) {
                     ForEach(self.state.sessions, id: \.candidate.id) { session in
@@ -766,23 +779,40 @@ private struct DictionaryCorrectionOverlayGroupView: View {
                             }
                         }
                         if session.candidate.id != self.state.sessions.last?.candidate.id {
-                            Divider().overlay(Color.white.opacity(0.08)).padding(.horizontal, 14)
+                            Divider().overlay(self.theme.palette.separator).padding(.horizontal, 14)
                         }
                     }
                 }
             }
             .frame(height: self.contentHeight)
+            VStack(alignment: .leading, spacing: 7) {
+                if self.state.sessions.contains(where: { $0.isSavedCorrection && !$0.didUndoSavedCorrection && $0.savedCorrection?.wasAlreadyPresent != true }) {
+                    Text("Undo removes this dictionary save. Your text stays as edited.")
+                        .font(self.theme.typography.captionSmall)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack {
+                    Text("Closes automatically")
+                    Spacer()
+                    Text("New corrections restart the timer")
+                }
+                .font(self.theme.typography.captionSmall)
+                .foregroundStyle(self.theme.palette.secondaryText)
+            }
+            .padding(.horizontal, 16).padding(.top, 5).padding(.bottom, 8)
             GeometryReader { proxy in
-                Capsule().fill(Color.white.opacity(0.72))
+                Capsule().fill(self.theme.palette.accent)
                     .frame(width: proxy.size.width * self.progress, height: 2)
             }
-            .frame(height: 2).padding(.horizontal, 14).padding(.top, 3).padding(.bottom, 5)
-            .accessibilityLabel("Time to undo")
+            .frame(height: 3).padding(.horizontal, 16).padding(.bottom, 12)
+            .accessibilityLabel("Time until notification closes")
             .accessibilityValue(Double(self.progress).formatted(.percent.precision(.fractionLength(0)).locale(self.interfaceLocale)))
         }
-        .frame(width: 460)
-        .background(TransientOverlayBackground())
-        .preferredColorScheme(.dark)
+        .frame(width: 500)
+        .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(self.theme.palette.cardBorder, lineWidth: 1).allowsHitTesting(false) }
+
         .onAppear { self.restartProgress() }
         .onChange(of: self.state.progressGeneration) { _, _ in self.restartProgress() }
         .onChange(of: self.state.sessions.map(\.candidate.id)) { _, ids in
@@ -801,6 +831,7 @@ private struct DictionaryCorrectionOverlayGroupView: View {
 }
 
 private struct AutomaticDictionaryCorrectionOverlayView: View {
+    @Environment(\.theme) private var theme
     @AppStorage("DictionarySharedFeatureMatcherEnabled", store: PrivateProfileDefaults.shared) private var pronunciationEnabled = DictionaryMatcherExperiment.defaultEnabled
     @ObservedObject var session: AutomaticDictionaryTrainingSession
     @ObservedObject private var settings = SettingsStore.shared
@@ -817,17 +848,8 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
     @State private var isDismissHovered = false
     @State private var progress: CGFloat = 1
 
-    private var accent: Color {
-        if self.settings.accentColorOption == .brand {
-            return Color(hex: AppBrand.profile.accentDark) ?? self.settings.accentColor
-        }
-        return self.settings.accentColor
-    }
-
-    /// This overlay owns a fixed black surface, independently of the main window's palette.
-    private var accentText: Color {
-        AppTheme.Palette.contrastingInk(on: self.accent) == .black ? self.accent : .white
-    }
+    private var accent: Color { self.theme.palette.accent }
+    private var accentText: Color { self.theme.palette.accentText }
 
     var body: some View {
         Group {
@@ -843,13 +865,13 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(width: self.grouped ? nil : 460)
-        .background { if !self.grouped { TransientOverlayBackground() } }
+        .background { if !self.grouped { RoundedRectangle(cornerRadius: 18, style: .continuous).fill(self.theme.palette.cardBackground) } }
         .overlay(alignment: .bottomLeading) {
             if !self.grouped && (self.session.screen == .choice || (self.session.isSavedCorrection &&
                 !self.session.didUndoSavedCorrection && !self.session.isUndoingSavedCorrection && !self.session.hasError)) {
                 GeometryReader { proxy in
                     Capsule()
-                        .fill(Color.white.opacity(0.72))
+                        .fill(self.theme.palette.accent)
                         .frame(width: proxy.size.width * self.progress, height: 2)
                         .frame(maxHeight: .infinity, alignment: .bottom)
                 }
@@ -858,7 +880,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 .allowsHitTesting(false)
             }
         }
-        .preferredColorScheme(.dark)
+
         .animation(self.reduceMotion ? nil : .easeOut(duration: 0.16), value: self.session.screen)
         .onAppear {
             self.startProgressAnimation()
@@ -886,8 +908,8 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
             Text(PichiLocalization.text(self.correctionChoiceDescription, locale: self.interfaceLocale))
                 .font(.fluidSystem(size: 11))
-                .foregroundStyle(.white.opacity(0.58))
-                .lineLimit(1)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
                 if self.session.candidate.negativeCorrection != nil {
@@ -917,7 +939,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 }
             }
             if self.session.hasError {
-                Text(PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale)).font(.fluidSystem(size: 11)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                Text(PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale)).font(.fluidSystem(size: 11)).foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning)).fixedSize(horizontal: false, vertical: true)
             }
         }
         .transition(.opacity)
@@ -948,7 +970,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.fluidSystem(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.72))
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .frame(width: 36, height: 36)
                 .background(self.panelSurface)
         }
@@ -967,7 +989,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
             VStack(alignment: .leading, spacing: 9) {
                 Text(AppBrand.text("Teach FluidVoice your pronunciation"))
                     .font(.fluidSystem(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.94))
+                    .foregroundStyle(self.theme.palette.secondaryText)
 
                 if self.session.isReady {
                     Label(AppBrand.text("FluidVoice got it right 3 times in a row."), systemImage: "checkmark.circle.fill")
@@ -994,7 +1016,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
                     Text(self.overlayReadinessCaption)
                         .font(.fluidSystem(size: 10.5, weight: .medium))
-                        .foregroundStyle(self.session.isReady ? self.accentText : .white.opacity(0.58))
+                        .foregroundStyle(self.session.isReady ? self.accentText : self.theme.palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
 
                     Spacer(minLength: 8)
@@ -1060,7 +1082,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
             Text(PichiLocalization.text(text, locale: self.interfaceLocale))
                 .font(.fluidSystem(size: 10.5))
-                .foregroundStyle(.white.opacity(0.58))
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -1076,7 +1098,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 if !self.session.didUndoSavedCorrection {
                     Text("Original audio saved.")
                         .font(.fluidSystem(size: 11))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(self.theme.palette.secondaryText)
                     HStack(spacing: 8) {
                         if self.session.savedCorrection?.wasAlreadyPresent != true {
                             CorrectionOverlayActionButton(
@@ -1096,7 +1118,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 if self.session.hasError {
                     Text(PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale))
                         .font(.fluidSystem(size: 11))
-                        .foregroundStyle(.white.opacity(0.8))
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -1107,34 +1129,51 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
     }
 
     private var compactSavedContent: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                self.correctionPair
-                if self.session.didUndoSavedCorrection || self.session.savedCorrection?.wasAlreadyPresent == true {
-                    Text(PichiLocalization.text(self.session.successTitle, locale: self.interfaceLocale))
-                        .font(.fluidSystem(size: 10.5)).foregroundStyle(.white.opacity(0.55))
+        VStack(alignment: .leading, spacing: 8) {
+            self.correctionPair
+            HStack(spacing: 10) {
+                Label {
+                    Text(PichiLocalization.text(self.savedStatus, locale: self.interfaceLocale))
+                } icon: {
+                    Image(systemName: self.session.didUndoSavedCorrection ? "arrow.uturn.backward" : "waveform.badge.checkmark")
                 }
-                if self.session.hasError {
-                    Text(PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale))
-                        .font(.fluidSystem(size: 10.5)).foregroundStyle(.white.opacity(0.8))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: 0)
-            if !self.session.didUndoSavedCorrection && self.session.savedCorrection?.wasAlreadyPresent != true {
-                CorrectionOverlayActionButton(title: self.session.isUndoingSavedCorrection ? "Undoing..." : "Undo save",
-                    systemImage: "arrow.uturn.backward", style: .secondary, accent: self.accent,
-                    action: self.session.undoSavedCorrection)
+                .font(self.theme.typography.captionSmall)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if !self.session.didUndoSavedCorrection && self.session.savedCorrection?.wasAlreadyPresent != true {
+                    Button(action: self.session.undoSavedCorrection) {
+                        Text(PichiLocalization.text(self.session.isUndoingSavedCorrection ? "Undoing..." : "Undo dictionary save", locale: self.interfaceLocale))
+                    }
+                    .buttonStyle(FluidOutlinedButtonStyle(height: 28))
+                    .fixedSize()
                     .disabled(self.session.isUndoingSavedCorrection)
-            } else if self.session.didUndoSavedCorrection {
-                Image(systemName: "checkmark").foregroundStyle(self.accentText)
+                    .help("Undo removes this dictionary save. Your text stays as edited.")
+                }
+                if !self.session.didUndoSavedCorrection {
+                    Button(action: self.session.openSavedDictionary) {
+                        Image(systemName: "text.book.closed").frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(self.theme.palette.accentText)
+                    .help("Listen to or manage this word in the dictionary")
+                    .accessibilityLabel("Open Dictionary")
+                    .disabled(self.session.isUndoingSavedCorrection)
+                }
             }
-            Button(action: self.session.openSavedDictionary) {
-                Image(systemName: "text.book.closed").font(.fluidSystem(size: 12)).frame(width: 24, height: 24)
+            if self.session.hasError {
+                Text(PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale))
+                    .font(self.theme.typography.captionSmall)
+                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .buttonStyle(.plain).foregroundStyle(.white.opacity(0.65)).help("Open Dictionary")
-            .disabled(self.session.isUndoingSavedCorrection)
         }
+    }
+
+    private var savedStatus: String {
+        if self.session.didUndoSavedCorrection { return self.session.successTitle }
+        if self.session.savedCorrection?.wasAlreadyPresent == true { return "Word and audio already saved" }
+        return "Word and audio saved"
     }
 
     private var legacySuccessContent: some View {
@@ -1151,10 +1190,10 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(PichiLocalization.text(self.session.successTitle, locale: self.interfaceLocale))
                     .font(.fluidSystem(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(self.theme.palette.primaryText)
                 Text("“\(self.session.candidate.heardText)” will become “\(self.session.candidate.correctedText)”.")
                     .font(.fluidSystem(size: 11))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .lineLimit(1)
             }
 
@@ -1166,15 +1205,15 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
     @ViewBuilder
     private func header(title: String, allowsBack: Bool) -> some View {
-        if !self.grouped {
+        if !self.grouped || self.session.screen != .success {
             HStack(spacing: 7) {
                 if allowsBack {
                     Button(action: self.session.returnToChoice) {
                         Image(systemName: "chevron.left")
                             .font(.fluidSystem(size: 10, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.72))
+                            .foregroundStyle(self.theme.palette.secondaryText)
                             .frame(width: 24, height: 24)
-                            .background(Circle().fill(Color.white.opacity(0.06)))
+                            .background(Circle().fill(self.theme.palette.elevatedCardBackground))
                     }
                     .buttonStyle(.plain)
                     .disabled(self.session.capturePhase != .idle)
@@ -1183,24 +1222,24 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 } else {
                     Image(systemName: self.session.isSavedCorrection ? "checkmark.circle.fill" : "mic.fill")
                         .font(.fluidSystem(size: 11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.78))
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .frame(width: 24, height: 24)
                 }
 
                 Text(PichiLocalization.text(title, locale: self.interfaceLocale))
                     .font(.fluidSystem(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.72))
+                    .foregroundStyle(self.theme.palette.secondaryText)
 
                 Spacer(minLength: 8)
 
                 Button(action: self.onDismiss) {
                     Image(systemName: "xmark")
                         .font(.fluidSystem(size: 10, weight: .semibold))
-                        .foregroundStyle(.white.opacity(self.isDismissHovered ? 0.95 : 0.68))
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .frame(width: 24, height: 24)
                         .background(
                             Circle()
-                                .fill(Color.white.opacity(self.isDismissHovered ? 0.13 : 0.06))
+                                .fill(self.theme.palette.elevatedCardBackground)
                         )
                 }
                 .buttonStyle(.plain)
@@ -1213,21 +1252,29 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
     }
 
     private var correctionPair: some View {
-        HStack(spacing: 8) {
-            Text(verbatim: self.session.candidate.heardText)
-                .foregroundStyle(.white.opacity(0.78))
-
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Recognized").font(self.theme.typography.captionSmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                Text(verbatim: self.session.candidate.heardText)
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             Image(systemName: "arrow.right")
-                .font(.fluidSystem(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.42))
-
-            Text(verbatim: self.session.candidate.correctedText)
-                .foregroundStyle(.white)
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .padding(.top, 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Your correction").font(self.theme.typography.captionSmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                Text(verbatim: self.session.candidate.correctedText)
+                    .font(self.theme.typography.bodySmallStrong)
+                    .foregroundStyle(self.theme.palette.accentText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .font(.fluidSystem(size: 16, weight: .semibold))
-        .lineLimit(1)
-        .minimumScaleFactor(0.72)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var finalOutputRow: some View {
@@ -1235,10 +1282,10 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Final output")
                     .font(.fluidSystem(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.46))
+                    .foregroundStyle(self.theme.palette.secondaryText)
                 Text(self.session.lastOutput.isEmpty ? PichiLocalization.text("Record to check", locale: self.interfaceLocale) : self.session.finalOutputText)
                     .font(.fluidSystem(size: 12, weight: .semibold))
-                    .foregroundStyle(.white.opacity(self.session.lastOutput.isEmpty ? 0.48 : 0.9))
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .lineLimit(1)
             }
 
@@ -1259,7 +1306,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
         HStack(spacing: 6) {
             Text("Captured")
                 .font(.fluidSystem(size: 10.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.46))
+                .foregroundStyle(self.theme.palette.secondaryText)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -1287,15 +1334,16 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
     private var panelSurface: some View {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(Color.white.opacity(0.045))
+            .fill(self.theme.palette.elevatedCardBackground)
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
+                    .strokeBorder(self.theme.palette.cardBorder, lineWidth: 1)
             )
     }
 }
 
 private struct CorrectionOverlayReadinessRing: View {
+    @Environment(\.theme) private var theme
     @Environment(\.locale) private var interfaceLocale
     let progress: Int
     let total: Int
@@ -1310,7 +1358,7 @@ private struct CorrectionOverlayReadinessRing: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.white.opacity(0.16), lineWidth: 7)
+                .stroke(self.theme.palette.cardBorder, lineWidth: 7)
 
             Circle()
                 .trim(from: 0, to: self.fraction)
@@ -1323,12 +1371,12 @@ private struct CorrectionOverlayReadinessRing: View {
             VStack(spacing: 0) {
                 Text("\(self.progress)/\(self.total)")
                     .font(.fluidSystem(size: 16, weight: .bold, design: .rounded))
-                    .foregroundStyle(self.isReady ? self.accent : .white.opacity(0.92))
+                    .foregroundStyle(self.isReady ? self.accent : self.theme.palette.secondaryText)
                     .monospacedDigit()
 
                 Text(PichiLocalization.text(self.isReady ? "Ready" : "correct", locale: self.interfaceLocale))
                     .font(.fluidSystem(size: 8.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.46))
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
         }
         .frame(width: 76, height: 76)
@@ -1341,6 +1389,7 @@ private struct CorrectionOverlayReadinessRing: View {
 }
 
 private struct CorrectionOverlayActionButton: View {
+    @Environment(\.theme) private var theme
     enum Style {
         case accent
         case secondary
@@ -1397,38 +1446,38 @@ private struct CorrectionOverlayActionButton: View {
 
     private var fillColor: Color {
         guard self.isEnabled else {
-            return Color.white.opacity(0.045)
+            return self.theme.palette.elevatedCardBackground
         }
         switch self.style {
         case .accent:
             return self.accent
         case .secondary:
-            return Color.white.opacity(self.isHovered ? 0.1 : 0.045)
+            return self.isHovered ? self.accent.opacity(0.12) : self.theme.palette.elevatedCardBackground
         }
     }
 
     private var foreground: Color {
-        guard self.isEnabled else { return .white.opacity(0.62) }
+        guard self.isEnabled else { return self.theme.palette.secondaryText }
         switch self.style {
         case .accent:
             return AppTheme.Palette.contrastingInk(on: self.accent)
         case .secondary:
-            return .white.opacity(0.94)
+            return self.theme.palette.primaryText
         }
     }
 
     private var borderColor: Color {
         guard self.isEnabled else {
-            return Color.white.opacity(0.1)
+            return self.theme.palette.cardBorder
         }
         if self.isReady {
             return self.accent.opacity(0.78)
         }
         switch self.style {
         case .accent:
-            return Color.white.opacity(self.isEnabled ? 0.18 : 0.06)
+            return self.theme.palette.cardBorder
         case .secondary:
-            return Color.white.opacity(self.isHovered ? 0.28 : 0.16)
+            return self.isHovered ? self.accent : self.theme.palette.cardBorder
         }
     }
 
@@ -1448,6 +1497,7 @@ private struct CorrectionOverlayActionButton: View {
 }
 
 private struct CorrectionOverlayRecordButton: View {
+    @Environment(\.theme) private var theme
     @Environment(\.locale) private var interfaceLocale
     let title: String
     let isStop: Bool
@@ -1461,7 +1511,7 @@ private struct CorrectionOverlayRecordButton: View {
         Button(action: self.action) {
             Label(PichiLocalization.text(self.title, locale: self.interfaceLocale), systemImage: self.isStop ? "stop.fill" : "mic.fill")
                 .font(.fluidSystem(size: 12, weight: .semibold))
-                .foregroundStyle(self.isEnabled ? AppTheme.Palette.contrastingInk(on: self.buttonColor) : .white.opacity(0.62))
+                .foregroundStyle(self.isEnabled ? AppTheme.Palette.contrastingInk(on: self.buttonColor) : self.theme.palette.secondaryText)
                 .padding(.horizontal, 13)
                 .frame(height: 36)
                 .background(
@@ -1469,7 +1519,7 @@ private struct CorrectionOverlayRecordButton: View {
                         .fill(self.isEnabled ? self.buttonColor : self.buttonColor.opacity(0.25))
                         .overlay {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(Color.white.opacity(self.isHovered ? 0.3 : 0.16), lineWidth: 1)
+                                .strokeBorder(self.isHovered ? self.accent : self.theme.palette.cardBorder, lineWidth: 1)
                         }
                 )
         }
@@ -1484,6 +1534,7 @@ private struct CorrectionOverlayRecordButton: View {
 }
 
 private struct CorrectionOverlayVariantChip: View {
+    @Environment(\.theme) private var theme
     let variant: String
     let onRemove: () -> Void
 
@@ -1497,18 +1548,18 @@ private struct CorrectionOverlayVariantChip: View {
                     .minimumScaleFactor(0.75)
                 Image(systemName: "xmark.circle.fill")
                     .font(.fluidSystem(size: 9))
-                    .foregroundStyle(.white.opacity(self.isHovered ? 0.72 : 0.42))
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
             .font(.fluidSystem(size: 10.5, weight: .medium))
-            .foregroundStyle(.white.opacity(0.72))
+            .foregroundStyle(self.theme.palette.secondaryText)
             .padding(.horizontal, 7)
             .frame(height: 23)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.white.opacity(self.isHovered ? 0.1 : 0.06))
+                    .fill(self.isHovered ? self.theme.palette.accent.opacity(0.12) : self.theme.palette.elevatedCardBackground)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                            .strokeBorder(self.theme.palette.cardBorder, lineWidth: 1)
                     )
             )
         }
