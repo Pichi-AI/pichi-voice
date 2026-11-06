@@ -1,7 +1,130 @@
 import AppKit
+import ApplicationServices
 import Combine
 import QuartzCore
 import SwiftUI
+
+
+/// Free rectangles around the editor, in AppKit screen coordinates. The whole
+/// text field is protected, including when the popup grows or is dragged.
+enum DictionaryCorrectionOverlayPlacement {
+    static func appKitFrame(accessibilityFrame: CGRect, primaryScreenTop: CGFloat) -> CGRect {
+        CGRect(x: accessibilityFrame.minX, y: primaryScreenTop - accessibilityFrame.maxY,
+               width: accessibilityFrame.width, height: accessibilityFrame.height)
+    }
+
+    static func availableRegions(screen: CGRect, editor: CGRect) -> [CGRect] {
+        let safe = screen.insetBy(dx: 10, dy: 10)
+        let excluded = editor.insetBy(dx: -10, dy: -10).intersection(safe)
+        guard !excluded.isNull else { return [safe] }
+        return [
+            CGRect(x: safe.minX, y: excluded.maxY, width: safe.width, height: max(0, safe.maxY - excluded.maxY)),
+            CGRect(x: safe.minX, y: safe.minY, width: safe.width, height: max(0, excluded.minY - safe.minY)),
+            CGRect(x: safe.minX, y: safe.minY, width: max(0, excluded.minX - safe.minX), height: safe.height),
+            CGRect(x: excluded.maxX, y: safe.minY, width: max(0, safe.maxX - excluded.maxX), height: safe.height),
+        ]
+    }
+
+    static func region(size: CGSize, screen: CGRect, editor: CGRect, minimumHeight: CGFloat) -> CGRect? {
+        let regions = availableRegions(screen: screen, editor: editor).filter { $0.width >= size.width && $0.height >= minimumHeight }
+        return regions.first { $0.height >= size.height } ?? regions.max { $0.height < $1.height }
+    }
+
+    static func frame(size: CGSize, screen: CGRect, editor: CGRect, manualTopLeft: CGPoint? = nil) -> CGRect? {
+        guard size.width > 0, size.height > 0 else { return nil }
+        let safe = screen.insetBy(dx: 10, dy: 10)
+        guard size.width <= safe.width, size.height <= safe.height else { return nil }
+        func clamped(_ point: CGPoint) -> CGRect {
+            CGRect(x: min(max(point.x, safe.minX), safe.maxX - size.width),
+                   y: min(max(point.y - size.height, safe.minY), safe.maxY - size.height),
+                   width: size.width, height: size.height)
+        }
+        let excluded = editor.insetBy(dx: -10, dy: -10)
+        if let manualTopLeft {
+            let manual = clamped(manualTopLeft)
+            if !manual.intersects(excluded) { return manual }
+        }
+        guard let region = region(size: size, screen: screen, editor: editor, minimumHeight: size.height) else { return nil }
+        let x = min(max(editor.midX - size.width / 2, region.minX), region.maxX - size.width)
+        let y: CGFloat
+        if region.minY >= editor.maxY { y = region.minY }
+        else if region.maxY <= editor.minY { y = region.maxY - size.height }
+        else { y = min(max(editor.midY - size.height / 2, region.minY), region.maxY - size.height) }
+        return CGRect(x: x, y: y, width: size.width, height: size.height)
+    }
+}
+
+/// Only geometry is read. No text or selection content is copied into the popup.
+@MainActor
+private final class DictionaryCorrectionEditorGeometry {
+    private var retainedElement: AXUIElement?
+
+    func reset() { self.retainedElement = nil }
+
+    func frame() -> CGRect? {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.08)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        var element = unsafeBitCast(value, to: AXUIElement.self)
+        var pid: pid_t = 0
+        AXUIElementGetPid(element, &pid)
+        if pid == ProcessInfo.processInfo.processIdentifier,
+           NSApp.keyWindow?.identifier?.rawValue == "DictionaryCorrectionOverlay" {
+            guard let retainedElement else { return nil }
+            element = retainedElement
+        } else {
+            self.retainedElement = nil
+            var found: AXUIElement?
+            for _ in 0..<5 {
+                AXUIElementSetMessagingTimeout(element, 0.08)
+                var role: CFTypeRef?, subrole: CFTypeRef?
+                AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+                AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subrole)
+                guard (subrole as? String) != (kAXSecureTextFieldSubrole as String) else { return nil }
+                if [kAXTextAreaRole as String, kAXTextFieldRole as String, kAXComboBoxRole as String].contains(role as? String ?? "") {
+                    found = element; break
+                }
+                var parent: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &parent) == .success,
+                      let parent, CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+                element = unsafeBitCast(parent, to: AXUIElement.self)
+            }
+            guard let found else { return nil }
+            element = found; self.retainedElement = found
+        }
+        var positionValue: CFTypeRef?, sizeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success,
+              let positionValue, let sizeValue,
+              CFGetTypeID(positionValue) == AXValueGetTypeID(), CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
+        var position = CGPoint.zero, size = CGSize.zero
+        guard AXValueGetValue(unsafeBitCast(positionValue, to: AXValue.self), .cgPoint, &position),
+              AXValueGetValue(unsafeBitCast(sizeValue, to: AXValue.self), .cgSize, &size),
+              position.x.isFinite, position.y.isFinite, size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0, let primary = NSScreen.screens.first else { return nil }
+        return DictionaryCorrectionOverlayPlacement.appKitFrame(accessibilityFrame: CGRect(origin: position, size: size), primaryScreenTop: primary.frame.maxY)
+    }
+}
+
+private struct DictionaryCorrectionDragHandle: NSViewRepresentable {
+    let began: () -> Void
+    let ended: (CGRect) -> Void
+    func makeNSView(context: Context) -> Handle { Handle() }
+    func updateNSView(_ view: Handle, context: Context) { view.began = self.began; view.ended = self.ended }
+    final class Handle: NSView {
+        var began: (() -> Void)?
+        var ended: ((CGRect) -> Void)?
+        override func mouseDown(with event: NSEvent) {
+            guard let window else { return }
+            self.began?()
+            window.performDrag(with: event)
+            self.ended?(window.frame)
+        }
+        override func resetCursorRects() { self.addCursorRect(self.bounds, cursor: .openHand) }
+    }
+}
 
 /// SwiftUI observes the collection while each row retains its existing session.
 @MainActor
@@ -9,6 +132,7 @@ private final class DictionaryCorrectionOverlayState: ObservableObject {
     @Published var sessions: [AutomaticDictionaryTrainingSession] = []
     @Published var progressGeneration: UInt64 = 0
     @Published var maximumListHeight: CGFloat = 420
+    var chromeHeight: CGFloat = 120
 }
 
 @MainActor
@@ -27,6 +151,11 @@ final class DictionaryCorrectionOverlayController {
     private var outcomes: [UUID: (AutomaticDictionarySuggestionOutcome) -> Void] = [:]
     private var dismissTask: Task<Void, Never>?
     private var generation: UInt64 = 0
+    private let editorGeometry = DictionaryCorrectionEditorGeometry()
+    private var geometryTask: Task<Void, Never>?
+    private var manualTopLeft: CGPoint?
+    private var isDragging = false
+
 
     #if DEBUG
     var presentedCandidateIDs: [UUID] { self.state.sessions.map(\.candidate.id) }
@@ -52,6 +181,7 @@ final class DictionaryCorrectionOverlayController {
     func concealPrivatePresentation() {
         self.generation &+= 1
         self.dismissTask?.cancel(); self.dismissTask = nil; self.deadline = nil
+        self.geometryTask?.cancel(); self.geometryTask = nil; self.editorGeometry.reset()
         for session in self.state.sessions {
             session.onInteraction = nil; session.onSuccess = nil; session.onOpenDictionary = nil
             session.concealSavedCorrection()
@@ -66,7 +196,7 @@ final class DictionaryCorrectionOverlayController {
     var isPresented: Bool { self.panel?.isVisible == true }
 
     func transientOverlayLayoutDidChange() {
-        guard self.isPresented else { return }
+        guard !self.state.sessions.isEmpty else { return }
         self.resizeAndPositionPanel(animated: true)
     }
 
@@ -136,9 +266,14 @@ final class DictionaryCorrectionOverlayController {
         self.outcomes[id] = outcome
         // Opening a row or undoing it never resets the shared countdown.
         session.onInteraction = { }
-        session.onSuccess = { [weak self] in
+        session.onSuccess = { [weak self, weak session] in
+            guard let session else { return }
             self?.outcomes.removeValue(forKey: id)?(.accepted)
-            self?.rowDidChange()
+            if session.screen == .success && (!session.isSavedCorrection || session.didUndoSavedCorrection) {
+                self?.remove(id: id)
+            } else {
+                self?.rowDidChange()
+            }
         }
         session.onOpenDictionary = { [weak self] in self?.remove(id: id) }
         self.rowCancellables[id] = session.objectWillChange.receive(on: RunLoop.main).sink { [weak self] _ in
@@ -166,7 +301,7 @@ final class DictionaryCorrectionOverlayController {
     /// The timer defers closing an active Undo/training operation or its error.
     /// Its next state publication rechecks the same deadline without restarting it.
     func expireIfDue() {
-        guard let deadline, self.now() >= deadline,
+        guard !self.isDragging, let deadline, self.now() >= deadline,
               !self.state.sessions.contains(where: {
                   $0.isUndoingSavedCorrection || $0.capturePhase != .idle || $0.screen == .training || $0.hasError
               }) else { return }
@@ -178,6 +313,15 @@ final class DictionaryCorrectionOverlayController {
         self.state.objectWillChange.send()
         self.expireIfDue()
         self.resizeAndPositionPanel(animated: true)
+    }
+
+    /// Acknowledging a saved row only removes its notice. It never saves again
+    /// or revokes the receipt, and leaves the shared deadline unchanged.
+    func confirm(id: UUID) {
+        guard let session = self.state.sessions.first(where: { $0.candidate.id == id }),
+              session.screen == .success, !session.isUndoingSavedCorrection, !session.hasError else { return }
+        self.outcomes.removeValue(forKey: id)?(.accepted)
+        self.remove(id: id)
     }
 
     func dismiss(id: UUID) {
@@ -211,6 +355,7 @@ final class DictionaryCorrectionOverlayController {
     func hide() {
         self.generation &+= 1
         self.dismissTask?.cancel(); self.dismissTask = nil; self.deadline = nil
+        self.geometryTask?.cancel(); self.geometryTask = nil; self.editorGeometry.reset()
         for session in self.state.sessions { self.release(session) }
         self.state.sessions = []
         self.panel?.orderOut(nil)
@@ -223,13 +368,19 @@ final class DictionaryCorrectionOverlayController {
     }
 
     private func presentGroup() {
-        if let screen = OverlayScreenResolver.screenForCurrentPointer() ?? NSScreen.main {
-            self.state.maximumListHeight = min(420, max(80, screen.visibleFrame.height - 100))
-        }
         let profile = PrivateProfileStorage.current
         let view = DictionaryCorrectionOverlayGroupView(state: self.state,
             onDismissAll: { [weak self] in self?.dismiss() },
             onDismissRow: { [weak self] in self?.dismiss(id: $0) },
+            onConfirmRow: { [weak self] in self?.confirm(id: $0) },
+            onDragBegan: { [weak self] in self?.isDragging = true },
+            onDragEnded: { [weak self] frame in
+                guard let self else { return }
+                self.isDragging = false
+                self.manualTopLeft = CGPoint(x: frame.minX, y: frame.maxY)
+                self.resizeAndPositionPanel(animated: false)
+                self.expireIfDue()
+            },
             onIgnore: { [weak self] id in self?.outcomes.removeValue(forKey: id)?(.ignored); self?.remove(id: id) },
             onFrequencyChange: { frequency in
                 guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
@@ -243,12 +394,20 @@ final class DictionaryCorrectionOverlayController {
         if let hostingView = self.hostingView { hostingView.rootView = PichiLocalizedContent { DictionaryCorrectionOverlayRoot(content: view) } }
         else { self.createPanel(rootView: view) }
         self.resizeAndPositionPanel(animated: true)
-        self.panel?.alphaValue = 1
-        self.panel?.orderFrontRegardless()
+        if self.geometryTask == nil {
+            self.geometryTask = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+                    guard let self, !self.state.sessions.isEmpty else { return }
+                    self.resizeAndPositionPanel(animated: false)
+                }
+            }
+        }
     }
 
     private func createPanel(rootView: DictionaryCorrectionOverlayGroupView) {
         let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.identifier = NSUserInterfaceItemIdentifier("DictionaryCorrectionOverlay")
         panel.isFloatingPanel = true; panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
@@ -261,40 +420,40 @@ final class DictionaryCorrectionOverlayController {
             .sink { [weak self] _ in DispatchQueue.main.async { self?.transientOverlayLayoutDidChange() } }
     }
     private func resizeAndPositionPanel(animated: Bool) {
-        guard let panel, let hostingView,
-              let screen = OverlayScreenResolver.screenForCurrentPointer() ?? NSScreen.main
-        else {
-            return
+        guard !self.isDragging, let panel, let hostingView else { return }
+        guard let editor = self.editorGeometry.frame(),
+              let editorScreen = NSScreen.screens.max(by: {
+                  let a = $0.frame.intersection(editor), b = $1.frame.intersection(editor)
+                  return (a.isNull ? 0 : a.width * a.height) < (b.isNull ? 0 : b.width * b.height)
+              }), editorScreen.frame.intersects(editor) else {
+            // If the editor cannot provide geometry, avoid guessing over its text.
+            panel.orderOut(nil); return
         }
-
+        let screen = self.manualTopLeft.flatMap { point in
+            NSScreen.screens.first { $0.frame.contains(CGPoint(x: point.x, y: point.y - 1)) }
+        } ?? editorScreen
         hostingView.layoutSubtreeIfNeeded()
-        let fittingSize = hostingView.fittingSize
-        let size = NSSize(width: ceil(fittingSize.width), height: ceil(fittingSize.height))
-        guard size.width > 0, size.height > 0 else { return }
-        hostingView.frame = NSRect(origin: .zero, size: size)
-
-        let visibleFrame = screen.visibleFrame
-        let requestedY = visibleFrame.minY + CGFloat(SettingsStore.shared.overlayBottomOffset)
-        let microphoneToastY = MicrophoneChangeOverlayController.shared.topEdge(on: screen).map { $0 + 10 }
-        let stackedY = max(requestedY, microphoneToastY ?? requestedY)
-        let y = max(visibleFrame.minY + 10, min(stackedY, visibleFrame.maxY - size.height - 40))
-        let frame = NSRect(
-            x: screen.frame.midX - size.width / 2,
-            y: y,
-            width: size.width,
-            height: size.height
-        )
-
-        guard animated, panel.isVisible else {
-            panel.setFrame(frame, display: true)
-            return
+        let fitting = hostingView.fittingSize
+        let size = CGSize(width: ceil(fitting.width), height: ceil(fitting.height))
+        guard let region = DictionaryCorrectionOverlayPlacement.region(size: size,
+            screen: screen.visibleFrame, editor: editor, minimumHeight: self.state.chromeHeight + 60) else {
+            panel.orderOut(nil); return
         }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.16
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().setFrame(frame, display: true)
+        let listHeight = min(420, max(60, floor(region.height - self.state.chromeHeight)))
+        if self.state.maximumListHeight != listHeight {
+            self.state.maximumListHeight = listHeight
         }
+        guard let frame = DictionaryCorrectionOverlayPlacement.frame(size: size,
+            screen: screen.visibleFrame, editor: editor, manualTopLeft: self.manualTopLeft) else {
+            panel.orderOut(nil); return
+        }
+        hostingView.frame = CGRect(origin: .zero, size: size)
+        // A straight animation between safe positions could cross the editor.
+        if panel.frame != frame { panel.setFrame(frame, display: true) }
+        panel.alphaValue = 1
+        if !panel.isVisible { panel.orderFrontRegardless() }
     }
+
 }
 
 enum MicrophoneChangePresentation: Hashable {
@@ -727,6 +886,9 @@ private struct DictionaryCorrectionOverlayGroupView: View {    @Environment(\.th
     @ObservedObject var state: DictionaryCorrectionOverlayState
     let onDismissAll: () -> Void
     let onDismissRow: (UUID) -> Void
+    let onConfirmRow: (UUID) -> Void
+    let onDragBegan: () -> Void
+    let onDragEnded: (CGRect) -> Void
     let onIgnore: (UUID) -> Void
     let onFrequencyChange: (SettingsStore.AutomaticDictionarySuggestionFrequency) -> Void
     let onDisableSuggestions: () -> Void
@@ -746,9 +908,14 @@ private struct DictionaryCorrectionOverlayGroupView: View {    @Environment(\.th
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "text.book.closed.fill").foregroundStyle(self.theme.palette.accentText)
-                Text("Personal Dictionary").font(self.theme.typography.bodySmallStrong)
-                Spacer()
+                HStack(spacing: 8) {
+                    Image(systemName: "text.book.closed.fill").foregroundStyle(self.theme.palette.accentText)
+                    Text("Personal Dictionary").font(self.theme.typography.bodySmallStrong)
+                    Spacer()
+                    Image(systemName: "hand.draw").font(self.theme.typography.caption)
+                }
+                .overlay { DictionaryCorrectionDragHandle(began: self.onDragBegan, ended: self.onDragEnded) }
+                .help("Drag to move this notification")
                 Button(action: self.onDismissAll) {
                     Image(systemName: "xmark").font(.fluidSystem(size: 10, weight: .semibold))
                         .frame(width: 24, height: 24).contentShape(Circle())
@@ -765,6 +932,7 @@ private struct DictionaryCorrectionOverlayGroupView: View {    @Environment(\.th
                     ForEach(self.state.sessions, id: \.candidate.id) { session in
                         AutomaticDictionaryCorrectionOverlayView(session: session, displayDuration: 10,
                             onDismiss: { self.onDismissRow(session.candidate.id) },
+                            onConfirm: { self.onConfirmRow(session.candidate.id) },
                             onIgnore: { self.onIgnore(session.candidate.id) },
                             onFrequencyChange: self.onFrequencyChange, onDisableSuggestions: self.onDisableSuggestions,
                             grouped: true)
@@ -810,6 +978,12 @@ private struct DictionaryCorrectionOverlayGroupView: View {    @Environment(\.th
             .accessibilityValue(Double(self.progress).formatted(.percent.precision(.fractionLength(0)).locale(self.interfaceLocale)))
         }
         .frame(width: 500)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height - self.contentHeight } action: { height in
+            if height > 0, self.state.chromeHeight != height {
+                self.state.chromeHeight = height
+                self.onLayout()
+            }
+        }
         .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(self.theme.palette.cardBorder, lineWidth: 1).allowsHitTesting(false) }
 
@@ -838,6 +1012,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
     let displayDuration: TimeInterval
     let onDismiss: () -> Void
+    let onConfirm: () -> Void
     let onIgnore: () -> Void
     let onFrequencyChange: (SettingsStore.AutomaticDictionarySuggestionFrequency) -> Void
     let onDisableSuggestions: () -> Void
@@ -1150,6 +1325,10 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                     .disabled(self.session.isUndoingSavedCorrection)
                     .help("Undo removes this dictionary save. Your text stays as edited.")
                 }
+                Button("Done", action: self.onConfirm)
+                    .buttonStyle(FluidOutlinedButtonStyle(height: 28, foreground: self.theme.palette.accentText))
+                    .disabled(self.session.isUndoingSavedCorrection || self.session.hasError)
+                    .help("Keep this save and dismiss its notification")
                 if !self.session.didUndoSavedCorrection {
                     Button(action: self.session.openSavedDictionary) {
                         Image(systemName: "text.book.closed").frame(width: 28, height: 28)

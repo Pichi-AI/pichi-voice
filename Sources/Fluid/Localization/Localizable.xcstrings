@@ -67096,6 +67096,40 @@
           }
         }
       }
+    },
+    "Drag to move this notification": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drag to move this notification"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Потяните за заголовок, чтобы переместить окно"
+          }
+        }
+      }
+    },
+    "Keep this save and dismiss its notification": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep this save and dismiss its notification"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оставить сохранение и убрать его из уведомления"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
