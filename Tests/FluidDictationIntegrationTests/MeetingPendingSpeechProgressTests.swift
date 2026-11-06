@@ -110,4 +110,13 @@ final class MeetingPendingSpeechProgressTests: XCTestCase {
         timeline.discard(beforeSample: 24_000)
         XCTAssertEqual(try timeline.measuredIntervals(fromSample: 24_000, throughSample: 40_000), [14..<15])
     }
+
+    func testInRoomTimelineBindsOnlyTheFirstValidMeasuredPacket() throws {
+        let timeline = try MeetingPCMSourceTimeline()
+        XCTAssertThrowsError(try timeline.record(sourceStartSample: 0, frameCount: 16_000, presentationTime: .nan))
+        try timeline.record(sourceStartSample: 0, frameCount: 16_000, presentationTime: 600)
+        try timeline.record(sourceStartSample: 16_000, frameCount: 16_000, presentationTime: 603)
+        XCTAssertEqual(try timeline.measuredIntervals(fromSample: 0, throughSample: 32_000), [0..<1, 3..<4])
+        XCTAssertNil(timeline.mapInterval(start: 0.5, end: 1.5), "A negative VAD query must not bridge an unknown source gap")
+    }
 }

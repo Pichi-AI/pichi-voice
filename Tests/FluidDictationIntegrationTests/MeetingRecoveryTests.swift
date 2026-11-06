@@ -35,6 +35,7 @@ final class MeetingRecoveryTests: XCTestCase {
         self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         var configuration = self.makeConfiguration()
         configuration.mode = .onlineCall
+        configuration.application = .init(bundleIdentifier: "us.zoom.xos", displayName: "Synthetic Zoom")
         configuration.audioStorageMode = .memoryOnly
         configuration.languageCode = "en"
         configuration.speakerLabelsEnabled = false
