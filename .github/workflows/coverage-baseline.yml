@@ -13,6 +13,7 @@ concurrency:
 
 env:
   DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+  SOURCE_REVISION: 59361675a1413361b9ea349830d523d5e982d002
 
 jobs:
   native:
@@ -31,22 +32,23 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Create isolated measurement worktree
-        run: git worktree add --detach ../coverage-worktree HEAD
+        run: git worktree add --detach ${{ runner.temp }}/coverage-worktree HEAD
       - name: Record immutable inputs
-        working-directory: ../coverage-worktree
+        working-directory: ${{ runner.temp }}/coverage-worktree
         run: |
           mkdir -p .build/coverage/reports
           git rev-parse HEAD > .build/coverage/reports/harness-revision.txt
-          git rev-parse HEAD^ > .build/coverage/reports/source-revision.txt
-          git diff --name-only HEAD^ HEAD > .build/coverage/reports/harness-delta.txt
+          git rev-parse "$SOURCE_REVISION" > .build/coverage/reports/source-revision.txt
+          git diff --name-only "$SOURCE_REVISION" HEAD > .build/coverage/reports/harness-delta.txt
           git ls-files Sources Vendor scripts/dev tools .codex > .build/coverage/reports/source-inventory.txt
           xcodebuild -version > .build/coverage/reports/xcode-version.txt
           sw_vers > .build/coverage/reports/os-version.txt
           df -h . > .build/coverage/reports/disk-before.txt
       - name: Create owned iPhone simulator
         if: matrix.scope == 'ios-iphone'
-        working-directory: ../coverage-worktree
+        working-directory: ${{ runner.temp }}/coverage-worktree
         run: |
           xcrun simctl list --json > .build/coverage/reports/simulator-inventory.json
           read -r device_type runtime < <(python3 - <<'PYCODE'
@@ -62,7 +64,7 @@ jobs:
           echo "SIMULATOR_UDID=$udid" >> "$GITHUB_ENV"
           echo "$udid" > .build/coverage/reports/owned-simulator.txt
       - name: Build instrumented native targets once
-        working-directory: ../coverage-worktree
+        working-directory: ${{ runner.temp }}/coverage-worktree
         env:
           SCOPE: ${{ matrix.scope }}
           SCHEME: ${{ matrix.scheme }}
@@ -76,7 +78,7 @@ jobs:
           fi
           xcodebuild -project Fluid.xcodeproj -scheme "$SCHEME" -configuration Debug             -destination "$destination" -derivedDataPath "$PWD/.build/coverage/DerivedData"             -clonedSourcePackagesDirPath "$PWD/.build/coverage/SourcePackages" -jobs 2             -enableCodeCoverage YES -resultBundlePath .build/coverage/build.xcresult             "${signing[@]}" build-for-testing 2>&1 | tee .build/coverage/reports/build.log
       - name: Configure existing isolated test host
-        working-directory: ../coverage-worktree
+        working-directory: ${{ runner.temp }}/coverage-worktree
         env:
           SCHEME: ${{ matrix.scheme }}
         run: |
@@ -101,7 +103,7 @@ jobs:
           (products/'coverage.xctestrun').write_bytes(plistlib.dumps(value))
           PYCODE
       - name: Execute existing tests with coverage
-        working-directory: ../coverage-worktree
+        working-directory: ${{ runner.temp }}/coverage-worktree
         env:
           SCOPE: ${{ matrix.scope }}
           TEST_RUNNER_FLUID_EXPORT_TEST_SANDBOX_TEMP: /tmp
@@ -116,7 +118,7 @@ jobs:
           xcodebuild -xctestrun .build/coverage/DerivedData/Build/Products/coverage.xctestrun             -destination "$destination" -enableCodeCoverage YES -parallel-testing-enabled NO             -test-timeouts-enabled YES -default-test-execution-time-allowance 60             -maximum-test-execution-time-allowance 180 -resultBundlePath .build/coverage/tests.xcresult             "${exclusions[@]}" test-without-building 2>&1 | tee .build/coverage/reports/tests.log
       - name: Export coverage and actual test accounting
         if: always()
-        working-directory: ../coverage-worktree
+        working-directory: ${{ runner.temp }}/coverage-worktree
         run: |
           if [[ -d .build/coverage/tests.xcresult ]]; then
             xcrun xccov view --report --json .build/coverage/tests.xcresult > .build/coverage/reports/xccov.json
@@ -128,17 +130,19 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: coverage-metrics-${{ matrix.scope }}
-          path: ../coverage-worktree/.build/coverage/reports
+          path: ${{ runner.temp }}/coverage-worktree/.build/coverage/reports
           if-no-files-found: error
           retention-days: 7
+          include-hidden-files: true
       - name: Preserve native result bundle
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: coverage-xcresult-${{ matrix.scope }}
-          path: ../coverage-worktree/.build/coverage/tests.xcresult
+          path: ${{ runner.temp }}/coverage-worktree/.build/coverage/tests.xcresult
           if-no-files-found: ignore
           retention-days: 7
+          include-hidden-files: true
       - name: Release owned simulator
         if: always() && env.SIMULATOR_UDID != ''
         run: |
@@ -152,14 +156,15 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
-      - run: git worktree add --detach ../coverage-worktree HEAD
+          fetch-depth: 0
+      - run: git worktree add --detach ${{ runner.temp }}/coverage-worktree HEAD
       - name: Run package-owned tests with compiler coverage
-        working-directory: ../coverage-worktree
+        working-directory: ${{ runner.temp }}/coverage-worktree
         run: |
           mkdir -p .build/coverage/reports
           xcodebuild -version > .build/coverage/reports/xcode-version.txt
           git rev-parse HEAD > .build/coverage/reports/harness-revision.txt
-          git rev-parse HEAD^ > .build/coverage/reports/source-revision.txt
+          git rev-parse "$SOURCE_REVISION" > .build/coverage/reports/source-revision.txt
           status=0
           for package in NativeTextInference PichiGigaAM RussianMorphology TranscribeCpp; do
             scratch="$PWD/.build/coverage/packages/$package"
@@ -172,6 +177,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: coverage-metrics-packages
-          path: ../coverage-worktree/.build/coverage/reports
+          path: ${{ runner.temp }}/coverage-worktree/.build/coverage/reports
           if-no-files-found: error
           retention-days: 7
+          include-hidden-files: true
