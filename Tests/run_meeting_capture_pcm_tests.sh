@@ -28,7 +28,7 @@ memory_contract = declaration(contract, 'nonisolated protocol MeetingMemoryAudio
 root.joinpath('Contracts.swift').write_text('import Foundation\nimport CoreMedia\n' + speaker_contract + '\n' + memory_contract + '\n'
     + 'class MeetingProcessingPipeline {}\n'
     + 'final class DebugLogger: Sendable { static let shared = DebugLogger(); func info(_ message: String, source: String) {} }\n'
-    + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true; var speakerRevisions: [String] = []; var protectedSourceThroughSample: Int? = nil }\n'
+    + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true; var speakerRevisions: [String] = []; var protectedSourceThroughSample: Int? = nil; var protectedSourceIntervals: [Range<TimeInterval>] = [] }\n'
     + 'enum MeetingAudioTrackKind: Sendable { case microphone, applicationAudio }\n'
     + 'enum MeetingCaptureEvent: Sendable { enum Kind: Sendable { case writerBackpressure, captureStoppedUnexpectedly }; case interrupted(kind: Kind, trackID: UUID?, detail: String) }\n'
     + 'struct MeetingBackendSpeakerActivity: Sendable {}\n'
