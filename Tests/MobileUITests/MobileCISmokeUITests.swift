@@ -66,6 +66,20 @@ final class MobileCISmokeUITests: XCTestCase {
         capture("privacy-ru-dark")
     }
 
+    private func toggle(_ row: XCUIElement) {
+        XCTAssertTrue(row.isHittable && row.isEnabled)
+        let bounds = row.frame
+        let controls = app.switches.allElementsBoundByIndex.filter {
+            let frame = $0.frame
+            return frame.width > 0 && frame.width < bounds.width / 2
+                && bounds.contains(CGPoint(x: frame.midX, y: frame.midY))
+        }
+        XCTAssertLessThanOrEqual(controls.count, 1)
+        if let backing = controls.first { backing.tap() }
+        else if bounds.width < 90 { row.tap() }
+        else { row.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap() }
+    }
+
     func testSaveAudioChoicePersistsAcrossOrdinaryRelaunch() throws {
         launch()
         navigate("settings", title: "Settings")
@@ -74,8 +88,8 @@ final class MobileCISmokeUITests: XCTestCase {
         XCTAssertTrue(setting.waitForExistence(timeout: 5))
         let original = try XCTUnwrap(setting.value as? String)
         XCTAssertTrue(["0", "1"].contains(original))
-        // The trailing coordinate is the native UISwitch in the identified row.
-        setting.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+        capture("privacy-before-toggle")
+        toggle(setting)
         let expected = original == "0" ? "1" : "0"
         let updated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", expected), object: setting)
         XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 5), .completed)
@@ -86,7 +100,7 @@ final class MobileCISmokeUITests: XCTestCase {
         XCTAssertTrue(setting.waitForExistence(timeout: 5))
         XCTAssertEqual(setting.value as? String, expected)
         capture("privacy-persisted")
-        setting.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+        toggle(setting)
         let restored = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", original), object: setting)
         XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed)
     }

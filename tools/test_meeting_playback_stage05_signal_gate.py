@@ -63,7 +63,7 @@ class Stage05SignalGateTests(unittest.TestCase):
         return capture
 
     def _cli_fixture(self):
-        temporary = tempfile.TemporaryDirectory(dir="/private/tmp")
+        temporary = tempfile.TemporaryDirectory(dir=str(Path(tempfile.gettempdir()).resolve()))
         root = Path(temporary.name)
         rate, count, delay = 16_000, 20_000, 96
         render, state = [], 0x1234_5678
@@ -172,7 +172,7 @@ class Stage05SignalGateTests(unittest.TestCase):
         self.assertEqual(gate.safe_category("private-window-title", {"unknown"}), "unknown")
 
     def test_native_float32_wav_is_decoded_and_nonfinite_is_rejected(self):
-        temporary = tempfile.TemporaryDirectory(dir="/private/tmp")
+        temporary = tempfile.TemporaryDirectory(dir=str(Path(tempfile.gettempdir()).resolve()))
         try:
             path = Path(temporary.name) / "float.wav"
             self._write_float_wav(path, [0.25, -0.5, 0.0])

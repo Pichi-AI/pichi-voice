@@ -15,7 +15,8 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         settings.selectedSpeechModel = .gigaam
         XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
-        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .streaming,
+                       "Registered bounded multi-track capture now supports the same streaming default")
         XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode),
                      "Reading a capability default must not write or migrate a preference")
         settings.selectedSpeechModel = .whisperTiny
@@ -23,6 +24,8 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         settings.selectedSpeechModel = .gigaam
         settings.meetingSpeakerProcessingMode = .afterRecording
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .afterRecording,
+                       "An explicit legacy choice remains authoritative for either input kind")
         settings.meetingSpeakerProcessingMode = .streaming
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .streaming,
                        "An explicit unsupported request is rejected by admission, not silently rewritten")

@@ -203,7 +203,9 @@ class DriverTests(unittest.TestCase):
                 if fault == "pid":
                     child = Child(child.pid, child.args, child.kind)
                 elif fault == "executable":
-                    processes.metadata[child.pid]["executable"] = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+                    foreign = self.root / "foreign-executable"
+                    foreign.write_bytes(b"synthetic foreign executable")
+                    processes.metadata[child.pid]["executable"] = str(foreign)
                 elif fault == "profile":
                     processes.metadata[child.pid]["arguments"] = "Google Chrome --user-data-dir=/user-primary"
                 elif fault == "group":

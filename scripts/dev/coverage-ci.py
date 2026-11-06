@@ -257,8 +257,8 @@ def native(root, output, scope, ui_class):
             join_files(files, xccov_files(archive, root))
             if scope == "ios":
                 tree = json.loads(command(["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", bundle, "--compact"]).stdout)
-                require_test_class(tree, ui_class)
                 command(["xcrun", "xcresulttool", "export", "attachments", "--path", bundle, "--output-path", work / f"screenshots-{index}", "--filter", "*.png"])
+                require_test_class(tree, ui_class)
         finally:
             if udid:
                 command(["xcrun", "simctl", "shutdown", udid], tolerate=True)

@@ -21,10 +21,13 @@ final class SettingsBackupRoundTripTests: XCTestCase {
         XCTAssertFalse(reloaded.onboardingCompleted)
         reloaded.onboardingCurrentStep = 7
         XCTAssertEqual(reloaded.onboardingCurrentStep, 7, "The optional account step must survive relaunch")
+        reloaded.onboardingCurrentStep = DesktopOnboardingNavigation.ownerVoiceStep
+        XCTAssertEqual(SettingsStore(defaults: defaults).onboardingCurrentStep, DesktopOnboardingNavigation.ownerVoiceStep,
+            "The optional voice step must survive relaunch without renumbering legacy steps")
         reloaded.onboardingCurrentStep = Int.max
-        XCTAssertEqual(reloaded.onboardingCurrentStep, 7)
+        XCTAssertEqual(reloaded.onboardingCurrentStep, DesktopOnboardingNavigation.ownerVoiceStep)
         defaults.set(Int.max, forKey: "OnboardingCurrentStep")
-        XCTAssertEqual(reloaded.onboardingCurrentStep, 7)
+        XCTAssertEqual(reloaded.onboardingCurrentStep, DesktopOnboardingNavigation.ownerVoiceStep)
         reloaded.onboardingCurrentStep = -1
         XCTAssertEqual(reloaded.onboardingCurrentStep, 0)
     }
