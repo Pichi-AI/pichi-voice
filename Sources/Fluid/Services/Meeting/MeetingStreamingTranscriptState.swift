@@ -94,7 +94,7 @@ actor MeetingStreamingTranscriptState {
          speakerNameFormat: String = PichiLocalization.text("Speaker %lld")) throws {
         guard configuration.speakerLabelsEnabled,
               configuration.effectiveSpeakerProcessingMode == .streaming,
-              track.kind == .microphone,
+              (track.kind == .microphone || track.kind == .applicationAudio),
               limits.maximumPendingWords > 0, limits.maximumPendingTextBytes > 0,
               limits.maximumPendingSeconds.isFinite, limits.maximumPendingSeconds > 0 else {
             throw Failure.invalidConfiguration

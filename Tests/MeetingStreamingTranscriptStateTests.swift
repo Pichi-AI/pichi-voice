@@ -157,6 +157,7 @@ struct MeetingStreamingTranscriptStateTests {
         catch { check(false, "Expected \(error), got \(error)") }
     }
     static func main() async throws {
+        try await multipleSpeakersInEachPhysicalSource()
         try await integerSourceClockPreservesStrictPrivacyWatermarks()
         try await growingSpeechCannotEraseProtectedPendingWords()
         try await speechBoundaryCancellationAndProofGuards()
@@ -533,6 +534,39 @@ struct MeetingStreamingTranscriptStateTests {
         check(final.diagnostics.isFinal && final.diagnostics.pendingProtectedWords == 0)
         check(final.retainActivityFromSample == 640_000)
         await expect(.alreadyFinished) { _ = try await value.finish(observation(accepted: 40, asr: 40, final: true)) }
+    }
+
+    static func multipleSpeakersInEachPhysicalSource() async throws {
+        var identities = Set<SessionSpeakerID>()
+        for kind in [MeetingAudioTrackKind.microphone, .applicationAudio] {
+            var source = track()
+            source.id = UUID()
+            source.kind = kind
+            let sourceEpoch = MeetingAnalysisEpochID(trackID: source.id, ordinal: 0)
+            let value = try State(attemptID: attempt, track: source,
+                configuration: .init(speakerProcessingMode: .streaming, speakerAttributionPolicy: .init()),
+                privacyContext: nil)
+            let words = (0..<40).map { index in
+                var word = word(index)
+                word.id = UUID()
+                word.sourceTrackID = source.id
+                return word
+            }
+            let activity: [MeetingBackendSpeakerActivity] = [
+                .init(token: .init(analysisEpochID: sourceEpoch, label: "a"), start: 0, end: 10),
+                .init(token: .init(analysisEpochID: sourceEpoch, label: "b"), start: 10, end: 20)]
+            let first = try await value.observe(observation(words, accepted: 20, asr: 20, activity: activity))
+            let final = try await value.finish(observation(accepted: 20, asr: 20, final: true, activity: activity))
+            let published = first.safeBatch.segments + final.safeBatch.segments
+            check(published.count == words.count, "Both ends of speech remain present for each physical source")
+            check(published.map(\.nativeTiming) == words.map(\.nativeTiming))
+            check(published.allSatisfy { $0.sourceTrackID == source.id })
+            let participants = Set(published.compactMap(\.speakerID))
+            check(participants.count == 2, "One physical audio stream may contain multiple participants")
+            check(identities.isDisjoint(with: participants), "Equal native slot labels in two source epochs cannot alias participants")
+            identities.formUnion(participants)
+        }
+        check(identities.count == 4)
     }
 
     static func diarizationLagAndWordClusters() async throws {

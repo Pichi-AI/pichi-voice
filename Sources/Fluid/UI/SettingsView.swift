@@ -247,6 +247,21 @@ struct SettingsView: View {
                         .padding(16)
                     }
                     .settingsSearchTarget(.fluidMeet)
+
+                    ThemedCard(style: .standard) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Label(PichiLocalization.text("My voice"), systemImage: "person.wave.2")
+                                .font(.fluidSystem(.headline))
+                                .foregroundStyle(self.theme.palette.primaryText)
+                            MeetingOwnerVoiceSettingsContent(
+                                audioArbiter: self.appServices.meetingAudioActivityArbiter,
+                                microphone: nil
+                            )
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                    }
+                    .settingsSearchTarget(.ownerVoice)
                 }
 
                 if self.selectedSection == .general, self.appServices.accountSession.configuration != nil {

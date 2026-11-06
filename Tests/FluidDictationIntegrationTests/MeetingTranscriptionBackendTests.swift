@@ -1519,6 +1519,14 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertThrowsError(try registered.validateSpeakerProcessingMode(configuration: streaming, mode: .onlineCall)) {
             XCTAssertEqual($0 as? MeetingBackendError, .unsupportedTrackTopology(backend: Self.backendID))
         }
+        let multi = self.descriptor(tracks: [.microphone, .applicationAudio],
+            inputs: [.recordedChunks, .boundedMicrophonePCM, .boundedMultiTrackPCM],
+            speakerModes: [.afterRecording, .streaming])
+        XCTAssertNoThrow(try multi.validatePCMInput(configuration: streaming, mode: .onlineCall))
+        XCTAssertThrowsError(try multi.validatePCMInput(configuration: MeetingFinalProcessingConfiguration(languageCode: "en"), mode: .onlineCall))
+        let missingMicrophone = self.descriptor(tracks: [.applicationAudio], inputs: [.boundedMultiTrackPCM],
+            speakerModes: [.streaming])
+        XCTAssertThrowsError(try missingMicrophone.validatePCMInput(configuration: streaming, mode: .onlineCall))
         let disabled = MeetingFinalProcessingConfiguration(speakerLabelsEnabled: false, speakerProcessingMode: .streaming)
         XCTAssertNoThrow(try ordinary.validateSpeakerProcessingMode(configuration: disabled, mode: .inRoom))
     }
@@ -1535,7 +1543,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             speakerProcessingMode: .streaming)
         XCTAssertEqual(admission.diarizationFingerprint, selected.diarizationFingerprint)
         XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(admission, isAppleSilicon: true))
-        XCTAssertThrowsError(try PichiMeetingProviderFactory.validateRecordingConfiguration(selected,
+        XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(selected,
             isAppleSilicon: true, captureMode: .onlineCall))
 
         let wrongProfile = MeetingFinalProcessingConfiguration(asrModel: selected.asrModel, languageCode: "ru",
@@ -1545,6 +1553,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         for model in [PichiMeetingProviderFactory.whisperTinyModelID, PichiMeetingProviderFactory.parakeetV3ModelID] {
             let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model))
             XCTAssertTrue(descriptor.supportedSpeakerProcessingModes.contains(.streaming))
+            XCTAssertTrue(descriptor.supportedInputs.contains(.boundedMultiTrackPCM))
             XCTAssertNotNil(PichiMeetingProviderFactory.speakerModelStore(for: model, speakerProcessingMode: .streaming))
             let configuration = PichiMeetingProviderFactory.configuration(asrModel: model, languageCode: "auto",
                 artifactFingerprintOverride: "synthetic-export", speakerProcessingMode: .streaming)
@@ -1602,7 +1611,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
         settings.selectedSpeechModel = .gigaam
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
-        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .streaming)
         XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode))
         settings.meetingSpeakerProcessingMode = .afterRecording
         XCTAssertEqual(settings.meetingSpeakerProcessingMode, .afterRecording)
@@ -1701,7 +1710,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         let descriptor = self.descriptor()
         registry.register(Self.backendID) { context in PCMBackend(descriptor: descriptor, context: context, probe: probe) }
         await self.reject(self.pipeline(registry, probe: probe), session: self.session(mode: .onlineCall),
-            expected: .unsupportedTrackTopology(backend: Self.backendID), probe: probe)
+            expected: .unsupportedInput(backend: Self.backendID, input: .boundedMultiTrackPCM), probe: probe)
     }
 
     func testClaimedPCMCapabilityWithoutImplementedAdmissionIsRejected() async {

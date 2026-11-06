@@ -880,11 +880,14 @@ nonisolated struct MeetingAnalysisManifest: Equatable {
         self.tracks.flatMap(\.gaps)
     }
 
-    /// The presentation origin the existing pipeline would use for this session: the minimum
+    /// Streaming sessions persist their publication clock. Earlier sessions use the minimum
     /// recorded chunk start across every track. Not just planned chunks — the legacy path folds in
     /// provisional ones too, and disagreeing would shift every timestamp the product shows.
     static func presentationOrigin(of session: MeetingSession) -> Double {
-        session.audioTracks
+        if session.transcriptTimeDomain == .meetingRelative, let explicit = session.transcriptPresentationOrigin {
+            return explicit.seconds
+        }
+        return session.audioTracks
             .flatMap(\.chunks)
             .map(\.presentationStart.seconds)
             .min() ?? 0

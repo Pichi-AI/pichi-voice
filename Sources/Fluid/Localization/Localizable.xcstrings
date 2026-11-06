@@ -15434,6 +15434,23 @@
         }
       }
     },
+    "Downloads once and stays on this Mac. Speaker identification runs locally during recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloads once and stays on this Mac. Speaker identification runs locally during recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загружается один раз и хранится на этом Mac. Участники определяются локально во время записи."
+          }
+        }
+      }
+    },
     "Drag %@ into the Accessibility apps list as shown": {
       "extractionState": "manual",
       "localizations": {
@@ -31030,6 +31047,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Готово · запускается после записи"
+          }
+        }
+      }
+    },
+    "Ready · runs during recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ready · runs during recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готово · работает во время записи"
           }
         }
       }

@@ -1,10 +1,18 @@
 import SwiftUI
 
 struct MeetingModelSettingsSection: View {
+    let processingMode: MeetingSpeakerProcessingMode
     let onModelImported: @MainActor () -> Void
     @Environment(\.theme) private var theme
-    @ObservedObject private var store = MeetingDiarizationModelStore.shared
+    @ObservedObject private var store: MeetingDiarizationModelStore
     @State private var showingDetails = false
+
+    init(store: MeetingDiarizationModelStore, processingMode: MeetingSpeakerProcessingMode,
+         onModelImported: @escaping @MainActor () -> Void) {
+        self._store = ObservedObject(wrappedValue: store)
+        self.processingMode = processingMode
+        self.onModelImported = onModelImported
+    }
 
     var body: some View {
         FluidManagementGroup(title: PichiLocalization.text("Speaker labels")) {
@@ -29,7 +37,9 @@ struct MeetingModelSettingsSection: View {
                             Text("Nemotron 3 Diarization · \(installed.totalByteCount.formatted(.byteCount(style: .file).locale(PichiLocalization.locale)))")
                         }
                         Text(CPUArchitecture.isAppleSilicon
-                            ? PichiLocalization.text("Downloads once and stays on this Mac. Speaker identification runs locally after recording.")
+                            ? (self.processingMode == .streaming
+                                ? PichiLocalization.text("Downloads once and stays on this Mac. Speaker identification runs locally during recording.")
+                                : PichiLocalization.text("Downloads once and stays on this Mac. Speaker identification runs locally after recording."))
                             : PichiLocalization.text("Automatic speaker separation requires Apple Silicon. GigaAM can transcribe recordings on Intel with unknown speaker identities."))
                     }
                     .font(self.theme.typography.caption)
@@ -45,7 +55,7 @@ struct MeetingModelSettingsSection: View {
                 .foregroundStyle(self.theme.palette.secondaryText)
             }
         }
-        .task { self.store.prepareInBackground() }
+        .task(id: ObjectIdentifier(self.store)) { self.store.prepareInBackground() }
         .onChange(of: self.store.state) { _, state in
             if case .ready = state { self.onModelImported() }
         }
@@ -70,7 +80,9 @@ struct MeetingModelSettingsSection: View {
                     .monospacedDigit()
             }
         case .ready:
-            Label("Ready · runs after recording", systemImage: "checkmark.circle.fill")
+            Label(self.processingMode == .streaming
+                ? PichiLocalization.text("Ready · runs during recording")
+                : PichiLocalization.text("Ready · runs after recording"), systemImage: "checkmark.circle.fill")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.success)
         case let .failed(message):
