@@ -81,7 +81,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         )
         if savedCorrection != nil {
             self.screen = .success
-            self.successTitle = "Saved to Dictionary"
+            self.successTitle = savedCorrection?.wasAlreadyPresent == true ? "Already in Dictionary" : "Saved to Dictionary"
         }
         // Observe the generation too: SwiftUI may coalesce a rapid OFF then ON.
         self.pronunciationSettingsObserver = NotificationCenter.default.publisher(for: DictionaryMatcherExperiment.didChangeNotification)
@@ -98,7 +98,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     func undoSavedCorrection() {
-        guard let receipt = self.savedCorrection, receipt.isCurrent, self.isProfileVisible,
+        guard let receipt = self.savedCorrection, !receipt.wasAlreadyPresent, receipt.isCurrent, self.isProfileVisible,
               !self.isCancelled, !self.isUndoingSavedCorrection, !self.didUndoSavedCorrection else { return }
         self.onInteraction?()
         self.isUndoingSavedCorrection = true

@@ -21,9 +21,19 @@ final class DictionaryCorrectionOverlayController {
     private var dismissTask: Task<Void, Never>?
     private var outcomeHandler: ((AutomaticDictionarySuggestionOutcome) -> Void)?
     private var generation: UInt64 = 0
-    private var savedCorrections: [DictionaryAudioLearningService.SavedCorrection] = []
+    private enum Notice {
+        case saved(DictionaryAudioLearningService.SavedCorrection)
+        case suggestion(AutomaticDictionaryCorrectionCandidate, PrivateProfileSnapshot, (AutomaticDictionarySuggestionOutcome) -> Void)
+    }
+    private var notices: [Notice] = []
 
-    private init() {
+    #if DEBUG
+    var presentedCandidateID: UUID? { self.session?.candidate.id }
+    var onPresentation: ((AutomaticDictionaryTrainingSession) -> Void)?
+    var onDismissal: (() -> Void)?
+    #endif
+
+    init() {
         profileCancellable = NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated { self?.concealPrivatePresentation() }
@@ -33,7 +43,7 @@ final class DictionaryCorrectionOverlayController {
     /// Hide the independent panel synchronously without cancelling its admitted recorder.
     private func concealPrivatePresentation() {
         generation &+= 1
-        savedCorrections.removeAll()
+        notices.removeAll()
         let wasSavedCorrection = session?.isSavedCorrection == true
         session?.concealSavedCorrection()
         dismissTask?.cancel(); dismissTask = nil
@@ -66,16 +76,16 @@ final class DictionaryCorrectionOverlayController {
     func showSavedCorrection(_ receipt: DictionaryAudioLearningService.SavedCorrection) {
         guard self.canPresent(receipt),
               self.session?.savedCorrection?.id != receipt.id,
-              !self.savedCorrections.contains(where: { $0.id == receipt.id }) else { return }
-        self.savedCorrections.removeAll { !self.canPresent($0) }
+              !self.notices.contains(where: { if case let .saved(saved) = $0 { return saved.id == receipt.id }; return false }) else { return }
+        self.notices.removeAll { !self.canPresent($0) }
         // Receipts contain only spelling/identity metadata, never retained PCM.
-        guard self.savedCorrections.count + (self.session?.isSavedCorrection == true ? 1 : 0) < 32 else { return }
-        self.savedCorrections.append(receipt)
+        guard self.notices.count + (self.session == nil ? 0 : 1) < 32 else { return }
+        self.notices.append(.saved(receipt))
         self.presentNextSavedCorrection()
     }
 
     func withdrawSavedCorrection(_ id: UUID) {
-        self.savedCorrections.removeAll { $0.id == id }
+        self.notices.removeAll { if case let .saved(saved) = $0 { return saved.id == id }; return false }
         if self.session?.savedCorrection?.id == id { self.hide() }
     }
 
@@ -83,18 +93,30 @@ final class DictionaryCorrectionOverlayController {
         receipt.isCurrent && SettingsStore.shared.customDictionaryEntries.contains(receipt.entry)
     }
 
+    private func canPresent(_ notice: Notice) -> Bool {
+        switch notice {
+        case let .saved(receipt): return self.canPresent(receipt)
+        case let .suggestion(_, profile, _):
+            return PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork
+        }
+    }
+
     private func presentNextSavedCorrection() {
         // A readable receipt after concealment belongs to the newly admitted
         // profile, whose transition already joined the old profile's capture.
         if self.panel == nil, self.hostingView == nil { self.session = nil }
         guard self.session == nil else { return }
-        while !self.savedCorrections.isEmpty {
-            let receipt = self.savedCorrections.removeFirst()
-            guard self.canPresent(receipt) else { continue }
-            let candidate = AutomaticDictionaryCorrectionCandidate(heardText: receipt.heardText, correctedText: receipt.correctedText)
-            let session = AutomaticDictionaryTrainingSession(candidate: candidate, asr: AppServices.shared.asr,
-                savedCorrection: receipt)
-            self.present(session, onOutcome: { _ in })
+        while !self.notices.isEmpty {
+            let notice = self.notices.removeFirst()
+            guard self.canPresent(notice) else { continue }
+            switch notice {
+            case let .saved(receipt):
+                let candidate = AutomaticDictionaryCorrectionCandidate(heardText: receipt.heardText, correctedText: receipt.correctedText)
+                let session = AutomaticDictionaryTrainingSession(candidate: candidate, asr: AppServices.shared.asr, savedCorrection: receipt)
+                self.present(session, onOutcome: { _ in })
+            case let .suggestion(candidate, _, outcome):
+                self.present(AutomaticDictionaryTrainingSession(candidate: candidate, asr: AppServices.shared.asr), onOutcome: outcome)
+            }
             return
         }
     }
@@ -105,13 +127,28 @@ final class DictionaryCorrectionOverlayController {
     ) {
         let profile = PrivateProfileStorage.current
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
-        guard self.session?.isUndoingSavedCorrection != true else { return }
-        if let current = self.session?.savedCorrection,
-           self.session?.didUndoSavedCorrection != true, self.canPresent(current) {
-            self.savedCorrections.insert(current, at: 0)
+        if let origin = candidate.observationID {
+            self.notices.removeAll { if case let .suggestion(previous, _, _) = $0 { return previous.observationID == origin }; return false }
+            if self.session?.screen == .choice, self.session?.candidate.observationID == origin {
+                self.present(AutomaticDictionaryTrainingSession(candidate: candidate, asr: AppServices.shared.asr), onOutcome: onOutcome)
+                return
+            }
         }
-        let session = AutomaticDictionaryTrainingSession(candidate: candidate, asr: AppServices.shared.asr)
-        self.present(session, onOutcome: onOutcome)
+        // Audio-unavailable and already-known corrections must queue as well.
+        guard self.notices.count + (self.session == nil ? 0 : 1) < 32 else { return }
+        let retained = self.notices.reduce(0) { total, notice in
+            if case let .suggestion(value, _, _) = notice, let audio = value.audioEvidence {
+                return total + DictionaryAudioLearningService.retainedBytes(audio)
+            }
+            return total
+        }
+        var queued = candidate
+        if let audio = queued.audioEvidence,
+           DictionaryAudioLearningService.retainedBytes(audio) > 128 * 1024 * 1024 - retained {
+            queued.audioEvidence = nil
+        }
+        self.notices.append(.suggestion(queued, profile, onOutcome))
+        self.presentNextSavedCorrection()
     }
 
     private func present(
@@ -138,6 +175,9 @@ final class DictionaryCorrectionOverlayController {
             self?.hide()
         }
         self.session = session
+        #if DEBUG
+        self.onPresentation?(session)
+        #endif
 
         let rootView = AutomaticDictionaryCorrectionOverlayView(
             session: session,
@@ -277,6 +317,9 @@ final class DictionaryCorrectionOverlayController {
         self.sessionCancellable = nil
         self.session = nil
         self.outcomeHandler = nil
+        #if DEBUG
+        self.onDismissal?()
+        #endif
         self.presentNextSavedCorrection()
     }
 
@@ -1044,12 +1087,14 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                         .font(.fluidSystem(size: 11))
                         .foregroundStyle(.white.opacity(0.6))
                     HStack(spacing: 8) {
-                        CorrectionOverlayActionButton(
-                            title: self.session.isUndoingSavedCorrection ? "Undoing..." : "Undo save",
-                            systemImage: "arrow.uturn.backward", style: .accent, accent: self.accent,
-                            action: self.session.undoSavedCorrection
-                        )
-                        .disabled(self.session.isUndoingSavedCorrection)
+                        if self.session.savedCorrection?.wasAlreadyPresent != true {
+                            CorrectionOverlayActionButton(
+                                title: self.session.isUndoingSavedCorrection ? "Undoing..." : "Undo save",
+                                systemImage: "arrow.uturn.backward", style: .accent, accent: self.accent,
+                                action: self.session.undoSavedCorrection
+                            )
+                            .disabled(self.session.isUndoingSavedCorrection)
+                        }
                         CorrectionOverlayActionButton(
                             title: "Open Dictionary", systemImage: "text.book.closed", style: .secondary, accent: self.accent,
                             action: self.session.openSavedDictionary
