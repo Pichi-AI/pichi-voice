@@ -10,6 +10,153 @@ import XCTest
 final class MeetingAEC3Tests: XCTestCase {
     private let token = MeetingAECStreamToken(generation: 7, identity: 11)
 
+    func testMappedAttestationRejectsMismatchedPhysicalEndsAndRecordingOwners() {
+        let clockID = UUID(), sourceID = UUID()
+        func packet(end: Double, clock: UUID = clockID, source: UUID) -> MeetingCaptureClockMetadata.Packet {
+            .init(mapping: .init(frameCount: 480, spans: [.init(frameStart: 0, frameEnd: 480,
+                hostStart: MeetingAudioClockMapping.mediaTime(100), hostEnd: MeetingAudioClockMapping.mediaTime(end))]),
+                clockID: clock, sourceID: source, producerEpoch: 1)
+        }
+        let render = packet(end: 100.01, source: sourceID)
+        var attestor = MeetingAECClockAttestor()
+        XCTAssertFalse(attestor.observe(grid: 0, renderPresentationTime: .zero, capturePresentationTime: .zero,
+            renderClockPacket: render, captureClockPacket: packet(end: 100.01005, source: UUID())))
+        XCTAssertFalse(attestor.observe(grid: 0, renderPresentationTime: .zero, capturePresentationTime: .zero,
+            renderClockPacket: render, captureClockPacket: packet(end: 100.01, clock: UUID(), source: UUID())))
+        XCTAssertFalse(attestor.observe(grid: 0, renderPresentationTime: .zero, capturePresentationTime: .zero,
+            renderClockPacket: render, captureClockPacket: nil))
+        XCTAssertEqual(attestor.pairedFrameCount, 0)
+    }
+
+    func testMappedPhysicalMismatchFallsBackWithoutLosingCaptureFramesOrClockCarrier() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-physical-mismatch-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var track = Self.microphoneTrack(); track.timebase.recordingTimePolicy = .hostMonotonicV1
+        let clock = try MeetingRecordingClock(timebase: track.timebase)
+        let capture = clock.source(track.id), render = clock.source(UUID())
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: directory, chunkDuration: 60,
+            eventHandler: { _ in }, clockContext: capture)
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let failures = AECTerminalRecorder(), fallbacks = AECTerminalRecorder(), live = AECLiveRecorder()
+        let committer = MeetingAECOutputCommitter(writer: writer, transcriptGate: gate,
+            liveAudioHandler: { _, sample in live.append(sample) }, terminalFailure: { failures.append($0) })
+        let processor = AECFakeProcessor()
+        let pipeline = MeetingAECPipeline(processor: processor, committer: committer,
+            fallbackObserver: { fallbacks.append($0) })
+        func packet(_ context: MeetingRecordingClockContext, end: Double) throws -> CMSampleBuffer {
+            let mapping = try context.mapping(frameCount: 480,
+                start: CMTime(seconds: 100, preferredTimescale: 1_000_000_000),
+                end: CMTime(seconds: end, preferredTimescale: 1_000_000_000), discontinuityBefore: true)
+            return try XCTUnwrap(MeetingAECPCMAdapter.synthesize(samples: [Float](repeating: 0.125, count: 480),
+                presentationTime: CMTime(seconds: 100, preferredTimescale: 1_000_000_000),
+                clockPacket: .init(mapping: mapping, clockID: context.clockID, sourceID: context.sourceID, producerEpoch: 1)))
+        }
+        pipeline.consumeRender(try packet(render, end: 100.01), stream: self.token)
+        pipeline.consumeCapture(try packet(capture, end: 100.01005), stream: self.token)
+        await committer.waitForPendingCommits()
+        pipeline.stop(boundary: gate.invalidate()); await committer.waitForPendingCommits()
+        let saved = await writer.stop()
+        XCTAssertEqual(processor.processedFrameCount, 0)
+        XCTAssertEqual(fallbacks.values, [.clockResidualExceeded])
+        XCTAssertTrue(failures.values.isEmpty)
+        XCTAssertEqual(live.count, 1)
+        XCTAssertEqual(saved.chunks.first?.captureAnalysisAsset?.frameCount, 480)
+        let mapping = try XCTUnwrap(saved.chunks.first?.clockMapping)
+        XCTAssertEqual(mapping.frameCount, 480)
+        XCTAssertEqual(try XCTUnwrap(mapping.spans.last).hostEnd.seconds, 100.01005, accuracy: 1e-9)
+    }
+
+    func testMappedEchoProcessingStaysActiveBeyondTheLegacyNominalClockDriftLimit() async throws {
+        for drift in [5e-6, 300e-6] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-shared-rate-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            var track = Self.microphoneTrack()
+            track.timebase.recordingTimePolicy = .hostMonotonicV1
+            let clock = try MeetingRecordingClock(timebase: track.timebase)
+            let capture = clock.source(track.id), render = clock.source(UUID())
+            let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: directory, chunkDuration: 60,
+                eventHandler: { _ in }, clockContext: capture)
+            let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+            let failures = AECTerminalRecorder(), fallbacks = AECTerminalRecorder()
+            let committer = MeetingAECOutputCommitter(writer: writer, transcriptGate: gate,
+                liveAudioHandler: nil, terminalFailure: { failures.append($0) })
+            let processor = AECFakeProcessor()
+            let pipeline = MeetingAECPipeline(processor: processor, committer: committer,
+                fallbackObserver: { fallbacks.append($0) })
+            let duration = 0.01 * (1 + drift)
+            for index in 0..<1_000 {
+                let start = 100 + Double(index) * duration, end = 100 + Double(index + 1) * duration
+                func packet(_ context: MeetingRecordingClockContext) throws -> CMSampleBuffer {
+                    let mapping = try context.mapping(frameCount: 480,
+                        start: CMTime(seconds: start, preferredTimescale: 1_000_000_000),
+                        end: CMTime(seconds: end, preferredTimescale: 1_000_000_000), discontinuityBefore: index == 0)
+                    return try XCTUnwrap(MeetingAECPCMAdapter.synthesize(samples: [Float](repeating: 0.125, count: 480),
+                        presentationTime: CMTime(seconds: start, preferredTimescale: 1_000_000_000),
+                        clockPacket: .init(mapping: mapping, clockID: context.clockID,
+                            sourceID: context.sourceID, producerEpoch: 1)))
+                }
+                pipeline.consumeRender(try packet(render), stream: self.token)
+                pipeline.consumeCapture(try packet(capture), stream: self.token)
+                await committer.waitForPendingCommits()
+                _ = await writer.snapshot()
+            }
+            let active = await writer.snapshot()
+            XCTAssertEqual(processor.processedFrameCount, 1_000, "The processor must remain active beyond index417")
+            XCTAssertTrue(fallbacks.values.isEmpty)
+            XCTAssertTrue(failures.values.isEmpty)
+            XCTAssertEqual(active.captureEras?.last?.echoProtection, .softwareEchoCancelled)
+            pipeline.stop(boundary: gate.invalidate()); await committer.waitForPendingCommits()
+            let stopped = await writer.stop()
+            XCTAssertEqual(stopped.chunks.compactMap { $0.captureAnalysisAsset?.frameCount }.reduce(0, +), 480_000)
+        }
+    }
+
+    func testEchoProcessingAndFallbackPreserveTheRecordingClockThroughRealWriter() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-clock-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var track = Self.microphoneTrack()
+        track.timebase = .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1,
+            firstPresentationTime: nil, recordingTimePolicy: .hostMonotonicV1)
+        let clock = try MeetingRecordingClock(timebase: track.timebase)
+        let captureContext = clock.source(track.id), renderContext = clock.source(UUID())
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: directory, chunkDuration: 60,
+            eventHandler: { _ in }, clockContext: captureContext)
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let live = AECLiveRecorder(), failures = AECTerminalRecorder()
+        let committer = MeetingAECOutputCommitter(writer: writer, transcriptGate: gate,
+            liveAudioHandler: { _, sample in live.append(sample) }, terminalFailure: { failures.append($0) })
+        let processor = AECFakeProcessor()
+        let pipeline = MeetingAECPipeline(processor: processor, committer: committer, fallbackObserver: { _ in })
+        let duration = 0.01 * 1.000005
+        for index in 0..<270 {
+            if index == 260 { processor.failNext = true }
+            let start = 100 + Double(index) * duration
+            func measured(_ context: MeetingRecordingClockContext, value: Float) throws -> CMSampleBuffer {
+                let mapping = try context.mapping(frameCount: 480,
+                    start: CMTime(seconds: start, preferredTimescale: 1_000_000_000),
+                    end: CMTime(seconds: start + duration, preferredTimescale: 1_000_000_000), discontinuityBefore: index == 0)
+                return try XCTUnwrap(MeetingAECPCMAdapter.synthesize(samples: [Float](repeating: value, count: 480),
+                    presentationTime: CMTime(seconds: start, preferredTimescale: 1_000_000_000),
+                    clockPacket: .init(mapping: mapping, clockID: context.clockID,
+                        sourceID: context.sourceID, producerEpoch: 1)))
+            }
+            pipeline.consumeRender(try measured(renderContext, value: 0.2), stream: self.token)
+            pipeline.consumeCapture(try measured(captureContext, value: 0.125), stream: self.token)
+            await committer.waitForPendingCommits()
+            _ = await writer.snapshot()
+        }
+        pipeline.stop(boundary: gate.invalidate())
+        await committer.waitForPendingCommits()
+        let saved = await writer.stop()
+        XCTAssertTrue(failures.values.isEmpty)
+        XCTAssertEqual(live.count, 270)
+        XCTAssertEqual(saved.chunks.compactMap { $0.captureAnalysisAsset?.frameCount }.reduce(0, +), 270 * 480)
+        let mapping = try XCTUnwrap(saved.chunks.first?.clockMapping)
+        XCTAssertEqual(mapping.frameCount, 270 * 480)
+        XCTAssertEqual(try XCTUnwrap(mapping.spans.first).hostStart.seconds, 100, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(mapping.spans.last).hostEnd.seconds, 100 + 270 * duration, accuracy: 2e-9)
+    }
+
     func testFailedAECRecordsAndTranscribesEveryFollowingSampleWithoutRetrying() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-fallback-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1982,6 +2129,7 @@ private final nonisolated class AECFakeProcessor: MeetingAECProcessing, @uncheck
     let configurationID = MeetingAECConstants.provenance.bridgeConfigurationID
     var failNext = false
     private var frames: UInt64 = 0
+    var processedFrameCount: UInt64 { self.frames }
     private var resets: UInt64 = 0
 
     func process(render: [Float], capture: [Float]) throws

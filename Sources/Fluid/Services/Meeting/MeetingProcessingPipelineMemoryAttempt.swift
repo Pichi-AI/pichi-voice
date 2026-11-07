@@ -198,6 +198,7 @@ extension MeetingProcessingPipeline {
     /// Foreground idle preparation is metadata-only until a registered adapter explicitly
     /// opens installed resources. It creates no session, audio lease or microphone identity.
     func prepareSelectedIdleResources(
+        recordingTimePolicy: MeetingRecordingTimePolicy? = nil,
         prepareFirst: @escaping @MainActor @Sendable () async throws -> (@Sendable () async -> Void)? = { nil }
     ) async throws -> MeetingIdlePreparationToken? {
         let modelID = settings.selectedSpeechModel.rawValue
@@ -216,8 +217,9 @@ extension MeetingProcessingPipeline {
             ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
         let backendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
             selectedModelID: modelID, savedBackendID: settings.meetingTranscriptionBackendID)
-        let configuration = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: backendID, languageCode: language,
+        var configuration = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: backendID, languageCode: language,
             diarizationEnabled: settings.meetingSpeakerLabelsEnabled, speakerProcessingMode: speakerMode)
+        configuration.recordingTimePolicy = recordingTimePolicy
         let backend = try backendRegistry.makeBackend(id: backendID, context: .init(legacyExecutor: { _, _ in
             throw MeetingModelResidencyError.unsupportedProvider
         }, idleResourcePreparation: idleResourcePreparation))
@@ -300,21 +302,25 @@ extension MeetingProcessingPipeline {
         let attemptID = UUID()
         let admissionContext = self.pcmAdmissionContextProvider(session.piiRedactionEnabled == true)
         func requestSnapshot() -> MeetingBackendRequest {
-            MeetingBackendRequest(attemptID: attemptID, session: session, sessionDirectory: sessionDirectory,
-                configuration: PichiMeetingProviderFactory.configuration(
+            var configuration = PichiMeetingProviderFactory.configuration(
                     backendID: backendID, languageCode: session.languageCode,
                     artifactFingerprintOverride: session.recordingASRArtifactFingerprint,
                     diarizationEnabled: session.speakerLabelsEnabled ?? true,
-                    speakerProcessingMode: session.effectiveSpeakerProcessingMode))
+                    speakerProcessingMode: session.effectiveSpeakerProcessingMode)
+            configuration.recordingTimePolicy = session.timebase.recordingTimePolicy
+            return MeetingBackendRequest(attemptID: attemptID, session: session, sessionDirectory: sessionDirectory,
+                configuration: configuration)
         }
         // Resolve the actual registered factory before preparing any weights. This metadata-only
         // context grants no executor/runtime. A declared descriptor alone cannot authorize PCM:
         // bare factories are inspected too, and the backend must implement strict-input admission.
-        let preflightRequest = MeetingBackendRequest(attemptID: attemptID, session: session, sessionDirectory: sessionDirectory,
-            configuration: PichiMeetingProviderFactory.validationConfiguration(backendID: backendID,
+        var preflightConfiguration = PichiMeetingProviderFactory.validationConfiguration(backendID: backendID,
                 languageCode: session.languageCode, diarizationEnabled: session.speakerLabelsEnabled ?? true,
                 artifactFingerprintOverride: session.recordingASRArtifactFingerprint,
-                speakerProcessingMode: session.effectiveSpeakerProcessingMode))
+                speakerProcessingMode: session.effectiveSpeakerProcessingMode)
+        preflightConfiguration.recordingTimePolicy = session.timebase.recordingTimePolicy
+        let preflightRequest = MeetingBackendRequest(attemptID: attemptID, session: session,
+            sessionDirectory: sessionDirectory, configuration: preflightConfiguration)
         let preflightBackend = try self.resolveMemoryInputBackend(backendID: backendID,
             configuration: preflightRequest.configuration, mode: session.mode, admissionContext: admissionContext)
         let descriptor = preflightBackend.descriptor

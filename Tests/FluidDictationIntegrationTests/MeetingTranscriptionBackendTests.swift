@@ -305,6 +305,22 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         }
     }
 
+    func testHostRecordingCannotEnterLegacyProcessingOrAllocateASR() async throws {
+        var session = self.makeSession()
+        session.timebase.recordingTimePolicy = .hostMonotonicV1
+        let pipeline = self.makePipeline(registry: .makeDefault(), backendID: .legacyCompatibility)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("clock-legacy-refusal-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        do {
+            _ = try await pipeline.process(session: session, sessionDirectory: directory, progress: { _ in })
+            XCTFail("A host-mapped recording needs a backend that consumes its mapping before inference")
+        } catch {
+            XCTAssertEqual(error as? MeetingRecordingTimePolicyError,
+                .legacyProcessingUnsupported(.hostMonotonicV1))
+        }
+    }
+
     func testPipelineRejectsPlanForDifferentDirectory() async throws {
         let descriptor = self.makeFixtureDescriptor()
         let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: Self.fixtureBackendID)

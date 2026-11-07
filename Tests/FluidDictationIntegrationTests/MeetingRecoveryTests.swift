@@ -17,6 +17,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let capture = StubCaptureController()
+        capture.recordingTimePolicy = .hostMonotonicV1
         capture.usesMicrophoneControl = true
         let microphone = self.makeMicrophoneTrack(chunks: [])
         var application = self.makeMicrophoneTrack(chunks: [])
@@ -30,6 +31,10 @@ final class MeetingRecoveryTests: XCTestCase {
         configuration.languageCode = "es"
         configuration.application = .init(bundleIdentifier: "us.zoom.xos", displayName: "Synthetic Zoom")
         let session = try await coordinator.startRecording(configuration: configuration)
+        XCTAssertEqual(session.timebase.recordingTimePolicy, .hostMonotonicV1)
+        let origin = Double(session.timebase.startedHostTime) * Double(session.timebase.machTimebaseNumerator)
+            / Double(session.timebase.machTimebaseDenominator) / 1_000_000_000
+        XCTAssertEqual(try XCTUnwrap(session.transcriptPresentationOrigin).seconds, origin, accuracy: 1e-9)
         await self.drainCaptureEvents()
         // Invoke the actual native surface's bound action, then verify the real coordinator
         // and attempt control composition. Physical native event routing is a separate check.
@@ -9406,6 +9411,7 @@ private actor SingleUseDrainingCaptureController: MeetingCaptureControlling {
 }
 
 private final class StubCaptureController: MeetingCaptureControlling, @unchecked Sendable {
+    var recordingTimePolicy: MeetingRecordingTimePolicy? = nil
     var usesMicrophoneControl = false
     private var microphoneControl: MeetingMicrophoneRecordingControl?
     private var microphoneGate: MeetingMicrophonePrivacyGate?

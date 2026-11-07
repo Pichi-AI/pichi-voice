@@ -96,7 +96,7 @@ nonisolated struct MeetingAnalysisManifestBuilder {
                 previousChunk: offset > 0 ? plannedChunks[offset - 1] : nil,
                 origin: projection.origin
             )
-            self.appendChunk(
+            try self.appendChunk(
                 chunk,
                 identity: identity,
                 discontinuity: discontinuity,
@@ -137,7 +137,10 @@ nonisolated struct MeetingAnalysisManifestBuilder {
         track: MeetingAudioTrack,
         projection: MeetingAnalysisPlanProjection,
         into accumulator: inout TrackAccumulator
-    ) {
+    ) throws {
+        if projection.recordingTimePolicy == .hostMonotonicV1 {
+            _ = try MeetingHostClockMapping.validated(chunk: chunk)
+        }
         let recorded = projection.recordedInterval(of: chunk)
 
         guard chunk.finalizationState == .finalized else {
@@ -183,6 +186,9 @@ nonisolated struct MeetingAnalysisManifestBuilder {
             return
         }
 
+        if projection.recordingTimePolicy == .hostMonotonicV1 {
+            _ = try MeetingHostClockMapping.validated(chunk: chunk, decoded: observed.decoded)
+        }
         var nextPieceIndex = 0
         for piece in self.eraPieces(
             of: recorded,
@@ -190,7 +196,7 @@ nonisolated struct MeetingAnalysisManifestBuilder {
             track: track,
             projection: projection
         ) {
-            nextPieceIndex += self.appendPiece(
+            nextPieceIndex += try self.appendPiece(
                 piece,
                 pieceIndex: nextPieceIndex,
                 identity: identity,
@@ -218,7 +224,10 @@ nonisolated struct MeetingAnalysisManifestBuilder {
         let discontinuityStarts = chunk.discontinuities.compactMap {
             $0.presentationTime.map { $0.seconds - projection.origin }
         }
-        let candidates = (starts + discontinuityStarts)
+        let clockBounds = projection.recordingTimePolicy == .hostMonotonicV1
+            ? chunk.clockMapping?.spans.flatMap { [$0.hostStart.seconds - projection.origin, $0.hostEnd.seconds - projection.origin] } ?? []
+            : []
+        let candidates = (starts + discontinuityStarts + clockBounds)
             .filter { $0.isFinite && $0 > recorded.start + tolerance && $0 < recorded.end - tolerance }
             .sorted()
         var inner: [Double] = []
@@ -244,7 +253,7 @@ nonisolated struct MeetingAnalysisManifestBuilder {
         track: MeetingAudioTrack,
         projection: MeetingAnalysisPlanProjection,
         into accumulator: inout TrackAccumulator
-    ) -> Int {
+    ) throws -> Int {
         let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
         guard let era = projection.eraIdentity(forTrack: track.id, containing: piece.start) else {
             self.appendGap(
@@ -281,16 +290,27 @@ nonisolated struct MeetingAnalysisManifestBuilder {
         // span and account for the remainder as an explicit gap; never let a shorter source region
         // claim coverage of a longer recorded interval.
         let decoded = observed.decoded
+        let hostAligned = projection.recordingTimePolicy == .hostMonotonicV1
+        let hostPiece: MeetingHostClockMapping.Piece?
+        if hostAligned {
+            guard let chunk = projection.chunksByKey[identity.key] else { throw MeetingHostClockMapping.Failure.invalid }
+            hostPiece = try MeetingHostClockMapping.piece(in: piece, chunk: chunk, origin: projection.origin, decoded: decoded)
+        } else { hostPiece = nil }
+        if hostAligned, hostPiece == nil {
+            self.appendGap(identity: identity, pieceIndex: pieceIndex, reason: .sourceClockGap,
+                recordedInterval: piece, era: nil, detail: "No captured PCM covers this measured host interval.", into: &accumulator)
+            return 1
+        }
         let priming = decoded.primingSeconds ?? 0
         let availableRecordedEnd = chunkInterval.start + max(0, decoded.durationSeconds - priming)
         // A sub-sample clock mismatch must not become a gap that erases speaker memory.
         // Account for the complete recorded piece, but feed only physically backed samples.
         let tailTolerance = MeetingAnalysisManifestSchema.decodedTailToleranceSeconds(sampleRate: decoded.sampleRate)
-        let spanRecordedEnd = piece.end - availableRecordedEnd <= tailTolerance
+        let spanRecordedEnd = hostAligned || piece.end - availableRecordedEnd <= tailTolerance
             ? piece.end : min(piece.end, availableRecordedEnd)
         let spanPiece = MeetingAnalysisInterval(start: piece.start, end: spanRecordedEnd)
-        let sourceStart = priming + (spanPiece.start - chunkInterval.start)
-        let sourceEnd = min(decoded.durationSeconds, priming + (spanPiece.end - chunkInterval.start))
+        let sourceStart = hostPiece?.source.start ?? (priming + (spanPiece.start - chunkInterval.start))
+        let sourceEnd = hostPiece?.source.end ?? min(decoded.durationSeconds, priming + (spanPiece.end - chunkInterval.start))
         guard sourceEnd - sourceStart > tolerance, sourceStart >= 0 else {
             self.appendGap(
                 identity: identity,
@@ -309,17 +329,19 @@ nonisolated struct MeetingAnalysisManifestBuilder {
         }
 
         let anchor = projection.anchorSeconds(forTrack: track.id, era: era)
-        let deDrift = MeetingAnalysisCaptureEras.deDrift(for: era, anchorSeconds: anchor)
-        let rateRatio = deDrift.appliedFactor ?? 1
+        let deDrift: MeetingDeDriftApplication = hostAligned ? .notApplicable
+            : MeetingAnalysisCaptureEras.deDrift(for: era, anchorSeconds: anchor)
+        let rateRatio = hostPiece?.rate ?? deDrift.appliedFactor ?? 1
         let analysisStart = accumulator.analysisCursor
         let analysisDuration = sourceEnd - sourceStart
-        let presentationStart = anchor + (spanPiece.start - anchor) * rateRatio
+        let presentationStart = hostAligned ? spanPiece.start : anchor + (spanPiece.start - anchor) * rateRatio
         let presentationEnd = presentationStart + analysisDuration * rateRatio
 
         // The fit residual is a measurement of this chunk, not a declaration: the decoded audio it
         // really holds, mapped through this era's correction, against the duration the recorder
         // claimed for it.
-        let residual = decoded.usableDurationSeconds * rateRatio - chunkInterval.duration
+        let residual = hostAligned ? spanPiece.duration - analysisDuration * rateRatio
+            : decoded.usableDurationSeconds * rateRatio - chunkInterval.duration
         let timing = MeetingSpanTimingMetadata(
             certainty: MeetingSpanTimingMetadata.certainty(
                 fitResidualSeconds: residual,

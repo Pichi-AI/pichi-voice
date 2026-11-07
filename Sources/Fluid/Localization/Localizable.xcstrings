@@ -7136,6 +7136,23 @@
         }
       }
     },
+    "Audio timing could not be verified.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio timing could not be verified."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось подтвердить временные метки аудио."
+          }
+        }
+      }
+    },
     "Audio unavailable": {
       "extractionState": "manual",
       "localizations": {
@@ -10901,6 +10918,23 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "Choose a transcription engine that supports recording time alignment.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a transcription engine that supports recording time alignment."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите движок расшифровки с поддержкой общей временной шкалы записи."
           }
         }
       }

@@ -140,6 +140,27 @@ final class MeetingLiveAudioFIFOTests: XCTestCase {
         XCTAssertEqual(state.pendingPackets, 0); XCTAssertEqual(state.pendingBytes, 0)
     }
 
+    func testSharedClockAnchorsSurviveAnonymousFIFOWithoutReconstruction() async throws {
+        let (fifo, _) = try fixture()
+        let native = try input(0, frames: 480)
+        let mapping = MeetingAudioClockMapping(frameCount: 480, spans: [
+            .init(frameStart: 0, frameEnd: 240, hostStart: .init(value: 1_000_000, timescale: 1_000),
+                  hostEnd: .init(value: 1_000_005, timescale: 1_000)),
+            .init(frameStart: 240, frameEnd: 480, hostStart: .init(value: 1_000_055, timescale: 1_000),
+                  hostEnd: .init(value: 1_000_060, timescale: 1_000), discontinuityBefore: true)
+        ])
+        let packet = MeetingCaptureClockMetadata.Packet(mapping: mapping, clockID: UUID(), sourceID: UUID(), producerEpoch: 8)
+        let sample = MeetingLiveSampleCopy.Sample(buffer: native.sample.buffer,
+            pts: CMTime(seconds: 1_000, preferredTimescale: 1_000),
+            duration: CMTime(seconds: 0.06, preferredTimescale: 1_000), clockPacket: packet)
+        XCTAssertTrue(fifo.enqueue(.init(sample: sample, epoch: 3)))
+        let decoded = try await fifo.drainBatch()
+        let restored = try XCTUnwrap(decoded.first)
+        XCTAssertEqual(restored.sample.clockPacket, packet)
+        XCTAssertEqual(restored.epoch, 3)
+        XCTAssertNil(restored.sample.clockPacket?.mapping.frame(atHostTime: .init(value: 1_000_030, timescale: 1_000)))
+    }
+
     func testByteAndDiskBudgetsRejectExplicitlyAndCloseJoinsLateInput() async throws {
         var memory = MeetingLiveAudioFIFO.Limits(); memory.maximumPendingBytes = 1
         let (memoryFIFO, _) = try fixture(limits: memory)

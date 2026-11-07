@@ -1563,7 +1563,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }
         let retainedPin = try await withTaskCancellationHandler { try await pinTask.value } onCancel: { pinTask.cancel() }
         try Task.checkCancellation()
-        if let retainedPin, retainedPin.privacyFingerprint != attemptRedactor?.checkpointIdentity {
+        if let retainedPin, retainedPin.privacyFingerprint != attemptRedactor?.checkpointIdentity
+            || retainedPin.configuration.recordingTimePolicy != session.timebase.recordingTimePolicy {
             throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
         }
 
@@ -1626,7 +1627,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         //
         // The request is frozen first, so the host capability handed to the factory can be bound to
         // this exact value.
-        let configuration: MeetingFinalProcessingConfiguration
+        var configuration: MeetingFinalProcessingConfiguration
         if let retainedPin {
             configuration = retainedPin.configuration
         } else {
@@ -1639,6 +1640,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 speakerProcessingMode: session.effectiveSpeakerProcessingMode
             )
         }
+        configuration.recordingTimePolicy = session.timebase.recordingTimePolicy
         let request = MeetingBackendRequest(
             attemptID: Self.resolvedAttemptID(session: session),
             session: session,
@@ -2051,6 +2053,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         attemptID: UUID,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
+        if let policy = session.timebase.recordingTimePolicy {
+            throw MeetingRecordingTimePolicyError.legacyProcessingUnsupported(policy)
+        }
         let asrService = self.asrServiceProvider()
         guard !asrService.isRunning else { throw MeetingProcessingError.dictationActive }
 
