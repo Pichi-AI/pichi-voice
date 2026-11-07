@@ -1154,6 +1154,7 @@ struct MeetingSessionStoreCheckpointTests {
         template: MeetingSession, check: (Bool, String) -> Void
     ) throws {
         var source = template
+        source.speakerLabelsEnabled = false // Isolate the native boundary heuristic from complete-owner fallback.
         source.state = .completed; source.endedAt = source.startedAt.addingTimeInterval(4)
         source.transcriptIsComplete = true; source.transcriptCoverageGaps = []
         let firstSpeaker = source.speakers[0]
