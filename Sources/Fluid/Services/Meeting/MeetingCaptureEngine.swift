@@ -6933,6 +6933,14 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
         self.liveAudioHandler?(track.kind, sample)
     }
 
+    /// Joins already accepted capture work without closing the source. Useful to the capture
+    /// owner at bounded checkpoints and deterministic integration boundaries.
+    func drainEnqueuedPackets() async {
+        await withCheckedContinuation { continuation in
+            self.queue.async { continuation.resume() }
+        }
+    }
+
     private func fail(_ error: Error) {
         let emit = self.lock.withLock { () -> Bool in
             guard self.terminalError == nil else { return false }

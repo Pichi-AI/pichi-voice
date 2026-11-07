@@ -392,6 +392,10 @@ nonisolated struct MeetingRecordingClockContext: Sendable {
 
     func timedCopy(_ sample: CMSampleBuffer, mapping: MeetingAudioClockMapping,
                    producerEpoch: UInt64) throws -> CMSampleBuffer {
+        if let previous = MeetingCaptureClockMetadata.read(from: sample), !self.accepts(previous) {
+            throw MeetingRecordingClock.Failure.invalidPacket
+        }
+        let sample = try Self.ownedCopy(sample)
         let frames = CMSampleBufferGetNumSamples(sample)
         let mapping = try mapping.validated(expectedFrameCount: Int64(frames))
         guard let first = mapping.spans.first, let last = mapping.spans.last else {
@@ -451,7 +455,7 @@ final nonisolated class MeetingCaptureSourceClock: @unchecked Sendable {
             let hostStart = acquisitionStart ?? sourceClock.map {
                 CMSyncConvertTime(nativeStart, from: $0, to: CMClockGetHostTimeClock())
             } ?? nativeStart
-            let hostEnd = sourceClock.map {
+            var hostEnd = sourceClock.map {
                 CMSyncConvertTime(nativeEnd, from: $0, to: CMClockGetHostTimeClock())
             } ?? (hostStart + CMTime(seconds: Double(frames) / rate, preferredTimescale: 1_000_000_000))
             guard hostStart.isNumeric, hostEnd.isNumeric, hostStart >= self.context.origin, hostEnd > hostStart else {
@@ -459,7 +463,7 @@ final nonisolated class MeetingCaptureSourceClock: @unchecked Sendable {
             }
             let formatChanged = self.format.map { !CMFormatDescriptionEqual($0, otherFormatDescription: description) } ?? false
             let changed = self.generation.map { $0 != producerGeneration } ?? true
-            var continuous = !changed && !formatChanged
+            var continuous = self.pending != nil && !changed && !formatChanged
             if let prior = self.pending {
                 if let a = prior.sourceFrameStart, let b = sourceFrameStart {
                     continuous = continuous && b == a + Int64(prior.frames)
@@ -467,10 +471,23 @@ final nonisolated class MeetingCaptureSourceClock: @unchecked Sendable {
                     continuous = continuous && abs((nativeStart - prior.nativeEnd).seconds) <= 1.0 / rate + 1e-9
                 }
                 guard hostStart > prior.hostStart else { throw MeetingRecordingClock.Failure.unprovenClock }
+                if continuous {
+                    let measured = (hostStart - prior.hostStart).seconds
+                    let nominal = Double(prior.frames) / prior.rate
+                    guard measured.isFinite, (0.98 - 1e-9...1.02 + 1e-9).contains(measured / nominal) else {
+                        throw MeetingRecordingClock.Failure.unprovenClock
+                    }
+                    if sourceClock == nil {
+                        // Only the finite unpaired tail needs projection. Its rate comes from
+                        // adjacent acquisition anchors, never accumulated nominal sample time.
+                        hostEnd = hostStart + CMTime(seconds: measured / Double(prior.frames) * Double(frames),
+                                                    preferredTimescale: 1_000_000_000)
+                    }
+                }
             }
             var output: [CMSampleBuffer] = []
             if let prior = self.pending {
-                let end = continuous ? hostStart : prior.projectedHostEnd
+                let end = continuous ? hostStart : min(prior.projectedHostEnd, hostStart)
                 let mapping = try self.context.mapping(frameCount: prior.frames, start: prior.hostStart,
                     end: end, discontinuityBefore: prior.discontinuity)
                 output.append(try self.context.timedCopy(prior.sample, mapping: mapping, producerEpoch: prior.epoch))

@@ -405,8 +405,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 return
             }
         }
-        let producerEpoch = self.clockContext != nil ? clockPacket!.producerEpoch : producerEpoch
-        let hostMapping = self.clockContext != nil ? clockPacket?.mapping : nil
+        let producerEpoch = self.clockContext != nil ? clockPacket?.producerEpoch ?? producerEpoch : producerEpoch
+        var hostMapping = self.clockContext != nil ? clockPacket?.mapping : nil
         let sourcePresentationTime = CMSampleBufferGetPresentationTimeStamp(sourceSampleBuffer)
         guard sourcePresentationTime.isValid, sourcePresentationTime.isNumeric else {
             self.recordDroppedSample(detail: "Capture delivered audio without a valid presentation timestamp.")
@@ -423,6 +423,12 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                    preferredTimescale: 1_000_000_000)
         } ?? Self.sampleDuration(sourceSampleBuffer)
         let previousEnd = self.activeChunk?.end ?? self.lastFinalizedEnd
+        // The same measured gap represents excluded input, not clock drift. It must remain
+        // a boundary even when it is shorter than the legacy half-second chunk threshold.
+        if let previousEnd, let first = hostMapping?.spans.first,
+           first.hostStart.seconds > previousEnd.seconds + 1e-9 {
+            hostMapping?.spans[0].discontinuityBefore = true
+        }
         let epochChanged = self.currentProducerEpoch.map { producerEpoch > $0 } ?? false
         self.currentProducerEpoch = max(self.currentProducerEpoch ?? producerEpoch, producerEpoch)
 
