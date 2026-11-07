@@ -42,6 +42,7 @@ extension MeetingSessionStoreCheckpointTests {
         for enabled in [nil, true] as [Bool?] {
             var complete = session
             complete.speakerLabelsEnabled = enabled
+            for index in complete.speakers.indices { complete.speakers[index].generatedParticipantNumber = index + 1 }
             let noise = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "synthetic-noise")
             let punctuation = word(".", 5, raw: noise, selected: noise, owner: extra, map: [noise: extra])
             let lexical = word("я", 5.1, raw: nil, selected: nil, owner: nil, rule: .insufficientSupport)
