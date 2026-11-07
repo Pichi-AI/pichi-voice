@@ -29,6 +29,7 @@ final class DictionaryAudioLearningService {
     }
 
     private struct Request {
+        let admission: UInt64
         let entry: SettingsStore.CustomDictionaryEntry
         let evidenceID: UUID
         let prepare: @MainActor () async throws -> DictionaryLearningAudioEvidence?
@@ -43,6 +44,16 @@ final class DictionaryAudioLearningService {
         let retainedEvidenceBytes: Int
     }
 
+    /// Only pre-delete approvals for this exact spoken occurrence are revoked.
+    /// Later deliberate corrections may admit it again; pending work never survives restart.
+    private struct RemovedOccurrence {
+        let entryID: UUID
+        let modelKey: String
+        let recordingID: UUID
+        let focalRange: Range<Int>
+        let throughAdmission: UInt64
+    }
+
     private let store: PronunciationDictionaryStore
     private let extract: Extractor
     private let lifetime: TimeInterval
@@ -50,6 +61,8 @@ final class DictionaryAudioLearningService {
     private let canProcessHistory: @MainActor () -> Bool
     private let isCurrent: @MainActor (SettingsStore.CustomDictionaryEntry) -> Bool
     private var queue: [Request] = []
+    private var admission: UInt64 = 0
+    private var removedOccurrences: [RemovedOccurrence] = []
     private var task: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
     private var retired = false
@@ -114,10 +127,21 @@ final class DictionaryAudioLearningService {
             throw PronunciationDictionaryStoreError.staleEvidence
         }
         try await self.store.removeSavedSample(capture, dictionaryEntryID: dictionaryEntryID, expectedProfileLabel: expectedProfileLabel)
-        // The commit is complete. Invalidate even a duplicate occurrence with a
-        // different event ID; pre-delete work for this word is now stale. Fresh
-        // corrections admitted after this operation can still add new examples.
-        self.queue.removeAll { $0.entry.id == dictionaryEntryID }
+        // The commit is complete. Revoke the old event and duplicate approvals
+        // of its occurrence without discarding another pending good pronunciation.
+        if let evidenceID = capture.originalAudioID { self.queue.removeAll { $0.evidenceID == evidenceID } }
+        if let recordingID = capture.sourceRecordingID, let range = capture.sourceFocalRange {
+            self.removedOccurrences.append(RemovedOccurrence(entryID: dictionaryEntryID, modelKey: capture.modelKey,
+                recordingID: recordingID, focalRange: range, throughAdmission: self.admission))
+        }
+        self.pruneRemovedOccurrences()
+        // Bounded even if the user removes many historical occurrences while a
+        // deferred history request cannot yet resolve its recording. Overflow
+        // conservatively retires old work for this word, never other words.
+        if self.removedOccurrences.count > 128 {
+            self.queue.removeAll { $0.entry.id == dictionaryEntryID }
+            self.pruneRemovedOccurrences()
+        }
         self.preserveDictionaryEntry(dictionaryEntryID)
         self.scheduleExpiry()
         if PrivateProfileStorage.isReadable(self.profile), !self.retired {
@@ -183,6 +207,7 @@ final class DictionaryAudioLearningService {
     func prepareForPrivateProfileTransition() async {
         retired = true
         queue.removeAll()
+        removedOccurrences.removeAll()
         recentCorrections.removeAll()
         createdEntries.removeAll()
         let work = task, expiry = expiryTask
@@ -289,7 +314,9 @@ final class DictionaryAudioLearningService {
             )
             return false
         }
+        self.admission += 1
         self.queue.append(Request(
+            admission: self.admission,
             entry: entry,
             evidenceID: evidenceID,
             prepare: prepare,
@@ -319,6 +346,7 @@ final class DictionaryAudioLearningService {
             var notifyPublication = false
             defer {
                 if !retry { self.queue.removeAll { $0.evidenceID == request.evidenceID } }
+                self.pruneRemovedOccurrences()
                 self.task = nil
                 self.activeEvidenceID = nil
                 if notifyPublication { request.didPublishTarget?() }
@@ -330,6 +358,7 @@ final class DictionaryAudioLearningService {
             do {
                 guard let evidence = try await request.prepare(), !evidence.samples.isEmpty, evidence.samples.count <= 238_080 else { return }
                 try Task.checkCancellation()
+                guard !self.wasRemoved(evidence, request: request) else { return }
                 guard request.expiresAt > Date(), (request.publishTarget == nil ? self.isCurrent(request.entry) : request.isCurrentBeforePreparation()), request.isValid(), request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
                 let occurrence = "\(evidence.recordingID):\(evidence.modelKey):\(evidence.sourceWordRange.lowerBound):\(evidence.sourceWordRange.upperBound)"
                 if let previous = self.recentCorrections[occurrence]?.receipt, previous.entry.id != request.entry.id {
@@ -422,6 +451,21 @@ final class DictionaryAudioLearningService {
     private func pruneExpired() {
         if self.queue.contains(where: { $0.evidenceID == self.activeEvidenceID && $0.expiresAt <= Date() }) { self.task?.cancel() }
         self.queue.removeAll { $0.expiresAt <= Date() }
+        self.pruneRemovedOccurrences()
+    }
+
+    private func wasRemoved(_ evidence: DictionaryLearningAudioEvidence, request: Request) -> Bool {
+        let focalRange = (evidence.sourceSampleRange.lowerBound + evidence.focalSampleRange.lowerBound)..<(evidence.sourceSampleRange.lowerBound + evidence.focalSampleRange.upperBound)
+        return self.removedOccurrences.contains {
+            $0.entryID == request.entry.id && $0.modelKey == evidence.modelKey &&
+                $0.recordingID == evidence.recordingID && $0.focalRange == focalRange && request.admission <= $0.throughAdmission
+        }
+    }
+
+    private func pruneRemovedOccurrences() {
+        self.removedOccurrences.removeAll { occurrence in
+            !self.queue.contains { $0.entry.id == occurrence.entryID && $0.admission <= occurrence.throughAdmission }
+        }
     }
 
     private func scheduleExpiry() {

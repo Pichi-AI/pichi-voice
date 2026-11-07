@@ -166,7 +166,7 @@ extension CustomDictionaryManualEntryTests {
         XCTAssertTrue(empty.isEmpty)
     }
 
-    func testSampleBrowserDeletionDropsOldSameWordWorkAndKeepsOtherWordsAndFreshLearning() async throws {
+    func testSampleBrowserDeletionRejectsDuplicateOccurrenceAndKeepsGoodPendingSamples() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
@@ -177,17 +177,19 @@ extension CustomDictionaryManualEntryTests {
         let profiles = await store.allProfiles()
         let capture = try XCTUnwrap(profiles.first?.enrollments.first)
         var idle = false
-        let persisted = expectation(description: "Other word and fresh post-delete correction saved")
-        persisted.expectedFulfillmentCount = 2
+        let persisted = expectation(description: "Good pending pronunciations and fresh post-delete correction saved")
+        persisted.expectedFulfillmentCount = 3
         let worker = DictionaryAudioLearningService(store: store,
             extract: { .init(values: [1, 0], sourceFrameCount: 2, modelKey: $0.modelKey) },
             canProcess: { idle }, canProcessHistory: { idle }, isCurrent: { _ in true })
         // A different approval UUID for the same occurrence must also be discarded.
         XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, prepare: { evidence }))
+        let pendingGood = self.sampleEvidence()
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, didPersist: { _ in persisted.fulfill() }, prepare: { pendingGood }))
         let otherEvidence = self.sampleEvidence()
         XCTAssertTrue(worker.enqueue(entry: other, evidenceID: UUID(), isValid: { true }, didPersist: { _ in persisted.fulfill() }, prepare: { otherEvidence }))
         try await worker.removeSavedSample(capture, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
-        XCTAssertEqual(worker.pendingCount, 1)
+        XCTAssertEqual(worker.pendingCount, 3, "Deferred occurrences are resolved before deciding whether they were removed")
         let empty = await store.allProfiles()
         XCTAssertTrue(empty.isEmpty)
         let fresh = self.sampleEvidence()
@@ -199,7 +201,7 @@ extension CustomDictionaryManualEntryTests {
         let learned = await store.allProfiles()
         XCTAssertEqual(Set(learned.map(\.dictionaryEntryID)), [entry.id, other.id])
         let target = try XCTUnwrap(learned.first { $0.dictionaryEntryID == entry.id })
-        XCTAssertEqual(target.enrollments.map(\.sourceRecordingID), [fresh.recordingID])
+        XCTAssertEqual(target.enrollments.map(\.sourceRecordingID), [pendingGood.recordingID, fresh.recordingID])
     }
 
     func testSampleBrowserDeletionJoinsActiveExtractorBeforeRemovingItsWord() async throws {
@@ -213,16 +215,38 @@ extension CustomDictionaryManualEntryTests {
         let capture = try XCTUnwrap(profiles.first?.enrollments.first)
         let started = expectation(description: "Extraction started")
         let joined = expectation(description: "Extraction cancelled and joined")
+        let prepared = expectation(description: "Revoked occurrence checked again without encoding")
+        prepared.expectedFulfillmentCount = 2
         let gate = DictionarySampleDeletionGate(started: started, joined: joined)
         let worker = DictionaryAudioLearningService(store: store, extract: { try await gate.extract($0) },
             canProcess: { true }, canProcessHistory: { true }, isCurrent: { _ in true })
-        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, prepare: { evidence }))
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, prepare: { prepared.fulfill(); return evidence }))
         await fulfillment(of: [started], timeout: 2)
         try await worker.removeSavedSample(capture, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
-        await fulfillment(of: [joined], timeout: 2)
+        await fulfillment(of: [joined, prepared], timeout: 2)
         XCTAssertEqual(worker.pendingCount, 0)
         let deleted = await store.allProfiles()
         XCTAssertTrue(deleted.isEmpty)
+        await worker.prepareForPrivateProfileTransition()
+    }
+
+    func testSampleDeletionRevocationBudgetRetiresOnlyOverloadedWordsPendingWork() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Word")
+        let other = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Other")
+        let worker = DictionaryAudioLearningService(store: store, canProcess: { false }, canProcessHistory: { false }, isCurrent: { _ in true })
+        let pending = self.sampleEvidence()
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, prepare: { pending }))
+        XCTAssertTrue(worker.enqueue(entry: other, evidenceID: UUID(), isValid: { true }, prepare: { pending }))
+        for index in 0..<129 {
+            try await self.saveSample(self.sampleEvidence(), entry: entry, store: store)
+            let profiles = await store.allProfiles()
+            let capture = try XCTUnwrap(profiles.first?.enrollments.first)
+            try await worker.removeSavedSample(capture, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
+            XCTAssertEqual(worker.pendingCount, index < 128 ? 2 : 1)
+        }
         await worker.prepareForPrivateProfileTransition()
     }
 
