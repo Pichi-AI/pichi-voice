@@ -113,6 +113,19 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         }
     }
 
+    func testEmissionAtRecordingOpeningDoesNotNeedAnInventedPreviousParticipant() throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let fixture = self.emissionFixture(epoch: epoch)
+        let units = Array(fixture.units.dropFirst())
+        let decisions = try MeetingSpeakerAttribution.resolve(units: units,
+            activity: Array(fixture.activity.dropFirst()), policy: self.emissionPolicy)
+        let first = try XCTUnwrap(decisions.first { $0.unitID == units[0].id })
+        guard case let .assigned(expected) = units[1].speaker else { return XCTFail("Fixture needs a real anchor") }
+        XCTAssertEqual(first.selectedToken, expected)
+        XCTAssertEqual(first.rule, .incomingSpeaker)
+        XCTAssertEqual(first.rawAssignment, .unassigned)
+    }
+
     func testEmissionContextRefusesInterveningVoicePrivacyBarrierAndAbsentAnchor() throws {
         let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
         let fixture = self.emissionFixture(epoch: epoch)

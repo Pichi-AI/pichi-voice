@@ -14,8 +14,9 @@ nonisolated enum MeetingSpeakerActivityCoverage {
         // which it was spoken. Nonintersection cannot classify that word as non-speech.
         // Capture/coverage/privacy admission is unchanged; contextual attribution later
         // uses the same validated recognition provenance and independent voice evidence.
-        if preservesTokenEmissions, unit.wordTimingProvenance?.basis == .tokenEmission,
-           unit.wordTimingProvenance?.hasValidSourceContext == true { return false }
+        if preservesTokenEmissions, unit.precision == .word,
+           unit.wordTimingProvenance?.basis == .tokenEmission,
+           unit.wordTimingProvenance?.isValid == true { return false }
         guard let activity = activityByEpoch[unit.analysisEpochID], !activity.isEmpty else {
             return false
         }
