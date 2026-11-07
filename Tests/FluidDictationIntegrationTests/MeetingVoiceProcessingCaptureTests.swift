@@ -1300,3 +1300,144 @@ final class MeetingScreenCaptureRecoveryTests: XCTestCase {
         // Admission deliberately has no amplitude or elapsed-silence input. Zero PCM is valid.
     }
 }
+
+/// The native adapters use this production boundary before privacy, persistence, VAD and ASR.
+/// Synthetic CMTimebases exercise source clock conversion without opening a capture device.
+final class MeetingNativeCaptureClockTests: XCTestCase {
+    private func recordingClock(origin: Double = 100) throws -> MeetingRecordingClock {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return try MeetingRecordingClock(timebase: .init(
+            startedHostTime: AVAudioTime.hostTime(forSeconds: origin),
+            machTimebaseNumerator: info.numer, machTimebaseDenominator: info.denom,
+            firstPresentationTime: nil))
+    }
+
+    private func packet(start: Double, frames: Int = 4_800, rate: Double = 48_000) throws -> CMSampleBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32,
+            sampleRate: rate, channels: 1, interleaved: false))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)))
+        buffer.frameLength = AVAudioFrameCount(frames)
+        let samples = try XCTUnwrap(buffer.floatChannelData?[0])
+        for index in 0..<frames { samples[index] = index.isMultiple(of: 2) ? 0.25 : -0.25 }
+        return try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(from: buffer,
+            presentationTime: CMTime(seconds: start, preferredTimescale: 1_000_000_000)))
+    }
+
+    private func sourceClock(rate: Double = 1, sourceStart: Double = 0, hostStart: Double = 100) throws -> CMTimebase {
+        var result: CMTimebase?
+        XCTAssertEqual(CMTimebaseCreateWithSourceClock(allocator: kCFAllocatorDefault,
+            sourceClock: CMClockGetHostTimeClock(), timebaseOut: &result), noErr)
+        let clock = try XCTUnwrap(result)
+        XCTAssertEqual(CMTimebaseSetRateAndAnchorTime(clock, rate: rate,
+            timebaseTime: CMTime(seconds: sourceStart, preferredTimescale: 1_000_000_000),
+            immediateSourceTime: CMTime(seconds: hostStart, preferredTimescale: 1_000_000_000)), noErr)
+        return clock
+    }
+
+    func testNativeClockDriftUsesHostIntervalsForBothRateDirections() throws {
+        for rate in [0.9997, 1.0003] {
+            let context = try self.recordingClock().source(UUID())
+            let source = MeetingCaptureSourceClock(context: context)
+            let nativeClock = try self.sourceClock(rate: rate)
+            XCTAssertTrue(try source.offer(self.packet(start: 0), producerGeneration: 1,
+                sourceClock: nativeClock).isEmpty)
+            let output = try XCTUnwrap(source.offer(self.packet(start: 0.1), producerGeneration: 1,
+                sourceClock: nativeClock).first)
+            let metadata = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: output))
+            let span = try XCTUnwrap(metadata.mapping.spans.first)
+            XCTAssertTrue(context.accepts(metadata))
+            XCTAssertEqual(span.hostStart.seconds, 100, accuracy: 0.000_001)
+            XCTAssertEqual(span.hostEnd.seconds, 100 + 0.1 / rate, accuracy: 0.000_001)
+            XCTAssertEqual(CMSampleBufferGetNumSamples(output), 4_800)
+            XCTAssertEqual(CMSampleBufferGetDuration(output).seconds, 0.1 / rate, accuracy: 0.000_001)
+            XCTAssertEqual(try source.finish().count, 1)
+            XCTAssertTrue(try source.finish().isEmpty)
+        }
+    }
+
+    func testContiguousNativeFramesUseMeasuredJitteredAnchorsWithoutFalseBoundaries() throws {
+        let context = try self.recordingClock().source(UUID())
+        let source = MeetingCaptureSourceClock(context: context)
+        var outputs: [CMSampleBuffer] = []
+        let hostStarts = (0..<20).map { 101 + Double($0) * 0.1 + ($0.isMultiple(of: 2) ? 0.001 : -0.001) }
+        // Delivery is deliberately a synchronous burst. Its arrival time cannot become acquisition time.
+        for index in hostStarts.indices {
+            outputs += try source.offer(self.packet(start: Double(index) * 0.1), producerGeneration: 1,
+                acquisitionStart: CMTime(seconds: hostStarts[index], preferredTimescale: 1_000_000_000),
+                sourceFrameStart: Int64(index * 4_800))
+        }
+        XCTAssertEqual(outputs.count, 19, "Only one finite packet awaits its next acquisition anchor")
+        var firstEpoch: UInt64?
+        for (index, output) in outputs.enumerated() {
+            let metadata = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: output))
+            let span = try XCTUnwrap(metadata.mapping.spans.first)
+            XCTAssertEqual(span.hostStart.seconds, hostStarts[index], accuracy: 0.000_001)
+            XCTAssertEqual(span.hostEnd.seconds, hostStarts[index + 1], accuracy: 0.000_001)
+            XCTAssertEqual(span.discontinuityBefore, index == 0)
+            if let firstEpoch { XCTAssertEqual(metadata.producerEpoch, firstEpoch) }
+            else { firstEpoch = metadata.producerEpoch }
+        }
+        XCTAssertEqual(try source.finish().count, 1)
+    }
+
+    func testRealNativeGapIsNotPaddedOrStretchedIntoRecordedAudio() throws {
+        let context = try self.recordingClock().source(UUID())
+        let source = MeetingCaptureSourceClock(context: context)
+        XCTAssertTrue(try source.offer(self.packet(start: 100), producerGeneration: 1).isEmpty)
+        let beforeGap = try XCTUnwrap(source.offer(self.packet(start: 102.5), producerGeneration: 1).first)
+        let resumed = try XCTUnwrap(source.finish().first)
+        let before = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: beforeGap)?.mapping.spans.first)
+        let after = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: resumed)?.mapping.spans.first)
+        XCTAssertEqual(before.hostEnd.seconds, 100.1, accuracy: 0.000_001)
+        XCTAssertEqual(after.hostStart.seconds, 102.5, accuracy: 0.000_001)
+        XCTAssertTrue(after.discontinuityBefore)
+        XCTAssertEqual(CMSampleBufferGetNumSamples(beforeGap) + CMSampleBufferGetNumSamples(resumed), 9_600)
+        XCTAssertEqual(after.hostStart.seconds - before.hostEnd.seconds, 2.4, accuracy: 0.000_001)
+    }
+
+    func testReplacementProducerConvertsResetPTSAndRejectsRetiredGeneration() throws {
+        let clock = try self.recordingClock()
+        let context = clock.source(UUID())
+        let source = MeetingCaptureSourceClock(context: context)
+        let oldClock = try self.sourceClock(hostStart: 100)
+        let replacementClock = try self.sourceClock(hostStart: 105)
+        XCTAssertTrue(try source.offer(self.packet(start: 0), producerGeneration: 7, sourceClock: oldClock).isEmpty)
+        let oldTail = try XCTUnwrap(source.offer(self.packet(start: 0), producerGeneration: 8,
+            sourceClock: replacementClock).first)
+        XCTAssertThrowsError(try source.offer(self.packet(start: 0.1), producerGeneration: 7,
+            sourceClock: oldClock)) { error in
+                guard case MeetingRecordingClock.Failure.retiredProducer = error else {
+                    return XCTFail("Expected a retired producer refusal, received \(error)")
+                }
+            }
+        let replacement = try XCTUnwrap(source.finish().first)
+        let oldMetadata = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: oldTail))
+        let newMetadata = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: replacement))
+        XCTAssertNotEqual(oldMetadata.producerEpoch, newMetadata.producerEpoch)
+        XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(oldTail).seconds, 100, accuracy: 0.000_001)
+        XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(replacement).seconds, 105, accuracy: 0.000_001)
+        XCTAssertTrue(try XCTUnwrap(newMetadata.mapping.spans.first).discontinuityBefore)
+        XCTAssertEqual(clock.origin.seconds, 100, accuracy: 0.000_001)
+        XCTAssertEqual(newMetadata.clockID, oldMetadata.clockID)
+    }
+
+    func testRateChangeRetiresOnePendingPacketAndKeepsIndependentSourceOwnership() throws {
+        let clock = try self.recordingClock()
+        let context = clock.source(UUID()), sibling = clock.source(UUID())
+        let source = MeetingCaptureSourceClock(context: context)
+        XCTAssertTrue(try source.offer(self.packet(start: 100), producerGeneration: 1).isEmpty)
+        let old = try XCTUnwrap(source.offer(self.packet(start: 100.1, frames: 4_410, rate: 44_100),
+            producerGeneration: 1).first)
+        let new = try XCTUnwrap(source.finish().first)
+        let oldPacket = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: old))
+        let newPacket = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: new))
+        XCTAssertTrue(context.accepts(oldPacket))
+        XCTAssertFalse(sibling.accepts(oldPacket))
+        XCTAssertNotEqual(oldPacket.producerEpoch, newPacket.producerEpoch)
+        XCTAssertEqual(CMSampleBufferGetDuration(old).seconds, 0.1, accuracy: 0.000_001)
+        XCTAssertEqual(CMSampleBufferGetDuration(new).seconds, 0.1, accuracy: 0.000_001)
+        XCTAssertEqual(CMSampleBufferGetNumSamples(new), 4_410)
+        XCTAssertTrue(try source.finish().isEmpty, "Normal stop must not publish the finite tail twice")
+    }
+}
