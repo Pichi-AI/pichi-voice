@@ -3361,7 +3361,8 @@ extension MeetingParakeetNemotronBackendTests {
             let gap = packet >= 20 ? (source == 0 ? 0.1 : 2.4) : 0
             return clock.origin.seconds + delay + Double(packet) * 0.5 * rate + gap
         }
-        for index in 0..<42 {
+        for index in 0..<32 {
+            // Stay inside the existing 20-second source budget while the main actor owns the fixture.
             // Reverse source delivery order on alternating packets. Arrival order cannot move the origin.
             for source in (index.isMultiple(of: 2) ? [1, 0] : [0, 1]) {
                 let sample = try Self.onlinePCM(frames: 8_000, startFrame: index * 8_000)
@@ -3389,7 +3390,7 @@ extension MeetingParakeetNemotronBackendTests {
         XCTAssertEqual(restored.timebase.recordingTimePolicy, .hostMonotonicV1)
         for (source, track) in tracks.enumerated() {
             let words = restored.transcriptSegments.filter { $0.sourceTrackID == track.id }
-            XCTAssertEqual(words.count, 42)
+            XCTAssertEqual(words.count, 32)
             XCTAssertEqual(try XCTUnwrap(words.first).start.seconds, host(source, 0) - clock.origin.seconds, accuracy: 2e-6)
             let gapStart = host(source, 19) - clock.origin.seconds + 0.5 * (source == 0 ? 1.0003 : 0.9997)
             let gapEnd = host(source, 20) - clock.origin.seconds

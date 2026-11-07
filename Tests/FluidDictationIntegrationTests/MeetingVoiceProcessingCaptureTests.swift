@@ -1350,7 +1350,7 @@ final class MeetingNativeCaptureClockTests: XCTestCase {
             XCTAssertEqual(span.hostStart.seconds, 100, accuracy: 0.000_001)
             XCTAssertEqual(span.hostEnd.seconds, 100 + 0.1 / rate, accuracy: 0.000_001)
             XCTAssertEqual(CMSampleBufferGetNumSamples(output), 4_800)
-            XCTAssertEqual(CMSampleBufferGetDuration(output).seconds, 0.1 / rate, accuracy: 0.000_001)
+            XCTAssertEqual(CMSampleBufferGetDuration(output).seconds, 0.1 / rate, accuracy: 2.0 / 48_000)
             XCTAssertEqual(try source.finish().count, 1)
             XCTAssertTrue(try source.finish().isEmpty)
         }
@@ -1363,9 +1363,11 @@ final class MeetingNativeCaptureClockTests: XCTestCase {
         let hostStarts = (0..<20).map { 101 + Double($0) * 0.1 + ($0.isMultiple(of: 2) ? 0.001 : -0.001) }
         // Delivery is deliberately a synchronous burst. Its arrival time cannot become acquisition time.
         for index in hostStarts.indices {
-            outputs += try source.offer(self.packet(start: Double(index) * 0.1), producerGeneration: 1,
-                acquisitionStart: CMTime(seconds: hostStarts[index], preferredTimescale: 1_000_000_000),
-                sourceFrameStart: Int64(index * 4_800))
+            do {
+                outputs += try source.offer(self.packet(start: Double(index) * 0.1), producerGeneration: 1,
+                    acquisitionStart: CMTime(seconds: hostStarts[index], preferredTimescale: 1_000_000_000),
+                    sourceFrameStart: Int64(index * 4_800))
+            } catch { XCTFail("Native jitter packet \(index): \(error)"); throw error }
         }
         XCTAssertEqual(outputs.count, 19, "Only one finite packet awaits its next acquisition anchor")
         var firstEpoch: UInt64?

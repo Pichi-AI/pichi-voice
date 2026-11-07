@@ -405,7 +405,6 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             }
         }
         let producerEpoch = self.clockContext != nil ? clockPacket?.producerEpoch ?? producerEpoch : producerEpoch
-        self.diagnosticSampleObserver?(sourceSampleBuffer, producerEpoch)
         var hostMapping = self.clockContext != nil ? clockPacket?.mapping : nil
         let sourcePresentationTime = CMSampleBufferGetPresentationTimeStamp(sourceSampleBuffer)
         guard sourcePresentationTime.isValid, sourcePresentationTime.isNumeric else {
@@ -417,6 +416,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             self.recordDroppedSample(detail: "Capture delivered audio from a retired producer epoch.")
             return
         }
+        self.diagnosticSampleObserver?(sourceSampleBuffer, producerEpoch)
 
         let duration = hostMapping.map {
             CMTime(seconds: ($0.spans.last?.hostEnd.seconds ?? 0) - ($0.spans.first?.hostStart.seconds ?? 0),

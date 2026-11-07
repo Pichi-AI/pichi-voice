@@ -947,7 +947,7 @@ extension MeetingMicrophoneCaptureTests {
             await fixture.tap.finishClockInput()
             XCTAssertEqual(fixture.sink.frames, count * Int(frames))
             XCTAssertEqual(fixture.sink.firstHost, 1_000, accuracy: 1e-9)
-            XCTAssertEqual(fixture.sink.lastHost, 1_000 + Double(count - 1) * 0.1 * (1 + drift) + 0.1, accuracy: 2e-9)
+            XCTAssertEqual(fixture.sink.lastHost, 1_000 + Double(count) * 0.1 * (1 + drift), accuracy: 2e-9)
             XCTAssertEqual(fixture.sink.discontinuities, 1, "Only the first producer epoch is a boundary")
             XCTAssertTrue(fixture.sink.consistentContext)
             XCTAssertEqual(fixture.stats.snapshot().conversionFailures, 0)
@@ -983,8 +983,10 @@ extension MeetingMicrophoneCaptureTests {
                               (120_000, 1_002.5), (124_800, 1_002.6)] {
             fixture.tap.handle(buffer: raw, time: AVAudioTime(hostTime: Self.privacyHostTime(host), sampleTime: Int64(frame), atRate: 48_000))
             await fixture.tap.drainClockHandoff()
+            print("GAP-CLOCK", frame, fixture.sink.frames, fixture.stats.snapshot().conversionFailures)
         }
         await fixture.tap.finishClockInput()
+        print("GAP-FINISH", fixture.sink.frames, fixture.stats.snapshot().conversionFailures)
         XCTAssertEqual(fixture.sink.frames, 24_000)
         XCTAssertEqual(fixture.sink.discontinuities, 2)
         XCTAssertTrue(fixture.sink.observedGap)
@@ -1089,7 +1091,9 @@ extension MeetingMicrophoneCaptureTests {
     }
     private func masterRawPCM(rate: Double, frames: AVAudioFrameCount, channels: AVAudioChannelCount,
                               interleaved: Bool = false) throws -> AVAudioPCMBuffer {
-        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: channels, interleaved: interleaved))
+        let layout = try XCTUnwrap(AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | channels))
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32,
+            sampleRate: rate, interleaved: interleaved, channelLayout: layout))
         let raw = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)); raw.frameLength = frames
         let data = try XCTUnwrap(raw.floatChannelData)
         if interleaved { data[0].initialize(repeating: 0.25, count: Int(frames * channels)) }
