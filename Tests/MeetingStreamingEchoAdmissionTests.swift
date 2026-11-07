@@ -152,10 +152,15 @@ nonisolated struct MeetingStreamingEchoAdmissionTests {
         try check(await bounded.diagnostics.closed, "A bounded failure closes raw admission")
         let delayed = try owner()
         _ = try await delayed.observe(track: microphone, observation: observation(track: microphone, through: 100))
-        do {
-            _ = try await delayed.observe(track: application, observation: observation(track: application, words: words(track: application)))
-            throw TestFailure.assertion("Expected explicit late evidence rejection")
-        } catch MeetingStreamingEchoAdmission.Failure.lateEvidence {}
+        let original = words(track: application)
+        let result = try await delayed.observe(track: application, observation: observation(track: application, words: original))
+        try check(result.batch.segments.map(\.id) == original.map(\.id)
+                  && zip(result.batch.segments, original).allSatisfy({ $0.text == $1.text && $0.isLikelyEcho == $1.isLikelyEcho }),
+                  "Expired echo evidence preserves original words/flags for normal admission")
+        let diagnostics = await delayed.diagnostics
+        try check(!diagnostics.closed && diagnostics.retainedRawUnits == 0
+                  && diagnostics.expiredEvidenceUnits == original.count,
+                  "Late valid ASR does not revive expired echo history or stop either source")
     }
 
     static func cancellationReleasesRawEvidence() async throws {

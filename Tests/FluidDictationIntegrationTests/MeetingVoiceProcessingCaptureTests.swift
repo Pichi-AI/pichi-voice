@@ -201,6 +201,94 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertTrue(gate.admitsTranscript())
     }
 
+    func testRawRouteResumeWithoutNewPCMReopensOnlyAfterDurableBoundary() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var track = self.makeTrack(chunkStart: 10, drift: nil, captureMethod: .avCaptureSession)
+        track.chunks = []
+        track.captureEras = [MeetingCaptureEra(method: .avCaptureSession, deviceUID: "mic",
+            deviceName: "Mic", roleAtElection: .unknown, echoProtection: .unprotected, startSeconds: 10)]
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root,
+            chunkDuration: 60, eventHandler: { _ in })
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        XCTAssertFalse(gate.observeAndAdmit(self.makeSampleBuffer(ptsSeconds: 10)))
+        let epoch = gate.invalidationEpoch
+        // No new PCM arrives before the one-shot route evaluation. This was a permanent stall.
+        let recorded = try await MeetingRawMicrophoneProtection.persistResume(.unfiltered,
+            observedAtSeconds: 12, writer: writer, gate: gate, epoch: epoch)
+        XCTAssertTrue(recorded)
+        XCTAssertFalse(gate.admitsTranscript(), "Persistence alone cannot publish live admission")
+        let manifest = root.appendingPathComponent("tracks/microphone/track.json")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let persisted = try decoder.decode(MeetingAudioTrack.self, from: Data(contentsOf: manifest))
+        XCTAssertEqual(persisted.captureEras?.map(\.echoProtection), [.unprotected, .unfiltered])
+        XCTAssertEqual(persisted.captureEras?.last?.startSeconds, 12)
+        XCTAssertTrue(gate.updateIfNotInvalidated(.unfiltered, since: epoch, notBeforePresentationSeconds: 12))
+        // The privacy quarantine may release older PCM later. It is retained but not live-ASR eligible.
+        let late = self.makeSampleBuffer(ptsSeconds: 11.9)
+        XCTAssertTrue(writer.enqueue(late))
+        XCTAssertFalse(gate.observeAndAdmit(late))
+        let resumed = self.makeSampleBuffer(ptsSeconds: 12.1)
+        XCTAssertTrue(writer.enqueue(resumed))
+        XCTAssertTrue(gate.observeAndAdmit(resumed))
+        let stopped = await writer.stop()
+        XCTAssertFalse(stopped.chunks.isEmpty)
+        XCTAssertEqual(stopped.health.droppedSampleCount, 0)
+        XCTAssertFalse(MeetingProcessingPipeline.microphoneIntervalIsAdmitted(start: 11.9, end: 12.01,
+            eras: try XCTUnwrap(stopped.captureEras)))
+        XCTAssertTrue(MeetingProcessingPipeline.microphoneIntervalIsAdmitted(start: 12.1, end: 12.11,
+            eras: try XCTUnwrap(stopped.captureEras)))
+    }
+
+    func testRawRouteResumeRejectsStaleObservationAndLaterInvalidation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var track = self.makeTrack(chunkStart: 10, drift: nil, captureMethod: .avCaptureSession)
+        track.chunks = []
+        track.captureEras = [MeetingCaptureEra(method: .avCaptureSession, deviceUID: "mic",
+            deviceName: "Mic", roleAtElection: .unknown, echoProtection: .unprotected, startSeconds: 10)]
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root,
+            chunkDuration: 60, eventHandler: { _ in })
+        let gate = MeetingMicrophoneTranscriptGate()
+        let staleEpoch = gate.invalidationEpoch
+        _ = gate.invalidate()
+        let stale = try await MeetingRawMicrophoneProtection.persistResume(.unfiltered,
+            observedAtSeconds: 12, writer: writer, gate: gate, epoch: staleEpoch)
+        XCTAssertFalse(stale)
+        let epoch = gate.invalidationEpoch
+        let recorded = try await MeetingRawMicrophoneProtection.persistResume(.unfiltered,
+            observedAtSeconds: 12, writer: writer, gate: gate, epoch: epoch)
+        XCTAssertTrue(recorded)
+        _ = gate.invalidate()
+        XCTAssertFalse(gate.updateIfNotInvalidated(.unfiltered, since: epoch, notBeforePresentationSeconds: 12))
+        XCTAssertFalse(gate.observeAndAdmit(self.makeSampleBuffer(ptsSeconds: 13)))
+        _ = await writer.stop()
+    }
+
+    func testRawRouteResumePersistenceFailureDoesNotOpenAdmission() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var track = self.makeTrack(chunkStart: 10, drift: nil, captureMethod: .avCaptureSession)
+        track.chunks = []
+        track.captureEras = [MeetingCaptureEra(method: .avCaptureSession, deviceUID: "mic",
+            deviceName: "Mic", roleAtElection: .unknown, echoProtection: .unprotected, startSeconds: 10)]
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root,
+            chunkDuration: 60, eventHandler: { _ in })
+        let gate = MeetingMicrophoneTranscriptGate()
+        let directory = root.appendingPathComponent("tracks/microphone")
+        try FileManager.default.removeItem(at: directory)
+        try Data().write(to: directory)
+        do {
+            _ = try await MeetingRawMicrophoneProtection.persistResume(.unfiltered,
+                observedAtSeconds: 12, writer: writer, gate: gate, epoch: gate.invalidationEpoch)
+            XCTFail("The failed durable write must propagate")
+        } catch {}
+        XCTAssertFalse(gate.observeAndAdmit(self.makeSampleBuffer(ptsSeconds: 13)))
+        let stopped = await writer.stop()
+        XCTAssertEqual(stopped.captureEras?.last?.echoProtection, .unprotected)
+    }
+
     func testTurnCrossingUnprotectedEraIsRejectedAsAWhole() {
         let eras = [
             MeetingCaptureEra(

@@ -30,7 +30,7 @@ extension MeetingProcessingPipeline {
         if let query = attempt.trackConfidentlyNonSpeech {
             nonSpeech = { start, end in await query(track.kind, start, end) }
         } else { nonSpeech = attempt.request.session.mode == .inRoom ? attempt.confidentlyNonSpeech : nil }
-        let sourceTimeline: MeetingPCMSourceTimeline?
+        let sourceTimeline: MeetingPCMSourceTimeline
         if attempt.request.session.mode == .onlineCall {
             let timebase = attempt.request.session.timebase
             let origin = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
@@ -38,7 +38,10 @@ extension MeetingProcessingPipeline {
             let timeline = try MeetingPCMSourceTimeline(originSeconds: origin)
             attempt.sourceTimelines[track.id] = timeline
             sourceTimeline = timeline
-        } else { sourceTimeline = nil }
+        } else {
+            sourceTimeline = try MeetingPCMSourceTimeline()
+            attempt.sourceTimelines[track.id] = sourceTimeline
+        }
         let state = try MeetingStreamingTranscriptState(attemptID: attemptID, track: track,
             configuration: configuration, privacyContext: attempt.request.session.mode == .onlineCall
                 ? attempt.redactor.map { MeetingTranscriptPrivacyContext(redactor: $0) } : attempt.privacyContext,
@@ -47,13 +50,13 @@ extension MeetingProcessingPipeline {
             // Keep every privacy/attribution-held word and the preceding physical ASR
             // window. Echo caches already retain positioned intervals, not source maps.
             let protectedFloor = await state.retainActivityFromSample
-            sourceTimeline?.discard(beforeSample: max(0, protectedFloor - 20 * 16_000))
+            sourceTimeline.discard(beforeSample: max(0, protectedFloor - 20 * 16_000))
         }
         let publish: @Sendable (MeetingStreamingTranscriptState.Emission, String) async throws -> Void = { emission, phase in
             try Task.checkCancellation()
             let batch = emission.safeBatch
             if !batch.segments.isEmpty || !batch.speakerRevisions.isEmpty || emission.hasSpeakerIdentityChanges
-                || batch.protectedSourceThroughSample != nil {
+                || batch.protectedSourceThroughSample != nil || !batch.protectedSourceIntervals.isEmpty {
                 try await checkpoint(batch)
             }
             try await publishPreview(emission)

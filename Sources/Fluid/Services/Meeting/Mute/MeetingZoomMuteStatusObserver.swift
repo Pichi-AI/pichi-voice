@@ -7,13 +7,8 @@ import Foundation
 /// Zoom exposes the local tile's rendered computer-audio status even when its toolbar is hidden.
 /// Its temporary-unmute HUD is another explicit rendered transition. Neither needs OCR or a
 /// permanent screenshot of a toolbar. All labels stay in memory and are never logged.
-final nonisolated class MeetingZoomMuteStatusObserver {
-    struct Snapshot {
-        let callWindowID: UInt32?
-        let state: MeetingMicrophoneMuteState?
-        let temporaryHUDVisible: Bool?
-        static let unavailable = Snapshot(callWindowID: nil, state: nil, temporaryHUDVisible: nil)
-    }
+final nonisolated class MeetingZoomMuteStatusObserver: MeetingRenderedAudioStatusObserving {
+    typealias Snapshot = MeetingRenderedAudioStatusSnapshot
 
     private struct CachedTile {
         let processID: Int32
@@ -68,11 +63,55 @@ final nonisolated class MeetingZoomMuteStatusObserver {
             guard calls.count == 1, let call = calls.first else { self.invalidate(); return .unavailable }
             self.callWindow = call.0
             self.callProcessID = processID
-            let state = try self.renderedState(window: call.0, descriptor: call.1, reader: &reader)
+            // The call menu owns Zoom's local audio command even with a hidden toolbar.
+            // A renderer's combined display-name description is never self-identity proof.
+            let state = try self.ownAudioMenuState(app: app, call: call.0, reader: &reader)
+                ?? self.renderedState(window: call.0, descriptor: call.1, reader: &reader)
             let hud = self.temporaryHUD(windows: windows, app: app, call: call.0, processID: processID,
                 descriptors: descriptors, reader: &reader)
             return Snapshot(callWindowID: call.1.windowID, state: state, temporaryHUDVisible: hud)
         } catch { return .unavailable }
+    }
+
+    struct AudioMenuAction {
+        let role: String?
+        let identifier: String?
+        let title: String?
+        let enabled: Bool
+    }
+
+    static func ownAudioMenuState(_ actions: [AudioMenuAction]) -> MeetingMicrophoneMuteState? {
+        let own = actions.filter { $0.identifier == "onMuteAudio:" }
+        guard own.count == 1, let action = own.first, action.role == "AXMenuItem", action.enabled else { return nil }
+        switch action.title {
+        case "Mute audio": return .unmuted
+        case "Unmute audio": return .muted
+        default: return nil
+        }
+    }
+
+    private func ownAudioMenuState(app: AXUIElement, call: AXUIElement,
+        reader: inout MeetingMuteControlLocator.Reader) throws -> MeetingMicrophoneMuteState? {
+        guard let focused = try reader.value(app, kAXFocusedWindowAttribute as String),
+              CFGetTypeID(focused) == AXUIElementGetTypeID(), CFEqual(focused, call),
+              let bar = try reader.value(app, kAXMenuBarAttribute as String),
+              CFGetTypeID(bar) == AXUIElementGetTypeID() else { return nil }
+        let menus = try reader.elements(bar as! AXUIElement).filter {
+            try reader.string($0, kAXRoleAttribute as String) == "AXMenuBarItem"
+                && reader.string($0, kAXTitleAttribute as String) == "Meeting"
+        }
+        guard menus.count == 1, let meeting = menus.first else { return nil }
+        var actions: [AudioMenuAction] = []
+        for menu in try reader.elements(meeting) {
+            guard try reader.string(menu, kAXRoleAttribute as String) == "AXMenu" else { continue }
+            for item in try reader.elements(menu) {
+                guard try reader.string(item, kAXIdentifierAttribute as String) == "onMuteAudio:" else { continue }
+                actions.append(.init(role: try reader.string(item, kAXRoleAttribute as String), identifier: "onMuteAudio:",
+                    title: try reader.string(item, kAXTitleAttribute as String),
+                    enabled: try reader.value(item, kAXEnabledAttribute as String) as? Bool == true))
+            }
+        }
+        return Self.ownAudioMenuState(actions)
     }
 
     private static func ownsForegroundCall(app: AXUIElement, call: AXUIElement, processID: Int32,

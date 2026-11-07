@@ -16,8 +16,19 @@ nonisolated protocol MeetingCaptureControlling: Sendable {
     ) async throws -> MeetingCaptureStartResult
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult
+    #if os(macOS)
+    func setMicrophoneManuallyMuted(_ muted: Bool, sessionID: MeetingSessionID) async throws
+    #endif
     func shutdownForTermination() async
 }
+
+#if os(macOS)
+nonisolated extension MeetingCaptureControlling {
+    func setMicrophoneManuallyMuted(_ muted: Bool, sessionID: MeetingSessionID) async throws {
+        throw MeetingCaptureError.noActiveCapture
+    }
+}
+#endif
 
 
 nonisolated enum MeetingCaptureError: LocalizedError {
@@ -99,7 +110,7 @@ nonisolated enum MeetingCaptureEvent: Sendable {
     /// Presentation-only status. The writer owns persisted capture eras; this cannot restart capture.
     case microphoneEchoProtectionChanged(MeetingMicrophoneEchoProtection)
     #if os(macOS)
-    /// Observed conference mute status. Unknown/checking means local microphone capture is denied.
+    /// Effective microphone recording status after local intent and conference transitions.
     case microphoneMuteStateChanged(MeetingMicrophoneMuteState)
     #endif
     case chunkFinalized(trackID: MeetingAudioTrackID, chunk: MeetingAudioChunk, format: MeetingAudioFormat)

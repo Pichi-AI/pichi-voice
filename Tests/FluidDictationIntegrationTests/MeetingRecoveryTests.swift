@@ -13,6 +13,124 @@ import XCTest
 // Existing recovery suite shares setup across crash and corruption scenarios.
 // swiftlint:disable:next type_body_length
 final class MeetingRecoveryTests: XCTestCase {
+    func testMicrophoneButtonActionRoutesThroughCoordinatorAndAttemptControl() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = StubCaptureController()
+        capture.usesMicrophoneControl = true
+        let microphone = self.makeMicrophoneTrack(chunks: [])
+        var application = self.makeMicrophoneTrack(chunks: [])
+        application.kind = .applicationAudio
+        capture.startResult = .init(tracks: [microphone, application], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(store: MeetingSessionStore(rootDirectory: dir), capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        var configuration = self.makeConfiguration()
+        configuration.mode = .onlineCall
+        // Exercise controls without starting the upstream English caption model.
+        configuration.languageCode = "es"
+        configuration.application = .init(bundleIdentifier: "us.zoom.xos", displayName: "Synthetic Zoom")
+        let session = try await coordinator.startRecording(configuration: configuration)
+        await self.drainCaptureEvents()
+        // Invoke the actual native surface's bound action, then verify the real coordinator
+        // and attempt control composition. Physical native event routing is a separate check.
+        let indicator = MeetingRecordingPillContent(coordinator: coordinator).microphoneIndicator
+        let applied = self.expectation(description: "The capture owner published the button's manual pause")
+        let publication = coordinator.$microphoneMuteState.filter { $0 == .manuallyMuted }.first().sink { _ in applied.fulfill() }
+        defer { publication.cancel() }
+        try XCTUnwrap(indicator.onToggle)()
+        await fulfillment(of: [applied], timeout: 2)
+        XCTAssertEqual(coordinator.microphoneMuteState, .manuallyMuted)
+        capture.observeMeetingMute(.unmuted)
+        await self.drainCaptureEvents()
+        XCTAssertEqual(coordinator.microphoneMuteState, .manuallyMuted)
+        capture.observeMeetingMute(.muted)
+        await self.drainCaptureEvents()
+        await coordinator.toggleMicrophoneRecording(expectedSessionID: session.id)
+        await self.drainCaptureEvents()
+        XCTAssertEqual(coordinator.microphoneMuteState, .muted, "Local enable cannot override the meeting mute")
+        capture.observeMeetingMute(.unmuted)
+        await self.drainCaptureEvents()
+        XCTAssertEqual(coordinator.microphoneMuteState, .unmuted)
+        await coordinator.toggleMicrophoneRecording(expectedSessionID: UUID())
+        XCTAssertEqual(coordinator.microphoneMuteState, .unmuted, "A retired surface cannot toggle another attempt")
+        XCTAssertEqual(capture.startCount, 1)
+        XCTAssertTrue(coordinator.isRecording)
+        await coordinator.shutdownForTermination()
+        let nextCoordinator = MeetingSessionCoordinator(store: MeetingSessionStore(rootDirectory: dir), capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let next = try await nextCoordinator.startRecording(configuration: configuration)
+        await self.drainCaptureEvents()
+        XCTAssertEqual(nextCoordinator.microphoneMuteState, .unmuted)
+        try XCTUnwrap(indicator.onToggle)()
+        await self.drainCaptureEvents(); await self.drainCaptureEvents()
+        XCTAssertEqual(nextCoordinator.microphoneMuteState, .unmuted)
+        XCTAssertNotEqual(next.id, session.id)
+        await nextCoordinator.shutdownForTermination()
+    }
+
+    func testProtectedIntervalCheckpointsRetireOnlyTheirSourceWavesAfterRouteGaps() async throws {
+        let suite = "WaveformIntervals.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.fluidMeetEnabled = true
+        settings.selectedSpeechModel = .parakeetTDTv2
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let microphone = self.makeMicrophoneTrack(chunks: [])
+        var application = self.makeMicrophoneTrack(chunks: [])
+        application.kind = .applicationAudio
+        let capture = StubCaptureController()
+        capture.startResult = .init(tracks: [microphone, application], firstPresentationTime: nil)
+        let processing = MemoryCheckpointProcessingController()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
+            audioArbiter: StubArbiter(), settings: settings)
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        var configuration = self.makeConfiguration()
+        configuration.mode = .onlineCall
+        configuration.application = .init(bundleIdentifier: "us.zoom.xos", displayName: "Synthetic Zoom")
+        configuration.audioStorageMode = .memoryOnly
+        configuration.languageCode = "en"
+        configuration.speakerLabelsEnabled = false
+        let session = try await coordinator.startRecording(configuration: configuration)
+        capture.stopResult = .init(tracks: [microphone, application], stoppedAt: session.startedAt.addingTimeInterval(20))
+        let clock = Double(session.timebase.startedHostTime) * Double(session.timebase.machTimebaseNumerator)
+            / Double(session.timebase.machTimebaseDenominator) / 1_000_000_000
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
+                                                channels: 1, interleaved: false))
+        for track in [microphone, application] {
+            for base in [0.0, 4.0, 10.0] {
+                for frame in 0..<100 {
+                    let start = base + Double(frame) * 0.02
+                    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 320))
+                    buffer.frameLength = 320
+                    try XCTUnwrap(buffer.floatChannelData?[0]).update(
+                        repeating: 0.018 + 0.011 * Float(sin(start * 6 * .pi)), count: 320)
+                    capture.emitLive(kind: track.kind, sampleBuffer: try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(
+                        from: buffer, presentationTime: CMTime(seconds: clock + start, preferredTimescale: 1_000_000_000))))
+                }
+            }
+        }
+        var batch = MeetingPCMTranscriptBatch(segments: [])
+        batch.sourceTrack = microphone
+        try await processing.checkpoint(batch)
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.contains { $0.source == .you })
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.contains { $0.source == .them })
+        batch.protectedSourceIntervals = [0..<2, 4..<6]
+        try await processing.checkpoint(batch)
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.filter { $0.source == .you }.allSatisfy { $0.start >= 10 - 0.000_001 })
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.contains { $0.source == .them && $0.start < 2 })
+        batch.sourceTrack = application
+        try await processing.checkpoint(batch)
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.allSatisfy { $0.start >= 10 - 0.000_001 })
+        let loaded = try await store.load(id: session.id)
+        let persisted = try XCTUnwrap(loaded)
+        XCTAssertTrue(persisted.transcriptSegments.isEmpty, "Source processing metadata cannot invent transcript words")
+        XCTAssertGreaterThan(coordinator.liveTranscript.revision, 0)
+    }
+
     func testFloatingCaptionCornersStayTransparentAcrossAppearanceAndNativeResizing() async throws {
         let directory = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -9282,6 +9400,19 @@ private actor SingleUseDrainingCaptureController: MeetingCaptureControlling {
 }
 
 private final class StubCaptureController: MeetingCaptureControlling, @unchecked Sendable {
+    var usesMicrophoneControl = false
+    private var microphoneControl: MeetingMicrophoneRecordingControl?
+    private var microphoneGate: MeetingMicrophonePrivacyGate?
+    private var controlledSessionID: MeetingSessionID?
+
+    func setMicrophoneManuallyMuted(_ muted: Bool, sessionID: MeetingSessionID) async throws {
+        guard sessionID == self.controlledSessionID, let control = self.microphoneControl else { throw MeetingCaptureError.wrongActiveSession }
+        control.setManuallyMuted(muted)
+    }
+
+    func observeMeetingMute(_ state: MeetingMicrophoneMuteState) {
+        self.microphoneControl?.observe(.init(state: state, observedAtHostTime: mach_absolute_time(), generation: 1))
+    }
     var startResult = MeetingCaptureStartResult(tracks: [], firstPresentationTime: nil)
     var startError: Error?
     var startupEvents: [MeetingCaptureEvent] = []
@@ -9319,6 +9450,12 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
         self.startCount += 1
         self.eventHandler = eventHandler
         self.liveAudioHandler = liveAudioHandler
+        if self.usesMicrophoneControl {
+            let gate = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions), automaticWatchdog: false)
+            self.microphoneGate = gate
+            self.controlledSessionID = session.id
+            self.microphoneControl = MeetingMicrophoneRecordingControl(gate: gate) { eventHandler(.microphoneMuteStateChanged($0)) }
+        }
         for event in self.startupEvents {
             eventHandler(event)
         }
@@ -9329,6 +9466,11 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
         self.stopCount += 1
+        self.microphoneControl?.finish()
+        await self.microphoneGate?.stop()
+        self.microphoneControl = nil
+        self.microphoneGate = nil
+        self.controlledSessionID = nil
         try await self.onStop?()
         if let stopError { throw stopError }
         return self.stopResult ?? MeetingCaptureStopResult(tracks: [], stoppedAt: Date())

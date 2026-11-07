@@ -728,6 +728,7 @@
 		D1A600000000000000000204 /* MeetingWindowSelectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */; };
 		A11CE0030000000000000002 /* NativeButtonStylesHitTargetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CE0030000000000000001 /* NativeButtonStylesHitTargetTests.swift */; };
 		D1A600000000000000000206 /* MeetingRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000205 /* MeetingRecoveryTests.swift */; };
+		0575A5C4354B4120A70BCA43 /* MeetingPendingSpeechProgressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DA5859554A44A789E0BFE78 /* MeetingPendingSpeechProgressTests.swift */; };
 		B149D69C5977426AB8600002 /* MeetingAPIControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B149D69C5977426AB8600001 /* MeetingAPIControllerTests.swift */; };
 		BE0A00000000000000000002 /* MeetingTranscriptionBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */; };
 		C1A000000000000000000002 /* MeetingResultSidecarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000001 /* MeetingResultSidecarTests.swift */; };
@@ -818,6 +819,9 @@
 		F55932CD21E9D28005AE10C0 /* MeetingCaptureStorageAdmissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B5E6DADC27DE8E247EC335 /* MeetingCaptureStorageAdmissionTests.swift */; };
 		C0DE123A0000000000000002 /* DictationContextCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */; };
 		E01100000000000000000002 /* EditModeRouteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01100000000000000000001 /* EditModeRouteTests.swift */; };
+		C011AB000000000000000003 /* PichiCallObservation in Frameworks */ = {isa = PBXBuildFile; productRef = C011AB000000000000000002; };
+		C011AB000000000000000004 /* PichiCallObservation in Frameworks */ = {isa = PBXBuildFile; productRef = C011AB000000000000000002; };
+		C011AB000000000000000005 /* PichiCallObservation in Frameworks */ = {isa = PBXBuildFile; productRef = C011AB000000000000000002; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -942,6 +946,7 @@
 		D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWindowSelectorTests.swift; sourceTree = "<group>"; };
 		A11CE0030000000000000001 /* NativeButtonStylesHitTargetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeButtonStylesHitTargetTests.swift; sourceTree = "<group>"; };
 		D1A600000000000000000205 /* MeetingRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingRecoveryTests.swift; sourceTree = "<group>"; };
+		8DA5859554A44A789E0BFE78 /* MeetingPendingSpeechProgressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPendingSpeechProgressTests.swift; sourceTree = "<group>"; };
 		B149D69C5977426AB8600001 /* MeetingAPIControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAPIControllerTests.swift; sourceTree = "<group>"; };
 		BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTranscriptionBackendTests.swift; sourceTree = "<group>"; };
 		C1A000000000000000000001 /* MeetingResultSidecarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingResultSidecarTests.swift; sourceTree = "<group>"; };
@@ -1099,6 +1104,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C011AB000000000000000003 /* PichiCallObservation in Frameworks */,
 				AEC300000000000000000003 /* FluidAEC3Bridge in Frameworks */,
 				C41C41000000000000000003 /* PichiGigaAM in Frameworks */,
 				C41C41000000000000000006 /* PichiTextPrivacy in Frameworks */,
@@ -1117,6 +1123,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				803000000000000000000003 /* MediaRemoteAdapter in Frameworks */,
+				C011AB000000000000000005 /* PichiCallObservation in Frameworks */,
 				7CDB0A302F3C4D5600FB7CAD /* XCTest.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1125,6 +1132,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C011AB000000000000000004 /* PichiCallObservation in Frameworks */,
 				AEC300000000000000000004 /* FluidAEC3Bridge in Frameworks */,
 				C41C41000000000000000004 /* PichiGigaAM in Frameworks */,
 				C41C41000000000000000007 /* PichiTextPrivacy in Frameworks */,
@@ -1248,6 +1256,7 @@
 				D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */,
 				A11CE0030000000000000001 /* NativeButtonStylesHitTargetTests.swift */,
 				D1A600000000000000000205 /* MeetingRecoveryTests.swift */,
+				8DA5859554A44A789E0BFE78 /* MeetingPendingSpeechProgressTests.swift */,
 				B149D69C5977426AB8600001 /* MeetingAPIControllerTests.swift */,
 				BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */,
 				C1A000000000000000000001 /* MeetingResultSidecarTests.swift */,
@@ -1410,6 +1419,7 @@
 			);
 			name = fluid;
 			packageProductDependencies = (
+				C011AB000000000000000002 /* PichiCallObservation */,
 				AEC300000000000000000002 /* FluidAEC3Bridge */,
 				C41C41000000000000000002 /* PichiGigaAM */,
 				C41C41000000000000000005 /* PichiTextPrivacy */,
@@ -1441,6 +1451,7 @@
 			);
 			name = FluidDictationIntegrationTests;
 			packageProductDependencies = (
+				C011AB000000000000000002 /* PichiCallObservation */,
 				803000000000000000000004 /* MediaRemoteAdapter */,
 				2E9B00000000000000000005 /* ZeppelinEmbed */,
 			);
@@ -1467,6 +1478,7 @@
 			);
 			name = FluidASRBaselineHost;
 			packageProductDependencies = (
+				C011AB000000000000000002 /* PichiCallObservation */,
 				AEC300000000000000000002 /* FluidAEC3Bridge */,
 				C41C41000000000000000002 /* PichiGigaAM */,
 				C41C41000000000000000005 /* PichiTextPrivacy */,
@@ -1562,6 +1574,7 @@
 			mainGroup = 7C078D862E3B339200FB7CAC;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				C011AB000000000000000001 /* XCLocalSwiftPackageReference "PichiCallObservation" */,
 				AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */,
 				C41C41000000000000000001 /* XCLocalSwiftPackageReference "PichiGigaAM" */,
 				1F20C0000000000000000001 /* XCLocalSwiftPackageReference "RussianMorphology" */,
@@ -1705,6 +1718,7 @@
 				D1A600000000000000000204 /* MeetingWindowSelectorTests.swift in Sources */,
 				A11CE0030000000000000002 /* NativeButtonStylesHitTargetTests.swift in Sources */,
 				D1A600000000000000000206 /* MeetingRecoveryTests.swift in Sources */,
+				0575A5C4354B4120A70BCA43 /* MeetingPendingSpeechProgressTests.swift in Sources */,
 				B149D69C5977426AB8600002 /* MeetingAPIControllerTests.swift in Sources */,
 				BE0A00000000000000000002 /* MeetingTranscriptionBackendTests.swift in Sources */,
 				C1A000000000000000000002 /* MeetingResultSidecarTests.swift in Sources */,
@@ -2370,6 +2384,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		C011AB000000000000000001 /* XCLocalSwiftPackageReference "PichiCallObservation" */ = {isa = XCLocalSwiftPackageReference; relativePath = Vendor/PichiCallObservation; };
 		1F20C0000000000000000001 /* XCLocalSwiftPackageReference "RussianMorphology" */ = {isa = XCLocalSwiftPackageReference; relativePath = Vendor/RussianMorphology; };
 		7C9A71002F58B00000FB7CAF /* XCLocalSwiftPackageReference "TranscribeCpp" */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -2436,6 +2451,7 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		C011AB000000000000000002 /* PichiCallObservation */ = {isa = XCSwiftPackageProductDependency; package = C011AB000000000000000001; productName = PichiCallObservation; };
 		1F20C0000000000000000002 /* PichiRussianMorphology */ = {isa = XCSwiftPackageProductDependency; package = 1F20C0000000000000000001 /* XCLocalSwiftPackageReference "RussianMorphology" */; productName = PichiRussianMorphology; };
 		C41C41000000000000000005 /* PichiTextPrivacy */ = {isa = XCSwiftPackageProductDependency; package = C41C41000000000000000001 /* XCLocalSwiftPackageReference "PichiGigaAM" */; productName = PichiTextPrivacy; };
 		A51A10000000000000000002 /* NativeTextInference */ = {

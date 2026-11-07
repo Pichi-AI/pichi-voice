@@ -151,13 +151,33 @@ final class MeetingLiveTimeConversionTests: XCTestCase {
 }
 
 final class MeetingLiveTranscriptSnapshotTests: XCTestCase {
+    func testSuppressedMicrophoneEchoResolvesOnlyItsOwnAudio() {
+        let origin = MeetingLiveOriginBox()
+        origin.establish(.zero)
+        let resolved = expectation(description: "Suppressed source audio is processed without a duplicate caption")
+        let coordinator = MeetingLiveTranscriptionCoordinator(originBox: origin,
+            onResolvedAudioWithoutCaption: { source, start, end in
+                XCTAssertEqual(source, .you)
+                XCTAssertEqual(start, 3)
+                XCTAssertEqual(end, 5)
+                resolved.fulfill()
+            }, onUpdate: { _ in })
+        let text = "This is one complete synthetic sentence repeated in the microphone echo."
+        coordinator.handleUtterance(kind: .applicationAudio, text: text, start: .zero, end: CMTime(seconds: 1, preferredTimescale: 1000))
+        coordinator.handleUtterance(kind: .microphone, text: text,
+            start: CMTime(seconds: 3, preferredTimescale: 1000), end: CMTime(seconds: 5, preferredTimescale: 1000))
+        wait(for: [resolved], timeout: 1)
+        XCTAssertEqual(coordinator.latestSnapshot().utterances.count, 1)
+        XCTAssertEqual(coordinator.latestSnapshot().utterances.first?.speaker, .them)
+    }
+
     func testSuccessfulEmptyFinalReportsSourceCoverageWithoutPublishingEmptyWords() async {
         let origin = MeetingLiveOriginBox()
         origin.establish(CMTime(seconds: 100, preferredTimescale: 16_000))
         let completed = expectation(description: "Successful empty final supplies exact source coverage")
         completed.assertForOverFulfill = true
         let coordinator = MeetingLiveTranscriptionCoordinator(originBox: origin,
-            onEmptyRecognition: { source, start, end in
+            onResolvedAudioWithoutCaption: { source, start, end in
                 XCTAssertEqual(source, .them)
                 XCTAssertEqual(start, 2, accuracy: 0.0001)
                 XCTAssertEqual(end, 4, accuracy: 0.0001)
@@ -1772,9 +1792,11 @@ final class MeetingLiveBoundaryTests: XCTestCase {
         private(set) var finishes = 0
         let naturalEnd: Bool
         let failFinish: Bool
-        init(naturalEnd: Bool = false, failFinish: Bool = false) {
+        let finalText: String
+        init(naturalEnd: Bool = false, failFinish: Bool = false, finalText: String = "hello") {
             self.naturalEnd = naturalEnd
             self.failFinish = failFinish
+            self.finalText = finalText
         }
 
         func prepareModels() async throws {}
@@ -1784,7 +1806,7 @@ final class MeetingLiveBoundaryTests: XCTestCase {
             self.calls += 1
             if self.calls == 1 {
                 self.partial?("hello")
-                if self.naturalEnd { self.end?("hello") }
+                if self.naturalEnd { self.end?(self.finalText) }
             }
             for _ in 0..<20 {
                 await Task.yield()
@@ -1825,6 +1847,26 @@ final class MeetingLiveBoundaryTests: XCTestCase {
         await fulfillment(of: [final], timeout: 1)
         let raced = await recognizer.resetDuringProcessing
         XCTAssertFalse(raced, "An EOU callback must not reset a suspended inference")
+    }
+
+    func testSuccessfulEmptyEnglishEndpointCompletesMeasuredInputForEitherSource() async throws {
+        for kind in [MeetingAudioTrackKind.microphone, .applicationAudio] {
+            let recognizer = Recognizer(naturalEnd: true, finalText: "")
+            let engine = MeetingLiveTrackEngine(kind: kind, recognizer: recognizer)
+            let completed = expectation(description: "A successful empty endpoint resolves measured PCM")
+            await engine.configure(onPartial: { _, _, _, _, _ in },
+                onUtterance: { source, _, text, start, end in
+                    XCTAssertEqual(source, kind)
+                    XCTAssertEqual(text, "")
+                    XCTAssertEqual(start.seconds, 10, accuracy: 0.000_001)
+                    XCTAssertGreaterThan(end, start)
+                    completed.fulfill()
+                }, onDegraded: { _, _ in XCTFail("Empty recognition is not a failure") }, onReady: { _ in })
+            await engine.diagnosticInstallCallbacks()
+            await engine.diagnosticConsume(try self.sample(at: 10))
+            await fulfillment(of: [completed], timeout: 1)
+            await engine.stop()
+        }
     }
 
     func testForcedEndpointFlushesTailWithoutDuplicateCallbacks() async throws {

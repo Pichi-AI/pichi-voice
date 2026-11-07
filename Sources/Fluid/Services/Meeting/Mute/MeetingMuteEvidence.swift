@@ -91,6 +91,21 @@ nonisolated struct MeetingMuteTransitionState {
         return (eventTime, eventTime)
     }
 
+    /// Both key-up and modifier release end the same owned chord. A delayed release can
+    /// narrow an old PCM epoch without changing a newer rendered unmute.
+    mutating func releaseObservation(eventTime: UInt64?, processedAt now: UInt64,
+                                     generation: UInt64) -> MeetingMicrophoneMuteObservation? {
+        let boundary = Self.releaseBoundary(eventTime: eventTime, processedAt: now)
+        if self.keyUp(processedAt: now, releasedAt: boundary.unsafeStart > 0 ? boundary.unsafeStart : nil) {
+            return .init(state: .muted, observedAtHostTime: now, generation: generation,
+                         unsafeStartHostTime: boundary.unsafeStart)
+        }
+        guard let resumed = self.historicalReleaseUnmuteAt,
+              let until = self.historicalReleaseUntilAt else { return nil }
+        return .init(state: .unmuted, observedAtHostTime: resumed, generation: generation,
+                     unsafeStartHostTime: boundary.unsafeStart, refinementUntilHostTime: until)
+    }
+
     /// Returns true only for a newly observed visible transition which changes effective state.
     @discardableResult
     mutating func observe(_ visible: MeetingMicrophoneMuteState?, at time: UInt64) -> Bool {
@@ -201,6 +216,15 @@ nonisolated struct MeetingMuteTransitionState {
     mutating func negativeWasProcessed(at time: UInt64) {
         self.excludedThrough = max(self.excludedThrough, time)
         self.latestEvidenceAt = max(self.latestEvidenceAt, time)
+    }
+
+    /// Losing control of a known temporary grant is different from a missing toolbar frame.
+    /// Retire only the temporary grant; a persistent unmute is unchanged.
+    mutating func retireTemporaryGrant(at time: UInt64) -> Bool {
+        guard self.temporaryUnmute || self.temporaryObservedDuringHold || (self.held && self.possiblePTT) else {
+            self.keyListenerUnavailable(); return false
+        }
+        return self.keyUp(processedAt: time, releasedAt: time)
     }
 
     /// An unavailable key listener supplies no conference transition. Keep the rendered state.

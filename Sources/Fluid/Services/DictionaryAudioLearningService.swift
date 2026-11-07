@@ -21,6 +21,7 @@ final class DictionaryAudioLearningService {
         let correctedText: String
         let profile: PrivateProfileSnapshot
         let createdEntry: Bool
+        var wasAlreadyPresent = false
 
         var isCurrent: Bool {
             PrivateProfileStorage.isReadable(self.profile) && PrivateProfileStorage.acceptsNewWork
@@ -101,6 +102,7 @@ final class DictionaryAudioLearningService {
 
     /// Revert only this event. Existing words, other examples and later edits survive.
     func undoSavedCorrection(_ receipt: SavedCorrection) async throws -> Bool {
+        guard !receipt.wasAlreadyPresent else { return false }
         if let active = self.undoTasks[receipt.id] { return try await active.value }
         let task = Task { @MainActor in try await self.performUndo(receipt) }
         self.undoTasks[receipt.id] = task
@@ -216,7 +218,7 @@ final class DictionaryAudioLearningService {
             })
     }
 
-    private static func retainedBytes(_ evidence: DictionaryLearningAudioEvidence) -> Int {
+    static func retainedBytes(_ evidence: DictionaryLearningAudioEvidence) -> Int {
         let featureValues = evidence.featureFrames.reduce(0) { $0 + $1.frames.values.count }
         return (evidence.samples.count + featureValues) * MemoryLayout<Float>.size
     }
@@ -360,6 +362,12 @@ final class DictionaryAudioLearningService {
                     }
                     self.recentCorrections[occurrence] = (receipt, Date())
                     request.didPersist?(receipt)
+                } else {
+                    // Idempotent enrollment is still a completed correction.
+                    // Acknowledging it must not grant Undo over an older sample.
+                    request.didPersist?(SavedCorrection(id: request.evidenceID, entry: request.entry,
+                        heardText: evidence.observedText, correctedText: request.entry.replacement,
+                        profile: self.profile, createdEntry: false, wasAlreadyPresent: true))
                 }
                 DebugLogger.shared.info(
                     inserted ? "Original pronunciation evidence saved" : "Original pronunciation evidence already present",
