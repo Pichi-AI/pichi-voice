@@ -629,7 +629,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         let key = usesEncoder ? GigaAMEncoderDictionaryStorage.modelKey(fingerprint: fingerprint)
             : GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint)
         var alignment = DictionaryLearningAlignment(modelKey: key,
-            words: result.words.map { ASRWordTiming(text: $0.text, start: $0.start, end: $0.end) })
+            words: Self.wordTimings(result.words))
         if usesEncoder { alignment.featureFrames = Self.learningFrames(result.encoderWindows) }
         var text = result.text
         if usesEncoder, let snapshot = self.dictionarySnapshot, snapshot.enabled, snapshot.modelKey == key {
@@ -715,7 +715,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         let result = try await self.transcribeDetailed(samples,
             captureEncoderFeatures: capturePronunciation && usesEncoder && DictionaryMatcherExperiment.sharedFeaturesEnabled)
         guard self.lifecycleGeneration == generation, self.loadedModelFingerprint == fingerprint, self.isReady else { throw CancellationError() }
-        let words = result.words.map { ASRWordTiming(text: $0.text, start: $0.start, end: $0.end) }
+        let words = Self.wordTimings(result.words)
         var capture: PronunciationEnrollmentCapture?
         if capturePronunciation, DictionaryMatcherExperiment.sharedFeaturesEnabled,
            let fingerprint = self.loadedModelFingerprint {
@@ -806,8 +806,24 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         let result = try await self.transcribeDetailed(samples)
         return (
             ASRTranscriptionResult(text: result.text, confidence: result.confidence, endOfUtteranceProbability: result.endOfUtteranceProbability),
-            result.words.map { ASRWordTiming(text: $0.text, start: $0.start, end: $0.end) }
+            Self.wordTimings(result.words)
         )
+    }
+
+    /// The native decoder reports lexical CTC emission envelopes, not forced alignment.
+    /// Keep their exact values while making the distinction available to every consumer.
+    nonisolated static func wordTimings(_ words: [GigaAMWordTiming]) -> [ASRWordTiming] {
+        words.map { word in
+            let provenance: ASRWordTimingProvenance?
+            if let source = word.sourceContext {
+                provenance = source.isValid ? .init(basis: .tokenEmission,
+                    sourceWindowID: "ctc:\(source.sampleRange.lowerBound):\(source.sampleRange.upperBound)",
+                    sourceWordIndex: source.wordIndex) : nil
+            } else {
+                provenance = .init(basis: .tokenEmission)
+            }
+            return ASRWordTiming(text: word.text, start: word.start, end: word.end, timingProvenance: provenance)
+        }
     }
 
     func modelsExistOnDisk() -> Bool {

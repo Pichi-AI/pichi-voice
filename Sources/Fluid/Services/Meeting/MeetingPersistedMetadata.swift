@@ -25,6 +25,50 @@ nonisolated enum MeetingSessionDateCodec {
     }
 }
 
+/// Token emission envelopes locate decoder output, not measured spoken-word boundaries.
+/// A recognition owner adds source context before filtering or rebasing the native word list.
+/// Missing metadata retains the older provider contract without guessing its timing basis.
+nonisolated struct ASRWordTimingProvenance: Codable, Equatable, Sendable {
+    enum Basis: String, Codable, Sendable { case tokenEmission }
+
+    let basis: Basis
+    let sourceWindowID: String?
+    let sourceWordIndex: Int?
+
+    init(basis: Basis, sourceWindowID: String? = nil, sourceWordIndex: Int? = nil) {
+        self.basis = basis
+        self.sourceWindowID = sourceWindowID
+        self.sourceWordIndex = sourceWordIndex
+    }
+
+    var hasValidSourceContext: Bool {
+        guard let sourceWindowID, let sourceWordIndex,
+              Self.validWindowID(sourceWindowID),
+              (0..<8_192).contains(sourceWordIndex) else { return false }
+        return true
+    }
+
+    var isValid: Bool {
+        (self.sourceWindowID == nil && self.sourceWordIndex == nil) || self.hasValidSourceContext
+    }
+
+    private static func validWindowID(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 512
+            && !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+            && !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Namespace the provider's original inference context, never enumerate its filtered output.
+    /// Basis-only metadata stays unscoped; missing native positions cannot be reconstructed here.
+    func scoped(to namespace: String) -> Self? {
+        guard self.isValid, Self.validWindowID(namespace) else { return nil }
+        guard let sourceWindowID, let sourceWordIndex else { return self }
+        let scoped = Self(basis: self.basis, sourceWindowID: "\(namespace)/\(sourceWindowID)",
+                          sourceWordIndex: sourceWordIndex)
+        return scoped.hasValidSourceContext ? scoped : nil
+    }
+}
+
 nonisolated enum MeetingMicrophoneBindingOutcome: Equatable, Sendable {
     case boundVerified(UInt32)
     /// Bind failed but the default input already IS the requested device (Bluetooth/aggregate).

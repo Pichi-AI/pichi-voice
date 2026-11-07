@@ -131,7 +131,8 @@ nonisolated enum GigaAMEncoderDictionary {
             guard !indices.isEmpty else { continue }
             let localWords = indices.map {
                 GigaAMWordTiming(text: source[$0].text, start: max(0, source[$0].start - window.offset),
-                    end: source[$0].end - window.offset, confidence: source[$0].confidence)
+                    end: source[$0].end - window.offset, confidence: source[$0].confidence,
+                    sourceContext: source[$0].sourceContext)
             }
             let local = GigaAMTranscript(text: localWords.map(\.text).joined(separator: " "), confidence: transcript.confidence,
                 words: localWords, endOfUtteranceProbability: nil, processingDuration: 0)

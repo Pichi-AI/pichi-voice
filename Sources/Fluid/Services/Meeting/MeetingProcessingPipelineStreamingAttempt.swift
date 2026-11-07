@@ -81,6 +81,7 @@ extension MeetingProcessingPipeline {
             if expectedTrackCount > 1 {
                 let timelines = attempt.sourceTimelines
                 attempt.echoAdmission = try MeetingStreamingEchoAdmission(tracks: Array(tracks.values),
+                    preservesTokenEmissions: configuration.speakerAttributionPolicy?.enableTokenEmissionContext == true,
                     presentationInterval: { id, start, end in timelines[id]?.mapInterval(start: start, end: end) },
                     presentationThrough: { id, end in timelines[id]?.mapEndTime(end) })
             }
