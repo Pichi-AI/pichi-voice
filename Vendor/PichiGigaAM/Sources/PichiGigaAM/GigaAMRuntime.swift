@@ -59,10 +59,12 @@ public actor GigaAMRuntime {
                         self.vocabulary = try GigaAMVocabulary(contents: String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8))
                     } else { self.vocabulary = .russianCharacters }
                     self.frontend = try GigaAMFrontend()
-                    try self.loadONNX(modelURL: modelURL, useGPU: executionProvider == .coreML)
-                    self.executionStatus = executionProvider == .coreML
+                    let backgroundReason: GigaAMExecutionStatus.FallbackReason? = self.resources().requiresBackgroundExecution ? .backgroundExecution : nil
+                    let useGPU = executionProvider == .coreML && backgroundReason == nil
+                    try self.loadONNX(modelURL: modelURL, useGPU: useGPU)
+                    self.executionStatus = useGPU
                         ? .init(backend: .gpu, fallbackReason: nil)
-                        : .init(backend: .cpu, fallbackReason: executionProvider == .cpu ? .explicitCPU : .incompatibleExport)
+                        : .init(backend: .cpu, fallbackReason: executionProvider == .cpu ? .explicitCPU : (backgroundReason ?? .incompatibleExport))
                 case .coreML(let configuration):
                     // Explicit legacy imports do not bypass capacity admission.
                     // In particular, do not compile the FP16 package on a 4 GB
@@ -84,9 +86,9 @@ public actor GigaAMRuntime {
                     if executionProvider == .cpu {
                         try native.load(gpu: false)
                         self.executionStatus = .init(backend: .cpu, fallbackReason: .explicitCPU)
-                    } else if !self.resources().hasGPU {
+                    } else if self.resources().requiresBackgroundExecution || !self.resources().hasGPU {
                         try native.load(gpu: false)
-                        self.executionStatus = .init(backend: .cpu, fallbackReason: .gpuUnavailable)
+                        self.executionStatus = .init(backend: .cpu, fallbackReason: self.resources().requiresBackgroundExecution ? .backgroundExecution : .gpuUnavailable)
                     } else {
                         do {
                             try native.load(gpu: true)
