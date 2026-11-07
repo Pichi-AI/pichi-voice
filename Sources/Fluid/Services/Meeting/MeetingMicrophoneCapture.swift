@@ -80,6 +80,21 @@ nonisolated struct MeetingMicrophonePTSClock {
         return self.stampValid(hostTime: hostTime, frameCount: frameCount)
     }
 
+    /// Privacy capture may reject a proposed stamp before any PCM is published. In that case
+    /// retire its entire clock update before re-anchoring, so the monotonic clamp retains only
+    /// the preceding accepted end rather than repeatedly inheriting an unpublished future end.
+    /// Ordinary capture keeps using `stamp` and its sample-count timeline unchanged.
+    mutating func stampVerifiedAcquisition(hostTime: UInt64?, frameCount: Int) -> Outcome? {
+        let preceding = self
+        let outcome = self.stamp(hostTime: hostTime, frameCount: frameCount)
+        guard MeetingMicrophonePrivacyTiming.acceptsEmission(outcome, acquisitionHostTime: hostTime) else {
+            self = preceding
+            self.requestTimelineReset()
+            return nil
+        }
+        return outcome
+    }
+
     private mutating func stampInvalid(frameCount: Int) -> Outcome {
         guard self.anchorHostSeconds != nil else { // no anchor: epoch-0 PTS would poison origins
             return .droppedPostCap
@@ -682,18 +697,15 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
     private func flush() {
         let frameCount = self.accumulated.count
         let acquisitionHostTime = self.windowHostTimeValid ? self.windowHostTime : nil
-        let outcome = self.clock.stamp(hostTime: acquisitionHostTime, frameCount: frameCount)
+        let outcome: MeetingMicrophonePTSClock.Outcome? = self.privacyGate == nil
+            ? self.clock.stamp(hostTime: acquisitionHostTime, frameCount: frameCount)
+            : self.clock.stampVerifiedAcquisition(hostTime: acquisitionHostTime, frameCount: frameCount)
         let samples = self.accumulated
         self.accumulated.removeAll(keepingCapacity: true)
         self.windowHostTime = nil
         self.windowHostTimeValid = false
 
-        if self.privacyGate != nil,
-           !MeetingMicrophonePrivacyTiming.acceptsEmission(outcome, acquisitionHostTime: acquisitionHostTime) {
-            self.clock.requestTimelineReset()
-            return
-        }
-
+        guard let outcome else { return }
         guard case let .emitted(pts, synthesized, anchorCorrected, resynced) = outcome else {
             self.statsBox.mutate { $0.droppedPostCapCount += 1 }
             return
