@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 typealias MeetingSessionID = UUID
 typealias MeetingAudioTrackID = UUID
@@ -442,6 +443,12 @@ nonisolated struct MeetingAudioClockMapping: Codable, Equatable, Sendable {
     var version: Int = 1
     var frameCount: Int64
     var spans: [MeetingAudioClockSpan]
+
+    var identityFingerprint: String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        guard let data = try? encoder.encode(self) else { return "invalid-clock-mapping" }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
 
     init(version: Int = 1, frameCount: Int64, spans: [MeetingAudioClockSpan]) {
         self.version = version; self.frameCount = frameCount; self.spans = spans
@@ -1886,7 +1893,7 @@ nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
                 track.chunks
                     .filter { $0.finalizationState == .finalized && $0.byteCount > 0 }
                     .map { ChunkFingerprint(id: $0.id, byteCount: $0.byteCount, sha256: $0.sha256,
-                        clockMappingDigest: MeetingAnalysisChunkIdentity(trackID: track.id, chunk: $0).clockMappingDigest) }
+                        clockMappingDigest: $0.clockMapping?.identityFingerprint) }
             )
         })
     }

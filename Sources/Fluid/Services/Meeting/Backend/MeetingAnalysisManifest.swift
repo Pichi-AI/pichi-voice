@@ -643,12 +643,7 @@ nonisolated struct MeetingAnalysisChunkIdentity: Codable, Equatable, Hashable {
         self.trackID = trackID
         self.chunkID = chunk.id
         self.sequence = chunk.sequence
-        if let mapping = chunk.clockMapping {
-            let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
-            self.clockMappingDigest = (try? encoder.encode(mapping)).map {
-                SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined()
-            } ?? "invalid-clock-mapping"
-        } else { self.clockMappingDigest = nil }
+        self.clockMappingDigest = chunk.clockMapping?.identityFingerprint
         if let asset = chunk.captureAnalysisAsset,
            asset.presence == .ready,
            asset.role == .captureAnalysis,
