@@ -760,6 +760,86 @@ extension MeetingMicrophoneCaptureTests {
         XCTAssertEqual(gate.statistics.retainedBuffers, 0)
     }
 
+    func testVerifiedAcquisitionRecoversAcrossNinetyMinuteDriftThresholdWithoutBackwardsPCM() async throws {
+        let host = PrivacyHostClock(), sink = AcquisitionSink()
+        let gate = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions),
+            hostTime: { host.now() }, automaticWatchdog: false)
+        defer { gate.close() }
+        gate.setAdmitted(true, observedAtHostTime: host.now())
+        var clock = MeetingMicrophonePTSClock()
+        let carrier = try self.acquisitionSample(at: CMTime(seconds: 1_000, preferredTimescale: 48_000), frames: 4_800)
+        let count = 54_000
+        var discarded = 0, consecutiveDiscards = 0, maximumConsecutiveDiscards = 0
+        var lastPublishedEnd: CMTime?
+        for index in 0..<count {
+            let acquisition = 1_000 + Double(index) * 0.1 * (1 - 5e-6)
+            let acquiredAt = Self.privacyHostTime(acquisition)
+            host.set(acquisition + 0.102 + Double(index % 13) * 0.0005)
+            // This is the same verified stamping and rollback transition used by the native tap.
+            guard let outcome = clock.stampVerifiedAcquisition(hostTime: acquiredAt, frameCount: 4_800) else {
+                discarded += 1; consecutiveDiscards += 1
+                maximumConsecutiveDiscards = max(maximumConsecutiveDiscards, consecutiveDiscards)
+                continue
+            }
+            consecutiveDiscards = 0
+            guard case let .emitted(pts, _, _, _) = outcome else { return XCTFail("Verified capture returned a non-emitting result") }
+            if let lastPublishedEnd {
+                XCTAssertGreaterThanOrEqual(CMTimeCompare(pts, lastPublishedEnd), 0,
+                    "Re-anchoring must preserve every genuinely published end")
+            }
+            lastPublishedEnd = pts + CMTime(value: 4_800, timescale: 48_000)
+            let sample = try self.acquisitionCopy(carrier, at: pts)
+            XCTAssertTrue(gate.submit(sample, acquisitionHostTime: acquiredAt,
+                                      deliveryQueue: sink.queue, delivery: sink.receive))
+            gate.checkFreshnessAndDrain()
+            if index % 10 == 0 { sink.join() }
+        }
+        host.set(6_402); gate.checkFreshnessAndDrain(); sink.join()
+        await gate.stop()
+        XCTAssertGreaterThan(discarded, 0, "The run must cross the native 20 ms acquisition-proof boundary")
+        XCTAssertLessThanOrEqual(discarded, 2, "A drift reset must retire only a bounded unpublished tail")
+        XCTAssertLessThanOrEqual(maximumConsecutiveDiscards, 1, "The next valid acquisition must recover promptly")
+        XCTAssertEqual(sink.count, count - discarded, "No accepted PCM may disappear after clock recovery")
+        XCTAssertEqual(sink.frames, (count - discarded) * 4_800)
+        XCTAssertEqual(gate.statistics.rejectedBuffers, 0)
+        XCTAssertEqual(gate.statistics.retainedBuffers, 0)
+    }
+
+    func testVerifiedAcquisitionRepeatedRejectionsCannotAdvanceThePublishedBoundary() {
+        var clock = MeetingMicrophonePTSClock()
+        XCTAssertNotNil(clock.stampVerifiedAcquisition(hostTime: Self.privacyHostTime(1_000), frameCount: 4_800))
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: Self.privacyHostTime(1_000.070), frameCount: 4_800))
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: Self.privacyHostTime(1_000.075), frameCount: 4_800))
+        let recovered = clock.stampVerifiedAcquisition(hostTime: Self.privacyHostTime(1_000.180), frameCount: 4_800)
+        guard case let .emitted(pts, _, _, _)? = recovered else { return XCTFail("An unpublished future end blocked recovery") }
+        XCTAssertEqual(pts.seconds, 1_000.180, accuracy: 1.0 / 48_000)
+        XCTAssertGreaterThanOrEqual(CMTimeCompare(pts, CMTime(seconds: 1_000.1, preferredTimescale: 48_000)), 0)
+        guard case let .emitted(next, _, _, _)? = clock.stampVerifiedAcquisition(
+            hostTime: Self.privacyHostTime(1_000.280), frameCount: 4_800) else { return XCTFail("The recovered acquisition stopped again") }
+        XCTAssertEqual(next.seconds, pts.seconds + 0.1, accuracy: 1.0 / 48_000)
+    }
+
+    func testVerifiedAcquisitionInvalidAndBackwardsHostTimesPreserveAcceptedPCM() {
+        var clock = MeetingMicrophonePTSClock()
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: nil, frameCount: 4_800))
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: nil, frameCount: 4_800), "A non-emitting rejection must be idempotent")
+        guard case let .emitted(first, _, _, _)? = clock.stampVerifiedAcquisition(
+            hostTime: Self.privacyHostTime(1_000), frameCount: 4_800) else { return XCTFail("The first valid acquisition did not start") }
+        XCTAssertEqual(first.seconds, 1_000, accuracy: 1.0 / 48_000)
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: nil, frameCount: 4_800), "Synthesized acquisition remains unproved")
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: Self.privacyHostTime(999.8), frameCount: 4_800))
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: Self.privacyHostTime(999.9), frameCount: 4_800))
+        guard case let .emitted(recovered, _, _, _)? = clock.stampVerifiedAcquisition(
+            hostTime: Self.privacyHostTime(1_000.2), frameCount: 4_800) else { return XCTFail("Valid time did not recover after backwards acquisition") }
+        XCTAssertEqual(recovered.seconds, 1_000.2, accuracy: 1.0 / 48_000)
+        XCTAssertGreaterThanOrEqual(CMTimeCompare(recovered, first + CMTime(value: 4_800, timescale: 48_000)), 0)
+        clock.requestTimelineReset()
+        guard case let .emitted(clamped, _, _, _) = clock.stamp(
+            hostTime: Self.privacyHostTime(999.9), frameCount: 4_800) else { return XCTFail("Ordinary capture did not preserve its existing clamp") }
+        XCTAssertEqual(clamped.seconds, recovered.seconds + 0.1, accuracy: 1.0 / 48_000,
+                       "The non-privacy reset still clamps against genuinely emitted PCM")
+    }
+
     func testOnlyVerifiedAcquisitionCanQuarantineCanonicalFuturePCM() async throws {
         let host = PrivacyHostClock(), sink = AcquisitionSink()
         let gate = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions),
