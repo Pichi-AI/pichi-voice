@@ -1955,9 +1955,10 @@ final class MobileNavigationUITests: XCTestCase {
         XCTAssertTrue(scroll.waitForExistence(timeout: 5))
         var speakerLabels: [String]?
         if let encoded = environment["PICHI_PRIVATE_SAVED_EXPECTED_SPEAKER_LABELS"] {
-            speakerLabels = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String])
-            XCTAssertEqual(speakerLabels?.count, expected.count)
-            XCTAssertNotNil(identifiers, "Speaker review requires stable paragraph identifiers")
+            let labels = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String])
+            speakerLabels = try XCTUnwrap(labels.count == expected.count ? labels : nil,
+                "Every expected paragraph needs one participant caption")
+            _ = try XCTUnwrap(identifiers, "Speaker review requires stable paragraph identifiers")
         }
         try assertSavedParagraphs(expected, identifiers: identifiers, step: "private-saved", speakerLabels: speakerLabels)
         #endif
