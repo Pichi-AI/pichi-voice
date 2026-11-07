@@ -626,6 +626,7 @@ actor PronunciationDictionaryStore {
     /// Remove one exact enrollment, retaining its word, other models and examples.
     /// Persist owns orphan cleanup, so files shared by retained examples survive.
     func removeSavedSample(_ capture: PronunciationEnrollmentCapture, dictionaryEntryID: UUID, expectedProfileLabel: String) throws {
+        try Task.checkCancellation()
         try self.requireAccess()
         self.loadIfNeeded()
         var profiles = self.document?.profiles ?? []
@@ -636,6 +637,7 @@ actor PronunciationDictionaryStore {
         guard matches.count == 1, let captureIndex = matches.first else { throw PronunciationDictionaryStoreError.staleEvidence }
         profiles[profileIndex].enrollments.remove(at: captureIndex)
         if profiles[profileIndex].enrollments.isEmpty { profiles.remove(at: profileIndex) }
+        try Task.checkCancellation()
         try self.persist(Document(version: 1, profiles: profiles))
         self.revisions[dictionaryEntryID] = UUID()
     }
@@ -821,6 +823,7 @@ actor PronunciationDictionaryStore {
         try self.requireAccess()
         self.loadIfNeeded()
         var profiles = self.document?.profiles ?? []
+        let affectedEntries = Set(profiles.filter { $0.enrollments.contains { $0.originalAudioID == evidenceID } }.map(\.dictionaryEntryID))
         for index in profiles.indices {
             profiles[index].enrollments.removeAll { $0.originalAudioID == evidenceID }
         }
@@ -829,6 +832,7 @@ actor PronunciationDictionaryStore {
             version: 1,
             profiles: profiles
         ))
+        for entryID in affectedEntries { self.revisions[entryID] = UUID() }
         try? FileManager.default.removeItem(at: self.audioURL(evidenceID))
     }
 

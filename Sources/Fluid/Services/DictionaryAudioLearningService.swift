@@ -100,6 +100,32 @@ final class DictionaryAudioLearningService {
     /// Deleting a sample from the dictionary explicitly keeps its word.
     func preserveDictionaryEntry(_ id: UUID) { self.createdEntries.removeValue(forKey: id) }
 
+    /// Join background learning before changing the user's chosen references.
+    /// A failed/cancelled delete leaves queued work and Undo ownership intact.
+    func removeSavedSample(_ capture: PronunciationEnrollmentCapture, dictionaryEntryID: UUID, expectedProfileLabel: String) async throws {
+        try Task.checkCancellation()
+        guard !self.retired, PrivateProfileStorage.isReadable(self.profile), PrivateProfileStorage.acceptsNewWork else {
+            throw PronunciationDictionaryStoreError.staleEvidence
+        }
+        await self.pauseForForegroundAdmission()
+        defer { self.resumeAfterForegroundAdmission() }
+        try Task.checkCancellation()
+        guard !self.retired, PrivateProfileStorage.isReadable(self.profile), PrivateProfileStorage.acceptsNewWork else {
+            throw PronunciationDictionaryStoreError.staleEvidence
+        }
+        try await self.store.removeSavedSample(capture, dictionaryEntryID: dictionaryEntryID, expectedProfileLabel: expectedProfileLabel)
+        // The commit is complete. Invalidate even a duplicate occurrence with a
+        // different event ID; pre-delete work for this word is now stale. Fresh
+        // corrections admitted after this operation can still add new examples.
+        self.queue.removeAll { $0.entry.id == dictionaryEntryID }
+        self.preserveDictionaryEntry(dictionaryEntryID)
+        self.scheduleExpiry()
+        if PrivateProfileStorage.isReadable(self.profile), !self.retired {
+            ASRService.invalidateDictionaryCache()
+            DictionaryEntriesChangeNotice.post()
+        }
+    }
+
     /// Revert only this event. Existing words, other examples and later edits survive.
     func undoSavedCorrection(_ receipt: SavedCorrection) async throws -> Bool {
         guard !receipt.wasAlreadyPresent else { return false }

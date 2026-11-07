@@ -7,6 +7,333 @@ import XCTest
 import FluidAudio
 #endif
 
+extension CustomDictionaryManualEntryTests {
+    private func sampleEvidence(recordingID: UUID = UUID(), modelKey: String = "parakeet-v3") -> DictionaryLearningAudioEvidence {
+        DictionaryLearningAudioEvidence(recordingID: recordingID, modelKey: modelKey, observedText: "wurd",
+            sourceWordRange: 0..<1, sourceSampleRange: 0..<4, focalSampleRange: 1..<3, samples: [0, 0.2, 0.3, 0])
+    }
+
+    private func saveSample(_ evidence: DictionaryLearningAudioEvidence, entry: SettingsStore.CustomDictionaryEntry,
+                            store: PronunciationDictionaryStore, value: [Float] = [1, 0]) async throws {
+        let revision = await store.revision(for: entry.id)
+        try await store.learnOriginalAudio(entryID: entry.id, label: entry.replacement, evidenceID: UUID(), evidence: evidence,
+            capture: .init(values: value, sourceFrameCount: 2, modelKey: evidence.modelKey), expectedRevision: revision)
+    }
+
+    func testDeletingSavedAudioRebuildsReferencesAndLastSampleKeepsTextRules() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("profiles.json")
+        let store = PronunciationDictionaryStore(fileURL: url)
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["wurd"], replacement: "Word")
+        let other = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Other")
+        let priorEntries = SettingsStore.shared.customDictionaryEntries
+        defer { SettingsStore.shared.customDictionaryEntries = priorEntries; ASRService.invalidateDictionaryCache() }
+        SettingsStore.shared.customDictionaryEntries = [entry, other]
+        for vector: [Float] in [[1, 0], [0.8, 0.6], [0.6, 0.8]] {
+            try await self.saveSample(self.sampleEvidence(), entry: entry, store: store, value: vector)
+        }
+        try await self.saveSample(self.sampleEvidence(), entry: other, store: store)
+        let initial = await store.allProfiles()
+        let before = try XCTUnwrap(initial.first { $0.dictionaryEntryID == entry.id })
+        let unrelated = initial.filter { $0.dictionaryEntryID == other.id }
+        let removed = before.enrollments[0]
+        let oldKey = DictionaryNegativeEvidenceResolver.profileKey(before)
+        let oldRevision = await store.revision(for: entry.id)
+        try await store.removeSavedSample(removed, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
+        let after = await PronunciationDictionaryStore(fileURL: url).allProfiles()
+        let kept = try XCTUnwrap(after.first { $0.dictionaryEntryID == entry.id })
+        XCTAssertEqual(kept.enrollments, Array(before.enrollments.dropFirst()))
+        XCTAssertTrue(kept.isEligibleForMatching)
+        XCTAssertEqual(after.filter { $0.dictionaryEntryID == other.id }, unrelated)
+        let newRevision = await store.revision(for: entry.id)
+        XCTAssertNotEqual(newRevision, oldRevision)
+        let newKey = DictionaryNegativeEvidenceResolver.profileKey(kept)
+        XCTAssertNotEqual(newKey, oldKey)
+        let audioURL = directory.appendingPathComponent("pronunciation-audio/\(try XCTUnwrap(removed.originalAudioID)).json")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioURL.path))
+        do {
+            _ = try await store.savedAudioSamples(for: removed, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
+            XCTFail("A stale browser cannot play the removed sample")
+        } catch { XCTAssertEqual(error as? PronunciationDictionaryStoreError, .staleEvidence) }
+        let playable = try await store.savedAudioSamples(for: kept.enrollments[0], dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
+        XCTAssertEqual(playable, [0.2, 0.3])
+        #if arch(arm64)
+        var cache = FluidAudioProvider.TemporalReferenceCache()
+        let frames = DictionaryMatchFrames(hiddenSize: 2, values: [1, 0])
+        XCTAssertTrue(cache.insert([frames], for: oldKey))
+        cache.retain(keys: [newKey])
+        XCTAssertNil(cache[oldKey], "The old prepared reference must not be reused for the new profile")
+        XCTAssertNil(cache[newKey])
+        let references = DictionaryPronunciationReferences.make(profiles: [kept])
+        XCTAssertEqual(references.count, 2)
+        XCTAssertEqual(references.map(\.embedding.values), kept.enrollments.map(\.values))
+        #endif
+        for capture in kept.enrollments {
+            try await store.removeSavedSample(capture, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
+        }
+        let final = await PronunciationDictionaryStore(fileURL: url).allProfiles()
+        XCTAssertEqual(final, unrelated, "Only the emptied acoustic profile disappears")
+        XCTAssertEqual(SettingsStore.shared.customDictionaryEntries, [entry, other])
+        ASRService.invalidateDictionaryCache()
+        XCTAssertEqual(ASRService.applyCustomDictionary("wurd"), "Word")
+    }
+
+    func testDeletingManualReferenceRecomputesCalibrationFromRemainingSamples() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let id = UUID()
+        let captures = [[Float](arrayLiteral: 1, 0), [1, 0], [1, 0], [0.6, 0.8]].map {
+            PronunciationEnrollmentCapture(values: $0, sourceFrameCount: 2, modelKey: "parakeet-v3",
+                edgeEmbedding: $0, edgeFrameCount: 2)
+        }
+        try await store.upsert(dictionaryEntryID: id, label: "Word", modelKey: "parakeet-v3", enrollments: captures)
+        let profiles = await store.allProfiles()
+        let before = try XCTUnwrap(profiles.first)
+        let original = try XCTUnwrap(before.edgeCalibration(enabled: true))
+        XCTAssertGreaterThan(original.center[1], 0)
+        try await store.removeSavedSample(captures[3], dictionaryEntryID: id, expectedProfileLabel: "Word")
+        let updated = await store.allProfiles()
+        let calibration = try XCTUnwrap(updated.first?.edgeCalibration(enabled: true))
+        XCTAssertEqual(calibration.center, [1, 0])
+        XCTAssertEqual(calibration.baseline, 1)
+    }
+
+    func testCancelledOrFailedSampleDeletionDoesNotChangeStorageOrRevision() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("profiles.json")
+        let store = PronunciationDictionaryStore(fileURL: url)
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Word")
+        try await self.saveSample(self.sampleEvidence(), entry: entry, store: store)
+        let profiles = await store.allProfiles()
+        let capture = try XCTUnwrap(profiles.first?.enrollments.first)
+        let revision = await store.revision(for: entry.id)
+        let data = try Data(contentsOf: url)
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await store.removeSavedSample(capture, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
+        }
+        do { try await cancelled.value; XCTFail("Cancellation must stop before the commit") }
+        catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertEqual(try Data(contentsOf: url), data)
+        // A directory at the atomic destination deterministically rejects the write.
+        try FileManager.default.removeItem(at: url)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        do {
+            try await store.removeSavedSample(capture, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
+            XCTFail("An unwritable metadata destination must reject deletion")
+        } catch {}
+        let unchanged = await store.allProfiles()
+        let unchangedRevision = await store.revision(for: entry.id)
+        XCTAssertEqual(unchanged, profiles)
+        XCTAssertEqual(unchangedRevision, revision)
+        let audio = try await store.savedAudioSamples(for: capture, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
+        XCTAssertEqual(audio, [0.2, 0.3])
+        try FileManager.default.removeItem(at: url)
+        try data.write(to: url, options: .atomic)
+    }
+
+    func testCompensatingAudioRemovalInvalidatesOnlyAffectedWordRevision() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Word")
+        let otherID = UUID()
+        let evidence = self.sampleEvidence()
+        try await self.saveSample(evidence, entry: entry, store: store)
+        let profiles = await store.allProfiles()
+        let id = try XCTUnwrap(profiles.first?.enrollments.first?.originalAudioID)
+        let revision = await store.revision(for: entry.id)
+        let otherRevision = await store.revision(for: otherID)
+        // Rollback must still work in a cancelled learning task.
+        let rollback = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await store.removeOriginalAudio(evidenceID: id)
+        }
+        try await rollback.value
+        let current = await store.revision(for: entry.id)
+        let otherCurrent = await store.revision(for: otherID)
+        XCTAssertNotEqual(current, revision)
+        XCTAssertEqual(otherCurrent, otherRevision)
+        do {
+            try await store.learnOriginalAudio(entryID: entry.id, label: entry.replacement, evidenceID: UUID(), evidence: evidence,
+                capture: .init(values: [1, 0], sourceFrameCount: 2, modelKey: evidence.modelKey), expectedRevision: revision)
+            XCTFail("A stale extraction must not resurrect the removed enrollment")
+        } catch { XCTAssertEqual(error as? PronunciationDictionaryStoreError, .staleEvidence) }
+        let empty = await store.allProfiles()
+        XCTAssertTrue(empty.isEmpty)
+    }
+
+    func testSampleBrowserDeletionDropsOldSameWordWorkAndKeepsOtherWordsAndFreshLearning() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["wurd"], replacement: "Word")
+        let other = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Other")
+        let evidence = self.sampleEvidence()
+        try await self.saveSample(evidence, entry: entry, store: store)
+        let profiles = await store.allProfiles()
+        let capture = try XCTUnwrap(profiles.first?.enrollments.first)
+        var idle = false
+        let persisted = expectation(description: "Other word and fresh post-delete correction saved")
+        persisted.expectedFulfillmentCount = 2
+        let worker = DictionaryAudioLearningService(store: store,
+            extract: { .init(values: [1, 0], sourceFrameCount: 2, modelKey: $0.modelKey) },
+            canProcess: { idle }, canProcessHistory: { idle }, isCurrent: { _ in true })
+        // A different approval UUID for the same occurrence must also be discarded.
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, prepare: { evidence }))
+        let otherEvidence = self.sampleEvidence()
+        XCTAssertTrue(worker.enqueue(entry: other, evidenceID: UUID(), isValid: { true }, didPersist: { _ in persisted.fulfill() }, prepare: { otherEvidence }))
+        try await worker.removeSavedSample(capture, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
+        XCTAssertEqual(worker.pendingCount, 1)
+        let empty = await store.allProfiles()
+        XCTAssertTrue(empty.isEmpty)
+        let fresh = self.sampleEvidence()
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, didPersist: { _ in persisted.fulfill() }, prepare: { fresh }))
+        idle = true
+        worker.activityDidEnd()
+        await fulfillment(of: [persisted], timeout: 2)
+        await worker.prepareForPrivateProfileTransition()
+        let learned = await store.allProfiles()
+        XCTAssertEqual(Set(learned.map(\.dictionaryEntryID)), [entry.id, other.id])
+        let target = try XCTUnwrap(learned.first { $0.dictionaryEntryID == entry.id })
+        XCTAssertEqual(target.enrollments.map(\.sourceRecordingID), [fresh.recordingID])
+    }
+
+    func testSampleBrowserDeletionJoinsActiveExtractorBeforeRemovingItsWord() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Word")
+        let evidence = self.sampleEvidence()
+        try await self.saveSample(evidence, entry: entry, store: store)
+        let profiles = await store.allProfiles()
+        let capture = try XCTUnwrap(profiles.first?.enrollments.first)
+        let started = expectation(description: "Extraction started")
+        let joined = expectation(description: "Extraction cancelled and joined")
+        let gate = DictionarySampleDeletionGate(started: started, joined: joined)
+        let worker = DictionaryAudioLearningService(store: store, extract: { try await gate.extract($0) },
+            canProcess: { true }, canProcessHistory: { true }, isCurrent: { _ in true })
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, prepare: { evidence }))
+        await fulfillment(of: [started], timeout: 2)
+        try await worker.removeSavedSample(capture, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
+        await fulfillment(of: [joined], timeout: 2)
+        XCTAssertEqual(worker.pendingCount, 0)
+        let deleted = await store.allProfiles()
+        XCTAssertTrue(deleted.isEmpty)
+        await worker.prepareForPrivateProfileTransition()
+    }
+
+    func testCancelledAndFailedSampleBrowserDeletionRetainsPendingLearning() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("profiles.json")
+        let store = PronunciationDictionaryStore(fileURL: url)
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Word")
+        try await self.saveSample(self.sampleEvidence(), entry: entry, store: store)
+        let profiles = await store.allProfiles()
+        let capture = try XCTUnwrap(profiles.first?.enrollments.first)
+        let saved = expectation(description: "Pending learning resumes after failed deletion")
+        var idle = false
+        let worker = DictionaryAudioLearningService(store: store,
+            extract: { .init(values: [1, 0], sourceFrameCount: 2, modelKey: $0.modelKey) },
+            canProcess: { idle }, canProcessHistory: { idle }, isCurrent: { _ in true })
+        let evidence = self.sampleEvidence()
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true },
+            didPersist: { _ in saved.fulfill() }, prepare: { evidence }))
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await worker.removeSavedSample(capture, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
+        }
+        do { try await cancelled.value; XCTFail("Cancelled deletion must not commit") }
+        catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertEqual(worker.pendingCount, 1)
+        let data = try Data(contentsOf: url)
+        try FileManager.default.removeItem(at: url)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        do {
+            try await worker.removeSavedSample(capture, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
+            XCTFail("Failed deletion must not discard admitted work")
+        } catch {}
+        XCTAssertEqual(worker.pendingCount, 1)
+        try FileManager.default.removeItem(at: url)
+        try data.write(to: url, options: .atomic)
+        idle = true
+        worker.activityDidEnd()
+        await fulfillment(of: [saved], timeout: 2)
+        await worker.prepareForPrivateProfileTransition()
+        let updated = await store.allProfiles()
+        XCTAssertEqual(updated.first?.enrollments.count, 2)
+        XCTAssertTrue(updated.first?.enrollments.contains(capture) == true)
+    }
+
+    func testFailedSampleBrowserDeletionPreservesUndoOwnership() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("profiles.json")
+        let store = PronunciationDictionaryStore(fileURL: url)
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Word")
+        let previous = SettingsStore.shared.customDictionaryEntries
+        defer { SettingsStore.shared.customDictionaryEntries = previous; ASRService.invalidateDictionaryCache() }
+        SettingsStore.shared.customDictionaryEntries = []
+        let saved = expectation(description: "New correction published")
+        var receipt: DictionaryAudioLearningService.SavedCorrection?
+        let worker = DictionaryAudioLearningService(store: store,
+            extract: { .init(values: [1, 0], sourceFrameCount: 2, modelKey: $0.modelKey) },
+            canProcess: { true }, canProcessHistory: { true }, isCurrent: { _ in true })
+        let evidence = self.sampleEvidence()
+        XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, publishTarget: {
+            SettingsStore.shared.customDictionaryEntries.append(entry)
+            return .created
+        }, didPersist: { receipt = $0; saved.fulfill() }, prepare: { evidence }))
+        await fulfillment(of: [saved], timeout: 2)
+        let profiles = await store.allProfiles()
+        let capture = try XCTUnwrap(profiles.first?.enrollments.first)
+        let data = try Data(contentsOf: url)
+        try FileManager.default.removeItem(at: url)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        do {
+            try await worker.removeSavedSample(capture, dictionaryEntryID: entry.id, expectedProfileLabel: entry.replacement)
+            XCTFail("Failed persistence must retain the original correction's Undo ownership")
+        } catch {}
+        try FileManager.default.removeItem(at: url)
+        try data.write(to: url, options: .atomic)
+        let undone = try await worker.undoSavedCorrection(try XCTUnwrap(receipt))
+        XCTAssertTrue(undone)
+        XCTAssertFalse(SettingsStore.shared.customDictionaryEntries.contains(entry))
+        await worker.prepareForPrivateProfileTransition()
+    }
+}
+
+private actor DictionarySampleDeletionGate {
+    private let started: XCTestExpectation
+    private let joined: XCTestExpectation
+    private var continuation: CheckedContinuation<PronunciationEnrollmentCapture, Error>?
+    private var cancelled = false
+
+    init(started: XCTestExpectation, joined: XCTestExpectation) { self.started = started; self.joined = joined }
+
+    func extract(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                if self.cancelled { continuation.resume(throwing: CancellationError()); return }
+                self.continuation = continuation
+                self.started.fulfill()
+            }
+        } onCancel: { Task { await self.cancel() } }
+    }
+
+    private func cancel() {
+        guard !self.cancelled else { return }
+        self.cancelled = true
+        self.continuation?.resume(throwing: CancellationError())
+        self.continuation = nil
+        self.joined.fulfill()
+    }
+}
+
 @MainActor
 final class CustomDictionaryManualEntryTests: XCTestCase {
     func testSelectableHistoryTextTracksItsFinalWidthAcrossResize() async throws {
