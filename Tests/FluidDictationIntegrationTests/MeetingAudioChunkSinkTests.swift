@@ -31,6 +31,7 @@ private final class MeetingWriterEventRecorder: @unchecked Sendable {
 final class MeetingAudioChunkSinkTests: XCTestCase {
     @MainActor
     func testInRoomStreamingUsesSharedEpochAwareTeeAndExactWriterEndpointsAtRealUptime() async throws {
+        for channels in [1, 2] {
         for changesProducer in [false, true] {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -65,8 +66,9 @@ final class MeetingAudioChunkSinkTests: XCTestCase {
             XCTAssertTrue(writer.enqueue(sample))
         }
         for index in 0..<25 {
-            let layout: UInt32? = index.isMultiple(of: 2) ? nil : kAudioChannelLayoutTag_Mono
-            let raw = try makeRawSampleBuffer(channelCount: 1, layoutTag: layout, frameCount: 512,
+            let layout: UInt32? = index.isMultiple(of: 2) ? nil
+                : (channels == 1 ? kAudioChannelLayoutTag_Mono : kAudioChannelLayoutTag_Stereo)
+            let raw = try makeRawSampleBuffer(channelCount: channels, layoutTag: layout, frameCount: 512,
                 pts: base + Double(index * 512) / 48_000, interleaved: index.isMultiple(of: 2))
             let generation: UInt64 = changesProducer && index >= 12 ? 2 : 1
             for measured in try clock.offer(raw, producerGeneration: generation, sourceFrameStart: Int64(index * 512)) { try offer(measured) }
@@ -85,6 +87,7 @@ final class MeetingAudioChunkSinkTests: XCTestCase {
         XCTAssertEqual(consumer.frameCount, 25 * 512 / 3)
         XCTAssertEqual(consumer.finishCount, 1)
         XCTAssertFalse(events.snapshot().contains { if case .interrupted = $0 { return true }; return false })
+        }
         }
     }
 
