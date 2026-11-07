@@ -162,7 +162,8 @@ final class MobileMeetingPlaybackAudioTests: XCTestCase {
         let directory = try await store.sessionDirectory(for: session.id)
         let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
             sourceDisplayName: "Synthetic", format: nil, timebase: timebase, health: .waiting, chunks: [])
-        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: directory, eventHandler: { _ in })
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: directory,
+            chunkDuration: 1, eventHandler: { _ in })
         let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32,
             sampleRate: 16_000, channels: 1, interleaved: false))
         let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000))
