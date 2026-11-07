@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROJECT = ROOT / 'Fluid.xcodeproj/project.pbxproj'
@@ -40,6 +41,16 @@ def validate_application_identity(project):
 
 
 class BuildIdentityTests(unittest.TestCase):
+    def testPhysicalUIAcceptanceSchemeDoesNotEmbedHostedUnitTests(self):
+        scheme = ET.parse(ROOT / 'Fluid.xcodeproj/xcshareddata/xcschemes/PichiVoiceMobileUIAcceptance.xcscheme').getroot()
+        references = scheme.findall('TestAction/Testables/TestableReference/BuildableReference')
+        self.assertEqual([node.get('BlueprintName') for node in references], ['PichiVoiceMobileUITests'])
+        build_names = [node.get('BlueprintName') for node in
+                       scheme.findall('BuildAction/BuildActionEntries/BuildActionEntry/BuildableReference')]
+        self.assertIn('PichiVoiceMobile', build_names)
+        self.assertNotIn('PichiVoiceMobileIntegrationTests', build_names)
+        self.assertEqual(scheme.find('TestAction').get('buildConfiguration'), 'Release')
+
     def testMobileRegenerationPreservesSourcesAndIncludesNewPlatformFiles(self):
         with tempfile.TemporaryDirectory(prefix='pichi-mobile-membership-') as directory:
             root = pathlib.Path(directory)
