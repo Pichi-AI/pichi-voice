@@ -1,4 +1,5 @@
 // Shared defaults for the app and its embedded Live Activity extension.
 // Release packaging may override CURRENT_PROJECT_VERSION for both targets.
+#include "../../Configuration/PichiBrand.xcconfig"
 MARKETING_VERSION = 1.0
-CURRENT_PROJECT_VERSION = 19
+CURRENT_PROJECT_VERSION = 24

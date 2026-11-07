@@ -33,11 +33,24 @@ depth = 1
 while depth:
     depth += (source[end] == '{') - (source[end] == '}')
     end += 1
-Path(sys.argv[1]).write_text('import Foundation\n' + source[start:end] + '\n')
+# The evidence carries DictionaryLearningFeatureFrames (a93663b2), which wraps the real
+# DictionaryAudioInspection.Frames compiled below from its production file.
+frames_marker = 'nonisolated struct DictionaryLearningFeatureFrames:'
+assert source.count(frames_marker) == 1, 'Expected one production feature-frames declaration'
+frames_start = source.index(frames_marker)
+frames_end = source.index('\n}\n', frames_start) + 3
+# DictionaryAudioInspection throws this exact production error; the playground actor is excluded.
+playground = Path('Sources/Fluid/Services/DictionaryMatchPlayground.swift').read_text()
+error_marker = 'enum DictionaryMatchPlaygroundError: LocalizedError {'
+assert playground.count(error_marker) == 1, 'Expected one production playground error declaration'
+error_start = playground.index(error_marker)
+error_end = playground.index('\n}\n', error_start) + 3
+Path(sys.argv[1]).write_text('import Foundation\n' + playground[error_start:error_end] + '\n' + source[frames_start:frames_end] + '\n' + source[start:end] + '\n')
 PY
 xcrun swiftc -target x86_64-apple-macosx15.0 -parse-as-library -swift-version 5 \
     -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/DictionaryLearningAudioEvidence.swift" \
+    Sources/Fluid/Services/DictionaryAudioInspection.swift \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift \
     Sources/Fluid/Account/AccountDomain.swift Sources/Fluid/Account/PrivateProfileStorage.swift \

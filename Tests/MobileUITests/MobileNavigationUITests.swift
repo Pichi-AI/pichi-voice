@@ -3,9 +3,19 @@ import UIKit
 import CoreText
 
 final class MobileNavigationUITests: XCTestCase {
+    /// A test that sets its own launch arguments must repeat these, or a clean simulator stops at first-run setup.
+    private static let completedSetup = ["-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
+
     private var app: XCUIApplication!
 
     override func setUpWithError() throws {
+        let syntheticLiveCaptionReview = name.contains("testFastManualReturnToCaptionBottomRestoresFollowing")
+            || name.contains("testCaptureSourceHeaderInBothLanguagesAndThemes")
+        #if !targetEnvironment(simulator)
+        if syntheticLiveCaptionReview {
+            throw XCTSkip("Synthetic live-caption presentation is simulator-only")
+        }
+        #endif
         if name.contains("testSpeakerColorsNativeSmoke") || name.contains("testParticipantInlineNameAndOwnerTransferSmoke") {
             #if !targetEnvironment(simulator)
             throw XCTSkip("Synthetic speaker color smoke is simulator-only")
@@ -58,11 +68,14 @@ final class MobileNavigationUITests: XCTestCase {
         continueAfterFailure = false
         if !productionDownload { XCUIDevice.shared.orientation = .portrait }
         app = XCUIApplication()
+        if syntheticLiveCaptionReview {
+            app.launchEnvironment["PICHI_UI_CAPTION_REVIEW"] = "1"
+        }
         if !productionDownload {
             let language = name.contains("testSharedGuestHistoryAcrossAccountProfiles") ? "ru" : "en"
             app.launchArguments += ["-PichiInterfaceLanguage", language]
         }
-        if name.contains("testSensitivePolicySettingsInBothLanguagesAndThemes") {
+        if !productionSmoke {
             app.launchArguments += ["-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
         }
         if name.contains("testSharedGuestHistoryAcrossAccountProfiles") {
@@ -798,6 +811,10 @@ final class MobileNavigationUITests: XCTestCase {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Synthetic saved-history launch regression requires an owned simulator")
         #else
+        // Without the fixture this test cannot tell a missing file from a list that failed to load.
+        guard ProcessInfo.processInfo.environment["PICHI_NAVIGATION_FIXTURE_STAGED"] == "1" else {
+            throw XCTSkip("Stage NavigationMeeting.json and set TEST_RUNNER_PICHI_NAVIGATION_FIXTURE_STAGED=1")
+        }
         let rowID = "history.session.DDD86147-F0B9-4B13-88B5-099B1E0D8BA5"
         let launchArguments = app.launchArguments
         for appearance in ["light", "dark"] {
@@ -859,6 +876,29 @@ final class MobileNavigationUITests: XCTestCase {
         #endif
     }
 
+    func testCaptureSourceHeaderInBothLanguagesAndThemes() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Synthetic live-caption presentation is simulator-only")
+        #else
+        defer { app.terminate() }
+        for (language, appearance, source) in [("en", "light", "Microphone"), ("ru", "dark", "Микрофон")] {
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
+            app.launch()
+            let viewport = app.tables["meeting.liveTranscript.viewport"]
+            XCTAssertTrue(viewport.waitForExistence(timeout: 10))
+            let header = app.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "meeting.liveParagraph.", source + ",")).firstMatch
+            for _ in 0..<20 where !header.exists || !header.isHittable || header.frame.minY < viewport.frame.minY {
+                viewport.swipeDown(velocity: .fast)
+            }
+            XCTAssertTrue(header.exists && header.isHittable, "The actual live source header must be visible")
+            XCTAssertGreaterThanOrEqual(header.frame.minY, viewport.frame.minY)
+            capture("source-header-\(language)-\(appearance)")
+        }
+        #endif
+    }
+
     func testFastManualReturnToCaptionBottomRestoresFollowing() throws {
         app.terminate()
         app.launchEnvironment["PICHI_UI_CAPTION_REVIEW"] = "1"
@@ -884,7 +924,7 @@ final class MobileNavigationUITests: XCTestCase {
     func testOwnerVoiceSettingsUseNativeRecordingStructureInBothLanguages() throws {
         for (language, settingsTitle, appearance) in [("en", "Settings", "light"), ("ru", "Настройки", "dark")] {
             app.terminate()
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             XCUIDevice.shared.orientation = .portrait
             app.launch()
             waitForOrientation(portrait: true)
@@ -1041,7 +1081,7 @@ final class MobileNavigationUITests: XCTestCase {
 
     func testRussianSettingsAndModelsInDarkAppearance() throws {
         app.terminate()
-        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark"]
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark"] + Self.completedSetup
         app.launch()
         waitForOrientation(portrait: true)
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
@@ -1064,7 +1104,7 @@ final class MobileNavigationUITests: XCTestCase {
         for appearance in ["light", "dark"] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
-            app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             waitForOrientation(portrait: true)
             openNavigation("meetings", title: "Записи")
@@ -1205,7 +1245,7 @@ final class MobileNavigationUITests: XCTestCase {
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             waitForOrientation(portrait: true)
             capture("attribution-\(language)-ready")
@@ -1239,17 +1279,18 @@ final class MobileNavigationUITests: XCTestCase {
 
     func testProtectedTranscriptExportOpensNativeShareSheetInBothLanguages() throws {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9016"
+        var fixtureSeen = false
         for (language, appearance, meetingsTitle) in [("en", "light", "Recordings"), ("ru", "dark", "Записи")] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             waitForOrientation(portrait: true)
             capture("protected-export-\(language)-ready")
             openNavigation("meetings", title: meetingsTitle)
             capture("protected-export-\(language)-history")
             let meeting = app.buttons["history.session.\(fixtureID)"]
-            XCTAssertTrue(meeting.waitForExistence(timeout: 5), "Stage the approved protected synthetic fixture")
+            try requireFixture(meeting, timeout: 5, seen: &fixtureSeen, "Stage the approved protected synthetic fixture")
             meeting.tap()
             let more = app.buttons["transcript.more"]
             XCTAssertTrue(more.waitForExistence(timeout: 5))
@@ -1362,7 +1403,7 @@ final class MobileNavigationUITests: XCTestCase {
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             waitForOrientation(portrait: true)
             capture("legacy-attribution-\(language)-ready")
@@ -1602,16 +1643,17 @@ final class MobileNavigationUITests: XCTestCase {
         throw XCTSkip("Legacy participant fixtures are simulator-only")
         #else
         let fixtureID = "8EEC0000-2026-4000-8000-000000000021"
+        var fixtureSeen = false
         for (language, appearance, meetings) in [
             ("en", "light", "Recordings"),
             ("ru", "dark", "Записи")
         ] {
             for iteration in 0..<2 {
-                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
                 app.launch()
                 openNavigation("meetings", title: meetings)
                 let meeting = app.buttons["history.session.\(fixtureID)"]
-                XCTAssertTrue(meeting.waitForExistence(timeout: 5), "Stage the synthetic legacy participant fixture")
+                try requireFixture(meeting, timeout: 5, seen: &fixtureSeen, "Stage the synthetic legacy participant fixture")
                 meeting.tap()
                 XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
                 let firstCaption = app.staticTexts["Участник 2"].firstMatch
@@ -1656,7 +1698,7 @@ final class MobileNavigationUITests: XCTestCase {
             ("ru", "dark", "Записи", "Вы", "Participant 1")
         ] {
             func openFixture() throws {
-                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
                 app.launch()
                 capture("participant-correction-\(language)-ready")
                 openNavigation("meetings", title: meetings)
@@ -1781,15 +1823,16 @@ final class MobileNavigationUITests: XCTestCase {
         throw XCTSkip("Synthetic saved-meeting navigation review is simulator-only")
         #else
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9025"
+        var fixtureSeen = false
         let lastID = "00000000-0000-0000-0000-202610210105"
         for (language, appearance, meetings) in [("en", "light", "Recordings"), ("ru", "dark", "Записи")] {
             app.terminate()
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             capture("navigation-surface-\(language)-ready")
             openNavigation("meetings", title: meetings)
             let meeting = app.buttons["history.session.\(fixtureID)"]
-            XCTAssertTrue(meeting.waitForExistence(timeout: 10))
+            try requireFixture(meeting, timeout: 10, seen: &fixtureSeen, "Stage ParticipantCorrectionMeeting.json in the simulator store")
             meeting.tap()
             let scroll = app.scrollViews["meeting.transcript"]
             XCTAssertTrue(scroll.waitForExistence(timeout: 10))
@@ -1853,7 +1896,7 @@ final class MobileNavigationUITests: XCTestCase {
         let identifiers = try savedParagraphIdentifiers(expectedCount: expected.count)
         for (language, appearance, meetings) in [("en", "light", "Recordings"), ("ru", "dark", "Записи")] {
             app.terminate()
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             capture("saved-reading-\(language)-ready")
             openNavigation("meetings", title: meetings)
@@ -1884,7 +1927,7 @@ final class MobileNavigationUITests: XCTestCase {
         }
         let identifiers = try savedParagraphIdentifiers(expectedCount: expected.count)
         app.terminate()
-        app.launchArguments = ["-PichiInterfaceLanguage", "ru"]
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru"] + Self.completedSetup
         app.launch()
         capture("private-saved-ready")
         // A scheduled iPadOS update can cover the application with a passcode sheet.
@@ -1927,7 +1970,7 @@ final class MobileNavigationUITests: XCTestCase {
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
-            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
             app.launch()
             waitForOrientation(portrait: true)
             openNavigation("meetings", title: meetingsTitle)
@@ -1988,6 +2031,7 @@ final class MobileNavigationUITests: XCTestCase {
         throw XCTSkip("Synthetic address presentation is verified only in owned simulators")
         #else
         let fixtureID = "A02B2152-C9AF-4E50-88A5-BE1B97120210"
+        var fixtureSeen = false
         for (language, appearance, meetingsTitle, expected) in [
             ("en", "light", "Recordings", "1 Example Street, Example City"),
             ("ru", "dark", "Записи", "ул. Примерная, 1, Примерск"),
@@ -2001,7 +2045,7 @@ final class MobileNavigationUITests: XCTestCase {
             capture("location-\(language)-\(appearance)-launched")
             openNavigation("meetings", title: meetingsTitle)
             let meeting = app.buttons["history.session.\(fixtureID)"]
-            XCTAssertTrue(meeting.waitForExistence(timeout: 10), "Stage LocationMeeting.json in the owned simulator")
+            try requireFixture(meeting, timeout: 10, seen: &fixtureSeen, "Stage LocationMeeting.json in the owned simulator")
             // The place names the recording; the start is on the row's second line.
             XCTAssertTrue(meeting.label.contains(expected) && !meeting.label.contains("\(expected) · "), meeting.label)
             capture("location-\(language)-\(appearance)-history")
@@ -2158,6 +2202,17 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertLessThanOrEqual(name.frame.height, 60,
                 "Participant names must remain compact labels rather than tall, narrow word fragments",
                 file: file, line: line)
+        }
+    }
+
+    /// Skips only while the fixture has never been seen. After that a missing row is a real failure.
+    private func requireFixture(_ row: XCUIElement, timeout: TimeInterval, seen: inout Bool, _ stage: String) throws {
+        if row.waitForExistence(timeout: timeout) {
+            seen = true
+        } else if seen {
+            XCTFail("A staged row disappeared after it was seen")
+        } else {
+            throw XCTSkip(stage)
         }
     }
 

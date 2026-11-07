@@ -12,6 +12,9 @@ extension MeetingSessionStoreCheckpointTests {
             timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
         session.state = .completed; session.endedAt = session.startedAt.addingTimeInterval(30)
         session.piiRedactionEnabled = true; session.audioStorageMode = .memoryOnly
+        // Below, exercise the narrower legacy neighbor heuristic without the newer
+        // complete-owner projection. Default/enabled ownership is checked separately.
+        session.speakerLabelsEnabled = false
         session.speakers = [(a, "Имя Ёё"), (b, "Другое имя"), (extra, "Video voice")].map {
             .init(id: $0.0, displayName: $0.1, diarizationClusterID: nil, trackKind: .microphone,
                   isLocalUser: false, identityCandidates: [])
@@ -36,6 +39,26 @@ extension MeetingSessionStoreCheckpointTests {
             return value
         }
         let both = [ta: a, tb: b]
+        for enabled in [nil, true] as [Bool?] {
+            var complete = session
+            complete.speakerLabelsEnabled = enabled
+            for index in complete.speakers.indices { complete.speakers[index].generatedParticipantNumber = index + 1 }
+            let noise = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "synthetic-noise")
+            let punctuation = word(".", 5, raw: noise, selected: noise, owner: extra, map: [noise: extra])
+            let lexical = word("я", 5.1, raw: nil, selected: nil, owner: nil, rule: .insufficientSupport)
+            let known = word("Следующая реплика.", 10, raw: tb, selected: tb, owner: b, map: both)
+            complete.transcriptSegments = [punctuation, lexical, known]
+            let original = complete.transcriptSegments
+            let reading = MeetingTranscriptExporter.speakerPresentations(in: complete)
+            check(reading[lexical.id]?.participantID == b && reading[known.id]?.participantID == b,
+                  "Default and enabled reading assign lexical speech to the established participant")
+            check(complete.readableSpeakers.map(\.id) == [b] && complete.transcriptSegments == original,
+                  "Complete reading excludes punctuation-only identities without rewriting source evidence")
+            let portable = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: complete)) as! [String: Any]
+            let exported = portable["segments"] as! [[String: Any]]
+            check(!exported.isEmpty && exported.allSatisfy { $0["speakerID"] as? String == b.uuidString },
+                  "Default and enabled portable reading export keep the established lexical owner")
+        }
         do {
             var value = session
             for index in value.speakers.indices {
@@ -76,7 +99,7 @@ extension MeetingSessionStoreCheckpointTests {
             value.transcriptSegments = [punctuation, short, real]
             let reading = MeetingTranscriptExporter.speakerPresentations(in: value)
             check(reading[short.id]?.participantID == nil,
-                  "Punctuation-only native evidence cannot sponsor a phantom owner for a short lexical fragment")
+                  "With automatic ownership disabled, punctuation cannot sponsor a phantom lexical owner")
             check(value.readableSpeakers.map(\.id) == [b], "A punctuation-only native person stays out of the roster")
             let portable = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: value)) as! [String: Any]
             let roster = Set((portable["speakers"] as! [[String: Any]]).compactMap { $0["id"] as? String })
@@ -493,6 +516,7 @@ extension MeetingSessionStoreCheckpointTests {
         session.state = .completed; session.endedAt = session.startedAt.addingTimeInterval(100)
         session.piiRedactionEnabled = true; session.audioStorageMode = .memoryOnly
         session.transcriptIsComplete = true
+        session.speakerLabelsEnabled = false
         session.speakers = [(owner, "Synthetic owner"), (other, "Synthetic reply")].map {
             .init(id: $0.0, displayName: $0.1, diarizationClusterID: nil, trackKind: .microphone,
                   isLocalUser: false, identityCandidates: [])

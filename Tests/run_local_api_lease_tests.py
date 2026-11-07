@@ -71,7 +71,7 @@ def skip_non_code(text: str, index: int) -> int | None:
     raise ValueError("Unterminated Swift string")
 
 
-def declaration(text: str, kind: str, name: str) -> str:
+def declaration(text: str, kind: str, name: str, signature: str = "") -> str:
     """Copy one complete production declaration verbatim, never neighboring methods."""
     # Find declarations only in code. A removed/commented implementation must not
     # be reconstructed from a comment or a documentation string and then "tested".
@@ -87,7 +87,7 @@ def declaration(text: str, kind: str, name: str) -> str:
                 code[position] = " "
         cursor = skipped
     modifiers = r"(?:(?:private|fileprivate|internal|public|package|final|nonisolated)\s+)*"
-    pattern = rf"(?m)^[ \t]*{modifiers}{re.escape(kind)}\s+{re.escape(name)}\b"
+    pattern = rf"(?m)^[ \t]*{modifiers}{re.escape(kind)}\s+{re.escape(name)}\b{signature}"
     matches = list(re.finditer(pattern, "".join(code)))
     if len(matches) != 1:
         raise ValueError(f"Expected exactly one {kind} {name}; found {len(matches)}")
@@ -161,9 +161,14 @@ methods = '\n'.join(declaration(source, 'func', name) for name in (
     'transcribeSamplesForAPI', 'transcribeSamplesForAPIWithLease', 'transcribeFileForAPI', 'transcribeFileForAPIWithLease',
     'refreshExecutionStatus',
 ))
-leases = '\n'.join(declaration(source, 'func', name) for name in (
-    'acquireExclusiveActivity', 'releaseExclusiveActivity',
-))
+# acquireExclusiveActivity has two overloads since bcd33777 and 2786fe25: the public
+# one forwards to the private one that owns the admission guard. Copy both, each by signature.
+leases = '\n'.join([
+    declaration(source, 'func', 'acquireExclusiveActivity', r"\(_ activity: ASRExclusiveActivity\) throws"),
+    declaration(source, 'func', 'acquireExclusiveActivity', r"\(_ activity: ASRExclusiveActivity, cancelDictionaryLearning: Bool\)"),
+    declaration(source, 'func', 'acquireForegroundActivity'),
+    declaration(source, 'func', 'releaseExclusiveActivity'),
+])
 types = '\n'.join(declaration(lease_source, kind, name) for kind, name in (
     ('enum', 'ASRExclusiveActivity'), ('struct', 'ASRActivityLease'), ('enum', 'ASRActivityError'),
 ))
@@ -177,6 +182,8 @@ struct ASRTranscriptionResult { let text: String; let confidence: Float }
 final class DictionaryAudioLearningService {
     static let shared = DictionaryAudioLearningService()
     func cancelForRecording() {}
+    func pauseForForegroundAdmission() async {}
+    func resumeAfterForegroundAdmission() {}
     func activityDidEnd() {}
 }
 actor Gate {

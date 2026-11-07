@@ -225,8 +225,8 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
             participant: participant)]
         let original = snapshot
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
-        XCTAssertEqual(rows.first?.captionLabel, "00:01 Участник 2")
-        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).first?.captionLabel, "00:01 Участник 2")
+        XCTAssertEqual(rows.first?.captionLabel, "00:01 Участник 2 · \(PichiLocalization.text("Microphone"))")
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).first?.captionLabel, "00:01 Участник 2 · \(PichiLocalization.text("Microphone"))")
         XCTAssertEqual(snapshot, original, "Caption formatting preserves legacy identity and uncertainty metadata")
         XCTAssertTrue(rows.first?.participant?.isEstimated == true)
     }
@@ -259,7 +259,7 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         XCTAssertEqual(MeetingLiveBubbleComposer.rows(for: snapshot).map(\.text), ["[PERSON]"])
         snapshot.partials[.you] = .init(id: UUID(), text: "следующий", start: 2)
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
-        XCTAssertEqual(rows.map(\.showsLabel), [true, false])
+        XCTAssertEqual(rows.map(\.showsLabel), [true, true])
         XCTAssertNil(rows[1].participant)
         XCTAssertEqual(rows[1].readingTurnStart, 2)
         XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).count, 2)
@@ -285,15 +285,15 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         let original = snapshot
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
         let paragraphs = MeetingLiveCaptionParagraphs.compose(rows)
-        XCTAssertEqual(rows.map(\.showsLabel), [false, true, false, true, true, false])
-        XCTAssertNil(rows[0].captionLabel)
-        XCTAssertEqual(rows[1].captionLabel, "00:07 Участник 1")
-        XCTAssertEqual(rows[4].captionLabel, "01:15 Участник 1",
+        XCTAssertEqual(rows.map(\.showsLabel), [true, true, true, true, true, true])
+        XCTAssertEqual(rows[0].captionLabel, PichiLocalization.text("Microphone"))
+        XCTAssertEqual(rows[1].captionLabel, "00:07 Участник 1 · \(PichiLocalization.text("Microphone"))")
+        XCTAssertEqual(rows[4].captionLabel, "01:15 Участник 1 · \(PichiLocalization.text("Microphone"))",
                        "Distinct identities remain separate even when users give them the same name")
         XCTAssertEqual(paragraphs.map { $0.text() }, ["До определения", "Начало\n", "А", "продолжение", "ответ", "и дальше"])
         XCTAssertEqual(rows[2].participant, unknown, "Unresolved evidence never borrows a preceding voice")
-        XCTAssertNil(paragraphs[2].captionLabel)
-        XCTAssertEqual(paragraphs[3].captionLabel, "00:10 Участник 1",
+        XCTAssertEqual(paragraphs[2].captionLabel, PichiLocalization.text("Microphone"))
+        XCTAssertEqual(paragraphs[3].captionLabel, "00:10 Участник 1 · \(PichiLocalization.text("Microphone"))",
                        "An unresolved voice boundary resets the next explicit participant turn timestamp")
         XCTAssertTrue(paragraphs[3].showsLabel)
         XCTAssertEqual(snapshot, original)
@@ -317,14 +317,14 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         let original = snapshot
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
         XCTAssertEqual(rows.map(\.participant), [owner, incoming, incoming, candidates])
-        XCTAssertEqual(rows.map(\.showsLabel), [true, true, false, false])
+        XCTAssertEqual(rows.map(\.showsLabel), [true, true, false, true])
         XCTAssertEqual(rows.map(\.readingTurnStart), [0, 2, 2, 4])
         XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).map { $0.text() },
                        ["Первая речь.", "Новая речь.", "Одновременно"])
         XCTAssertEqual(snapshot, original, "Reading presentation never changes speaker evidence")
     }
 
-    func testSourceOnlyAndUncertainCaptionLabelsStayAbsentEvenInDirectPreviewRows() {
+    func testSourceOnlyAndUncertainCaptionsLabelTheirSourceWithoutClaimingAParticipant() {
         for source in [MeetingLiveSpeaker.you, .them] {
             let presentations: [MeetingSpeakerPresentation?] = [nil,
                 .init(identity: "unknown", label: .unknown),
@@ -333,8 +333,8 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
             for participant in presentations {
                 let row = MeetingLiveBubbleComposer.Row(id: UUID(), speaker: source, text: "Текст",
                     isPartial: false, showsLabel: true, participant: participant)
-                XCTAssertNil(row.captionLabel, "Live captions do not fall back to Unknown speaker, Microphone or Meeting audio")
-                XCTAssertNil(MeetingLiveCaptionParagraphs.compose([row])[0].captionLabel)
+                XCTAssertEqual(row.captionLabel, PichiLocalization.text(source == .you ? "Microphone" : "Meeting audio"))
+                XCTAssertEqual(MeetingLiveCaptionParagraphs.compose([row])[0].captionLabel, row.captionLabel)
             }
         }
     }
@@ -546,6 +546,31 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testNativeSourceHeadersDistinguishMeetingAudioAndMicrophone() async throws {
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.utterances = [
+            .init(id: UUID(), speaker: .them, text: "Обсудим план встречи.", start: 0, end: 2),
+            .init(id: UUID(), speaker: .you, text: "Я подготовил предложения.", start: 3, end: 5),
+            .init(id: UUID(), speaker: .them, text: "Добавим время на вопросы.", start: 6, end: 8,
+                participant: .init(identity: "synthetic-participant",
+                    label: .identified(.init(displayName: "Анна", isLocalUser: false)))),
+        ]
+        snapshot.partials[.you] = .init(id: UUID(), text: "Сейчас уточню детали", start: 9)
+        let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        XCTAssertEqual(rows.map(\.showsLabel), [true, true, true, true])
+        for scheme in [ColorScheme.light, .dark] {
+            let host = try CaptionNativeHost(rows: rows, scheme: scheme)
+            defer { host.close() }
+            host.model.height = min(480, host.window.bounds.height - 160)
+            try await settle(host, "Both caption sources must finish native layout") {
+                self.scrollViews(in: host.controller.view).contains {
+                    $0.window === host.window && $0.bounds.height > 0 && $0.contentSize.height > 0
+                }
+            }
+            capture(host, step: "source-labels", scheme: scheme)
+        }
+    }
+
     @MainActor
     func testNativeSpeakerColorLabelsUseReadableParticipantIdentity() async throws {
         let names = ["Owner", "Анна Ёлкина", "Борис", "Вера", "Георгий", "Дина", "Евгений", "Жанна"]
@@ -606,15 +631,15 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
         let original = snapshot
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
         XCTAssertEqual(rows.filter(\.showsLabel).compactMap(\.captionLabel),
-                       ["00:07 Анна", "00:26 Анна", "1:02:35 Борис"])
+                       ["00:07 Анна · \(PichiLocalization.text("Microphone"))", PichiLocalization.text("Microphone"), "00:26 Анна · \(PichiLocalization.text("Microphone"))", "1:02:35 Борис · \(PichiLocalization.text("Microphone"))"])
         let paragraphs = MeetingLiveCaptionParagraphs.compose(rows)
         XCTAssertEqual(paragraphs.map { $0.text() },
                        ["Первая реплика.", "А", "затем продолжение.", "Следующий участник отвечает."])
         XCTAssertEqual(rows[1].participant, unknown,
                        "Unresolved speech must not inherit the preceding participant")
-        XCTAssertFalse(rows[1].showsLabel)
-        XCTAssertNil(paragraphs[1].captionLabel)
-        XCTAssertEqual(paragraphs[2].captionLabel, "00:26 Анна",
+        XCTAssertTrue(rows[1].showsLabel)
+        XCTAssertEqual(paragraphs[1].captionLabel, PichiLocalization.text("Microphone"))
+        XCTAssertEqual(paragraphs[2].captionLabel, "00:26 Анна · \(PichiLocalization.text("Microphone"))",
                        "The next known participant starts a new timed turn after unresolved speech")
         XCTAssertEqual(paragraphs.flatMap(\.rows).map(\.id), snapshot.utterances.map(\.id))
         XCTAssertEqual(snapshot, original)

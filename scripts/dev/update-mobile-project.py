@@ -17,7 +17,11 @@ APP_INFO = ROOT / "Sources/Mobile/Info.plist"
 VERSION_CONFIG = ROOT / "Sources/Mobile/Version.xcconfig"
 # Debug and Release share one app identity. An embedded extension must extend it, so a local
 # signing identity overrides this one setting rather than PRODUCT_BUNDLE_IDENTIFIER.
-APP_BUNDLE = "ai.pichi.voice.mobile"
+brand_identity = re.findall(r"^PICHI_BUNDLE_IDENTIFIER\s*=\s*([A-Za-z0-9.-]+)\s*$",
+    (ROOT / "Configuration/PichiBrand.xcconfig").read_text(), re.MULTILINE)
+if len(brand_identity) != 1:
+    raise ValueError("Expected one literal PICHI_BUNDLE_IDENTIFIER in Configuration/PichiBrand.xcconfig")
+APP_BUNDLE = brand_identity[0]
 
 # The app declares Live Activity support; the plist keeps its compact hand-edited layout.
 app_info_text = APP_INFO.read_text()
@@ -123,12 +127,12 @@ def configs(label, test=False, hosted=False, extension=False):
                 PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER)")
         elif extension:
             # The extension has no String Catalog; the app passes it already localized copy.
-            settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER=APP_BUNDLE, PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER).activity",
+            settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER="$(PICHI_BUNDLE_IDENTIFIER)", PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER).activity",
                 INFOPLIST_FILE="Sources/MobileActivity/Info.plist",
                 SKIP_INSTALL="YES", APPLICATION_EXTENSION_API_ONLY="YES", SWIFT_EMIT_LOC_STRINGS="NO",
                 LD_RUNPATH_SEARCH_PATHS="$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks")
         else:
-            settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER=APP_BUNDLE, PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER)",
+            settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER="$(PICHI_BUNDLE_IDENTIFIER)", PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER)",
                 INFOPLIST_FILE="Sources/Mobile/Info.plist", CODE_SIGN_ENTITLEMENTS="Sources/Mobile/Mobile.entitlements",
                 ASSETCATALOG_COMPILER_APPICON_NAME="MobileAppIcon",
                 ENABLE_PREVIEWS="YES", PICHI_SOURCE_REVISION="unknown")

@@ -345,7 +345,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try require(revision.count == 40 && revision.allSatisfy { "0123456789abcdef".contains($0) }
                     && ProcessInfo.processInfo.environment["PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT"] == "1",
                     "The parent must freshly preserve all current data and verify an idle frozen Release process")
-        let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice.mobile")
+        let app = XCUIApplication()
         app.launchArguments = []
         app.launchEnvironment = [:]
         switch app.state {
@@ -403,7 +403,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         player.volume = 0.8
         try require(player.prepareToPlay(), "The runner must prepare actual synthetic speech playback")
 
-        let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice.mobile")
+        let app = XCUIApplication()
         app.launchArguments = []
         app.launchEnvironment = [:]
         app.activate()
@@ -570,7 +570,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         player.volume = 0.8
         try require(player.prepareToPlay(), "The runner must prepare real fixture playback")
 
-        let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice.mobile")
+        let app = XCUIApplication()
         // Preserve the user's actual language, theme, model and privacy choices.
         app.launchArguments = []
         app.launchEnvironment = [:]
@@ -802,7 +802,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try FileManager.default.createDirectory(at: checkpoints, withIntermediateDirectories: true)
         print("[VISIBLE_UI_RUN] directory=\(checkpoints.path) revision=\(revision) test=testReleaseVisibleOneMinuteRecordingWithParentCheckpoints source=\(audioSource)")
 
-        let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice.mobile")
+        let app = XCUIApplication()
         app.launchArguments = []
         app.launchEnvironment = [:]
         // External playback is owned and observed by the parent on another device.
@@ -992,7 +992,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try FileManager.default.createDirectory(at: checkpoints, withIntermediateDirectories: true)
         print("[VISIBLE_UI_RUN] directory=\(checkpoints.path) revision=\(revision) test=testDebugSilentLongRecordingWithParentStopSignal source=debug_file_input speed=\(speed)")
 
-        let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice.mobile")
+        let app = XCUIApplication()
         var ownsRecording = false
         do {
             // Activation preserves an existing process. Never relaunch an unrelated
