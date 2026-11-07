@@ -849,6 +849,9 @@ struct MeetingSessionStoreCheckpointTests {
         template: MeetingSession, check: (Bool, String) -> Void
     ) throws {
         var source = template
+        // These assertions isolate native/neighbor evidence admission. The separate
+        // readable-contract fixture checks default/enabled complete-owner projection.
+        source.speakerLabelsEnabled = false
         source.state = .completed; source.endedAt = source.startedAt.addingTimeInterval(5)
         source.transcriptIsComplete = true; source.transcriptCoverageGaps = []
         let speakerA = source.speakers[0]
