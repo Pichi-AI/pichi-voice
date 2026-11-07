@@ -208,6 +208,53 @@ final class MeetingRecordingClockCoreTests: XCTestCase {
             presentationTime: CMTime(seconds: seconds, preferredTimescale: 1_000_000_000), sampleRate: rate)
     }
 
+    private final class ActivityEvidence: @unchecked Sendable {
+        private let lock = NSLock()
+        private var resets = 0
+        private var values: [(Double, Double, MeetingSpeechActivity)] = []
+        func reset() { lock.withLock { resets += 1 } }
+        func append(_ start: Double, _ end: Double, _ activity: MeetingSpeechActivity) {
+            lock.withLock { values.append((start, end, activity)) }
+        }
+        var snapshot: (Int, [(Double, Double, MeetingSpeechActivity)]) { lock.withLock { (resets, values) } }
+    }
+    private struct QuietModel: MeetingSpeechActivityFrameModel {
+        let evidence: ActivityEvidence
+        mutating func probability(samples: [Float], reset: Bool) throws -> Float {
+            if reset { evidence.reset() }
+            return 0.01
+        }
+    }
+
+    func testSpeechActivityUsesMappedFrameEndsWithoutResettingForDriftOrScoringMuteGaps() async throws {
+        let evidence = ActivityEvidence()
+        let worker = MeetingCaptureSpeechActivityWorker(factory: { QuietModel(evidence: evidence) }, clock: { 0 }) {
+            evidence.append($0, $1, $2)
+        }
+        let context = try MeetingRecordingClock(timebase: .init(startedHostTime: 1_000_000_000_000,
+            machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)).source(UUID())
+        for index in 0..<8 {
+            let gap = index >= 6 ? 0.1 : 0
+            let start = 2 + Double(index) * 0.256 * 1.0003 + gap
+            let end = 2 + Double(index + 1) * 0.256 * 1.0003 + gap
+            let mapping = try context.mapping(frameCount: 4096,
+                start: CMTime(seconds: 1_000 + start, preferredTimescale: 1_000_000_000),
+                end: CMTime(seconds: 1_000 + end, preferredTimescale: 1_000_000_000), discontinuityBefore: index == 0 || index == 6)
+            let packet = try context.timedCopy(sample(frames: 4096, at: 1_000 + start), mapping: mapping,
+                producerEpoch: index < 6 ? 1 : 2)
+            worker.offer(packet, start: start)
+            await worker.drainForTesting()
+        }
+        let snapshot = evidence.snapshot
+        XCTAssertEqual(snapshot.0, 2, "Only a true source boundary resets recurrent state")
+        XCTAssertEqual(snapshot.1.count, 8)
+        XCTAssertEqual(snapshot.1[5].1, 2 + 6 * 0.256 * 1.0003, accuracy: 2e-9)
+        XCTAssertEqual(snapshot.1[6].0, 2 + 6 * 0.256 * 1.0003 + 0.1, accuracy: 2e-9)
+        XCTAssertTrue(worker.confidentlyNonSpeech(start: snapshot.1[7].0, end: snapshot.1[7].1))
+        XCTAssertFalse(worker.confidentlyNonSpeech(start: snapshot.1[5].0, end: snapshot.1[7].1))
+        worker.stop(); await worker.join()
+    }
+
     func testSourceClockCalibratesAdjacentAcquisitionAnchorsAndFiniteTailWithoutRetaggingNativeTime() throws {
         let clock = try MeetingRecordingClock(timebase: .init(startedHostTime: 1_000_000_000_000,
             machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil,
