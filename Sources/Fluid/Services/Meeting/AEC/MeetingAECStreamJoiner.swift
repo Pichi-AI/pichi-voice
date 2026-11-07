@@ -44,7 +44,10 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
         var endGrid: Int64 { self.startGrid + Int64(self.source.samples.count) }
         var remainingCount: Int { self.source.samples.count - self.consumed }
         var effectivePresentationTime: CMTime {
-            CMTimeAdd(
+            if let time = self.source.clockPacket?.mapping.hostTime(atFrame: Double(self.consumed)) {
+                return CMTime(value: time.value, timescale: time.timescale)
+            }
+            return CMTimeAdd(
                 self.source.presentationTime,
                 CMTime(value: CMTimeValue(self.consumed), timescale: 48_000)
             )
@@ -57,6 +60,8 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
         var cumulativeSamples: Int64 = 0
         var previousPresentationTime: CMTime?
         var format: MeetingAECPCMFormat?
+        var clockPacket: MeetingCaptureClockMetadata.Packet?
+        var clockMode: Bool?
         var blocks: [BufferedBlock] = []
 
         var retainedSamples: Int { self.blocks.reduce(0) { $0 + $1.remainingCount } }
@@ -136,6 +141,14 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
         _ block: MeetingAECPCMBlock,
         into track: inout TrackState
     ) -> Result<Void, MeetingAECFailure> {
+        if let mode = track.clockMode, mode != (block.clockPacket != nil) { return .failure(.streamChanged) }
+        if let previous = track.clockPacket, let packet = block.clockPacket {
+            guard previous.clockID == packet.clockID, previous.sourceID == packet.sourceID,
+                  previous.producerEpoch == packet.producerEpoch else { return .failure(.streamChanged) }
+            if packet.mapping.spans.first?.discontinuityBefore == true { return .failure(.timestampGap) }
+        }
+        track.clockMode = block.clockPacket != nil
+        track.clockPacket = block.clockPacket
         if let format = track.format, format != block.sourceFormat {
             return .failure(.formatChanged)
         }
@@ -323,7 +336,7 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
             from: grid,
             track: &track
         ) else { return nil }
-        return MeetingAECFrame(presentationTime: slice.presentationTime, samples: slice.samples)
+        return MeetingAECFrame(presentationTime: slice.presentationTime, samples: slice.samples, clockPacket: slice.clockPacket)
     }
 
     private static func consumeSlice(
@@ -337,17 +350,25 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
         let presentationTime = first.effectivePresentationTime
         var remaining = count
         var samples: [Float] = []
+        var clockPacket: MeetingCaptureClockMetadata.Packet?
         samples.reserveCapacity(count)
         while remaining > 0 {
             guard !track.blocks.isEmpty else { return nil }
             let take = min(remaining, track.blocks[0].remainingCount)
             let start = track.blocks[0].consumed
+            if let packet = track.blocks[0].source.clockPacket {
+                guard let sliced = try? packet.sliced(frames: Double(start)..<Double(start + take)) else { return nil }
+                if let previous = clockPacket {
+                    guard let joined = try? previous.appending(sliced) else { return nil }
+                    clockPacket = joined
+                } else { clockPacket = sliced }
+            }
             samples.append(contentsOf: track.blocks[0].source.samples[start..<(start + take)])
             track.blocks[0].consumed += take
             remaining -= take
             if track.blocks[0].remainingCount == 0 { track.blocks.removeFirst() }
         }
-        return MeetingAECBypassSlice(presentationTime: presentationTime, samples: samples)
+        return MeetingAECBypassSlice(presentationTime: presentationTime, samples: samples, clockPacket: clockPacket)
     }
 
     private static func discard(before grid: Int64, track: inout TrackState) {
@@ -378,7 +399,7 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
                     emissions.append(.bypass(
                         MeetingAECBypassSlice(
                             presentationTime: newCapture.presentationTime,
-                            samples: newCapture.samples
+                            samples: newCapture.samples, clockPacket: newCapture.clockPacket
                         ),
                         failure
                     ))
@@ -392,7 +413,8 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
             emissions.append(.bypass(
                 MeetingAECBypassSlice(
                     presentationTime: block.effectivePresentationTime,
-                    samples: Array(block.source.samples[block.consumed...])
+                    samples: Array(block.source.samples[block.consumed...]),
+                    clockPacket: try? block.source.clockPacket?.sliced(frames: Double(block.consumed)..<Double(block.source.samples.count))
                 ),
                 failure
             ))
@@ -402,7 +424,7 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
             emissions.append(.bypass(
                 MeetingAECBypassSlice(
                     presentationTime: newCapture.presentationTime,
-                    samples: newCapture.samples
+                    samples: newCapture.samples, clockPacket: newCapture.clockPacket
                 ),
                 failure
             ))

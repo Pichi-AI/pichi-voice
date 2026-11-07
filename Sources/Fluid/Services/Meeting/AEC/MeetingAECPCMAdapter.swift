@@ -128,13 +128,14 @@ nonisolated enum MeetingAECPCMAdapter {
             sourceFormat: MeetingAECPCMFormat(
                 channelCount: channels,
                 interleaved: !nonInterleaved
-            )
+            ), clockPacket: MeetingCaptureClockMetadata.read(from: sampleBuffer)
         ))
     }
 
     /// Produces an owning mono Float32 sample buffer. `presentationTime` is always the source
     /// capture PTS (plus an exact source-sample offset), never an output ordinal.
-    static func synthesize(samples: [Float], presentationTime: CMTime) -> CMSampleBuffer? {
+    static func synthesize(samples: [Float], presentationTime: CMTime,
+                           clockPacket: MeetingCaptureClockMetadata.Packet? = nil) -> CMSampleBuffer? {
         guard !samples.isEmpty,
               samples.allSatisfy(\.isFinite),
               presentationTime.isValid,
@@ -153,6 +154,13 @@ nonisolated enum MeetingAECPCMAdapter {
         else { return nil }
         buffer.frameLength = AVAudioFrameCount(samples.count)
         channel.update(from: samples, count: samples.count)
-        return meetingMicrophoneSynthesizeSampleBuffer(from: buffer, presentationTime: presentationTime)
+        guard let sample = meetingMicrophoneSynthesizeSampleBuffer(from: buffer, presentationTime: presentationTime) else { return nil }
+        if let packet = clockPacket {
+            do {
+                try MeetingCaptureClockMetadata.attach(mapping: packet.mapping, clockID: packet.clockID,
+                    sourceID: packet.sourceID, producerEpoch: packet.producerEpoch, to: sample)
+            } catch { return nil }
+        }
+        return sample
     }
 }

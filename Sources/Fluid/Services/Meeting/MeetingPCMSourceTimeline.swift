@@ -296,6 +296,18 @@ nonisolated enum MeetingCaptureClockMetadata {
         let clockID: UUID
         let sourceID: UUID
         let producerEpoch: UInt64
+
+        func sliced(frames: Range<Double>) throws -> Self {
+            .init(mapping: try self.mapping.sliced(frames: frames), clockID: self.clockID,
+                  sourceID: self.sourceID, producerEpoch: self.producerEpoch)
+        }
+
+        func appending(_ next: Self) throws -> Self {
+            guard self.clockID == next.clockID, self.sourceID == next.sourceID,
+                  self.producerEpoch == next.producerEpoch else { throw Failure.contextMismatch }
+            return .init(mapping: try self.mapping.appending(next.mapping), clockID: self.clockID,
+                         sourceID: self.sourceID, producerEpoch: self.producerEpoch)
+        }
     }
     private final class Box: NSObject {
         let packet: Packet
