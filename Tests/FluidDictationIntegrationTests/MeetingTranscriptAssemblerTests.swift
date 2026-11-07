@@ -27,6 +27,222 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
     // fixtures exercise that replay contract explicitly instead of inheriting today's default.
     private let provisionalPolicy = MeetingSpeakerAttributionPolicy(enableProvisionalSpeakerIdentities: true)
 
+    // Deliberately disable the historical-reading fallbacks. These fixtures must acquire
+    // coherent participants from the production emission context before any renderer runs.
+    private var emissionPolicy: MeetingSpeakerAttributionPolicy {
+        .init(enableNeighborResolution: false, enableBriefInterruption: false,
+              enableMainSpeakerContinuation: false, enableTokenEmissionContext: true)
+    }
+
+    private func emissionFixture(epoch: MeetingAnalysisEpochID, spans: [String] = [])
+        -> (units: [MeetingFinalTextUnit], activity: [MeetingBackendSpeakerActivity]) {
+        let first = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "first")
+        let second = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "second")
+        let specs: [(String, Double, Double, MeetingBackendSpeakerAssignment, String, Int)] = [
+            ("Earlier", 0, 1.2, .assigned(second), "previous", 2),
+            ("New", 3.08, 3.12, .unassigned, "current", 0),
+            ("phrase", 4.44, 4.84, .assigned(first), "current", 1),
+            ("continues", 5, 5.4, .assigned(first), "current", 2),
+            ("Reply", 8, 8.04, .assigned(second), "current", 3)]
+        let units = specs.enumerated().map { index, value in
+            MeetingFinalTextUnit(id: "emission-\(index)", trackID: epoch.trackID, analysisEpochID: epoch,
+                precision: .word, text: value.0, analysisStart: value.1, analysisEnd: value.2,
+                speaker: value.3, analysisSpanIDs: spans,
+                wordTimingProvenance: .init(basis: .tokenEmission,
+                    sourceWindowID: "\(epoch):\(value.4)", sourceWordIndex: value.5))
+        }
+        return (units, [.init(token: second, start: 0, end: 1.3),
+                        .init(token: first, start: 4.09, end: 7),
+                        .init(token: second, start: 8, end: 10)])
+    }
+
+    func testEmissionOnsetJoinsItsTurnBeforeReadingFallbackWithoutChangingNativeEvidence() throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let fixture = self.emissionFixture(epoch: epoch)
+        let result = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: UUID(), epoch: epoch,
+            offset: 0, duration: 11, units: fixture.units, activity: fixture.activity,
+            speakerAttributionPolicy: self.emissionPolicy)
+        let opening = result.segments[1], anchor = result.segments[2]
+        XCTAssertNotNil(opening.speakerID)
+        XCTAssertEqual(opening.speakerID, anchor.speakerID)
+        XCTAssertNotEqual(opening.speakerID, result.segments[0].speakerID)
+        XCTAssertEqual(result.segments[4].speakerID, result.segments[0].speakerID,
+                       "A real short reply remains with its independently supported participant")
+        XCTAssertEqual(result.segments.map(\.text), fixture.units.map(\.text))
+        XCTAssertEqual(opening.nativeTiming, .init(start: 3.08, end: 3.12))
+        XCTAssertEqual(opening.nativeSpeakerAssignment, .unassigned)
+        XCTAssertEqual(opening.speakerAttribution?.rawAssignment, .unassigned)
+        XCTAssertEqual(opening.speakerAttribution?.rule, .incomingSpeaker)
+        XCTAssertEqual(opening.nativeWordTimingProvenance, fixture.units[1].wordTimingProvenance)
+        let decisions = try MeetingSpeakerAttribution.resolve(units: fixture.units,
+            activity: fixture.activity, policy: self.emissionPolicy)
+        let decision = try XCTUnwrap(decisions.first { $0.unitID == fixture.units[1].id })
+        XCTAssertEqual(decision.activeSupportSeconds, 0, "Context does not invent voice in a decoder frame")
+        XCTAssertEqual(decision.cueUnitIDs, [fixture.units[2].id])
+        let raw = try MeetingSpeakerAttribution.acousticAssignments(
+            units: fixture.units.map { $0.assigningSpeaker(.unassigned) },
+            activity: fixture.activity, policy: self.emissionPolicy)
+        XCTAssertEqual(raw[fixture.units[1].id], .unassigned)
+        var session = self.readingFixture([]).0
+        session.audioTracks[0].id = epoch.trackID
+        session.speakers = result.speakers
+        session.transcriptSegments = result.segments
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: result.segments, in: session)
+        let turn = try XCTUnwrap(paragraphs.first { $0.segments.contains { $0.id == opening.id } })
+        XCTAssertTrue(turn.segments.contains { $0.id == anchor.id }, "The opening is published in its following turn")
+    }
+
+    func testEmissionContextRefusesDifferentWindowFilteredPrefixAndMissingProvenance() throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let fixture = self.emissionFixture(epoch: epoch)
+        let original = fixture.units[1]
+        let variants: [ASRWordTimingProvenance?] = [nil,
+            .init(basis: .tokenEmission),
+            .init(basis: .tokenEmission, sourceWindowID: "different", sourceWordIndex: 0),
+            .init(basis: .tokenEmission, sourceWindowID: original.wordTimingProvenance?.sourceWindowID, sourceWordIndex: 2),
+            .init(basis: .tokenEmission, sourceWindowID: "", sourceWordIndex: 0)]
+        for metadata in variants {
+            var units = fixture.units
+            units[1] = .init(id: original.id, trackID: epoch.trackID, analysisEpochID: epoch,
+                precision: .word, text: original.text, analysisStart: original.analysisStart,
+                analysisEnd: original.analysisEnd, speaker: .unassigned, analysisSpanIDs: [],
+                wordTimingProvenance: metadata)
+            let decisions = try MeetingSpeakerAttribution.resolve(units: units,
+                activity: fixture.activity, policy: self.emissionPolicy)
+            XCTAssertNil(decisions.first { $0.unitID == original.id }?.selectedToken)
+        }
+    }
+
+    func testEmissionAtRecordingOpeningDoesNotNeedAnInventedPreviousParticipant() throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let fixture = self.emissionFixture(epoch: epoch)
+        let units = Array(fixture.units.dropFirst())
+        let decisions = try MeetingSpeakerAttribution.resolve(units: units,
+            activity: Array(fixture.activity.dropFirst()), policy: self.emissionPolicy)
+        let first = try XCTUnwrap(decisions.first { $0.unitID == units[0].id })
+        guard case let .assigned(expected) = units[1].speaker else { return XCTFail("Fixture needs a real anchor") }
+        XCTAssertEqual(first.selectedToken, expected)
+        XCTAssertEqual(first.rule, .incomingSpeaker)
+        XCTAssertEqual(first.rawAssignment, .unassigned)
+    }
+
+    func testEmissionContextRefusesInterveningVoicePrivacyBarrierAndAbsentAnchor() throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let fixture = self.emissionFixture(epoch: epoch)
+        let rival = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "other")
+        let barrier = MeetingSpeakerAttributionContextBarrier(analysisEpochID: epoch,
+            interval: .init(start: 3.5, end: 3.6))
+        let cases: [([MeetingBackendSpeakerActivity], [MeetingSpeakerAttributionContextBarrier], Set<String>)] = [
+            (fixture.activity + [.init(token: rival, start: 3.5, end: 3.54)], [], []),
+            (fixture.activity, [barrier], []),
+            (fixture.activity, [], [fixture.units[2].id]),
+            ([], [], [])]
+        for (activity, barriers, blocked) in cases {
+            let decisions = try MeetingSpeakerAttribution.resolve(units: fixture.units, activity: activity,
+                policy: self.emissionPolicy, barrierUnitIDs: blocked, contextualBarriers: barriers)
+            XCTAssertNil(decisions.first { $0.unitID == fixture.units[1].id }?.selectedToken)
+        }
+        let supported = fixture.units[1].assigningSpeaker(.assigned(rival))
+        var units = fixture.units; units[1] = supported
+        let direct = try MeetingSpeakerAttribution.resolve(units: units,
+            activity: fixture.activity + [.init(token: rival, start: 3.08, end: 3.12)], policy: self.emissionPolicy)
+        XCTAssertEqual(direct.first { $0.unitID == supported.id }?.selectedToken, rival)
+    }
+
+    func testEmissionContextBoundIncludesTheWholeAnchorAndIsFrozen() throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let fixture = self.emissionFixture(epoch: epoch)
+        let first = fixture.units[1], next = fixture.units[2]
+        for delta in [0.0, 0.000_01] {
+            var units = fixture.units
+            units[2] = .init(id: next.id, trackID: epoch.trackID, analysisEpochID: epoch, precision: .word,
+                text: next.text, analysisStart: next.analysisStart,
+                analysisEnd: first.analysisEnd + 2 + delta, speaker: next.speaker, analysisSpanIDs: [],
+                wordTimingProvenance: next.wordTimingProvenance)
+            units.remove(at: 3) // Keep this fixture free from an unrelated overlap barrier.
+            let decisions = try MeetingSpeakerAttribution.resolve(units: units,
+                activity: fixture.activity, policy: self.emissionPolicy)
+            XCTAssertEqual(decisions.first { $0.unitID == first.id }?.selectedToken != nil, delta == 0)
+        }
+        let old = MeetingSpeakerAttributionPolicy(enableNeighborResolution: false,
+            enableBriefInterruption: false, enableMainSpeakerContinuation: false)
+        var encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(old)) as? [String: Any])
+        encoded.removeValue(forKey: "enableTokenEmissionContext")
+        encoded.removeValue(forKey: "maximumEmissionContextSeconds")
+        let decoded = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
+            from: JSONSerialization.data(withJSONObject: encoded))
+        XCTAssertFalse(decoded.enableTokenEmissionContext)
+        XCTAssertEqual(decoded.fingerprint, old.fingerprint)
+        XCTAssertNotEqual(decoded.fingerprint, self.emissionPolicy.fingerprint)
+        XCTAssertNil(try MeetingSpeakerAttribution.resolve(units: fixture.units,
+            activity: fixture.activity, policy: decoded).first { $0.unitID == first.id }?.selectedToken)
+        XCTAssertEqual(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
+            from: JSONEncoder().encode(self.emissionPolicy)), self.emissionPolicy)
+    }
+
+    func testCanonicalEmissionTextSurvivesActivityGapButEchoSuppressionStillWins() throws {
+        let (plan, manifest, span) = try self.onlineMicFixture(duration: 11)
+        let fixture = self.emissionFixture(epoch: span.analysisEpochID, spans: [span.id])
+        for suppressed in [false, true] {
+            var echo = Dictionary(uniqueKeysWithValues: fixture.units.map { ($0.id, MeetingUnitEchoVerdict.notEcho) })
+            if suppressed { echo[fixture.units[1].id] = .echoSuppressed(duplicateOfUnitID: nil) }
+            let result = try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
+                evidence: self.evidence(plan: plan, units: fixture.units, activity: fixture.activity),
+                coverageReceipts: self.receipts(for: manifest), echoVerdicts: echo,
+                speakerAttributionPolicy: self.emissionPolicy))
+            let emitted = result.segments.first { $0.nativeUnitID == fixture.units[1].id }
+            XCTAssertEqual(emitted != nil, !suppressed)
+            if let emitted {
+                XCTAssertNotNil(emitted.speakerID)
+                XCTAssertEqual(emitted.speakerAttribution?.rule, .incomingSpeaker)
+                XCTAssertEqual(emitted.nativeSpeakerAssignment, .unassigned)
+            }
+        }
+        XCTAssertTrue(MeetingSpeakerActivityCoverage.isOutside(fixture.units[1],
+            activityByEpoch: [span.analysisEpochID: fixture.activity]), "Old frozen admission remains unchanged")
+        XCTAssertFalse(MeetingSpeakerActivityCoverage.isOutside(fixture.units[1],
+            activityByEpoch: [span.analysisEpochID: fixture.activity], preservesTokenEmissions: true))
+    }
+
+    func testLiveEmissionWaitsForItsBoundedFollowingTurnAndMatchesStop() throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0), attempt = UUID()
+        let fixture = self.emissionFixture(epoch: epoch)
+        let assembler = MeetingTranscriptAssembler()
+        let early = try assembler.assemblePCMWindow(attemptID: attempt, epoch: epoch, offset: 0,
+            duration: 3.2, units: Array(fixture.units.prefix(2)), activity: Array(fixture.activity.prefix(1)),
+            speakerAttributionPolicy: self.emissionPolicy)
+        let opening = early.segments[1]
+        XCTAssertNil(opening.speakerID)
+        var tail = try MeetingStreamingProtectedWordTail(attemptID: attempt, epoch: epoch,
+            speakerNameFormat: "Speaker %lld", policy: self.emissionPolicy)
+        let waiting = try tail.update(safeWords: early, activity: Array(fixture.activity.prefix(1)),
+            watermarks: .init(asrStableThrough: 3.2, diarizationProcessedThrough: 3.2, privacySafeThrough: 3.2),
+            attemptID: attempt, epoch: epoch)
+        XCTAssertFalse(waiting.committedIDs.contains(opening.id),
+                       "An emission cannot become final before its declared context horizon")
+        let later = try assembler.assemblePCMWindow(attemptID: attempt, epoch: epoch, offset: 0,
+            duration: 11, units: Array(fixture.units.dropFirst(2)), priorSpeakers: early.speakers,
+            activity: fixture.activity, speakerAttributionPolicy: self.emissionPolicy)
+        let resolved = try tail.update(safeWords: later, activity: fixture.activity,
+            watermarks: .init(asrStableThrough: 11, diarizationProcessedThrough: 11, privacySafeThrough: 11),
+            attemptID: attempt, epoch: epoch)
+        let revision = try XCTUnwrap(resolved.revisions.first { $0.segmentID == opening.id })
+        var published = opening
+        XCTAssertTrue(try revision.apply(to: &published))
+        XCTAssertNotNil(published.speakerID)
+        XCTAssertEqual(published.speakerID, later.segments[0].speakerID)
+        XCTAssertEqual(published.nativeTiming, opening.nativeTiming)
+        XCTAssertEqual(published.nativeSpeakerAssignment, .unassigned)
+        XCTAssertEqual(published.nativeWordTimingProvenance, opening.nativeWordTimingProvenance)
+        XCTAssertTrue(resolved.committedIDs.contains(opening.id))
+        let stopped = try assembler.assemblePCMWindow(attemptID: attempt, epoch: epoch, offset: 0,
+            duration: 11, units: fixture.units, activity: fixture.activity, speakerAttributionPolicy: self.emissionPolicy)
+        XCTAssertEqual(published.speakerID, stopped.segments[1].speakerID)
+        _ = try tail.finish(activity: fixture.activity,
+            watermarks: .init(asrStableThrough: 11, diarizationProcessedThrough: 11, privacySafeThrough: 11),
+            attemptID: attempt, epoch: epoch)
+    }
+
     /// Explicit local audit input only. Private sessions never become repository fixtures.
     func testOptInSavedMeetingReadingCoverage() throws {
         guard let path = ProcessInfo.processInfo.environment["PICHI_SPEAKER_AUDIT_ROOT"] else {

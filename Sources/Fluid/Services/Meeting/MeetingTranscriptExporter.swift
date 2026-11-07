@@ -872,6 +872,7 @@ nonisolated enum MeetingTranscriptExporter {
                 && segment.completeness == .complete && !segment.isEcho
                 && segment.nativePrecision == nil && segment.nativeTiming == nil && segment.nativeUnitID == nil
                 && segment.nativeSpeakerAssignment == nil && segment.speakerAttribution == nil
+                && segment.nativeWordTimingProvenance == nil
                 && segment.speakerAttributionInference == nil
         }
         func unknown(_ segment: MeetingTranscriptSegment) -> Bool {
@@ -1124,6 +1125,7 @@ nonisolated enum MeetingTranscriptExporter {
                     nativeUnitID: $0.nativeUnitID,
                     nativeSpeakerAssignment: $0.nativeSpeakerAssignment,
                     nativeTiming: $0.nativeTiming,
+                    nativeWordTimingProvenance: $0.nativeWordTimingProvenance,
                     speakerAttribution: $0.speakerAttribution.map { attribution in
                         ExportedSpeakerAttribution(
                             unitID: attribution.unitID, rawAssignment: attribution.rawAssignment,
@@ -1369,6 +1371,7 @@ private struct ExportedSegment: Codable {
     var nativeUnitID: String?
     var nativeSpeakerAssignment: MeetingBackendSpeakerAssignment?
     var nativeTiming: MeetingTranscriptNativeTiming?
+    var nativeWordTimingProvenance: ASRWordTimingProvenance?
     var speakerAttribution: ExportedSpeakerAttribution?
 }
 

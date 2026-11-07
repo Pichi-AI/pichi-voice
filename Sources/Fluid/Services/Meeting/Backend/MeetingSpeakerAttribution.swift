@@ -8,7 +8,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     // A previous attempt cannot replay changed ownership semantics under the same fingerprint.
     static let currentVersion = 2
     static let standard = Self(enableProvisionalSpeakerIdentities: true, enableStableSpeakerOpening: true,
-                               enableCompleteReadingAssignment: true, enableIncomingGapReading: true)
+                               enableCompleteReadingAssignment: true, enableIncomingGapReading: true,
+                               enableTokenEmissionContext: true)
 
     let schemaVersion: Int
     /// Arithmetic slack only. It never expands intervals or creates positive overlap.
@@ -50,6 +51,11 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     /// Tokenless words in a real pause before a different voice follow the incoming turn.
     /// Missing keeps the former complete-reading policy and its exact fingerprint.
     let enableIncomingGapReading: Bool
+    /// Decoder emissions locate lexical evidence, not the acoustic extent of a spoken word.
+    /// Join an unsupported opening emission to the next independently supported word from
+    /// that same recognition invocation before publishing a participant turn.
+    let enableTokenEmissionContext: Bool
+    let maximumEmissionContextSeconds: Double
 
     init(
         schemaVersion: Int = Self.currentVersion,
@@ -77,7 +83,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         enableProvisionalSpeakerIdentities: Bool = false,
         enableStableSpeakerOpening: Bool = false,
         enableCompleteReadingAssignment: Bool = false,
-        enableIncomingGapReading: Bool = false
+        enableIncomingGapReading: Bool = false,
+        enableTokenEmissionContext: Bool = false,
+        maximumEmissionContextSeconds: Double = 2
     ) {
         self.schemaVersion = schemaVersion
         self.comparisonTolerance = comparisonTolerance
@@ -105,6 +113,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         self.enableStableSpeakerOpening = enableStableSpeakerOpening
         self.enableCompleteReadingAssignment = enableCompleteReadingAssignment
         self.enableIncomingGapReading = enableIncomingGapReading
+        self.enableTokenEmissionContext = enableTokenEmissionContext
+        self.maximumEmissionContextSeconds = maximumEmissionContextSeconds
     }
 
     /// Exact, length-framed values avoid locale, delimiter and rounding collisions. Zero has one
@@ -161,6 +171,10 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         if self.enableIncomingGapReading {
             entries.append(("incomingGapReadingV1", "true"))
         }
+        if self.enableTokenEmissionContext {
+            entries.append(("tokenEmissionContextV1", "true"))
+            entries.append(("emissionContextSeconds", bits(self.maximumEmissionContextSeconds)))
+        }
         let canonical = MeetingConfigFingerprintEncoding.encode(entries)
         let digest = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
         return "speaker-attribution-v\(self.schemaVersion):\(digest)"
@@ -173,7 +187,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         let nonnegative = [self.maximumCandidateNoiseSeconds, self.minimumInterruptionSupportSeconds, self.maximumUnknownRunSeconds,
                            self.maximumNeighborGapSeconds, self.maximumBoundaryResidualSeconds,
                            self.maximumBriefInterruptionSeconds, self.maximumInterruptionWordSeconds,
-                           self.maximumBriefInterruptionGapSeconds]
+                           self.maximumBriefInterruptionGapSeconds, self.maximumEmissionContextSeconds]
         guard self.comparisonTolerance.isFinite, (0...0.000_001).contains(self.comparisonTolerance),
               nonnegative.allSatisfy({ $0.isFinite && $0 >= 0 }),
               self.maximumCandidateNoiseActiveFraction.isFinite,
@@ -202,6 +216,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         case enableStableSpeakerOpening
         case enableCompleteReadingAssignment
         case enableIncomingGapReading
+        case enableTokenEmissionContext, maximumEmissionContextSeconds
     }
 
     init(from decoder: Decoder) throws {
@@ -232,7 +247,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
             enableProvisionalSpeakerIdentities: c.decodeIfPresent(Bool.self, forKey: .enableProvisionalSpeakerIdentities) ?? false,
             enableStableSpeakerOpening: c.decodeIfPresent(Bool.self, forKey: .enableStableSpeakerOpening) ?? false,
             enableCompleteReadingAssignment: c.decodeIfPresent(Bool.self, forKey: .enableCompleteReadingAssignment) ?? false,
-            enableIncomingGapReading: c.decodeIfPresent(Bool.self, forKey: .enableIncomingGapReading) ?? false
+            enableIncomingGapReading: c.decodeIfPresent(Bool.self, forKey: .enableIncomingGapReading) ?? false,
+            enableTokenEmissionContext: c.decodeIfPresent(Bool.self, forKey: .enableTokenEmissionContext) ?? false,
+            maximumEmissionContextSeconds: c.decodeIfPresent(Double.self, forKey: .maximumEmissionContextSeconds) ?? 2
         )
         _ = try self.validated()
     }
@@ -458,6 +475,12 @@ nonisolated enum MeetingSpeakerAttribution {
                 let anchors = zip(ordered, decisions).map { unit, decision in
                     self.isOriginalAnchor(unit: unit, decision: decision, policy: policy)
                         && !temporalBarriers.contains(unit.id) && !barrierUnitIDs.contains(unit.id)
+                }
+                if policy.enableTokenEmissionContext {
+                    try self.resolveEmissionOnsets(units: ordered, decisions: &decisions, anchors: anchors,
+                        temporalBarriers: temporalBarriers.union(barrierUnitIDs),
+                        contextBarriers: contextIndexes[epoch], index: index,
+                        policy: policy, diagnostics: &diagnostics)
                 }
                 if policy.enableNeighborResolution {
                     try self.resolveNeighbors(units: ordered, decisions: &decisions, anchors: anchors,
@@ -903,7 +926,7 @@ nonisolated enum MeetingSpeakerAttribution {
         _ unit: MeetingFinalTextUnit, _ decision: Decision, blocked: Set<String>,
         policy: MeetingSpeakerAttributionPolicy
     ) -> Bool {
-        guard unit.precision == .word, !blocked.contains(unit.id),
+        guard unit.precision == .word, !blocked.contains(unit.id), decision.selectedToken == nil,
               decision.rule != .barrier, decision.relation != .conflict else { return false }
         // New reading ownership also reuses the incoming-speaker rule for an unresolved
         // mixed word. The caller still requires every positive candidate to match an anchor.
@@ -913,6 +936,50 @@ nonisolated enum MeetingSpeakerAttribution {
               decision.candidates.allSatisfy(\.isSuppressed)
         else { return false }
         return true
+    }
+
+    /// An opening CTC emission can precede the actual onset of its word. Its frame interval
+    /// cannot veto the independently supported turn that follows inside the same ASR call.
+    /// This records a contextual link, never a fabricated word duration or acoustic identity.
+    /// Only original adjacent source indices qualify: filtering, privacy and window changes
+    /// cannot turn a later word into a new opening or let an inferred word sponsor another.
+    private static func resolveEmissionOnsets(
+        units: [MeetingFinalTextUnit], decisions: inout [Decision], anchors: [Bool],
+        temporalBarriers: Set<String>, contextBarriers: ContextBarrierIndex?, index: ActivityIndex,
+        policy: MeetingSpeakerAttributionPolicy, diagnostics: inout MeetingSpeakerAttributionDiagnostics
+    ) throws {
+        guard units.count >= 2 else { return }
+        for position in 0..<(units.count - 1) {
+            try self.checkCancellation(at: position)
+            let opening = units[position], following = units[position + 1]
+            let decision = decisions[position], anchor = decisions[position + 1]
+            guard opening.precision == .word, following.precision == .word,
+                  let source = opening.wordTimingProvenance, source.hasValidSourceContext,
+                  source.basis == .tokenEmission, source.sourceWordIndex == 0,
+                  let nextSource = following.wordTimingProvenance, nextSource.hasValidSourceContext,
+                  nextSource.basis == .tokenEmission, nextSource.sourceWordIndex == 1,
+                  source.sourceWindowID == nextSource.sourceWindowID,
+                  case .unassigned = opening.speaker,
+                  decision.selectedToken == nil, decision.rule != .barrier,
+                  decision.relation == .none, decision.activeSupportSeconds <= policy.comparisonTolerance,
+                  anchors[position + 1], anchor.rule.isIndependentAcousticSelection,
+                  let token = anchor.selectedToken,
+                  !temporalBarriers.contains(opening.id), !temporalBarriers.contains(following.id),
+                  opening.analysisEnd - opening.analysisStart <= policy.maximumUnknownRunSeconds,
+                  following.analysisStart >= opening.analysisEnd - policy.comparisonTolerance,
+                  following.analysisEnd - opening.analysisEnd <= policy.maximumEmissionContextSeconds + policy.comparisonTolerance,
+                  contextBarriers?.intersects(start: opening.analysisStart, end: following.analysisEnd) != true
+            else { continue }
+            let path = try index.query(start: opening.analysisStart, end: following.analysisEnd,
+                                       diagnostics: &diagnostics)
+            // Even a brief real second voice vetoes the link. A dominant label on the next
+            // word alone is not permission to move an intervening participant's speech.
+            guard !path.contains(where: {
+                $0.token != token && min($0.interval.end, following.analysisEnd)
+                    - max($0.interval.start, opening.analysisStart) > policy.comparisonTolerance
+            }) else { continue }
+            decisions[position] = decision.choosing(token, rule: .incomingSpeaker, cues: [following.id])
+        }
     }
 
     /// Shared chronological admission for a gap between two independent anchors. This checks

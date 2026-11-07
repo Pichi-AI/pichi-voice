@@ -410,6 +410,38 @@ final class MeetingEchoVetoTests: XCTestCase {
 
 /// Actual source clock mapping and echo owner, with no model or physical microphone.
 final class MeetingStreamingEchoPauseTests: XCTestCase {
+    func testEmissionVisibilityUsesFrozenAdmissionWithoutLosingEchoSuppression() async throws {
+        let mic = track(.microphone), app = track(.applicationAudio)
+        func emissionWords(_ track: MeetingAudioTrack) -> [MeetingTranscriptSegment] {
+            ["one", "two", "three", "four"].enumerated().map { index, text in
+                let start = 0.08 + Double(index) * 0.2
+                var segment = self.word(track, start: start)
+                segment.text = text
+                segment.end = .init(value: Int64(((start + 0.04) * 1_000).rounded()), timescale: 1_000)
+                segment.nativeTiming = .init(start: start, end: start + 0.04)
+                segment.nativeSpeakerAssignment = .unassigned
+                segment.nativeWordTimingProvenance = .init(basis: .tokenEmission,
+                    sourceWindowID: "\(track.id):window", sourceWordIndex: index)
+                return segment
+            }
+        }
+        func input(_ track: MeetingAudioTrack) -> MeetingStreamingPCMObservation {
+            .init(batch: .init(segments: emissionWords(track)),
+                activity: [.init(token: .init(analysisEpochID: .init(trackID: track.id, ordinal: 0), label: "a"),
+                                 start: 1.2, end: 2.4)],
+                acceptedThroughSample: 48_000, processedThroughSample: 48_000, retainedFromSample: 0,
+                isFinal: false, asrStableThroughSample: 48_000)
+        }
+        for enabled in [false, true] {
+            let owner = try MeetingStreamingEchoAdmission(tracks: [mic, app], preservesTokenEmissions: enabled)
+            _ = try await owner.observe(track: app, observation: input(app))
+            let observed = try await owner.observe(track: mic, observation: input(mic))
+            XCTAssertEqual(observed.batch.segments.count, 4)
+            XCTAssertTrue(observed.batch.segments.allSatisfy { $0.isLikelyEcho == enabled })
+            await owner.cancel()
+        }
+    }
+
     private func track(_ kind: MeetingAudioTrackKind) -> MeetingAudioTrack {
         .init(id: UUID(), kind: kind, sourceIdentifier: "fixture", sourceDisplayName: "Fixture", format: nil,
               timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1,

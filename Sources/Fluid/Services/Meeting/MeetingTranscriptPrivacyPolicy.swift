@@ -409,7 +409,8 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
             MeetingFinalTextUnit(id: unit.id, trackID: unit.trackID, analysisEpochID: unit.analysisEpochID,
                                  precision: unit.precision, text: replacements[unit.id] ?? unit.text,
                                  analysisStart: unit.analysisStart, analysisEnd: unit.analysisEnd,
-                                 speaker: unit.speaker, analysisSpanIDs: unit.analysisSpanIDs, confidence: unit.confidence)
+                                 speaker: unit.speaker, analysisSpanIDs: unit.analysisSpanIDs, confidence: unit.confidence,
+                                 wordTimingProvenance: unit.wordTimingProvenance)
         }
         return MeetingFinalTranscriptEvidence(backendID: evidence.backendID, attemptID: evidence.attemptID,
                                                units: units, speakerActivity: evidence.speakerActivity,

@@ -6,9 +6,17 @@ nonisolated enum MeetingSpeakerActivityCoverage {
         _ unit: MeetingFinalTextUnit,
         activityByEpoch: [MeetingAnalysisEpochID: [MeetingBackendSpeakerActivity]],
         tolerance: TimeInterval = MeetingAnalysisManifestSchema.mappingToleranceSeconds,
-        boundaryAssignments: [String: MeetingBackendSpeakerAssignment] = [:]
+        boundaryAssignments: [String: MeetingBackendSpeakerAssignment] = [:],
+        preservesTokenEmissions: Bool = false
     ) -> Bool {
         if boundaryAssignments[unit.id] != nil { return false }
+        // An emission marks where the decoder produced text, not the full interval in
+        // which it was spoken. Nonintersection cannot classify that word as non-speech.
+        // Capture/coverage/privacy admission is unchanged; contextual attribution later
+        // uses the same validated recognition provenance and independent voice evidence.
+        if preservesTokenEmissions, unit.precision == .word,
+           unit.wordTimingProvenance?.basis == .tokenEmission,
+           unit.wordTimingProvenance?.isValid == true { return false }
         guard let activity = activityByEpoch[unit.analysisEpochID], !activity.isEmpty else {
             return false
         }
@@ -360,7 +368,8 @@ nonisolated struct MeetingTranscriptAssembler {
                               !MeetingSpeakerActivityCoverage.isOutside(
                                   duplicate,
                                   activityByEpoch: activityByEpoch,
-                                  boundaryAssignments: boundaryAssignments
+                                  boundaryAssignments: boundaryAssignments,
+                                  preservesTokenEmissions: input.speakerAttributionPolicy?.enableTokenEmissionContext == true
                               )
                         else {
                             throw MeetingAssemblyError.echoDuplicateTargetNotVisible(
@@ -381,7 +390,8 @@ nonisolated struct MeetingTranscriptAssembler {
             }
 
             if MeetingSpeakerActivityCoverage.isOutside(
-                unit, activityByEpoch: activityByEpoch, boundaryAssignments: boundaryAssignments
+                unit, activityByEpoch: activityByEpoch, boundaryAssignments: boundaryAssignments,
+                preservesTokenEmissions: input.speakerAttributionPolicy?.enableTokenEmissionContext == true
             ) {
                 dispositions.append(MeetingTextUnitDispositionRecord(
                     unitID: unit.id,
@@ -502,6 +512,7 @@ nonisolated struct MeetingTranscriptAssembler {
                     nativeUnitID: unit.id,
                     nativeSpeakerAssignment: unit.speaker,
                     nativeTiming: .init(start: presentation.start, end: presentation.end),
+                    nativeWordTimingProvenance: unit.wordTimingProvenance,
                     speakerAttribution: decisionsByID[unit.id].flatMap {
                         MeetingTranscriptSpeakerAttribution.readingSummary(decision: $0, speakerIDs: speakerIDsByToken)
                     },
@@ -1074,6 +1085,7 @@ nonisolated struct MeetingTranscriptAssembler {
                 nativeUnitID: unit.id,
                 nativeSpeakerAssignment: unit.speaker,
                 nativeTiming: .init(start: interval.start, end: interval.end),
+                nativeWordTimingProvenance: unit.wordTimingProvenance,
                 speakerAttribution: decision.flatMap {
                     MeetingTranscriptSpeakerAttribution.readingSummary(decision: $0, speakerIDs: speakerIDs)
                 },
@@ -1199,7 +1211,8 @@ nonisolated enum MeetingPCMRecordingAttribution {
                 analysisEpochID: epoch, precision: segment.nativePrecision ?? .utterance, text: segment.text,
                 analysisStart: segment.nativeTiming?.start ?? segment.start.seconds,
                 analysisEnd: segment.nativeTiming?.end ?? segment.end.seconds,
-                speaker: .unassigned, analysisSpanIDs: [], confidence: nil)
+                speaker: .unassigned, analysisSpanIDs: [], confidence: nil,
+                wordTimingProvenance: segment.nativeWordTimingProvenance)
         }
         let assignments = try MeetingSpeakerAttribution.acousticAssignments(units: rawUnits,
             activity: activity, policy: speakerAttributionPolicy ?? .standard)
@@ -1288,6 +1301,7 @@ nonisolated enum MeetingPCMRecordingAttribution {
             result.segments[index].nativeUnitID = attributed.segments[index].nativeUnitID
             result.segments[index].nativeSpeakerAssignment = attributed.segments[index].nativeSpeakerAssignment
             result.segments[index].nativeTiming = attributed.segments[index].nativeTiming
+            result.segments[index].nativeWordTimingProvenance = attributed.segments[index].nativeWordTimingProvenance
             result.segments[index].speakerAttribution = attributed.segments[index].speakerAttribution
             result.segments[index].speakerIdentityIsProvisional = attributed.segments[index].speakerIdentityIsProvisional
         }
