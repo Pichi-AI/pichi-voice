@@ -119,6 +119,15 @@ final class MeetingModelPreparationQueueTests: XCTestCase {
 }
 
 final class MeetingLiveTimeConversionTests: XCTestCase {
+    func testFrozenRecordingOriginIgnoresDelayedPacketsAndLaterProducerResets() {
+        let box = MeetingLiveOriginBox()
+        let origin = CMTime(value: 1_000_123_456_789, timescale: 1_000_000_000)
+        XCTAssertEqual(box.freeze(origin), origin)
+        XCTAssertEqual(box.establish(CMTime(value: 900, timescale: 1)), origin)
+        XCTAssertEqual(box.establish(CMTime(value: 1_200, timescale: 1)), origin)
+        XCTAssertEqual(box.freeze(CMTime(value: 0, timescale: 1)), origin)
+        XCTAssertEqual(box.current, origin)
+    }
     func testZeroOriginPassesPTSThrough() {
         let pts = CMTime(value: 5, timescale: 1)
         let origin = CMTime(value: 0, timescale: 1)

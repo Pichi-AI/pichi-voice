@@ -10,6 +10,24 @@ import XCTest
 final class MeetingAEC3Tests: XCTestCase {
     private let token = MeetingAECStreamToken(generation: 7, identity: 11)
 
+    func testMappedAttestationRejectsMismatchedPhysicalEndsAndRecordingOwners() {
+        let clockID = UUID(), sourceID = UUID()
+        func packet(end: Double, clock: UUID = clockID, source: UUID) -> MeetingCaptureClockMetadata.Packet {
+            .init(mapping: .init(frameCount: 480, spans: [.init(frameStart: 0, frameEnd: 480,
+                hostStart: MeetingAudioClockMapping.mediaTime(100), hostEnd: MeetingAudioClockMapping.mediaTime(end))]),
+                clockID: clock, sourceID: source, producerEpoch: 1)
+        }
+        let render = packet(end: 100.01, source: sourceID)
+        var attestor = MeetingAECClockAttestor()
+        XCTAssertFalse(attestor.observe(grid: 0, renderPresentationTime: .zero, capturePresentationTime: .zero,
+            renderClockPacket: render, captureClockPacket: packet(end: 100.01005, source: UUID())))
+        XCTAssertFalse(attestor.observe(grid: 0, renderPresentationTime: .zero, capturePresentationTime: .zero,
+            renderClockPacket: render, captureClockPacket: packet(end: 100.01, clock: UUID(), source: UUID())))
+        XCTAssertFalse(attestor.observe(grid: 0, renderPresentationTime: .zero, capturePresentationTime: .zero,
+            renderClockPacket: render, captureClockPacket: nil))
+        XCTAssertEqual(attestor.pairedFrameCount, 0)
+    }
+
     func testMappedEchoProcessingStaysActiveBeyondTheLegacyNominalClockDriftLimit() async throws {
         for drift in [5e-6, 300e-6] {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-shared-rate-\(UUID())")
