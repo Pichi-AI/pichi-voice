@@ -3,6 +3,15 @@ import Combine
 import SwiftUI
 import UIKit
 
+/// Both the history swipe and the detail confirmation use the same admitted deletion.
+enum MobileMeetingDeletionActions {
+    @MainActor static func delete(_ session: MeetingSession, coordinator: MeetingSessionCoordinator,
+                                 canDelete: @MainActor () -> Bool) async throws {
+        guard !Task.isCancelled, !session.isLocalContentConcealed, canDelete() else { throw CancellationError() }
+        try await coordinator.deleteSession(id: session.id, expectedOwnership: session.profileOwnership ?? .guest)
+    }
+}
+
 /// Platform navigation and transient view state only. The shared coordinator owns every meeting.
 struct MobileMeetingRoot: View {
     @ObservedObject var coordinator: MeetingSessionCoordinator
@@ -141,7 +150,7 @@ struct MobileMeetingRoot: View {
         }
     }
 
-    /// Destructive actions share one confirmation, as on the desktop.
+    /// Detail actions use a confirmation; the history swipe commits directly.
     private typealias Deletion = MobilePrivatePresentationState.Deletion
 
     /// The meeting whose audio is being captured. It owns the whole window until capture ends:
@@ -243,11 +252,7 @@ struct MobileMeetingRoot: View {
                     playback.stop()
                     switch item {
                     case .meeting(let session):
-                        guard canPresent(session) else { return }
-                        try await coordinator.deleteSession(id: session.id, expectedOwnership: session.profileOwnership ?? .guest)
-                        guard canPresent(session) else { return }
-                        if historyPath.contains(session.id) { historyPath.removeAll() }
-                        await refreshHistory()
+                        try await deleteMeeting(session)
                     case .audio(let session):
                         guard canPresent(session) else { return }
                         acceptCommittedSession(try await coordinator.deleteAudio(sessionID: session.id, expectedOwnership: session.profileOwnership ?? .guest))
@@ -655,10 +660,15 @@ struct MobileMeetingRoot: View {
                     .alignmentGuide(.listRowSeparatorLeading) { dimensions in dimensions[.leading] }
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityIdentifier("history.session.\(session.id)")
-                .swipeActions {
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     // Deletion needs a presentable meeting, so an encrypted one offers no Delete here.
                     if !session.isLocalContentConcealed {
-                        Button(PichiLocalization.text("Delete"), role: .destructive) { deletion = .meeting(session) }
+                        Button(PichiLocalization.text("Delete"), role: .destructive) {
+                            run(session: session) { try await deleteMeeting(session) }
+                        }
+                        .tint(.red)
+                        .disabled(isBusy || !coordinator.isQuiescent || !canPresent(session))
+                        .accessibilityIdentifier("history.delete.\(session.id)")
                     }
                 }
         }
@@ -1098,6 +1108,14 @@ struct MobileMeetingRoot: View {
                 report(error)
             }
         }
+    }
+
+    private func deleteMeeting(_ session: MeetingSession) async throws {
+        playback.stop()
+        try await MobileMeetingDeletionActions.delete(session, coordinator: coordinator, canDelete: { canPresent(session) })
+        guard canPresent(session) else { return }
+        if historyPath.contains(session.id) { historyPath.removeAll() }
+        await refreshHistory()
     }
 
     private func runPrivate(_ operation: @escaping @MainActor (MobilePrivatePublicationTasks.Admission) async throws -> Void) {
