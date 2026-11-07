@@ -77,6 +77,22 @@ class BuildIdentityTests(unittest.TestCase):
     def testMergedProjectPreservesBothDistributionIdentities(self):
         validate_application_identity(PROJECT.read_text())
 
+    def testUITestRunnerCanHaveTaskIdentityWithoutChangingAppOrExtension(self):
+        project = PROJECT.read_text()
+        def settings(label):
+            block = re.search(r'/\* ' + label + r' \*/ = \{([^\n]+)', project).group(1)
+            return dict(re.findall(r'(\w+) = "([^"\n]*)";', block))
+        for configuration in ['Debug', 'Release']:
+            ui = settings('Mobile test ' + configuration)
+            app = settings('Mobile ' + configuration)
+            extension = settings('Mobile activity ' + configuration)
+            self.assertEqual(ui['PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER'], 'ai.pichi.voice.mobile.uitests')
+            self.assertEqual(ui['PRODUCT_BUNDLE_IDENTIFIER'], '$(PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER)')
+            self.assertEqual(app['PRODUCT_BUNDLE_IDENTIFIER'], '$(PICHI_MOBILE_BUNDLE_IDENTIFIER)')
+            self.assertEqual(extension['PRODUCT_BUNDLE_IDENTIFIER'], '$(PICHI_MOBILE_BUNDLE_IDENTIFIER).activity')
+            self.assertNotIn('PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER', app)
+            self.assertNotIn('PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER', extension)
+
     def testMobilePrivacyPurposeStringsHaveEnglishAndRussianCopy(self):
         info = plistlib.loads((ROOT / 'Sources/Mobile/Info.plist').read_bytes())
         for key in ['NSMicrophoneUsageDescription', 'NSSpeechRecognitionUsageDescription',
