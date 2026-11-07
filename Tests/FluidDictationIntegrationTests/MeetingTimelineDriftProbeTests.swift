@@ -185,6 +185,45 @@ private final class DriftStreamOutput: NSObject, SCStreamOutput {
 
 /// Model-free checks of the same frame mapping, attachment and converter used by native capture.
 final class MeetingRecordingClockCoreTests: XCTestCase {
+    func testOptInCapturedClockMetadataReplayWithSyntheticPCM() throws {
+        guard let path = ProcessInfo.processInfo.environment["PICHI_CLOCK_REPLAY_SESSION_FILE"] else {
+            throw XCTSkip("Set PICHI_CLOCK_REPLAY_SESSION_FILE to replay capture timing with synthetic PCM")
+        }
+        let session = try JSONDecoder().decode(MeetingSession.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+        let track = try XCTUnwrap(session.audioTracks.first { $0.kind == .microphone })
+        let mapping = try XCTUnwrap(track.chunks.first?.clockMapping).validated()
+        let base = session.timebase
+        let origin = Double(base.startedHostTime) * Double(base.machTimebaseNumerator)
+            / Double(base.machTimebaseDenominator) / 1_000_000_000
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: origin, recordingTimePolicy: .hostMonotonicV1)
+        let converter = try MeetingCapturePCMConverter()
+        let clockID = UUID(), sourceID = UUID()
+        var outputFrames = 0, nativeCursor = 0
+        func consume(_ buffer: CMSampleBuffer?) throws {
+            guard let buffer else { return }
+            let packet = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: buffer))
+            try timeline.record(sourceStartSample: outputFrames, frameCount: CMSampleBufferGetNumSamples(buffer),
+                presentationTime: CMSampleBufferGetPresentationTimeStamp(buffer).seconds, clockMapping: packet.mapping)
+            outputFrames += CMSampleBufferGetNumSamples(buffer)
+            timeline.discard(beforeSample: max(0, outputFrames - 47 * 16_000))
+        }
+        do {
+            while nativeCursor < Int(mapping.frameCount) {
+                let count = min(512, Int(mapping.frameCount) - nativeCursor)
+                let slice = try mapping.sliced(frames: Double(nativeCursor)..<Double(nativeCursor + count))
+                let start = try XCTUnwrap(slice.spans.first).hostStart
+                try consume(converter.convert(pcm(rate: 48_000, frames: AVAudioFrameCount(count)),
+                    presentationTime: CMTime(value: start.value, timescale: start.timescale),
+                    clockPacket: .init(mapping: slice, clockID: clockID, sourceID: sourceID, producerEpoch: 1)))
+                nativeCursor += count
+            }
+            try consume(converter.finish())
+        } catch {
+            XCTFail("Timing replay failure \(error); nativeCursor=\(nativeCursor), outputFrames=\(outputFrames), retainedSpans=\(timeline.retainedSpanCount)")
+            throw error
+        }
+        XCTAssertEqual(outputFrames, Int(mapping.frameCount) / 3)
+    }
     private let clockID = UUID(), sourceID = UUID()
     private func time(_ seconds: Double) -> MeetingMediaTime { MeetingAudioClockMapping.mediaTime(seconds) }
     private func mapping(frames: Int64, start: Double, end: Double, boundary: Bool = false) -> MeetingAudioClockMapping {
