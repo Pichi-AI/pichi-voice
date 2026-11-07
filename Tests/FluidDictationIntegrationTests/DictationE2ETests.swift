@@ -3477,6 +3477,83 @@ extension DictationE2ETests {
             now: now
         )) { XCTAssertEqual($0 as? DictionaryLearningAlignmentError, .invalidTiming) }
     }
+
+    func testDictionaryLearningRequiresWholeTimedCompound() throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        let text = "use white label today"
+        let recording = try XCTUnwrap(DictionaryLearningRecording(
+            alignment: .init(modelKey: "synthetic", words: [
+                .init(text: "use", start: 0, end: 0.4),
+                .init(text: "white label", start: 0.5, end: 1.5),
+                .init(text: "today", start: 1.6, end: 2)
+            ]), samples: [Float](repeating: 0, count: 48_000), now: now
+        ))
+        for partial in ["white", "label", "use white", "label today"] {
+            XCTAssertThrowsError(try DictionaryLearningAlignmentResolver.resolve(
+                recording: recording, deliveredTextBeforeEdit: text,
+                selectedUTF16Range: (text as NSString).range(of: partial), observedText: partial, now: now
+            ), "A partial lexical selection cannot borrow the whole compound's audio") {
+                XCTAssertEqual($0 as? DictionaryLearningAlignmentError, .invalidTiming)
+            }
+        }
+        let complete = try DictionaryLearningAlignmentResolver.resolve(
+            recording: recording, deliveredTextBeforeEdit: text,
+            selectedUTF16Range: (text as NSString).range(of: "white label"), observedText: "white label", now: now
+        )
+        XCTAssertEqual(complete.sourceWordRange, 1..<2)
+        XCTAssertEqual(complete.focalSampleRange, 8_000..<24_000)
+    }
+
+    func testDictionaryLearningRejectsOverlappingOrInvalidNeighbourTimings() throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        let text = "before target after"
+        let validBefore = ASRWordTiming(text: "before", start: 0.1, end: 0.8)
+        let validAfter = ASRWordTiming(text: "after", start: 1.6, end: 2)
+        let invalidNeighbours: [(ASRWordTiming, ASRWordTiming)] = [
+            (.init(text: "before", start: 0.1, end: 1.01), validAfter),
+            (validBefore, .init(text: "after", start: 1.49, end: 2)),
+            (.init(text: "before", start: .nan, end: 0.8), validAfter),
+            (validBefore, .init(text: "after", start: 1.6, end: .infinity)),
+            (.init(text: "before", start: 0.8, end: 0.1), validAfter),
+            (validBefore, .init(text: "after", start: 1.6, end: 4))
+        ]
+        for (before, after) in invalidNeighbours {
+            let recording = try XCTUnwrap(DictionaryLearningRecording(
+                alignment: .init(modelKey: "synthetic", words: [
+                    before, .init(text: "target", start: 1, end: 1.5), after
+                ]), samples: [Float](repeating: 0, count: 48_000), now: now
+            ))
+            XCTAssertThrowsError(try DictionaryLearningAlignmentResolver.resolve(
+                recording: recording, deliveredTextBeforeEdit: text,
+                selectedUTF16Range: (text as NSString).range(of: "target"), observedText: "target", now: now
+            )) { XCTAssertEqual($0 as? DictionaryLearningAlignmentError, .invalidTiming) }
+        }
+    }
+
+    func testDictionaryLearningKeepsExactFocalAudioWithTouchingOrSeparatedNeighbours() throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        let text = "before target after"
+        // These IDs prove only which samples are selected, not speech quality.
+        let samples = (0..<48_000).map { Float($0) }
+        for (previousEnd, nextStart) in [(1.0, 1.5), (0.8, 1.8)] {
+            let recording = try XCTUnwrap(DictionaryLearningRecording(
+                alignment: .init(modelKey: "synthetic", words: [
+                    .init(text: "before", start: 0, end: previousEnd),
+                    .init(text: "target", start: 1, end: 1.5),
+                    .init(text: "after", start: nextStart, end: 2)
+                ]), samples: samples, now: now
+            ))
+            let evidence = try DictionaryLearningAlignmentResolver.resolve(
+                recording: recording, deliveredTextBeforeEdit: text,
+                selectedUTF16Range: (text as NSString).range(of: "target"), observedText: "target", now: now
+            )
+            XCTAssertEqual(evidence.sourceWordRange, 1..<2)
+            let sourceStart = evidence.sourceSampleRange.lowerBound
+            XCTAssertEqual(sourceStart + evidence.focalSampleRange.lowerBound, 16_000)
+            XCTAssertEqual(sourceStart + evidence.focalSampleRange.upperBound, 24_000)
+            XCTAssertEqual(Array(evidence.samples[evidence.focalSampleRange]), Array(samples[16_000..<24_000]))
+        }
+    }
 }
 
 extension DictationE2ETests {
@@ -5701,5 +5778,55 @@ extension DictationE2ETests {
         let plan = try XCTUnwrap(DictionaryCorrectionReplacementPlan(sourceText: text,
             range: (text as NSString).range(of: "White Label"), replacement: "Whitelabel"))
         XCTAssertEqual(plan.text, "Whitelabel, Whitelabel. White Labeling and White Labele stay distinct.")
+    }
+}
+
+
+extension DictationE2ETests {
+    func testCompactFallbackAddSavesThroughControllerAndOnlyRemovesChosenRow() throws {
+        let settings = SettingsStore.shared, previousEntries = SettingsStore.shared.customDictionaryEntries
+        defer { settings.customDictionaryEntries = previousEntries }
+        settings.customDictionaryEntries = []
+        let controller = DictionaryCorrectionOverlayController()
+        defer { controller.concealPrivatePresentation() }
+        let first = AutomaticDictionaryCorrectionCandidate(heardText: "ComapctAlhpa", correctedText: "CompactAlphaE2E")
+        let second = AutomaticDictionaryCorrectionCandidate(heardText: "ComapctBtea", correctedText: "CompactBetaE2E")
+        controller.show(candidate: first) { _ in }
+        controller.show(candidate: second) { _ in }
+        let deadline = controller.displayDeadline, generation = controller.progressGeneration
+        let firstSession = try XCTUnwrap(controller.presentedSessions.first)
+        XCTAssertFalse(firstSession.isSavedCorrection, "A fallback must not claim audio was already saved")
+        controller.add(id: first.id)
+        XCTAssertEqual(controller.presentedCandidateIDs, [second.id])
+        let entry = try XCTUnwrap(settings.customDictionaryEntries.first { $0.replacement == first.correctedText })
+        XCTAssertTrue(entry.triggers.contains(first.heardText))
+        XCTAssertEqual(controller.displayDeadline, deadline)
+        XCTAssertEqual(controller.progressGeneration, generation)
+        let entries = settings.customDictionaryEntries
+        controller.add(id: first.id)
+        XCTAssertEqual(settings.customDictionaryEntries, entries, "A retired row cannot re-save")
+        controller.add(id: second.id)
+        XCTAssertTrue(controller.presentedCandidateIDs.isEmpty)
+        XCTAssertTrue(settings.customDictionaryEntries.contains { $0.replacement == second.correctedText })
+    }
+
+    func testCompactFallbackAddKeepsFailedSaveVisibleForCorrection() throws {
+        let settings = SettingsStore.shared, previousEntries = SettingsStore.shared.customDictionaryEntries
+        defer { settings.customDictionaryEntries = previousEntries }
+        settings.customDictionaryEntries = []
+        let controller = DictionaryCorrectionOverlayController()
+        defer { controller.concealPrivatePresentation() }
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "ComapctKnown", correctedText: "CompactKnownE2E")
+        controller.show(candidate: candidate) { _ in }
+        // Another editor/manual action already saved this spelling while the row was visible.
+        settings.customDictionaryEntries = CustomDictionaryTrainingMerge.mergedEntries(current: [],
+            replacement: candidate.correctedText, triggers: [candidate.heardText])
+        let entries = settings.customDictionaryEntries
+        controller.add(id: candidate.id)
+        XCTAssertEqual(controller.presentedCandidateIDs, [candidate.id])
+        let row = try XCTUnwrap(controller.presentedSessions.first)
+        XCTAssertTrue(row.hasError)
+        XCTAssertFalse(row.isSavedCorrection)
+        XCTAssertEqual(settings.customDictionaryEntries, entries)
     }
 }

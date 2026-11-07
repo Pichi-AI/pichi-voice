@@ -57,13 +57,14 @@ resource_paths = [
     "Sources/Fluid/Localization/Localizable.xcstrings", "Sources/Fluid/Assets.xcassets",
     "Sources/Fluid/Branding/brand-package.json", "Sources/Fluid/Resources/Notices",
     "Sources/Mobile/Resources/brand-distribution.json", "Sources/Mobile/Resources/MobileAssets.xcassets",
+    "Sources/Mobile/Resources/PrivacyInfo.xcprivacy",
 ]
 file_ids, source_builds, resource_builds = [], [], []
 file_refs = {}
 def file_ref(path, label="Mobile file "):
     if path not in file_refs:
         kind = {".swift":"sourcecode.swift", ".xcstrings":"text.json.xcstrings", ".xcassets":"folder.assetcatalog",
-                ".strings":"text.plist.strings", ".json":"text.json", ".xcconfig":"text.xcconfig"}.get(Path(path).suffix, "folder")
+                ".strings":"text.plist.strings", ".xcprivacy":"text.xml", ".json":"text.json", ".xcconfig":"text.xcconfig"}.get(Path(path).suffix, "folder")
         file_refs[path] = obj(label + path, f"isa = PBXFileReference; lastKnownFileType = {kind}; path = {quoted(path)}; sourceTree = SOURCE_ROOT;")
         file_ids.append(file_refs[path])
     return file_refs[path]
@@ -117,7 +118,9 @@ def configs(label, test=False, hosted=False, extension=False):
             settings.update(BUNDLE_LOADER="$(TEST_HOST)",
                 TEST_HOST="$(BUILT_PRODUCTS_DIR)/PichiVoiceMobile.app/PichiVoiceMobile")
         elif test:
-            settings.update(TEST_TARGET_NAME="PichiVoiceMobile", BUNDLE_LOADER="", TEST_HOST="")
+            settings.update(TEST_TARGET_NAME="PichiVoiceMobile", BUNDLE_LOADER="", TEST_HOST="",
+                PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER=APP_BUNDLE + ".uitests",
+                PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER)")
         elif extension:
             # The extension has no String Catalog; the app passes it already localized copy.
             settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER=APP_BUNDLE, PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER).activity",

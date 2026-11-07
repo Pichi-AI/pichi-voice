@@ -270,10 +270,25 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
                 XCTAssertEqual(missing, 0, "Unowned reading turn in \(platform)/\(file.lastPathComponent)")
                 XCTAssertEqual(session.transcriptSegments, original)
                 XCTAssertEqual(try Data(contentsOf: file), data, "Audit must not modify the stored source")
-                reports.append(["platform": platform, "snapshot": file.lastPathComponent,
+                var report: [String: Any] = ["platform": platform, "snapshot": file.lastPathComponent,
                     "segments": original.count,
                     "originalUnownedLexical": original.filter { $0.hasLexicalContent && !$0.isEcho && $0.speakerID == nil }.count,
-                    "readingParagraphs": paragraphs.count, "unownedReadingParagraphs": missing])
+                    "readingParagraphs": paragraphs.count, "unownedReadingParagraphs": missing]
+                if ProcessInfo.processInfo.environment["PICHI_SPEAKER_AUDIT_DETAIL"] == "1" {
+                    let presentations = MeetingTranscriptExporter.speakerPresentations(in: session)
+                    report["readingAssignments"] = original.map { segment -> [String: Any] in
+                        ["segmentID": segment.id.uuidString, "start": segment.start.seconds, "end": segment.end.seconds,
+                         "sourceSpeakerID": segment.speakerID?.uuidString ?? "",
+                         "readingSpeakerID": presentations[segment.id]?.participantID?.uuidString ?? "",
+                         "readable": segment.hasReadableContent, "echo": segment.isEcho]
+                    }
+                    report["readingParagraphDetails"] = paragraphs.map { paragraph -> [String: Any] in
+                        ["id": paragraph.id.uuidString, "text": paragraph.text,
+                         "speakerID": MeetingTranscriptExporter.speakerPresentation(for: paragraph, in: session,
+                            speakerNames: names).participantID?.uuidString ?? ""]
+                    }
+                }
+                reports.append(report)
             }
         }
         XCTAssertFalse(reports.isEmpty)
