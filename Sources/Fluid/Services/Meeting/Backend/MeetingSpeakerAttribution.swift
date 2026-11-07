@@ -7,7 +7,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     // Version 2 preserves per-word residual suppression inside a validated interruption bout.
     // A previous attempt cannot replay changed ownership semantics under the same fingerprint.
     static let currentVersion = 2
-    static let standard = Self(enableProvisionalSpeakerIdentities: true, enableStableSpeakerOpening: true)
+    static let standard = Self(enableProvisionalSpeakerIdentities: true, enableStableSpeakerOpening: true,
+                               enableCompleteReadingAssignment: true, enableIncomingGapReading: true)
 
     let schemaVersion: Int
     /// Arithmetic slack only. It never expands intervals or creates positive overlap.
@@ -43,6 +44,12 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     /// text can use bounded existing-speaker context without becoming acoustic evidence.
     /// Missing preserves the identity allocation of previously frozen attempts.
     let enableStableSpeakerOpening: Bool
+    /// Every admitted speech fragment has a reading participant. Acoustic uncertainty remains
+    /// in native evidence; this additive flag preserves replay of older frozen attempts.
+    let enableCompleteReadingAssignment: Bool
+    /// Tokenless words in a real pause before a different voice follow the incoming turn.
+    /// Missing keeps the former complete-reading policy and its exact fingerprint.
+    let enableIncomingGapReading: Bool
 
     init(
         schemaVersion: Int = Self.currentVersion,
@@ -68,7 +75,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         preserveIndependentSpeakerTurns: Bool = true,
         enableVoicedSpeakerAdmission: Bool = true,
         enableProvisionalSpeakerIdentities: Bool = false,
-        enableStableSpeakerOpening: Bool = false
+        enableStableSpeakerOpening: Bool = false,
+        enableCompleteReadingAssignment: Bool = false,
+        enableIncomingGapReading: Bool = false
     ) {
         self.schemaVersion = schemaVersion
         self.comparisonTolerance = comparisonTolerance
@@ -94,6 +103,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         self.enableVoicedSpeakerAdmission = enableVoicedSpeakerAdmission
         self.enableProvisionalSpeakerIdentities = enableProvisionalSpeakerIdentities
         self.enableStableSpeakerOpening = enableStableSpeakerOpening
+        self.enableCompleteReadingAssignment = enableCompleteReadingAssignment
+        self.enableIncomingGapReading = enableIncomingGapReading
     }
 
     /// Exact, length-framed values avoid locale, delimiter and rounding collisions. Zero has one
@@ -144,6 +155,12 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         if self.enableStableSpeakerOpening {
             entries.append(("stableSpeakerOpeningEnabled", "true"))
         }
+        if self.enableCompleteReadingAssignment {
+            entries.append(("completeReadingAssignmentV1", "true"))
+        }
+        if self.enableIncomingGapReading {
+            entries.append(("incomingGapReadingV1", "true"))
+        }
         let canonical = MeetingConfigFingerprintEncoding.encode(entries)
         let digest = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
         return "speaker-attribution-v\(self.schemaVersion):\(digest)"
@@ -183,6 +200,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         case enableVoicedSpeakerAdmission
         case enableProvisionalSpeakerIdentities
         case enableStableSpeakerOpening
+        case enableCompleteReadingAssignment
+        case enableIncomingGapReading
     }
 
     init(from decoder: Decoder) throws {
@@ -211,7 +230,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
             preserveIndependentSpeakerTurns: c.decodeIfPresent(Bool.self, forKey: .preserveIndependentSpeakerTurns) ?? false,
             enableVoicedSpeakerAdmission: c.decodeIfPresent(Bool.self, forKey: .enableVoicedSpeakerAdmission) ?? false,
             enableProvisionalSpeakerIdentities: c.decodeIfPresent(Bool.self, forKey: .enableProvisionalSpeakerIdentities) ?? false,
-            enableStableSpeakerOpening: c.decodeIfPresent(Bool.self, forKey: .enableStableSpeakerOpening) ?? false
+            enableStableSpeakerOpening: c.decodeIfPresent(Bool.self, forKey: .enableStableSpeakerOpening) ?? false,
+            enableCompleteReadingAssignment: c.decodeIfPresent(Bool.self, forKey: .enableCompleteReadingAssignment) ?? false,
+            enableIncomingGapReading: c.decodeIfPresent(Bool.self, forKey: .enableIncomingGapReading) ?? false
         )
         _ = try self.validated()
     }
@@ -252,6 +273,7 @@ nonisolated enum MeetingSpeakerAttributionRule: String, Codable, Sendable {
     case rawOnly, rawAssigned, singleAcousticSupport, residualSuppression, acousticDominance, insufficientSupport
     case ambiguous, conflict, barrier, neighborAgreement, incomingSpeaker, boundaryContinuation
     case briefInterruption, mainSpeakerContinuation, existingParticipantContext
+    case foregroundDominance, readingParticipantContext
 
     /// These choices use only the current word's acoustic activity, before contextual passes.
     /// Heuristic uncertainty and independence from neighboring text are separate properties.
@@ -265,7 +287,7 @@ nonisolated enum MeetingSpeakerAttributionRule: String, Codable, Sendable {
     var isHeuristic: Bool {
         switch self {
         case .neighborAgreement, .incomingSpeaker, .boundaryContinuation, .briefInterruption, .mainSpeakerContinuation, .existingParticipantContext,
-             .residualSuppression, .acousticDominance: return true
+             .residualSuppression, .acousticDominance, .foregroundDominance, .readingParticipantContext: return true
         default: return false
         }
     }
@@ -371,7 +393,9 @@ nonisolated enum MeetingSpeakerAttribution {
         assignments.reserveCapacity(units.count)
         for (position, decision) in resolution.decisions.enumerated() {
             try self.checkCancellation(at: position)
-            if let selected = decision.selectedToken { assignments[decision.unitID] = .assigned(selected) }
+            if let selected = decision.selectedToken, decision.rule != .foregroundDominance {
+                assignments[decision.unitID] = .assigned(selected)
+            }
             else {
                 // An indivisible utterance with two actual voices remains ambiguous even when
                 // the shorter source would be suppressed for word-level presentation.
@@ -452,6 +476,24 @@ nonisolated enum MeetingSpeakerAttribution {
                         temporalBarriers: temporalBarriers, contextBarriers: contextIndexes[epoch],
                         policy: policy
                     )
+                }
+            }
+            if policy.enableCompleteReadingAssignment, !contextualBarrierEpochIDs.contains(epoch), contextIndexes[epoch] == nil {
+                for position in decisions.indices {
+                    try self.checkCancellation(at: position)
+                    let decision = decisions[position]
+                    guard decision.selectedToken == nil, decision.rule != .barrier, decision.relation != .conflict,
+                          !barrierUnitIDs.contains(decision.unitID) else { continue }
+                    let ranked = decision.candidates.filter { $0.supportSeconds > policy.comparisonTolerance }
+                        .sorted { $0.supportSeconds > $1.supportSeconds }
+                    // An indivisible mixture has one foreground owner for reading. This is
+                    // deliberately not an independent acoustic assignment or separated text.
+                    // Ties are left for participant context rather than decided by slot names.
+                    guard let leader = ranked.first,
+                          ranked.count == 1 || leader.supportSeconds > ranked[1].supportSeconds + policy.comparisonTolerance
+                    else { continue }
+                    decisions[position] = decision.choosing(leader.token, rule: .foregroundDominance,
+                        background: ranked.dropFirst().map(\.token))
                 }
             }
             output.append(contentsOf: decisions)
