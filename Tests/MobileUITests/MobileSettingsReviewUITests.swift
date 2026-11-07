@@ -52,6 +52,41 @@ final class MobileSettingsReviewUITests: XCTestCase {
         }
     }
 
+    /// Offline legal resources are reachable from the guest Settings stack in every app appearance.
+    func testLicensesInBothLanguagesAndThemes() throws {
+        for (language, appearance) in [("ru", "light"), ("ru", "dark"), ("en", "light"), ("en", "dark")] {
+            let settingsTitle = language == "ru" ? "Настройки" : "Settings"
+            let licensesTitle = language == "ru" ? "Лицензии" : "Licenses"
+            let prefix = "licenses-\(language)-\(appearance)"
+            app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                                   "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
+            app.launch()
+            openSettings(title: settingsTitle)
+            let licenses = app.buttons["settings.licenses"]
+            reveal(licenses)
+            XCTAssertTrue(licenses.exists && licenses.isHittable)
+            licenses.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["settings.licenses.detail"].firstMatch.waitForExistence(timeout: 10))
+            XCTAssertTrue(app.navigationBars[licensesTitle].exists)
+            capture(prefix + "-list")
+            let component = app.buttons["licenses.component.fluidvoice"]
+            XCTAssertTrue(component.exists && component.isHittable)
+            component.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["licenses.component.detail"].firstMatch.waitForExistence(timeout: 5))
+            let license = app.staticTexts["licenses.document.FluidVoice-LICENSE.txt"]
+            XCTAssertTrue(license.exists)
+            XCTAssertTrue(license.label.contains("GNU GENERAL PUBLIC LICENSE"))
+            XCTAssertTrue(license.label.contains("How to Apply These Terms to Your New Programs"), "The full bundled text must load")
+            capture(prefix + "-detail")
+            app.navigationBars.buttons[licensesTitle].firstMatch.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["settings.licenses.detail"].firstMatch.waitForExistence(timeout: 5))
+            app.navigationBars.buttons[settingsTitle].firstMatch.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 5))
+            app.terminate()
+        }
+    }
+
     func testEverySettingsPageInBothLanguagesAndThemes() throws {
         for (language, appearance) in [("ru", "light"), ("ru", "dark"), ("en", "light")] {
             let settingsTitle = language == "ru" ? "Настройки" : "Settings"
@@ -156,7 +191,7 @@ final class MobileSettingsReviewUITests: XCTestCase {
 
     /// Navigation rows only. In-place controls such as pickers and actions stay on the root.
     private func destinationIdentifiers() -> [String] {
-        let inPlace: Set<String> = ["settings.replaySetup", "settings.interfaceLanguage", "settings.appearance"]
+        let inPlace: Set<String> = ["settings.replaySetup", "settings.interfaceLanguage", "settings.appearance", "settings.privacyPolicy"]
         let rows = app.collectionViews.firstMatch.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "settings."))
         var identifiers: [String] = []
         for _ in 0..<3 {

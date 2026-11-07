@@ -1526,6 +1526,9 @@ final class MeetingRecoveryTests: XCTestCase {
         configuration.mode = .onlineCall
         configuration.application = .init(bundleIdentifier: "synthetic.call", displayName: "Synthetic call")
         let session = try await coordinator.startRecording(configuration: configuration)
+        // The silence watchdog waits for a known unmuted microphone in an online call.
+        capture.emit(.microphoneMuteStateChanged(.unmuted))
+        await self.drainCaptureEvents()
         var silent = application.health; silent.silentForSeconds = 100
         capture.emit(.trackHealth(trackID: application.id, health: silent))
         await self.drainCaptureEvents()
@@ -1868,6 +1871,9 @@ final class MeetingRecoveryTests: XCTestCase {
                 configuration.mode = .onlineCall
                 configuration.application = MeetingApplicationIdentity(bundleIdentifier: "us.zoom.xos", displayName: "Zoom")
                 let started = try await coordinator.startRecording(configuration: configuration)
+                // The silence watchdog waits for a known unmuted microphone in an online call.
+                capture.emit(.microphoneMuteStateChanged(.unmuted))
+                await self.drainCaptureEvents()
                 var silentHealth = applicationAudio.health
                 silentHealth.silentForSeconds = 100
                 let silence = MeetingCaptureEvent.trackHealth(trackID: applicationAudio.id, health: silentHealth)
