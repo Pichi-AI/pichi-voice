@@ -302,7 +302,9 @@ nonisolated enum MeetingReadingSpeakerResolver {
                         || source.speakerAttribution?.relation == MeetingSpeakerAttributionRelation.none,
                        let left, let right, left.id != right.id,
                        time.start > left.end + policy.comparisonTolerance,
-                       right.start > time.end + policy.comparisonTolerance {
+                       right.start > time.end + policy.comparisonTolerance,
+                       left.end > windowStart + policy.comparisonTolerance,
+                       right.start < windowEnd - policy.comparisonTolerance {
                         // An unscored word in an actual pause is a turn-boundary case, not a
                         // mixture. Earlier long speech must not outvote the incoming reply.
                         // This makes no claim of acoustic support inside the pause itself.
