@@ -185,6 +185,39 @@ private final class DriftStreamOutput: NSObject, SCStreamOutput {
 
 /// Model-free checks of the same frame mapping, attachment and converter used by native capture.
 final class MeetingRecordingClockCoreTests: XCTestCase {
+    func testSmallNativePacketResamplingRetainsProtectedHistoryWithoutExhaustingScalarBudget() throws {
+        let base = 203_316.843104167
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: base - 1, recordingTimePolicy: .hostMonotonicV1)
+        let converter = try MeetingCapturePCMConverter()
+        let input = try pcm(rate: 48_000, frames: 512)
+        var outputFrames = 0, maximumHistory = 0
+        func host(_ index: Int) -> Double {
+            let ideal = base + Double(index * 512) / 48_000 * 0.999995
+            return CMClockMakeHostTimeFromSystemUnits(AVAudioTime.hostTime(forSeconds: ideal)).seconds
+        }
+        func consume(_ sample: CMSampleBuffer?) throws {
+            guard let sample else { return }
+            let proof = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: sample))
+            XCTAssertFalse(try timeline.record(sourceStartSample: outputFrames,
+                frameCount: CMSampleBufferGetNumSamples(sample),
+                presentationTime: CMSampleBufferGetPresentationTimeStamp(sample).seconds, clockMapping: proof.mapping))
+            outputFrames += CMSampleBufferGetNumSamples(sample)
+            timeline.discard(beforeSample: max(0, outputFrames - 47 * 16_000))
+            maximumHistory = max(maximumHistory, timeline.retainedSpanCount)
+        }
+        for index in 0..<12_000 {
+            try consume(converter.convert(input,
+                presentationTime: CMTime(seconds: host(index), preferredTimescale: 1_000_000_000),
+                clockPacket: packet(mapping(frames: 512, start: host(index), end: host(index + 1), boundary: index == 0))))
+        }
+        try consume(converter.finish())
+        XCTAssertEqual(outputFrames, 12_000 * 512 / 3)
+        XCTAssertGreaterThan(maximumHistory, 8_192, "This cadence must exercise the old failing history bound")
+        XCTAssertLessThan(maximumHistory, 20_000, "Retirement keeps history bounded across repeated protected windows")
+        XCTAssertLessThan(timeline.retainedSpanCount, MeetingPCMSourceTimeline.maximumRetainedSpans)
+        XCTAssertFalse(timeline.hasGaps)
+        XCTAssertEqual(try XCTUnwrap(timeline.mapEndTime(Double(outputFrames) / 16_000)), host(12_000) - (base - 1), accuracy: 2e-9)
+    }
     func testOptInCapturedClockMetadataReplayWithSyntheticPCM() throws {
         guard let path = ProcessInfo.processInfo.environment["PICHI_CLOCK_REPLAY_SESSION_FILE"] else {
             throw XCTSkip("Set PICHI_CLOCK_REPLAY_SESSION_FILE to replay capture timing with synthetic PCM")

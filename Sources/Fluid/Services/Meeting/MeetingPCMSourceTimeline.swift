@@ -7,6 +7,10 @@ import Foundation
 /// compact sample clock; publication maps native envelopes into the existing presentation-time
 /// contract, while source VAD queries only measured contiguous intervals.
 final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
+    // Scalar history spans several protected inference windows. Resampling small native
+    // packets can split each calibration span again, unlike a single packet/chunk mapping.
+    // This remains a fixed bound (about 2.5 MiB of scalar spans per source).
+    static let maximumRetainedSpans = 65_536
     enum Failure: Error, Equatable { case invalidConfiguration, invalidTimestamp, nonContiguousInput, spanBudgetExceeded }
     enum BoundarySide { case start, end }
     private struct Span {
@@ -28,10 +32,10 @@ final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
     private var lastPhysicalEnd: Double?
     private var observedGaps = false
 
-    init(originSeconds: Double? = nil, maximumSpans: Int = 8_192,
+    init(originSeconds: Double? = nil, maximumSpans: Int = MeetingPCMSourceTimeline.maximumRetainedSpans,
          recordingTimePolicy: MeetingRecordingTimePolicy? = nil) throws {
         guard originSeconds.map({ $0.isFinite && $0 >= 0 }) != false,
-              maximumSpans > 0, maximumSpans <= 8_192 else {
+              maximumSpans > 0, maximumSpans <= Self.maximumRetainedSpans else {
             throw Failure.invalidConfiguration
         }
         self.originSeconds = originSeconds
