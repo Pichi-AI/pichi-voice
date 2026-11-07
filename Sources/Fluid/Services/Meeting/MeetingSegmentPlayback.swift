@@ -282,7 +282,40 @@ nonisolated enum MeetingSegmentPlaybackPlan {
             let sidecar = try MeetingResultSidecarStore(sessionDirectory: directory).read(
                 expectedAttemptID: attempt.id, expectedBackendID: MeetingBackendID(rawValue: backendID), reference: reference
             )
+            if session.timebase.recordingTimePolicy == .hostMonotonicV1 {
+                for span in sidecar.analysisManifest.allSpans where span.trackID == segment.sourceTrackID {
+                    guard let chunk = session.audioTracks.first(where: { $0.id == span.trackID })?.chunks.first(where: { $0.id == span.chunkID }),
+                          span.chunk == MeetingAnalysisChunkIdentity(trackID: span.trackID, chunk: chunk),
+                          let mapped = try MeetingHostClockMapping.piece(in: span.recordedInterval, chunk: chunk,
+                            origin: sidecar.analysisManifest.presentationOriginSeconds, decoded: span.observed.decoded),
+                          abs(mapped.rate - span.presentationMapping.rateRatio) <= MeetingAnalysisManifestSchema.mappingToleranceSeconds else {
+                        throw MeetingSegmentPlaybackError.unavailable
+                    }
+                }
+            }
             return try self.slices(segment: segment, spans: sidecar.analysisManifest.allSpans, directory: directory)
+        }
+        if session.timebase.recordingTimePolicy == .hostMonotonicV1 {
+            guard let track = session.audioTracks.first(where: { $0.id == segment.sourceTrackID }) else {
+                throw MeetingSegmentPlaybackError.unavailable
+            }
+            let origin = MeetingAnalysisManifest.presentationOrigin(of: session)
+            var slices: [Slice] = []
+            for chunk in track.chunks.sorted(by: { $0.presentationStart < $1.presentationStart }) {
+                let mapping = try MeetingHostClockMapping.validated(chunk: chunk)
+                guard let asset = chunk.captureAnalysisAsset else { throw MeetingSegmentPlaybackError.unavailable }
+                for clockSpan in mapping.spans {
+                    let start = max(segment.start.seconds, clockSpan.hostStart.seconds - origin)
+                    let end = min(segment.end.seconds, clockSpan.hostEnd.seconds - origin)
+                    guard end > start else { continue }
+                    guard let mapped = try MeetingHostClockMapping.piece(in: .init(start: start, end: end),
+                        chunk: chunk, origin: origin) else { throw MeetingSegmentPlaybackError.unavailable }
+                    let url = try MeetingChunkPathConfinement.containedURL(sessionDirectory: directory, relativePath: asset.relativeFilePath)
+                    slices.append(Slice(url: url, start: mapped.source.start, end: mapped.source.end))
+                }
+            }
+            guard !slices.isEmpty else { throw MeetingSegmentPlaybackError.unavailable }
+            return slices
         }
         // Legacy transcripts use chunk-relative offsets. Refuse drift-corrected legacy audio
         // without a verified span mapping rather than silently playing the wrong words.

@@ -21,6 +21,22 @@ final class MeetingAudioAssetCompatibilityTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(decoded.spans.first).discontinuityBefore)
     }
 
+    func testInRoomHostRecordingPinsItsOriginWhileLegacyKeepsItsOldTimebase() throws {
+        let configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic clock",
+            microphone: .init(captureDeviceID: "mic", displayName: "Mic"))
+        let legacyTimebase = MeetingTimebaseMetadata(startedHostTime: 100_000_000_000,
+            machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)
+        let legacy = MeetingSession(configuration: configuration, timebase: legacyTimebase)
+        XCTAssertNil(legacy.transcriptPresentationOrigin)
+        var hostTimebase = legacyTimebase; hostTimebase.recordingTimePolicy = .hostMonotonicV1
+        let unified = MeetingSession(configuration: configuration, timebase: hostTimebase)
+        XCTAssertEqual(try XCTUnwrap(unified.transcriptPresentationOrigin).seconds, 100)
+        XCTAssertEqual(unified.transcriptTimeDomain, .meetingRelative)
+        let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(unified))
+        XCTAssertEqual(restored, unified)
+        XCTAssertEqual(MeetingAnalysisManifest.presentationOrigin(of: restored), 100)
+    }
+
     func testLegacyChunkOmitsAllP0aKeysAndRoundTripsFullSession() throws {
         let chunk = MeetingAudioChunk(
             id: UUID(),

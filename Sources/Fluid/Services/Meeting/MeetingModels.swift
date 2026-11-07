@@ -1358,7 +1358,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.selectedMicrophone = configuration.microphone
         self.startedAt = startedAt
         self.timebase = timebase
-        if configuration.mode == .onlineCall, configuration.effectiveSpeakerProcessingMode == .streaming,
+        if (timebase.recordingTimePolicy == .hostMonotonicV1
+            || (configuration.mode == .onlineCall && configuration.effectiveSpeakerProcessingMode == .streaming)),
            timebase.machTimebaseDenominator > 0 {
             let seconds = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
                 / Double(timebase.machTimebaseDenominator) / 1_000_000_000

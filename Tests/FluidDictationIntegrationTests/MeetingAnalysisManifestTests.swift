@@ -20,6 +20,126 @@ private nonisolated struct ManifestFixtureObserver: MeetingChunkAudioObserving {
 final class MeetingAnalysisManifestTests: XCTestCase {
     private let backendID = MeetingBackendID(rawValue: "fixture.analysis-manifest")
 
+    private func hostClockChunk(gap: Bool = false) -> MeetingAudioChunk {
+        var audio = self.chunk(sequence: 0, start: 100, end: gap ? 112 : 110.001, path: "tracks/microphone/clock.caf")
+        audio.audioSchemaVersion = 2
+        audio.captureAnalysisAsset = .init(role: .captureAnalysis, encoding: .linearPCMFloat32CAFV1,
+            presence: .ready, relativeFilePath: audio.relativeFilePath, byteCount: audio.byteCount,
+            sha256: audio.sha256, sampleRate: 100, channelCount: 1, frameCount: 1_000)
+        audio.clockMapping = .init(frameCount: 1_000, spans: gap ? [
+            .init(frameStart: 0, frameEnd: 500, hostStart: self.mediaTime(100), hostEnd: self.mediaTime(105)),
+            .init(frameStart: 500, frameEnd: 1_000, hostStart: self.mediaTime(107), hostEnd: self.mediaTime(112), discontinuityBefore: true)
+        ] : [.init(frameStart: 0, frameEnd: 1_000, hostStart: self.mediaTime(100), hostEnd: self.mediaTime(110.001))])
+        return audio
+    }
+
+    func testHostClockManifestUsesSavedFramesWithoutApplyingLegacyDeDriftAgain() throws {
+        let audio = self.hostClockChunk()
+        let drift = MeetingClockDriftRecord(cumulativeAbsorbedSeconds: -0.1, elapsedValidHostSeconds: 1_000, eligible: true)
+        let mic = self.track(kind: .microphone, chunks: [audio], eras: [self.era(protection: .voiceProcessed, start: 0, drift: drift)])
+        let plan = self.plan(mode: .onlineCall, tracks: [mic], recordingTimePolicy: .hostMonotonicV1)
+        let manifest = try MeetingAnalysisManifestBuilder(plan: plan,
+            observer: self.observer([(mic.id, audio, self.observed(audio, duration: 10, priming: .notApplicable(.linearPCMFloat32CAFV1)))])).build()
+        let span = try XCTUnwrap(manifest.allSpans.first)
+        XCTAssertEqual(span.sourceLocalInterval, .init(start: 0, end: 10))
+        XCTAssertEqual(span.presentationInterval.start, 0, accuracy: 0.000_001)
+        XCTAssertEqual(span.presentationInterval.end, 10.001, accuracy: 0.000_001)
+        XCTAssertEqual(span.presentationMapping.rateRatio, 1.0001, accuracy: 0.000_001)
+        XCTAssertEqual(span.timing.deDrift, .notApplicable)
+        XCTAssertNotNil(span.chunk.clockMappingDigest)
+        XCTAssertEqual(try JSONDecoder().decode(MeetingAnalysisManifest.self, from: JSONEncoder().encode(manifest)), manifest)
+        let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(plan.request.session))
+        XCTAssertEqual(restored.audioTracks[0].chunks[0].clockMapping, audio.clockMapping)
+        let repeated = try MeetingAnalysisManifestBuilder(plan: plan,
+            observer: self.observer([(mic.id, audio, self.observed(audio, duration: 10, priming: .notApplicable(.linearPCMFloat32CAFV1)))])).build()
+        XCTAssertEqual(repeated, manifest)
+    }
+
+    func testHostClockGapRemainsUnknownTimeAndPlaybackInvertsTheSameFrameMap() throws {
+        let audio = self.hostClockChunk(gap: true)
+        let mic = self.track(kind: .microphone, chunks: [audio], eras: [self.era(protection: .voiceProcessed, start: 0)])
+        let plan = self.plan(mode: .onlineCall, tracks: [mic], recordingTimePolicy: .hostMonotonicV1)
+        let manifest = try MeetingAnalysisManifestBuilder(plan: plan,
+            observer: self.observer([(mic.id, audio, self.observed(audio, duration: 10, priming: .notApplicable(.linearPCMFloat32CAFV1)))])).build()
+        XCTAssertEqual(manifest.allSpans.count, 2)
+        XCTAssertEqual(manifest.allGaps.map(\.reason), [.sourceClockGap])
+        XCTAssertEqual(manifest.allGaps.first?.recordedInterval, .init(start: 5, end: 7))
+        XCTAssertEqual(manifest.tracks[0].epochs.count, 2)
+        XCTAssertEqual(manifest.allSpans[1].analysisInterval, .init(start: 5, end: 10))
+        XCTAssertEqual(manifest.allSpans[1].presentationInterval, .init(start: 7, end: 12))
+        let segment = MeetingTranscriptSegment(id: UUID(), start: .init(value: 8, timescale: 1),
+            end: .init(value: 9, timescale: 1), sourceTrackID: mic.id, speakerID: nil,
+            text: "synthetic clock word", revision: 0, status: .final, overlap: .none, completeness: .complete)
+        let slices = try MeetingSegmentPlaybackPlan.slices(session: plan.request.session, segment: segment,
+            directory: FileManager.default.temporaryDirectory)
+        XCTAssertEqual(slices.count, 1)
+        XCTAssertEqual(slices[0].start, 6, accuracy: 0.000_001)
+        XCTAssertEqual(slices[0].end, 7, accuracy: 0.000_001)
+        let canonical = try MeetingSegmentPlaybackPlan.slices(segment: segment, spans: manifest.allSpans,
+            directory: FileManager.default.temporaryDirectory)
+        XCTAssertEqual(canonical[0].start, slices[0].start, accuracy: 0.000_001)
+        XCTAssertEqual(canonical[0].end, slices[0].end, accuracy: 0.000_001)
+    }
+
+    func testHostClockPolicyRefusesMissingCorruptAndDecoderMismatchedMappings() throws {
+        for variant in 0..<4 {
+            var audio = self.hostClockChunk()
+            if variant == 0 { audio.clockMapping = nil }
+            if variant == 1 { audio.clockMapping?.version = 7 }
+            if variant == 2 { audio.clockMapping?.spans[0].hostEnd = self.mediaTime(109) }
+            if variant == 3 { audio.clockMapping?.frameCount = 999 }
+            let mic = self.track(kind: .microphone, chunks: [audio], eras: [self.era(protection: .voiceProcessed, start: 0)])
+            let plan = self.plan(mode: .onlineCall, tracks: [mic], recordingTimePolicy: .hostMonotonicV1)
+            XCTAssertThrowsError(try MeetingAnalysisManifestBuilder(plan: plan,
+                observer: self.observer([(mic.id, audio, self.observed(audio, duration: 10, priming: .notApplicable(.linearPCMFloat32CAFV1)))])).build())
+        }
+        let audio = self.hostClockChunk()
+        let mic = self.track(kind: .microphone, chunks: [audio], eras: [self.era(protection: .voiceProcessed, start: 0)])
+        let plan = self.plan(mode: .onlineCall, tracks: [mic], recordingTimePolicy: .hostMonotonicV1)
+        XCTAssertThrowsError(try MeetingAnalysisManifestBuilder(plan: plan,
+            observer: self.observer([(mic.id, audio, self.observed(audio, duration: 9.99, priming: .notApplicable(.linearPCMFloat32CAFV1)))])).build())
+        let hashFailure = MeetingAnalysisManifestBuilder(plan: plan,
+            observer: self.observer([(mic.id, audio, .failed(.hashChanged, detail: "Synthetic changed hash"))]))
+        let refused = try hashFailure.build()
+        XCTAssertTrue(refused.allSpans.isEmpty)
+        XCTAssertEqual(refused.allGaps.first?.reason, .chunkHashChanged)
+    }
+
+    func testRetainedCheckpointCannotReuseARecordingWithAnotherClockPolicy() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("host-clock-checkpoint-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var session = self.plan(mode: .inRoom, tracks: [], recordingTimePolicy: .hostMonotonicV1).request.session
+        session.audioStorageMode = .retainedFiles
+        let config = MeetingFinalProcessingConfiguration(recordingTimePolicy: .hostMonotonicV1)
+        let pin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: session.id,
+            backendID: self.backendID, backendVersion: "clock-test", configuration: config,
+            piiRedactionEnabled: false, privacyFingerprint: nil)
+        let value = MeetingRetainedProcessingCheckpoint.Value(pin: pin, inputFingerprint: "synthetic-clock-input",
+            ownerVoiceIdentity: nil, runtimeFingerprint: nil, payload: Data([1, 2, 3]))
+        let store = MeetingRetainedProcessingCheckpoint(sessionDirectory: directory)
+        try store.write(value, session: session)
+        XCTAssertEqual(try XCTUnwrap(store.read(session: session)).pin, pin)
+        session.timebase.recordingTimePolicy = nil
+        XCTAssertThrowsError(try store.read(session: session))
+        XCTAssertThrowsError(try store.write(value, session: session))
+    }
+
+    func testFullClockAnchorShapeParticipatesInFrozenSourceIdentity() throws {
+        let audio = self.hostClockChunk()
+        let mic = self.track(kind: .microphone, chunks: [audio], eras: [self.era(protection: .voiceProcessed, start: 0)])
+        let plan = self.plan(mode: .onlineCall, tracks: [mic], recordingTimePolicy: .hostMonotonicV1)
+        let manifest = try MeetingAnalysisManifestBuilder(plan: plan,
+            observer: self.observer([(mic.id, audio, self.observed(audio, duration: 10, priming: .notApplicable(.linearPCMFloat32CAFV1)))])).build()
+        var split = audio
+        split.clockMapping?.spans = [
+            .init(frameStart: 0, frameEnd: 500, hostStart: self.mediaTime(100), hostEnd: .init(value: 1_050_005, timescale: 10_000)),
+            .init(frameStart: 500, frameEnd: 1_000, hostStart: .init(value: 1_050_005, timescale: 10_000), hostEnd: self.mediaTime(110.001))]
+        XCTAssertNotEqual(MeetingAnalysisChunkIdentity(trackID: mic.id, chunk: audio), MeetingAnalysisChunkIdentity(trackID: mic.id, chunk: split))
+        var changed = mic; changed.chunks = [split]
+        XCTAssertThrowsError(try manifest.validated(against: self.plan(mode: .onlineCall, tracks: [changed], recordingTimePolicy: .hostMonotonicV1)))
+    }
+
     func testUnfilteredSpeechIsAdmittedWithoutClaimingEchoProtection() throws {
         let audio = self.chunk(sequence: 0, start: 100, end: 110)
         let mic = self.track(kind: .microphone, chunks: [audio], eras: [self.era(protection: .unfiltered, start: 0)])
@@ -146,7 +266,8 @@ final class MeetingAnalysisManifestTests: XCTestCase {
 
     private func plan(
         mode: MeetingCaptureMode,
-        tracks: [MeetingAudioTrack]
+        tracks: [MeetingAudioTrack],
+        recordingTimePolicy: MeetingRecordingTimePolicy? = nil
     ) -> MeetingBackendPlan {
         let application = mode == .onlineCall
             ? MeetingApplicationIdentity(bundleIdentifier: "fixture.app", displayName: "Fixture")
@@ -170,11 +291,16 @@ final class MeetingAnalysisManifestTests: XCTestCase {
             )
         )
         session.audioTracks = tracks
+        session.timebase.recordingTimePolicy = recordingTimePolicy
+        if recordingTimePolicy != nil {
+            session.transcriptTimeDomain = .meetingRelative
+            session.transcriptPresentationOrigin = self.mediaTime(100)
+        }
         let request = MeetingBackendRequest(
             attemptID: UUID(),
             session: session,
             sessionDirectory: FileManager.default.temporaryDirectory,
-            configuration: MeetingFinalProcessingConfiguration()
+            configuration: MeetingFinalProcessingConfiguration(recordingTimePolicy: recordingTimePolicy)
         )
         return MeetingBackendPlan(
             request: request,
