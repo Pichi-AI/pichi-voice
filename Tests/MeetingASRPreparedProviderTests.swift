@@ -13,6 +13,13 @@ nonisolated enum MeetingConfigFingerprintEncoding {
         pairs.map { "\($0.key)=\($0.value)" }.joined(separator: ";")
     }
 }
+// MeetingRetranscriptionLanguage.failedAttemptLanguage(for:) reads only these session fields.
+nonisolated struct MeetingProcessingAttempt { let languageCode: String? }
+nonisolated struct MeetingSession {
+    var transcriptSegments: [Int] = []
+    var processingAttempts: [MeetingProcessingAttempt] = []
+    var languageCode = "en"
+}
 nonisolated struct ModelPreparationProgress: Sendable {}
 nonisolated struct ASRTranscriptionResult: Sendable {}
 nonisolated struct ASRWordTiming: Sendable {}
@@ -25,7 +32,7 @@ nonisolated enum MeetingModelResidencyError: Error { case unsupportedProvider }
     var isReady: Bool { get }
     func releaseResidency() async
 }
-nonisolated enum MeetingProviderOptions {
+extension MeetingProviderOptions {
     static func resolve(_ configuration: MeetingFinalProcessingConfiguration) throws {
         if configuration.asrModel == "unsupported" { throw ProbeError.rejected }
     }

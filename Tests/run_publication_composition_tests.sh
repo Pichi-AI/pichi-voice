@@ -58,6 +58,8 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
     Sources/Fluid/Services/Meeting/MeetingRecordingCipher.swift \
     Sources/Fluid/Services/Meeting/MeetingRecordingKeychainStore.swift \
+    Tests/Support/StandaloneMeetingProcessingDependencies.swift \
+    Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
     "$task_test_dir/AttributionTypes.swift" "$task_test_dir/ApplicationSupport.swift" \
