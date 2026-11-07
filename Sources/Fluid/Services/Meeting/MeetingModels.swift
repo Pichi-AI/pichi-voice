@@ -1007,6 +1007,7 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     /// Initial acoustic token assignment, before contextual reading rules or manual identity edits.
     var nativeSpeakerAssignment: MeetingBackendSpeakerAssignment? = nil
     var nativeTiming: MeetingTranscriptNativeTiming? = nil
+    var nativeWordTimingProvenance: ASRWordTimingProvenance? = nil
     var speakerAttribution: MeetingTranscriptSpeakerAttribution? = nil
     /// A stable reading identity while acoustic identity is unresolved. Native assignments,
     /// timing and attribution summaries remain evidence and are never rewritten to claim it.

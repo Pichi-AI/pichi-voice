@@ -139,10 +139,57 @@ nonisolated struct ASRTranscriptionResult: Sendable {
     }
 }
 
+/// Token emission envelopes locate decoder output, not measured spoken-word boundaries.
+/// A recognition owner adds source context before filtering or rebasing the native word list.
+/// Missing metadata retains the older provider contract without guessing its timing basis.
+nonisolated struct ASRWordTimingProvenance: Codable, Equatable, Sendable {
+    enum Basis: String, Codable, Sendable { case tokenEmission }
+
+    let basis: Basis
+    let sourceWindowID: String?
+    let sourceWordIndex: Int?
+
+    init(basis: Basis, sourceWindowID: String? = nil, sourceWordIndex: Int? = nil) {
+        self.basis = basis
+        self.sourceWindowID = sourceWindowID
+        self.sourceWordIndex = sourceWordIndex
+    }
+
+    var hasValidSourceContext: Bool {
+        guard let sourceWindowID, let sourceWordIndex,
+              !sourceWindowID.isEmpty, sourceWindowID.utf8.count <= 512,
+              !sourceWindowID.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+              !sourceWindowID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              (0..<8_192).contains(sourceWordIndex) else { return false }
+        return true
+    }
+
+    var isValid: Bool {
+        (self.sourceWindowID == nil && self.sourceWordIndex == nil) || self.hasValidSourceContext
+    }
+
+    /// Only the owner of this exact inference call can establish its word positions.
+    /// Invalid incoming metadata cannot be repaired into apparently trustworthy context.
+    func scoped(to sourceWindowID: String, wordIndex: Int) -> Self? {
+        guard self.isValid else { return nil }
+        let scoped = Self(basis: self.basis, sourceWindowID: sourceWindowID, sourceWordIndex: wordIndex)
+        return scoped.hasValidSourceContext ? scoped : nil
+    }
+}
+
 nonisolated struct ASRWordTiming: Codable, Sendable {
     let text: String
     let start: TimeInterval
     let end: TimeInterval
+    let timingProvenance: ASRWordTimingProvenance?
+
+    init(text: String, start: TimeInterval, end: TimeInterval,
+         timingProvenance: ASRWordTimingProvenance? = nil) {
+        self.text = text
+        self.start = start
+        self.end = end
+        self.timingProvenance = timingProvenance
+    }
 }
 
 /// A provider's actual segment boundary, in seconds from its input PCM start.

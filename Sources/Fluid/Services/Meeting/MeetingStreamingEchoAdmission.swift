@@ -162,7 +162,8 @@ actor MeetingStreamingEchoAdmission {
                 let raw = MeetingFinalTextUnit(id: id, trackID: track.id, analysisEpochID: epoch,
                     precision: precision, text: segment.text, analysisStart: native.start, analysisEnd: native.end,
                     speaker: segment.nativeSpeakerAssignment ?? .unassigned,
-                    analysisSpanIDs: ["streaming-offset:\(offset)"], confidence: nil)
+                    analysisSpanIDs: ["streaming-offset:\(offset)"], confidence: nil,
+                    wordTimingProvenance: segment.nativeWordTimingProvenance)
                 source.units.append(.init(positioned: positioned, segmentID: segment.id, native: raw))
                 if track.kind == .microphone { self.unpublished.insert(segment.id) }
             }

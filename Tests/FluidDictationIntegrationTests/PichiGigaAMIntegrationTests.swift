@@ -7,6 +7,24 @@ import AppKit
 #endif
 
 extension PichiGigaAMIntegrationTests {
+    func testNativeCTCWordMappingKeepsEmissionSemanticsWithoutInventingSpeechDuration() throws {
+        let native = [GigaAMWordTiming(text: "A", start: 0.08, end: 0.12, confidence: 0.7),
+                      GigaAMWordTiming(text: "reply", start: 1.44, end: 1.80, confidence: 0.8)]
+        let words = PichiGigaAMProvider.wordTimings(native)
+        XCTAssertEqual(words.map(\.text), native.map(\.text))
+        XCTAssertEqual(words.map(\.start), native.map(\.start))
+        XCTAssertEqual(words.map(\.end), native.map(\.end))
+        XCTAssertTrue(words.allSatisfy { $0.timingProvenance?.basis == .tokenEmission })
+        XCTAssertTrue(words.allSatisfy { $0.timingProvenance?.sourceWindowID == nil
+            && $0.timingProvenance?.sourceWordIndex == nil },
+            "Only the recognition-call owner can identify the source window")
+        let legacy = try JSONDecoder().decode(ASRWordTiming.self,
+            from: Data(#"{"text":"legacy","start":0.08,"end":0.12}"#.utf8))
+        XCTAssertNil(legacy.timingProvenance)
+        let restored = try JSONDecoder().decode([ASRWordTiming].self, from: JSONEncoder().encode(words))
+        XCTAssertEqual(restored.map(\.timingProvenance), words.map(\.timingProvenance))
+    }
+
     func testEncoderCohortsKeepCompatibleManualAndContextReferences() throws {
         func feature(_ frames: Int, axis: Int = 0) throws -> GigaAMEncoderFeatures {
             var row = [Float](repeating: 0, count: GigaAMEncoderFeatures.dimension)

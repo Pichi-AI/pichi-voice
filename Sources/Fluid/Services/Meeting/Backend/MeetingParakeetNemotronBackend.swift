@@ -655,10 +655,17 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             // Pad only inference. Original sample bounds still constrain timing and coverage.
             var output = try await asr.transcribeWithTimings(Self.asrInput(try await audio.source.readSamples(in: lower..<upper)))
             func validWords() -> [ASRWordTiming] {
-                output.words.filter { word in
+                // The index belongs to the complete provider response, including rejected
+                // context words. Filtering must not turn a later word into a leading token.
+                let windowID = "asr:\(epochID):\(lower):\(upper)"
+                return output.words.enumerated().compactMap { index, word in
+                    guard
                     !word.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         && word.start.isFinite && word.end.isFinite && word.start >= 0
                         && word.end > word.start && word.end <= Double(upper - lower) / audio.sampleRate + 1e-6
+                    else { return nil }
+                    return ASRWordTiming(text: word.text, start: word.start, end: word.end,
+                        timingProvenance: word.timingProvenance?.scoped(to: windowID, wordIndex: index))
                 }
             }
             var physicalWords = validWords()
@@ -676,7 +683,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                     let midpoint = (word.start + word.end) * audio.sampleRate / 2 + Double(lower)
                     return midpoint >= Double(start) && (midpoint < Double(end) || end == count)
                 }
-                words.append(contentsOf: kept.map { .init(text: $0.text, start: $0.start + offset, end: $0.end + offset) })
+                words.append(contentsOf: kept.map { .init(text: $0.text, start: $0.start + offset, end: $0.end + offset,
+                    timingProvenance: $0.timingProvenance) })
                 text.append(kept.map(\.text).joined(separator: " "))
             } else if output.words.isEmpty || upper - lower >= 16_000 {
                 // Timed words rejected from padded silence cannot become an untimed utterance.
@@ -816,7 +824,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                     analysisEpochID: epoch, precision: .word,
                     text: word.text.trimmingCharacters(in: .whitespacesAndNewlines),
                     analysisStart: word.start, analysisEnd: word.end, speaker: .unassigned,
-                    analysisSpanIDs: [], confidence: nil)
+                    analysisSpanIDs: [], confidence: nil,
+                    wordTimingProvenance: word.timingProvenance?.scoped(to: "pcm:\(epoch)", wordIndex: index))
             }
         } else {
             let segments = ASRSegmentTiming.validated(result.segmentTimings, text: text, duration: duration)
@@ -916,7 +925,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 analysisEnd: end,
                 speaker: .unassigned,
                 analysisSpanIDs: spanIDs,
-                confidence: nil
+                confidence: nil,
+                wordTimingProvenance: word.timingProvenance
             ))
         }
         for (index, chunk) in output.untimedChunks.enumerated() {

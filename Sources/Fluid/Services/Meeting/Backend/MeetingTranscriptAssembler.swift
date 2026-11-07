@@ -511,6 +511,7 @@ nonisolated struct MeetingTranscriptAssembler {
                     nativeUnitID: unit.id,
                     nativeSpeakerAssignment: unit.speaker,
                     nativeTiming: .init(start: presentation.start, end: presentation.end),
+                    nativeWordTimingProvenance: unit.wordTimingProvenance,
                     speakerAttribution: decisionsByID[unit.id].flatMap {
                         MeetingTranscriptSpeakerAttribution.readingSummary(decision: $0, speakerIDs: speakerIDsByToken)
                     },
@@ -1083,6 +1084,7 @@ nonisolated struct MeetingTranscriptAssembler {
                 nativeUnitID: unit.id,
                 nativeSpeakerAssignment: unit.speaker,
                 nativeTiming: .init(start: interval.start, end: interval.end),
+                nativeWordTimingProvenance: unit.wordTimingProvenance,
                 speakerAttribution: decision.flatMap {
                     MeetingTranscriptSpeakerAttribution.readingSummary(decision: $0, speakerIDs: speakerIDs)
                 },
@@ -1208,7 +1210,8 @@ nonisolated enum MeetingPCMRecordingAttribution {
                 analysisEpochID: epoch, precision: segment.nativePrecision ?? .utterance, text: segment.text,
                 analysisStart: segment.nativeTiming?.start ?? segment.start.seconds,
                 analysisEnd: segment.nativeTiming?.end ?? segment.end.seconds,
-                speaker: .unassigned, analysisSpanIDs: [], confidence: nil)
+                speaker: .unassigned, analysisSpanIDs: [], confidence: nil,
+                wordTimingProvenance: segment.nativeWordTimingProvenance)
         }
         let assignments = try MeetingSpeakerAttribution.acousticAssignments(units: rawUnits,
             activity: activity, policy: speakerAttributionPolicy ?? .standard)
@@ -1297,6 +1300,7 @@ nonisolated enum MeetingPCMRecordingAttribution {
             result.segments[index].nativeUnitID = attributed.segments[index].nativeUnitID
             result.segments[index].nativeSpeakerAssignment = attributed.segments[index].nativeSpeakerAssignment
             result.segments[index].nativeTiming = attributed.segments[index].nativeTiming
+            result.segments[index].nativeWordTimingProvenance = attributed.segments[index].nativeWordTimingProvenance
             result.segments[index].speakerAttribution = attributed.segments[index].speakerAttribution
             result.segments[index].speakerIdentityIsProvisional = attributed.segments[index].speakerIdentityIsProvisional
         }

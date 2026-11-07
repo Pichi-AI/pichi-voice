@@ -87,13 +87,16 @@ final class MeetingPrivacyPublicationTests: XCTestCase {
         let units = words.enumerated().map { index, text in
             MeetingFinalTextUnit(id: "word-\(index)", trackID: epoch.trackID, analysisEpochID: epoch,
                                  precision: .word, text: text, analysisStart: Double(index), analysisEnd: Double(index + 1),
-                                 speaker: .unassigned, analysisSpanIDs: ["span"])
+                                 speaker: .unassigned, analysisSpanIDs: ["span"],
+                                 wordTimingProvenance: .init(basis: .tokenEmission,
+                                     sourceWindowID: "private-source-window", sourceWordIndex: index))
         }
         let original = MeetingFinalTranscriptEvidence(backendID: .gigaam, attemptID: UUID(), units: units)
         let safe = try await MeetingTranscriptPrivacyPolicy.redactedEvidence(original, using: SyntheticPersonRedactor())
         XCTAssertEqual(safe.units.map(\.text), ["Здравствуйте", "[PERSON]", "[PERSON]", "hello"])
         XCTAssertEqual(safe.units.map(\.id), original.units.map(\.id))
         XCTAssertEqual(safe.units.map(\.analysisSpanIDs), original.units.map(\.analysisSpanIDs))
+        XCTAssertEqual(safe.units.map(\.wordTimingProvenance), original.units.map(\.wordTimingProvenance))
     }
 
     func testPrivacyFailureCannotReturnAnUnfilteredPublication() async throws {

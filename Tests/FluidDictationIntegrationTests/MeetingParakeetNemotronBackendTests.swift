@@ -10,6 +10,106 @@ import XCTest
 /// materializer and pipeline integration tests use real WAV files on disk.
 @MainActor
 final class MeetingParakeetNemotronBackendTests: XCTestCase {
+    func testEmissionSourceContextIsExplicitBoundedAndLegacyCompatible() throws {
+        let unscoped = ASRWordTimingProvenance(basis: .tokenEmission)
+        XCTAssertTrue(unscoped.isValid)
+        XCTAssertFalse(unscoped.hasValidSourceContext)
+        let valid = try XCTUnwrap(unscoped.scoped(to: "synthetic-window", wordIndex: 0))
+        XCTAssertTrue(valid.hasValidSourceContext)
+        for malformed in [
+            ASRWordTimingProvenance(basis: .tokenEmission, sourceWindowID: "window"),
+            .init(basis: .tokenEmission, sourceWordIndex: 0),
+            .init(basis: .tokenEmission, sourceWindowID: "", sourceWordIndex: 0),
+            .init(basis: .tokenEmission, sourceWindowID: " \n", sourceWordIndex: 0),
+            .init(basis: .tokenEmission, sourceWindowID: String(repeating: "x", count: 513), sourceWordIndex: 0),
+            .init(basis: .tokenEmission, sourceWindowID: "window", sourceWordIndex: -1),
+            .init(basis: .tokenEmission, sourceWindowID: "window", sourceWordIndex: 8_192),
+        ] {
+            XCTAssertFalse(malformed.isValid)
+            XCTAssertFalse(malformed.hasValidSourceContext)
+            XCTAssertNil(malformed.scoped(to: "replacement", wordIndex: 0))
+        }
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 20 * 16_000)
+        let unit = MeetingFinalTextUnit(id: "native-word", trackID: epoch.trackID, analysisEpochID: epoch,
+            precision: .word, text: "A", analysisStart: 0.08, analysisEnd: 0.12,
+            speaker: .unassigned, analysisSpanIDs: [], wordTimingProvenance: valid)
+        let copy = unit.assigningSpeaker(.assigned(.init(analysisEpochID: epoch, label: "voice")))
+        XCTAssertEqual(copy.wordTimingProvenance, valid)
+        XCTAssertEqual(copy.analysisStart, unit.analysisStart)
+        XCTAssertEqual(copy.analysisEnd, unit.analysisEnd)
+        let data = try JSONEncoder().encode(unit)
+        XCTAssertEqual(try JSONDecoder().decode(MeetingFinalTextUnit.self, from: data), unit)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "wordTimingProvenance")
+        let legacy = try JSONDecoder().decode(MeetingFinalTextUnit.self,
+            from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertNil(legacy.wordTimingProvenance)
+    }
+
+    func testPCMTimingProvenanceRetainsOriginalIndexThroughSortingAndStoredReattribution() throws {
+        let (first, _) = self.attributionTokens()
+        let epoch = first.analysisEpochID
+        let marker = ASRWordTimingProvenance(basis: .tokenEmission)
+        let words = [ASRWordTiming(text: "later", start: 1.44, end: 1.8, timingProvenance: marker),
+                     ASRWordTiming(text: "early", start: 0.08, end: 0.12, timingProvenance: marker)]
+        let units = try MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "later early"),
+            words: words, epoch: epoch, duration: 2, activity: [], identityTokens: [])
+        XCTAssertEqual(units.map(\.text), ["early", "later"])
+        XCTAssertEqual(units.map { $0.wordTimingProvenance?.sourceWordIndex }, [1, 0])
+        XCTAssertEqual(Set(units.compactMap { $0.wordTimingProvenance?.sourceWindowID }).count, 1)
+        XCTAssertTrue(units.allSatisfy { $0.wordTimingProvenance?.hasValidSourceContext == true })
+        let attempt = UUID()
+        let batch = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: attempt, epoch: epoch,
+            offset: 0, duration: 2, units: units)
+        XCTAssertEqual(batch.segments.map(\.nativeWordTimingProvenance), units.map(\.wordTimingProvenance))
+        let encoded = try JSONEncoder().encode(batch.segments)
+        let restored = try JSONDecoder().decode([MeetingTranscriptSegment].self, from: encoded)
+        XCTAssertEqual(restored, batch.segments)
+        let final = try MeetingPCMRecordingAttribution.assemble(transcript: batch,
+            activity: [.init(token: first, start: 0, end: 2)], epoch: epoch,
+            attemptID: attempt, duration: 2, speakerNameFormat: "Speaker %d")
+        XCTAssertEqual(final.segments.map(\.nativeWordTimingProvenance), batch.segments.map(\.nativeWordTimingProvenance))
+        XCTAssertEqual(final.segments.map(\.nativeTiming), batch.segments.map(\.nativeTiming))
+        XCTAssertEqual(final.segments.map(\.id), batch.segments.map(\.id))
+        var session = self.makeSession(mode: .inRoom, tracks: [])
+        session.transcriptSegments = final.segments
+        session.speakers = final.speakers
+        let exported = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: MeetingTranscriptExporter.json(for: session)) as? [String: Any])
+        let rows = try XCTUnwrap(exported["segments"] as? [[String: Any]])
+        XCTAssertEqual(rows.count, 2)
+        let exportedProvenance = try rows.map { row -> ASRWordTimingProvenance in
+            let object = try XCTUnwrap(row["nativeWordTimingProvenance"] as? [String: Any])
+            return try JSONDecoder().decode(ASRWordTimingProvenance.self,
+                from: JSONSerialization.data(withJSONObject: object))
+        }
+        XCTAssertEqual(exportedProvenance, final.segments.compactMap(\.nativeWordTimingProvenance))
+        var legacyObject = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [[String: Any]])
+        for index in legacyObject.indices { legacyObject[index].removeValue(forKey: "nativeWordTimingProvenance") }
+        let legacy = try JSONDecoder().decode([MeetingTranscriptSegment].self,
+            from: JSONSerialization.data(withJSONObject: legacyObject))
+        XCTAssertTrue(legacy.allSatisfy { $0.nativeWordTimingProvenance == nil })
+    }
+
+    func testOfflineFilteringAndCoreRebaseDoNotPromoteLaterEmissionToSourceWordZero() async throws {
+        let marker = ASRWordTimingProvenance(basis: .tokenEmission)
+        let result = try await self.replayResult(seconds: 40, responses: [
+            .init(text: "invalid first", words: [
+                .init(text: "invalid", start: -1, end: 0.04, timingProvenance: marker),
+                .init(text: "first", start: 0.08, end: 0.12, timingProvenance: marker)]),
+            .init(text: "context second", words: [
+                .init(text: "context", start: 0.08, end: 0.12, timingProvenance: marker),
+                .init(text: "second", start: 2.08, end: 2.12, timingProvenance: marker)]),
+        ])
+        let units = result.bundle.evidence.units
+        XCTAssertEqual(units.map(\.text), ["first", "second"])
+        XCTAssertEqual(units.map { $0.wordTimingProvenance?.sourceWordIndex }, [1, 1])
+        XCTAssertEqual(Set(units.compactMap { $0.wordTimingProvenance?.sourceWindowID }).count, 2)
+        XCTAssertEqual(units[0].analysisStart, 0.08, accuracy: 1e-6)
+        XCTAssertEqual(units[1].analysisStart, 20.08, accuracy: 1e-6)
+        XCTAssertTrue(units.allSatisfy { $0.wordTimingProvenance?.hasValidSourceContext == true })
+    }
+
     func testRetainedNewAttemptRestoresCompletedASRCoresAndContinuousSpeakerEvidence() async throws {
         for fingerprint: String? in ["synthetic-sha256", nil] {
         let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 145)
@@ -28,7 +128,8 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
         materializer.replaySampleCounts[epoch.id] = 45 * 16_000
         first.diarizerFactory.segmentsByEpoch[epoch.id] = [.init(slotIndex: 2, start: 0, end: 45)]
-        first.asrSession.responses = [.init(text: "first", words: [.init(text: "first", start: 0.5, end: 1)])]
+        first.asrSession.responses = [.init(text: "first", words: [.init(text: "first", start: 0.5, end: 1,
+            timingProvenance: .init(basis: .tokenEmission))])]
         first.asrSession.cancellationCallIndices = [1]
         do {
             _ = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
@@ -43,7 +144,8 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             .init(text: "third", words: [.init(text: "third", start: 2.5, end: 3)]),
         ]
         if fingerprint == nil {
-            resumedRuntime.asrSession.responses.insert(.init(text: "first", words: [.init(text: "first", start: 0.5, end: 1)]), at: 0)
+            resumedRuntime.asrSession.responses.insert(.init(text: "first", words: [.init(text: "first", start: 0.5, end: 1,
+                timingProvenance: .init(basis: .tokenEmission))]), at: 0)
         }
         let resumedBackend = self.makeBackend(runtime: resumedRuntime, materializer: materializer)
         let resumedRequest = self.makeRequest(session: session, directory: directory, configuration: pinnedASR)
@@ -55,6 +157,11 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(bundle.evidence.attemptID, resumedRequest.attemptID)
         XCTAssertEqual(bundle.evidence.units.map(\.text), ["first", "second", "third"])
         XCTAssertEqual(bundle.evidence.units.map(\.analysisStart), [0.5, 20.5, 40.5])
+        let restoredProvenance = try XCTUnwrap(bundle.evidence.units.first?.wordTimingProvenance)
+        XCTAssertTrue(restoredProvenance.hasValidSourceContext)
+        XCTAssertEqual(restoredProvenance.basis, .tokenEmission)
+        XCTAssertEqual(restoredProvenance.sourceWordIndex, 0)
+        XCTAssertEqual(restoredProvenance.sourceWindowID, "asr:\(epoch.id):0:352000")
         XCTAssertEqual(Set(bundle.evidence.units.map(\.id)).count, 3, "Completed cores cannot be duplicated")
         XCTAssertEqual(resumedRuntime.asrSession.callSampleCounts, (fingerprint == nil ? [22, 24, 7] : [24, 7]).map { $0 * 16_000 },
                        "Only a verified artifact identity authorizes reuse of completed ASR cores")
