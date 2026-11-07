@@ -393,7 +393,6 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         // Intentional privacy exclusion is neither a hardware failure nor writer backpressure.
         // Recheck here because a producer or normalization queue can outlive an observation.
         guard self.sampleAdmission?(sourceSampleBuffer) != false else { return }
-        self.diagnosticSampleObserver?(sourceSampleBuffer, producerEpoch)
         guard CMSampleBufferIsValid(sourceSampleBuffer), CMSampleBufferDataIsReady(sourceSampleBuffer) else {
             self.recordDroppedSample(detail: "Capture delivered an invalid audio sample.")
             return
@@ -401,11 +400,12 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         let clockPacket = MeetingCaptureClockMetadata.read(from: sourceSampleBuffer)
         if let clockContext {
             guard let clockPacket, clockContext.accepts(clockPacket) else {
-                self.reportWriterFailure(detail: "Capture packet has no recording-clock mapping.", sampleBuffer: sourceSampleBuffer)
+                self.reportWriterFailure(detail: PichiLocalization.text("Audio timing could not be verified."), sampleBuffer: sourceSampleBuffer)
                 return
             }
         }
         let producerEpoch = self.clockContext != nil ? clockPacket?.producerEpoch ?? producerEpoch : producerEpoch
+        self.diagnosticSampleObserver?(sourceSampleBuffer, producerEpoch)
         var hostMapping = self.clockContext != nil ? clockPacket?.mapping : nil
         let sourcePresentationTime = CMSampleBufferGetPresentationTimeStamp(sourceSampleBuffer)
         guard sourcePresentationTime.isValid, sourcePresentationTime.isNumeric else {
@@ -443,7 +443,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         var backwardReset = false
         if hostMapping != nil {
             if let previousEnd, presentationTime < previousEnd - CMTime(value: 1, timescale: 1_000_000) {
-                self.reportWriterFailure(detail: "Recording-clock packets overlap.", sampleBuffer: sourceSampleBuffer)
+                self.reportWriterFailure(detail: PichiLocalization.text("Audio timing could not be verified."), sampleBuffer: sourceSampleBuffer)
                 return
             }
         } else if let previousEnd, presentationTime < previousEnd {

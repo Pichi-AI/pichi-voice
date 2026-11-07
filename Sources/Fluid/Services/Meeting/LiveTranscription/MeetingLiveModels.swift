@@ -301,7 +301,10 @@ final nonisolated class MeetingLiveOriginBox: @unchecked Sendable {
 /// One immutable host-clock axis and ownership scope for a capture attempt. Frame positions
 /// remain media coordinates; only measured host intervals determine recording time.
 final nonisolated class MeetingRecordingClock: @unchecked Sendable {
-    enum Failure: Error { case invalidTimebase, invalidPacket, retiredProducer, unprovenClock }
+    enum Failure: LocalizedError {
+        case invalidTimebase, invalidPacket, retiredProducer, unprovenClock
+        var errorDescription: String? { PichiLocalization.text("Audio timing could not be verified.") }
+    }
     let id: UUID
     let origin: CMTime
     private let lock = NSLock()
