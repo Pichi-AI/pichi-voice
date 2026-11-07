@@ -726,6 +726,244 @@ extension MeetingMicrophoneCaptureTests {
         XCTAssertEqual(gate.statistics.deliveredBuffers, 0)
     }
 
+    func testAcquisitionClockKeepsFortyFiveMinuteDriftingMicrophoneContinuous() async throws {
+        let host = PrivacyHostClock()
+        let gate = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions),
+            hostTime: { host.now() }, automaticWatchdog: false)
+        defer { gate.close() }
+        gate.setAdmitted(true, observedAtHostTime: host.now())
+        let sink = AcquisitionSink()
+        var clock = MeetingMicrophonePTSClock()
+        let carrier = try self.acquisitionSample(at: CMTime(seconds: 1_000, preferredTimescale: 48_000), frames: 4_800)
+        let count = 27_000
+        for index in 0..<count {
+            let acquisition = 1_000 + Double(index) * 0.1 * (1 - 5e-6)
+            let acquiredAt = Self.privacyHostTime(acquisition)
+            guard case let .emitted(pts, _, _, _) = clock.stamp(hostTime: acquiredAt, frameCount: 4_800) else {
+                return XCTFail("A valid hardware clock unexpectedly stopped")
+            }
+            // A realistic variable handoff delay becomes shorter than accumulated canonical lead.
+            host.set(acquisition + 0.100 + Double(index % 13) * 0.0005 + 0.001)
+            let sample = try self.acquisitionCopy(carrier, at: pts)
+            XCTAssertTrue(gate.submit(sample, acquisitionHostTime: acquiredAt,
+                                      deliveryQueue: sink.queue, delivery: sink.receive))
+            gate.checkFreshnessAndDrain()
+            if index % 10 == 0 { sink.join() }
+        }
+        host.set(3_702)
+        gate.checkFreshnessAndDrain(); sink.join()
+        await gate.stop()
+        XCTAssertEqual(sink.count, count, "Host-clock drift must not turn continuous allowed capture into tiny islands")
+        XCTAssertEqual(sink.frames, count * 4_800)
+        XCTAssertTrue(sink.contiguous, "Privacy checks preserve the source's exact sample-count PTS")
+        XCTAssertEqual(gate.statistics.rejectedBuffers, 0)
+        XCTAssertEqual(gate.statistics.retainedBuffers, 0)
+    }
+
+    func testVerifiedAcquisitionRecoversAcrossNinetyMinuteDriftThresholdWithoutBackwardsPCM() async throws {
+        let host = PrivacyHostClock(), sink = AcquisitionSink()
+        let gate = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions),
+            hostTime: { host.now() }, automaticWatchdog: false)
+        defer { gate.close() }
+        gate.setAdmitted(true, observedAtHostTime: host.now())
+        var clock = MeetingMicrophonePTSClock()
+        let carrier = try self.acquisitionSample(at: CMTime(seconds: 1_000, preferredTimescale: 48_000), frames: 4_800)
+        let count = 54_000
+        var discarded = 0, consecutiveDiscards = 0, maximumConsecutiveDiscards = 0
+        var lastPublishedEnd: CMTime?
+        for index in 0..<count {
+            let acquisition = 1_000 + Double(index) * 0.1 * (1 - 5e-6)
+            let acquiredAt = Self.privacyHostTime(acquisition)
+            host.set(acquisition + 0.102 + Double(index % 13) * 0.0005)
+            // This is the same verified stamping and rollback transition used by the native tap.
+            guard let outcome = clock.stampVerifiedAcquisition(hostTime: acquiredAt, frameCount: 4_800) else {
+                discarded += 1; consecutiveDiscards += 1
+                maximumConsecutiveDiscards = max(maximumConsecutiveDiscards, consecutiveDiscards)
+                continue
+            }
+            consecutiveDiscards = 0
+            guard case let .emitted(pts, _, _, _) = outcome else { return XCTFail("Verified capture returned a non-emitting result") }
+            if let lastPublishedEnd {
+                XCTAssertGreaterThanOrEqual(CMTimeCompare(pts, lastPublishedEnd), 0,
+                    "Re-anchoring must preserve every genuinely published end")
+            }
+            lastPublishedEnd = pts + CMTime(value: 4_800, timescale: 48_000)
+            let sample = try self.acquisitionCopy(carrier, at: pts)
+            XCTAssertTrue(gate.submit(sample, acquisitionHostTime: acquiredAt,
+                                      deliveryQueue: sink.queue, delivery: sink.receive))
+            gate.checkFreshnessAndDrain()
+            if index % 10 == 0 { sink.join() }
+        }
+        host.set(6_402); gate.checkFreshnessAndDrain(); sink.join()
+        await gate.stop()
+        XCTAssertGreaterThan(discarded, 0, "The run must cross the native 20 ms acquisition-proof boundary")
+        XCTAssertLessThanOrEqual(discarded, 2, "A drift reset must retire only a bounded unpublished tail")
+        XCTAssertLessThanOrEqual(maximumConsecutiveDiscards, 1, "The next valid acquisition must recover promptly")
+        XCTAssertEqual(sink.count, count - discarded, "No accepted PCM may disappear after clock recovery")
+        XCTAssertEqual(sink.frames, (count - discarded) * 4_800)
+        XCTAssertEqual(gate.statistics.rejectedBuffers, 0)
+        XCTAssertEqual(gate.statistics.retainedBuffers, 0)
+    }
+
+    func testVerifiedAcquisitionRepeatedRejectionsCannotAdvanceThePublishedBoundary() {
+        var clock = MeetingMicrophonePTSClock()
+        XCTAssertNotNil(clock.stampVerifiedAcquisition(hostTime: Self.privacyHostTime(1_000), frameCount: 4_800))
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: Self.privacyHostTime(1_000.070), frameCount: 4_800))
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: Self.privacyHostTime(1_000.075), frameCount: 4_800))
+        let recovered = clock.stampVerifiedAcquisition(hostTime: Self.privacyHostTime(1_000.180), frameCount: 4_800)
+        guard case let .emitted(pts, _, _, _)? = recovered else { return XCTFail("An unpublished future end blocked recovery") }
+        XCTAssertEqual(pts.seconds, 1_000.180, accuracy: 1.0 / 48_000)
+        XCTAssertGreaterThanOrEqual(CMTimeCompare(pts, CMTime(seconds: 1_000.1, preferredTimescale: 48_000)), 0)
+        guard case let .emitted(next, _, _, _)? = clock.stampVerifiedAcquisition(
+            hostTime: Self.privacyHostTime(1_000.280), frameCount: 4_800) else { return XCTFail("The recovered acquisition stopped again") }
+        XCTAssertEqual(next.seconds, pts.seconds + 0.1, accuracy: 1.0 / 48_000)
+    }
+
+    func testVerifiedAcquisitionInvalidAndBackwardsHostTimesPreserveAcceptedPCM() {
+        var clock = MeetingMicrophonePTSClock()
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: nil, frameCount: 4_800))
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: nil, frameCount: 4_800), "A non-emitting rejection must be idempotent")
+        guard case let .emitted(first, _, _, _)? = clock.stampVerifiedAcquisition(
+            hostTime: Self.privacyHostTime(1_000), frameCount: 4_800) else { return XCTFail("The first valid acquisition did not start") }
+        XCTAssertEqual(first.seconds, 1_000, accuracy: 1.0 / 48_000)
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: nil, frameCount: 4_800), "Synthesized acquisition remains unproved")
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: Self.privacyHostTime(999.8), frameCount: 4_800))
+        XCTAssertNil(clock.stampVerifiedAcquisition(hostTime: Self.privacyHostTime(999.9), frameCount: 4_800))
+        guard case let .emitted(recovered, _, _, _)? = clock.stampVerifiedAcquisition(
+            hostTime: Self.privacyHostTime(1_000.2), frameCount: 4_800) else { return XCTFail("Valid time did not recover after backwards acquisition") }
+        XCTAssertEqual(recovered.seconds, 1_000.2, accuracy: 1.0 / 48_000)
+        XCTAssertGreaterThanOrEqual(CMTimeCompare(recovered, first + CMTime(value: 4_800, timescale: 48_000)), 0)
+        clock.requestTimelineReset()
+        guard case let .emitted(clamped, _, _, _) = clock.stamp(
+            hostTime: Self.privacyHostTime(999.9), frameCount: 4_800) else { return XCTFail("Ordinary capture did not preserve its existing clamp") }
+        XCTAssertEqual(clamped.seconds, recovered.seconds + 0.1, accuracy: 1.0 / 48_000,
+                       "The non-privacy reset still clamps against genuinely emitted PCM")
+    }
+
+    func testOnlyVerifiedAcquisitionCanQuarantineCanonicalFuturePCM() async throws {
+        let host = PrivacyHostClock(), sink = AcquisitionSink()
+        let gate = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions),
+            hostTime: { host.now() }, automaticWatchdog: false)
+        defer { gate.close() }
+        gate.setAdmitted(true, observedAtHostTime: host.now())
+        let sample = try self.acquisitionSample(at: CMTime(seconds: 1_000.110, preferredTimescale: 48_000), frames: 4_800)
+        host.set(1_000.205)
+        XCTAssertFalse(gate.submit(sample, deliveryQueue: sink.queue, delivery: sink.receive),
+                       "Unproven ScreenCaptureKit/AVCapture PCM retains strict future rejection")
+        XCTAssertFalse(gate.submit(sample, acquisitionHostTime: Self.privacyHostTime(1_000.080),
+                                  deliveryQueue: sink.queue, delivery: sink.receive), "An out-of-contract acquisition clock is rejected")
+        let actualFuture = try self.acquisitionSample(at: CMTime(seconds: 1_000.220, preferredTimescale: 48_000))
+        XCTAssertFalse(gate.submit(actualFuture, acquisitionHostTime: Self.privacyHostTime(1_000.210),
+                                  deliveryQueue: sink.queue, delivery: sink.receive), "Verified acquisition still cannot be in the future")
+        XCTAssertTrue(gate.submit(sample, acquisitionHostTime: Self.privacyHostTime(1_000.100),
+                                 deliveryQueue: sink.queue, delivery: sink.receive))
+        host.set(1_001.215); gate.checkFreshnessAndDrain(); sink.join()
+        XCTAssertEqual(sink.count, 0, "A verified clock does not bypass full quarantine on either timeline")
+        host.set(1_001.240); gate.checkFreshnessAndDrain(); sink.join()
+        XCTAssertEqual(sink.count, 1)
+        let owned = try XCTUnwrap(sink.last)
+        XCTAssertTrue(gate.permitsReleasedSample(owned))
+        var copied: CMSampleBuffer?
+        XCTAssertEqual(CMSampleBufferCreateCopy(allocator: kCFAllocatorDefault, sampleBuffer: owned,
+                                             sampleBufferOut: &copied), noErr)
+        XCTAssertTrue(gate.permitsReleasedSample(try XCTUnwrap(copied)), "A native copy preserves gate-owned acquisition proof")
+        let transformed = try self.acquisitionSample(at: CMSampleBufferGetPresentationTimeStamp(owned), frames: 4_800)
+        XCTAssertTrue(gate.permitsReleasedSample(transformed),
+                      "A downstream resampler's canonical output is already conservatively mature when ingress releases it")
+        let other = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions),
+            hostTime: { host.now() }, automaticWatchdog: false)
+        defer { other.close() }
+        other.setAdmitted(true, observedAtHostTime: host.now())
+        XCTAssertFalse(other.permitsReleasedSample(owned), "Acquisition proof belongs to one capture gate")
+    }
+
+    func testAcquisitionProofUsesRealUnmuteAndMuteBoundariesForCopiedAndTransformedPCM() async throws {
+        let host = PrivacyHostClock(), sink = AcquisitionSink()
+        let gate = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions),
+            hostTime: { host.now() }, automaticWatchdog: false)
+        defer { gate.close() }
+        gate.setAdmitted(true, observedAtHostTime: host.now())
+        host.set(1_000.3); gate.setAdmitted(false, observedAtHostTime: host.now())
+        host.set(1_000.5); gate.setAdmitted(true, observedAtHostTime: host.now())
+        host.set(1_000.6)
+        let beforeUnmute = try self.acquisitionSample(at: CMTime(seconds: 1_000.509, preferredTimescale: 48_000))
+        XCTAssertFalse(gate.submit(beforeUnmute, acquisitionHostTime: Self.privacyHostTime(1_000.490),
+                                  deliveryQueue: sink.queue, delivery: sink.receive), "Canonical lead cannot admit pre-unmute acquisition")
+        let allowed = try self.acquisitionSample(at: CMTime(seconds: 1_000.540, preferredTimescale: 48_000))
+        XCTAssertTrue(gate.submit(allowed, acquisitionHostTime: Self.privacyHostTime(1_000.521),
+                                 deliveryQueue: sink.queue, delivery: sink.receive))
+        host.set(1_001.7); gate.checkFreshnessAndDrain(); sink.join()
+        let owned = try XCTUnwrap(sink.last)
+        XCTAssertTrue(gate.permitsReleasedSample(owned))
+        XCTAssertFalse(gate.permitsReleasedSample(beforeUnmute), "An attachment-free converted buffer has a conservative reopen edge")
+        XCTAssertTrue(gate.permitsReleasedSample(allowed), "Canonical resampler output after the safe reopen edge remains usable")
+        let closeTail = try self.acquisitionSample(at: CMTime(seconds: 1_001.979, preferredTimescale: 48_000))
+        host.set(1_001.990)
+        XCTAssertTrue(gate.submit(closeTail, acquisitionHostTime: Self.privacyHostTime(1_001.960),
+                                 deliveryQueue: sink.queue, delivery: sink.receive))
+        host.set(1_002); gate.setAdmitted(false, observedAtHostTime: host.now())
+        host.set(1_003.2); gate.checkFreshnessAndDrain(); sink.join()
+        XCTAssertEqual(sink.count, 1, "Close still removes the quarantined unsafe tail")
+        XCTAssertFalse(gate.permitsReleasedSample(closeTail))
+        XCTAssertTrue(gate.permitsReleasedSample(owned), "A confirmed copied prefix survives ordinary Stop")
+        await gate.stop()
+        XCTAssertEqual(gate.statistics.retainedBuffers, 0)
+        gate.close()
+        XCTAssertFalse(gate.permitsReleasedSample(owned), "Abort revokes the gate-owned attachment too")
+    }
+
+    func testAcquisitionAbortDropsPendingCopiesAndJoinsWithoutLateDelivery() async throws {
+        let host = PrivacyHostClock(), sink = AcquisitionSink()
+        let gate = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions),
+            hostTime: { host.now() }, automaticWatchdog: false)
+        gate.setAdmitted(true, observedAtHostTime: host.now())
+        host.set(1_000.205)
+        let sample = try self.acquisitionSample(at: CMTime(seconds: 1_000.110, preferredTimescale: 48_000), frames: 4_800)
+        XCTAssertTrue(gate.submit(sample, acquisitionHostTime: Self.privacyHostTime(1_000.100),
+                                 deliveryQueue: sink.queue, delivery: sink.receive))
+        gate.close()
+        host.set(1_002)
+        gate.checkFreshnessAndDrain()
+        await gate.stop(); sink.join()
+        XCTAssertEqual(sink.count, 0)
+        XCTAssertEqual(gate.statistics.retainedBuffers, 0)
+        XCTAssertEqual(gate.statistics.retainedBytes, 0)
+    }
+
+    private func acquisitionSample(at pts: CMTime, frames: AVAudioFrameCount = 480) throws -> CMSampleBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false))
+        let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+        pcm.frameLength = frames
+        try XCTUnwrap(pcm.floatChannelData?[0]).initialize(repeating: 0.25, count: Int(frames))
+        return try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(from: pcm, presentationTime: pts))
+    }
+
+    private func acquisitionCopy(_ sample: CMSampleBuffer, at pts: CMTime) throws -> CMSampleBuffer {
+        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 48_000),
+                                       presentationTimeStamp: pts, decodeTimeStamp: .invalid)
+        var copy: CMSampleBuffer?
+        XCTAssertEqual(CMSampleBufferCreateCopyWithNewTiming(allocator: kCFAllocatorDefault, sampleBuffer: sample,
+            sampleTimingEntryCount: 1, sampleTimingArray: &timing, sampleBufferOut: &copy), noErr)
+        return try XCTUnwrap(copy)
+    }
+
+    private final nonisolated class AcquisitionSink: @unchecked Sendable {
+        let queue = DispatchQueue(label: "meeting.acquisition-clock.tests")
+        private var previousEnd: CMTime?
+        private(set) var count = 0
+        private(set) var frames = 0
+        private(set) var contiguous = true
+        private(set) var last: CMSampleBuffer?
+        func receive(_ sample: CMSampleBuffer) {
+            let pts = CMSampleBufferGetPresentationTimeStamp(sample)
+            if let previousEnd, abs((pts - previousEnd).seconds) > 1.0 / 48_000 { self.contiguous = false }
+            let frames = CMSampleBufferGetNumSamples(sample)
+            self.previousEnd = pts + CMTime(value: Int64(frames), timescale: 48_000)
+            self.count += 1; self.frames += frames; self.last = sample
+        }
+        func join() { self.queue.sync {} }
+    }
+
     private final nonisolated class PrivacyHostClock: @unchecked Sendable {
         private let lock = NSLock()
         private var hostTime = CMClockConvertHostTimeToSystemUnits(CMTime(seconds: 1_000, preferredTimescale: 1_000_000_000))
