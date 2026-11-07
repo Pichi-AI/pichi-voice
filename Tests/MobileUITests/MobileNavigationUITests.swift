@@ -61,6 +61,10 @@ final class MobileNavigationUITests: XCTestCase {
         continueAfterFailure = false
         if !productionDownload { XCUIDevice.shared.orientation = .portrait }
         app = XCUIApplication()
+        if name.contains("testFastManualReturnToCaptionBottomRestoresFollowing")
+            || name.contains("testCaptureSourceHeaderInBothLanguagesAndThemes") {
+            app.launchEnvironment["PICHI_UI_CAPTION_REVIEW"] = "1"
+        }
         if !productionDownload {
             let language = name.contains("testSharedGuestHistoryAcrossAccountProfiles") ? "ru" : "en"
             app.launchArguments += ["-PichiInterfaceLanguage", language]
@@ -862,6 +866,27 @@ final class MobileNavigationUITests: XCTestCase {
                 XCTAssertTrue(app.staticTexts["Синтетический текст гостевой встречи."].waitForExistence(timeout: 5))
                 capture("shared-guest-\(profile)-\(appearance)-detail")
             }
+        }
+        #endif
+    }
+
+    func testCaptureSourceHeaderInBothLanguagesAndThemes() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Synthetic live-caption presentation is simulator-only")
+        #else
+        defer { app.terminate() }
+        for (language, appearance, source) in [("en", "light", "Microphone"), ("ru", "dark", "Микрофон")] {
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance] + Self.completedSetup
+            app.launch()
+            let viewport = app.tables["meeting.liveTranscript.viewport"]
+            XCTAssertTrue(viewport.waitForExistence(timeout: 10))
+            let header = app.staticTexts[source].firstMatch
+            for _ in 0..<20 where !header.exists || !header.isHittable {
+                viewport.swipeDown(velocity: .fast)
+            }
+            XCTAssertTrue(header.exists && header.isHittable, "The actual live source header must be visible")
+            capture("source-header-\(language)-\(appearance)")
         }
         #endif
     }
