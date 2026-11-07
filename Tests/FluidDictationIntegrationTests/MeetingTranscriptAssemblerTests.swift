@@ -127,7 +127,7 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
     }
 
     func testUnscoredWordInPauseFollowsIncomingVoiceInsteadOfEarlierLongTurn() throws {
-        let (session, epoch) = self.readingFixture([(0, 10, 0), (12, 12.04, nil), (13, 19, 1)])
+        var (session, epoch) = self.readingFixture([(0, 10, 0), (12, 12.04, nil), (13, 19, 1)])
         let result = try self.resolveReading(session, epoch: epoch)
         XCTAssertEqual(result.segments[1].speakerID, session.speakers[1].id)
         XCTAssertEqual(result.segments[1].nativeSpeakerAssignment, .unassigned)
@@ -139,6 +139,27 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             fallbackSpeaker: { MeetingTranscriptAssembler().readingFallbackSpeaker(attemptID: session.id, epoch: $0) })
         XCTAssertEqual(old.segments[1].speakerID, session.speakers[0].id)
         XCTAssertNotEqual(oldPolicy.fingerprint, MeetingSpeakerAttributionPolicy.standard.fingerprint)
+        let word = session.transcriptSegments[1]
+        let decision = try XCTUnwrap(MeetingSpeakerAttribution.resolve(units: [.init(
+            id: word.nativeUnitID!, trackID: epoch.trackID, analysisEpochID: epoch, precision: .word,
+            text: word.text, analysisStart: 12, analysisEnd: 12.04, speaker: .unassigned, analysisSpanIDs: [])], activity: []).first)
+        session.transcriptSegments[1].speakerAttribution = .init(decision: decision, speakerIDs: [:])
+        XCTAssertEqual(session.transcriptSegments[1].speakerAttribution?.relation, MeetingSpeakerAttributionRelation.none)
+        XCTAssertEqual(try self.resolveReading(session, epoch: epoch).segments[1].speakerID, session.speakers[1].id)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(oldPolicy)) as? [String: Any])
+        json.removeValue(forKey: "enableIncomingGapReading")
+        let decoded = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
+            from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertFalse(decoded.enableIncomingGapReading)
+        XCTAssertEqual(decoded.fingerprint, oldPolicy.fingerprint)
+    }
+
+    func testIncomingPauseRuleCannotReachBeyondLiveReadingHorizon() throws {
+        for nextStart in [27.04, 100] {
+            let (session, epoch) = self.readingFixture([(0, 10, 0), (12, 12.04, nil), (nextStart, nextStart + 1, 1)])
+            let result = try self.resolveReading(session, epoch: epoch)
+            XCTAssertEqual(result.segments[1].speakerID, session.speakers[0].id)
+        }
     }
 
     func testReadingOwnershipDoesNotCrossCoverageBarrierOrReplaceManualCorrection() throws {
