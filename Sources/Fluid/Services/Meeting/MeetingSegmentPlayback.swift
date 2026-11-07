@@ -2,6 +2,61 @@ import AVFoundation
 import Combine
 import Foundation
 
+@MainActor
+protocol MeetingPlaybackAudioSessionControlling {
+    func activate() throws
+    func deactivate()
+}
+
+/// Playback owns activation only while playing. Capture retains its own category and route policy.
+@MainActor
+final class MeetingPlaybackAudioSession: MeetingPlaybackAudioSessionControlling {
+#if os(iOS)
+    private let session: any MeetingPlaybackSystemAudioSession
+    private var ownsActivation = false
+
+    init(session: any MeetingPlaybackSystemAudioSession = AVAudioSession.sharedInstance()) {
+        self.session = session
+    }
+#endif
+
+    func activate() throws {
+#if os(iOS)
+        // The default/previous recording category can respect Silent or use an input route.
+        // Media playback remains audible in Silent and lets iOS keep the user's headphones.
+        try self.session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        self.ownsActivation = true
+        do { try self.session.setActive(true, options: []) }
+        catch { self.deactivate(); throw error }
+#endif
+    }
+
+    func deactivate() {
+#if os(iOS)
+        guard self.ownsActivation else { return }
+        self.ownsActivation = false
+        // A newer capture owner must never be deactivated by an old playback callback.
+        guard self.session.category == .playback, self.session.mode == .default,
+              self.session.categoryOptions == [.mixWithOthers] else { return }
+        try? self.session.setActive(false, options: [.notifyOthersOnDeactivation])
+#endif
+    }
+}
+
+#if os(iOS)
+@MainActor
+protocol MeetingPlaybackSystemAudioSession {
+    var category: AVAudioSession.Category { get }
+    var mode: AVAudioSession.Mode { get }
+    var categoryOptions: AVAudioSession.CategoryOptions { get }
+    func setCategory(_ category: AVAudioSession.Category, mode: AVAudioSession.Mode,
+                     options: AVAudioSession.CategoryOptions) throws
+    func setActive(_ active: Bool, options: AVAudioSession.SetActiveOptions) throws
+}
+
+extension AVAudioSession: MeetingPlaybackSystemAudioSession {}
+#endif
+
 /// Only the expanded player observes the clock; transcript rows do not redraw every tick.
 @MainActor
 final class MeetingPlaybackProgress: ObservableObject {
@@ -29,8 +84,15 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
     private var activeSegmentIDs: [MeetingTranscriptSegmentID] = []
     private var activeOwnership: MeetingProfileOwnership?
     private let profile = PrivateProfileStorage.current
+    private let store: any MeetingSessionStoring
+    private let audioSession: any MeetingPlaybackAudioSessionControlling
 
-    init() { PrivateProfileService.shared.register(self) }
+    init(store: any MeetingSessionStoring = MeetingSessionStore.shared,
+         audioSession: (any MeetingPlaybackAudioSessionControlling)? = nil) {
+        self.store = store
+        self.audioSession = audioSession ?? MeetingPlaybackAudioSession()
+        PrivateProfileService.shared.register(self)
+    }
 
     func prepareForPrivateProfileTransition() async throws {
         let task = loadTask
@@ -69,9 +131,10 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
         self.activeOwnership = expectedOwnership
         self.isLoading = true
         let requestID = self.requestID
+        let store = self.store
         self.loadTask = Task { [weak self] in
             do {
-                guard let source = try await MeetingSessionStore.shared.loadExistingSource(id: sessionID,
+                guard let source = try await store.loadExistingSource(id: sessionID,
                     expectedOwnership: expectedOwnership)
                 else { throw MeetingSegmentPlaybackError.unavailable }
                 let session = source.session, directory = source.directory
@@ -101,6 +164,7 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
                         guard !self.isSeeking else { return }
                         self.player?.pause()
                         self.progress.isPlaying = false
+                        self.audioSession.deactivate()
                         self.progress.elapsed = self.progress.duration
                     }
                 }
@@ -121,8 +185,7 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
                         self.errorMessage = "This audio chunk could not be played."
                     }
                 }
-                self.progress.isPlaying = true
-                player.play()
+                self.resume()
             } catch {
                 guard let self, !Task.isCancelled, self.requestID == requestID else { return }
                 self.stop()
@@ -136,7 +199,9 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
         if self.progress.isPlaying {
             player.pause()
             self.progress.isPlaying = false
+            self.audioSession.deactivate()
         } else {
+            guard self.activateAudioSession() else { return }
             self.progress.isPlaying = true
             if self.progress.elapsed >= self.progress.duration - 0.05 {
                 self.seek(to: 0)
@@ -144,6 +209,21 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
                 player.play()
             }
         }
+    }
+
+    private func activateAudioSession() -> Bool {
+        do { try self.audioSession.activate(); return true }
+        catch {
+            self.stop()
+            self.errorMessage = "This audio chunk could not be played."
+            return false
+        }
+    }
+
+    private func resume() {
+        guard self.activateAudioSession() else { return }
+        self.progress.isPlaying = true
+        self.player?.play()
     }
 
     func seek(to seconds: Double) {
@@ -163,6 +243,7 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
                     self.player?.play()
                 } else if position >= self.progress.duration || !finished {
                     self.progress.isPlaying = false
+                    self.audioSession.deactivate()
                 }
             }
         }
@@ -179,6 +260,7 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
         self.loadTask?.cancel()
         self.loadTask = nil
         self.player?.pause()
+        self.audioSession.deactivate()
         if let timeObserver { self.player?.removeTimeObserver(timeObserver) }
         self.timeObserver = nil
         self.isSeeking = false

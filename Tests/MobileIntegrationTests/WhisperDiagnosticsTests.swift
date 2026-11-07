@@ -1,5 +1,7 @@
 import Foundation
 #if !PICHI_WHISPER_DIAGNOSTICS_STANDALONE
+import AVFoundation
+import TranscribeCpp
 import XCTest
 @testable import PichiVoiceMobile
 #endif
@@ -127,12 +129,28 @@ private enum WhisperDiagnosticCases {
         try require(WhisperShortInputPolicy.evaluate(hasText: false, chunks: []) == .empty, "An empty successful decode is not a capture failure")
     }
 
-    static func uncertainFinalTierAndStrongNoSpeechAreNotPublished() throws {
-        try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(avgLogprob: -1.001)]) == .lowLogprob, "Failed final decoder tier must be suppressed")
+    static func uncertainSpeechIsPreservedWhileSilenceAndRepetitionAreRejected() throws {
+        // Scalar traces from the reported 1.0 (24) failure, not private PCM or text.
+        for chunk in [quality(avgLogprob: -1.013960, noSpeechProbability: 0.101760),
+                      quality(avgLogprob: -1.223409, noSpeechProbability: 0.096204),
+                      quality(avgLogprob: -2.653449, noSpeechProbability: 0.147411)] {
+            let decision = WhisperShortInputPolicy.evaluate(hasText: true, chunks: [chunk])
+            try require(decision == .lowLogprob && decision.preservesText,
+                        "Uncertain native wording must not become a successful empty speech result")
+        }
         try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(compressionRatio: 2.401)]) == .compression, "Repetitive final decoder tier must be suppressed")
         try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(noSpeechProbability: 0.9)]) == .noSpeech, "Strong no-speech evidence must suppress Tiny hallucination")
         try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(noSpeechProbability: 0.01, noSpeechTriggered: true)]) == .noSpeech, "Native no-speech decision must be honored")
-        try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(), quality(avgLogprob: -1.01, fallbacks: 5)]) == .lowLogprob, "A good earlier chunk cannot hide a failed later tier")
+        try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(), quality(avgLogprob: -1.01, fallbacks: 5)]) == .lowLogprob, "Low likelihood remains an explicit diagnostic decision")
+        for rejected in [quality(compressionRatio: 2.401), quality(noSpeechProbability: 0.95),
+                         quality(avgLogprob: .nan)] {
+            let decision = WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(avgLogprob: -1.2), rejected])
+            try require(!decision.preservesText, "Uncertain early wording cannot hide a later unsafe or malformed chunk")
+        }
+        for decision: WhisperShortInputPolicy.Decision in [.empty, .missingQuality, .invalidQuality, .noSpeech, .compression] {
+            try require(!decision.preservesText, "Rejected native evidence cannot be published")
+        }
+        try require(WhisperShortInputPolicy.Decision.accepted.preservesText, "Clear native speech remains accepted")
         // Successful fallback is not intrinsically bad quality. It is the
         // native final-tier measurements that determine acceptance.
         try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(temperature: 0.2, fallbacks: 1)]) == .accepted, "Do not invent a confidence penalty from the fallback count")
@@ -178,7 +196,7 @@ private struct WhisperDiagnosticsStandalone {
         try WhisperDiagnosticCases.unknownTimingsRemainUnknown()
         try WhisperDiagnosticCases.tinyPolicyRequiresLoadedArtifactAndBoundedPhysicalInput()
         try WhisperDiagnosticCases.nativeQualityKeepsClearAndQuietSpeechWithoutTokens()
-        try WhisperDiagnosticCases.uncertainFinalTierAndStrongNoSpeechAreNotPublished()
+        try WhisperDiagnosticCases.uncertainSpeechIsPreservedWhileSilenceAndRepetitionAreRejected()
         try WhisperDiagnosticCases.missingOrMalformedNativeQualityCannotBecomePerfectConfidence()
         try WhisperDiagnosticCases.partialQualityGateDoesNotPretendToBeSemanticOrVoiceActivityDetection()
         print("PASS: 12 synthetic Whisper diagnostic/quality scenarios using production values")
@@ -187,6 +205,56 @@ private struct WhisperDiagnosticsStandalone {
 #else
 @MainActor
 final class WhisperDiagnosticsTests: XCTestCase {
+    func testRealTinyProviderPreservesAnUncertainNativeSpeechResult() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let directory = environment["PICHI_WHISPER_MODEL_DIR"],
+              let fixture = environment["PICHI_WHISPER_UNCERTAIN_FIXTURE"] else {
+            throw XCTSkip("Enable a verified local Tiny model and synthetic noisy speech fixture explicitly")
+        }
+        let file = try AVAudioFile(forReading: URL(fileURLWithPath: fixture))
+        XCTAssertEqual(file.processingFormat.sampleRate, 16_000)
+        XCTAssertEqual(file.processingFormat.channelCount, 1)
+        XCTAssertTrue((16_000...320_000).contains(Int(file.length)))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+            frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: buffer)
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+        let samples = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+        // Verify the fixture's native premise before exercising the actual provider.
+        // This does not infer wording accuracy from a scalar or publish private audio.
+        let native = try await self.uncertainNativeSnapshot(samples, directory: directory)
+        XCTAssertFalse(native.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        XCTAssertTrue(native.isUncertain, "The fixture must cover the reported low-likelihood branch")
+        let provider = WhisperProvider(modelDirectory: URL(fileURLWithPath: directory),
+            modelOverride: .whisperTiny, useAutomaticLanguageDetection: true)
+        addTeardownBlock { @MainActor in await provider.releaseResidency() }
+        try await provider.prepare()
+        let recognized = try await provider.transcribe(samples)
+        XCTAssertEqual(recognized.text, native.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "The adapter must preserve uncertain native wording instead of returning silence")
+        XCTAssertFalse(recognized.text.isEmpty)
+        // Uncertain native speech can lack usable alignment. The existing timing
+        // validator may omit it; surviving intervals must still fit physical PCM.
+        XCTAssertTrue(recognized.segmentTimings.allSatisfy { $0.end <= Double(samples.count) / 16_000 })
+    }
+
+    private func uncertainNativeSnapshot(_ samples: [Float], directory: String) async throws -> (text: String, isUncertain: Bool) {
+        try Transcribe.initBackends()
+        let model = try Model(path: URL(fileURLWithPath: directory)
+            .appendingPathComponent("whisper-tiny-Q8_0.gguf").path, options: .init(backend: .cpu))
+        let session = try model.session()
+        let snapshot = try await session.runWhisper(samples, options: WhisperProvider.runOptions(
+            languageCode: "auto", model: .whisperTiny,
+            loadedModelName: "whisper-tiny-Q8_0.gguf", sampleCount: samples.count))
+        let chunks = snapshot.chunks.map {
+            WhisperShortInputPolicy.Chunk(temperature: $0.temperature, avgLogprob: $0.avgLogprob,
+                compressionRatio: $0.compressionRatio, noSpeechProbability: $0.noSpeechProbability,
+                fallbacks: $0.fallbacks, noSpeechTriggered: $0.noSpeechTriggered)
+        }
+        return (snapshot.transcript.text,
+            WhisperShortInputPolicy.evaluate(hasText: !snapshot.transcript.text.isEmpty, chunks: chunks) == .lowLogprob)
+    }
+
     func testSilenceAndPhysicalDuration() throws { try WhisperDiagnosticCases.silenceAndPhysicalDuration() }
     func testSineAndDCOffset() throws { try WhisperDiagnosticCases.sineAndDCOffset() }
     func testClippingAndQuietSampleFractions() throws { try WhisperDiagnosticCases.clippingAndQuietSampleFractions() }
@@ -196,7 +264,9 @@ final class WhisperDiagnosticsTests: XCTestCase {
     func testUnknownTimingsRemainUnknown() throws { try WhisperDiagnosticCases.unknownTimingsRemainUnknown() }
     func testTinyPolicyRequiresLoadedArtifactAndBoundedPhysicalInput() throws { try WhisperDiagnosticCases.tinyPolicyRequiresLoadedArtifactAndBoundedPhysicalInput() }
     func testNativeQualityKeepsClearAndQuietSpeechWithoutTokens() throws { try WhisperDiagnosticCases.nativeQualityKeepsClearAndQuietSpeechWithoutTokens() }
-    func testUncertainFinalTierAndStrongNoSpeechAreNotPublished() throws { try WhisperDiagnosticCases.uncertainFinalTierAndStrongNoSpeechAreNotPublished() }
+    func testUncertainSpeechIsPreservedWhileSilenceAndRepetitionAreRejected() throws {
+        try WhisperDiagnosticCases.uncertainSpeechIsPreservedWhileSilenceAndRepetitionAreRejected()
+    }
     func testMissingOrMalformedNativeQualityCannotBecomePerfectConfidence() throws { try WhisperDiagnosticCases.missingOrMalformedNativeQualityCannotBecomePerfectConfidence() }
     func testPartialQualityGateDoesNotPretendToBeSemanticOrVoiceActivityDetection() throws { try WhisperDiagnosticCases.partialQualityGateDoesNotPretendToBeSemanticOrVoiceActivityDetection() }
 
