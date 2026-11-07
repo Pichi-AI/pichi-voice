@@ -131,6 +131,21 @@ nonisolated enum MeetingHostClockMapping {
         return validated
     }
 
+    static func validatePlaybackSpan(_ span: MeetingAnalysisSpan, chunk: MeetingAudioChunk, origin: Double) throws {
+        let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
+        guard span.chunk == MeetingAnalysisChunkIdentity(trackID: span.trackID, chunk: chunk),
+              let mapped = try piece(in: span.recordedInterval, chunk: chunk, origin: origin, decoded: span.observed.decoded),
+              abs(mapped.rate - span.presentationMapping.rateRatio) <= tolerance,
+              abs(mapped.source.start - span.sourceLocalInterval.start) <= tolerance,
+              abs(mapped.source.end - span.sourceLocalInterval.end) <= tolerance,
+              abs(span.presentationInterval.start - span.recordedInterval.start) <= tolerance,
+              abs(span.presentationInterval.end - span.recordedInterval.end) <= tolerance,
+              abs(span.presentationMapping.presentationTime(forAnalysisTime: span.analysisInterval.start)
+                - span.recordedInterval.start) <= tolerance,
+              abs(span.presentationMapping.presentationTime(forAnalysisTime: span.analysisInterval.end)
+                - span.recordedInterval.end) <= tolerance else { throw Failure.invalid }
+    }
+
     static func piece(in interval: MeetingAnalysisInterval, chunk: MeetingAudioChunk,
                       origin: Double, decoded: MeetingChunkDecodedFacts? = nil) throws -> Piece? {
         let mapping = try validated(chunk: chunk, decoded: decoded)

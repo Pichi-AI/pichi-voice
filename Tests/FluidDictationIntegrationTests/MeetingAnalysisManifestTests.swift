@@ -46,6 +46,11 @@ final class MeetingAnalysisManifestTests: XCTestCase {
         XCTAssertEqual(span.presentationInterval.end, 10.001, accuracy: 0.000_001)
         XCTAssertEqual(span.presentationMapping.rateRatio, 1.0001, accuracy: 0.000_001)
         XCTAssertEqual(span.timing.deDrift, .notApplicable)
+        try MeetingHostClockMapping.validatePlaybackSpan(span, chunk: audio, origin: 100)
+        XCTAssertThrowsError(try MeetingHostClockMapping.validatePlaybackSpan(span, chunk: audio, origin: 100.1))
+        var shiftedMap = audio
+        shiftedMap.clockMapping?.spans[0].hostStart = self.mediaTime(100.1)
+        XCTAssertThrowsError(try MeetingHostClockMapping.validatePlaybackSpan(span, chunk: shiftedMap, origin: 100))
         XCTAssertNotNil(span.chunk.clockMappingDigest)
         XCTAssertEqual(try JSONDecoder().decode(MeetingAnalysisManifest.self, from: JSONEncoder().encode(manifest)), manifest)
         let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(plan.request.session))
@@ -70,7 +75,11 @@ final class MeetingAnalysisManifestTests: XCTestCase {
         let segment = MeetingTranscriptSegment(id: UUID(), start: .init(value: 8, timescale: 1),
             end: .init(value: 9, timescale: 1), sourceTrackID: mic.id, speakerID: nil,
             text: "synthetic clock word", revision: 0, status: .final, overlap: .none, completeness: .complete)
-        let slices = try MeetingSegmentPlaybackPlan.slices(session: plan.request.session, segment: segment,
+        var withUnrelatedTail = plan.request.session
+        var tail = self.chunk(sequence: 1, start: 120, end: 121)
+        tail.finalizationState = .failed
+        withUnrelatedTail.audioTracks[0].chunks.append(tail)
+        let slices = try MeetingSegmentPlaybackPlan.slices(session: withUnrelatedTail, segment: segment,
             directory: FileManager.default.temporaryDirectory)
         XCTAssertEqual(slices.count, 1)
         XCTAssertEqual(slices[0].start, 6, accuracy: 0.000_001)

@@ -283,14 +283,17 @@ nonisolated enum MeetingSegmentPlaybackPlan {
                 expectedAttemptID: attempt.id, expectedBackendID: MeetingBackendID(rawValue: backendID), reference: reference
             )
             if session.timebase.recordingTimePolicy == .hostMonotonicV1 {
+                let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
+                guard abs(sidecar.analysisManifest.presentationOriginSeconds
+                    - MeetingAnalysisManifest.presentationOrigin(of: session)) <= tolerance else {
+                    throw MeetingSegmentPlaybackError.unavailable
+                }
                 for span in sidecar.analysisManifest.allSpans where span.trackID == segment.sourceTrackID {
-                    guard let chunk = session.audioTracks.first(where: { $0.id == span.trackID })?.chunks.first(where: { $0.id == span.chunkID }),
-                          span.chunk == MeetingAnalysisChunkIdentity(trackID: span.trackID, chunk: chunk),
-                          let mapped = try MeetingHostClockMapping.piece(in: span.recordedInterval, chunk: chunk,
-                            origin: sidecar.analysisManifest.presentationOriginSeconds, decoded: span.observed.decoded),
-                          abs(mapped.rate - span.presentationMapping.rateRatio) <= MeetingAnalysisManifestSchema.mappingToleranceSeconds else {
+                    guard let chunk = session.audioTracks.first(where: { $0.id == span.trackID })?.chunks.first(where: { $0.id == span.chunkID }) else {
                         throw MeetingSegmentPlaybackError.unavailable
                     }
+                    try MeetingHostClockMapping.validatePlaybackSpan(span, chunk: chunk,
+                        origin: sidecar.analysisManifest.presentationOriginSeconds)
                 }
             }
             return try self.slices(segment: segment, spans: sidecar.analysisManifest.allSpans, directory: directory)
@@ -302,6 +305,8 @@ nonisolated enum MeetingSegmentPlaybackPlan {
             let origin = MeetingAnalysisManifest.presentationOrigin(of: session)
             var slices: [Slice] = []
             for chunk in track.chunks.sorted(by: { $0.presentationStart < $1.presentationStart }) {
+                guard chunk.presentationEnd.seconds - origin > segment.start.seconds,
+                      chunk.presentationStart.seconds - origin < segment.end.seconds else { continue }
                 let mapping = try MeetingHostClockMapping.validated(chunk: chunk)
                 guard let asset = chunk.captureAnalysisAsset else { throw MeetingSegmentPlaybackError.unavailable }
                 for clockSpan in mapping.spans {
