@@ -1330,7 +1330,7 @@ final class MeetingNativeCaptureClockTests: XCTestCase {
             sourceClock: CMClockGetHostTimeClock(), timebaseOut: &result), noErr)
         let clock = try XCTUnwrap(result)
         XCTAssertEqual(CMTimebaseSetRateAndAnchorTime(clock, rate: rate,
-            timebaseTime: CMTime(seconds: sourceStart, preferredTimescale: 1_000_000_000),
+            anchorTime: CMTime(seconds: sourceStart, preferredTimescale: 1_000_000_000),
             immediateSourceTime: CMTime(seconds: hostStart, preferredTimescale: 1_000_000_000)), noErr)
         return clock
     }
