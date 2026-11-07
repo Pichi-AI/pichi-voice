@@ -3383,7 +3383,8 @@ extension MeetingParakeetNemotronBackendTests {
         var completed = fixture.publication.session
         completed.state = .completed; completed.transcriptSegments = result.segments; completed.speakers = result.speakers
         try await store.save(completed)
-        let restored = try XCTUnwrap(try await store.load(id: completed.id))
+        let loaded = try await store.load(id: completed.id)
+        let restored = try XCTUnwrap(loaded)
         XCTAssertEqual(restored.transcriptSegments, result.segments)
         XCTAssertEqual(restored.timebase.recordingTimePolicy, .hostMonotonicV1)
         for (source, track) in tracks.enumerated() {

@@ -716,6 +716,77 @@ extension MeetingAudioChunkSinkTests {
 /// Synthetic PCM crosses the actual quarantine and writer, including the writer's second
 /// admission check. No microphone, meeting application, model or shared preferences are used.
 final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
+    private final class MappedConsumer: MeetingMemoryAudioConsuming, @unchecked Sendable {
+        let timeline = try! MeetingPCMSourceTimeline(originSeconds: 1_000, recordingTimePolicy: .hostMonotonicV1)
+        private let lock = NSLock()
+        private var frames = 0
+        private var failure: Error?
+        func enqueue(_ sample: CMSampleBuffer) -> Bool {
+            lock.withLock {
+                do {
+                    let count = CMSampleBufferGetNumSamples(sample)
+                    let mapping = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: sample)).mapping
+                    try timeline.record(sourceStartSample: frames, frameCount: count,
+                        presentationTime: CMSampleBufferGetPresentationTimeStamp(sample).seconds, clockMapping: mapping)
+                    frames += count
+                    return true
+                } catch { failure = error; return false }
+            }
+        }
+        func finish() async throws { if let error = lock.withLock({ failure }) { throw error } }
+        var frameCount: Int { lock.withLock { frames } }
+    }
+
+    func testSharedClockSourceMuteWriterAndLiveConsumerKeepTheSameMeasuredGaps() async throws {
+        let fixture = try Fixture(admissionPolicy: .latchedTransitions, recordingClockPolicy: true)
+        defer { fixture.gate.close(); fixture.removeDirectory() }
+        let gate = fixture.gate, clock = fixture.clock
+        let context = try XCTUnwrap(fixture.clockContext)
+        let source = MeetingCaptureSourceClock(context: context)
+        let consumer = MappedConsumer()
+        let tee = try MeetingMultiTrackCaptureTee(consumers: [.microphone: consumer],
+            originHostTime: Clock.ticks(1_000), eventHandler: { _ in }, liveAudioHandler: nil,
+            sampleAdmission: { _, sample in gate.permitsReleasedSample(sample) }, clockContexts: [.microphone: context])
+        fixture.observations.setForward { tee.offer(kind: .microphone, sample: $0) }
+        gate.setAdmitted(true, observedAtHostTime: clock.now())
+        let duration = 0.1 * 1.0003
+        for index in 0..<42 {
+            let acquired = 1_000.1 + Double(index) * duration
+            clock.set(acquired + 0.00001)
+            if index == 20 { gate.setAdmitted(false, observedAtHostTime: clock.now(), unsafeStartHostTime: Clock.ticks(acquired)) }
+            if index == 21 { gate.setAdmitted(true, observedAtHostTime: clock.now()) }
+            let raw = try sample(marker: index == 20 ? 0.9 : 0.25, at: Double(index) * 0.1, frames: 4_800)
+            for measured in try source.offer(raw, producerGeneration: 1,
+                acquisitionStart: CMTime(seconds: acquired, preferredTimescale: 1_000_000_000), sourceFrameStart: Int64(index * 4_800)) {
+                _ = gate.submit(measured, deliveryQueue: fixture.deliveryQueue) { fixture.writer.enqueue($0) }
+            }
+            gate.checkFreshnessAndDrain(); fixture.deliveryQueue.sync {}
+            _ = await fixture.writer.snapshot(); await tee.drainEnqueuedPackets()
+        }
+        clock.set(1_006)
+        for measured in try source.finish() {
+            _ = gate.submit(measured, deliveryQueue: fixture.deliveryQueue) { fixture.writer.enqueue($0) }
+        }
+        gate.checkFreshnessAndDrain(); fixture.deliveryQueue.sync {}
+        _ = await fixture.writer.snapshot(); await tee.drainEnqueuedPackets()
+        await gate.stop()
+        let track = await fixture.writer.stop()
+        try await tee.finish()
+        let stored = try readSamples(track, in: fixture.directory)
+        XCTAssertFalse(stored.isEmpty)
+        XCTAssertTrue(stored.allSatisfy { abs($0 - 0.25) < 0.001 }, "Muted PCM must never reach persistence")
+        XCTAssertEqual(fixture.observations.writerFailures, 0)
+        XCTAssertEqual(Int64(stored.count), track.chunks.compactMap { $0.clockMapping?.frameCount }.reduce(0, +))
+        let mappings = track.chunks.compactMap(\.clockMapping)
+        XCTAssertGreaterThanOrEqual(mappings.count, 2)
+        XCTAssertTrue(consumer.timeline.hasGaps)
+        XCTAssertEqual(try XCTUnwrap(consumer.timeline.mapTime(0)), try XCTUnwrap(mappings.first?.spans.first).hostStart.seconds - 1_000, accuracy: 2e-9)
+        XCTAssertEqual(try XCTUnwrap(consumer.timeline.mapEndTime(Double(consumer.frameCount) / 16_000)),
+            try XCTUnwrap(mappings.last?.spans.last).hostEnd.seconds - 1_000, accuracy: 2e-9)
+        let quietStart = 1_000.1 + 20 * duration
+        let quietEnd = 1_000.1 + 21 * duration
+        XCTAssertTrue(mappings.flatMap(\.spans).allSatisfy { $0.hostEnd.seconds <= quietStart + 1e-9 || $0.hostStart.seconds >= quietEnd - 1e-9 })
+    }
     @MainActor
     func testStoppingDrainsQueuedMuteToRealWriterWithoutReopeningAdmission() async throws {
         let fixture = try Fixture(admissionPolicy: .latchedTransitions)
@@ -1091,10 +1162,13 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
         private var observedMarkers: [Float] = []
         private var failures = 0
         private var details: [String] = []
+        private var forward: (@Sendable (CMSampleBuffer) -> Void)?
+        func setForward(_ value: @escaping @Sendable (CMSampleBuffer) -> Void) { lock.withLock { forward = value } }
         var failureDetails: [String] { self.lock.withLock { self.details } }
         var markers: [Float] { self.lock.withLock { self.observedMarkers } }
         var writerFailures: Int { self.lock.withLock { self.failures } }
         func observe(_ sample: CMSampleBuffer) {
+            self.lock.withLock { self.forward }?(sample)
             guard let block = CMSampleBufferGetDataBuffer(sample) else { return }
             var marker: Float = 0
             let status = withUnsafeMutableBytes(of: &marker) {
@@ -1116,28 +1190,37 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
         let observations = Observations()
         let deliveryQueue = DispatchQueue(label: "meeting.writer-privacy.tests.delivery")
         let writer: MeetingAudioChunkWriter
+        let clockContext: MeetingRecordingClockContext?
 
         init(admissionPolicy: MeetingMicrophonePrivacyGate.Configuration.AdmissionPolicy = .freshObservations,
+             recordingClockPolicy: Bool = false,
              onChunkFinalized: @escaping @Sendable () -> Void = {}) throws {
             self.directory = FileManager.default.temporaryDirectory.appendingPathComponent("FluidVoice-WriterPrivacy-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: false,
                 attributes: [.posixPermissions: NSNumber(value: Int16(0o700))])
             let clock = self.clock
+            var info = mach_timebase_info_data_t(); mach_timebase_info(&info)
+            let timebase = MeetingTimebaseMetadata(startedHostTime: Clock.ticks(1_000),
+                machTimebaseNumerator: info.numer, machTimebaseDenominator: info.denom, firstPresentationTime: nil,
+                recordingTimePolicy: recordingClockPolicy ? .hostMonotonicV1 : nil)
+            let trackID = UUID()
+            let context = try recordingClockPolicy ? MeetingRecordingClock(timebase: timebase).source(trackID) : nil
+            self.clockContext = context
             let gate = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: admissionPolicy),
+                clockContext: context,
                 hostTime: { clock.now() }, automaticWatchdog: false)
             self.gate = gate
             let observations = self.observations
-            let track = MeetingAudioTrack(id: UUID(), kind: .microphone,
+            let track = MeetingAudioTrack(id: trackID, kind: .microphone,
                 sourceIdentifier: "synthetic", sourceDisplayName: "Synthetic",
-                format: nil, timebase: MeetingTimebaseMetadata(startedHostTime: Clock.ticks(1_000),
-                    machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+                format: nil, timebase: timebase,
                 health: .waiting, chunks: [])
             self.writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: self.directory, chunkDuration: 60,
                 eventHandler: { event in
                     observations.record(event)
                     if case .chunkFinalized = event { onChunkFinalized() }
                 }, diagnosticSampleObserver: { sample, _ in observations.observe(sample) },
-                sampleAdmission: { gate.permitsReleasedSample($0) })
+                sampleAdmission: { gate.permitsReleasedSample($0) }, clockContext: context)
         }
 
         func removeDirectory() { try? FileManager.default.removeItem(at: self.directory) }
