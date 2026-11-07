@@ -28,6 +28,44 @@ final class MeetingAEC3Tests: XCTestCase {
         XCTAssertEqual(attestor.pairedFrameCount, 0)
     }
 
+    func testMappedPhysicalMismatchFallsBackWithoutLosingCaptureFramesOrClockCarrier() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-physical-mismatch-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var track = Self.microphoneTrack(); track.timebase.recordingTimePolicy = .hostMonotonicV1
+        let clock = try MeetingRecordingClock(timebase: track.timebase)
+        let capture = clock.source(track.id), render = clock.source(UUID())
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: directory, chunkDuration: 60,
+            eventHandler: { _ in }, clockContext: capture)
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let failures = AECTerminalRecorder(), fallbacks = AECTerminalRecorder(), live = AECLiveRecorder()
+        let committer = MeetingAECOutputCommitter(writer: writer, transcriptGate: gate,
+            liveAudioHandler: { _, sample in live.append(sample) }, terminalFailure: { failures.append($0) })
+        let processor = AECFakeProcessor()
+        let pipeline = MeetingAECPipeline(processor: processor, committer: committer,
+            fallbackObserver: { fallbacks.append($0) })
+        func packet(_ context: MeetingRecordingClockContext, end: Double) throws -> CMSampleBuffer {
+            let mapping = try context.mapping(frameCount: 480,
+                start: CMTime(seconds: 100, preferredTimescale: 1_000_000_000),
+                end: CMTime(seconds: end, preferredTimescale: 1_000_000_000), discontinuityBefore: true)
+            return try XCTUnwrap(MeetingAECPCMAdapter.synthesize(samples: [Float](repeating: 0.125, count: 480),
+                presentationTime: CMTime(seconds: 100, preferredTimescale: 1_000_000_000),
+                clockPacket: .init(mapping: mapping, clockID: context.clockID, sourceID: context.sourceID, producerEpoch: 1)))
+        }
+        pipeline.consumeRender(try packet(render, end: 100.01), stream: self.token)
+        pipeline.consumeCapture(try packet(capture, end: 100.01005), stream: self.token)
+        await committer.waitForPendingCommits()
+        pipeline.stop(boundary: gate.invalidate()); await committer.waitForPendingCommits()
+        let saved = await writer.stop()
+        XCTAssertEqual(processor.processedFrameCount, 0)
+        XCTAssertEqual(fallbacks.values, [.clockResidualExceeded])
+        XCTAssertTrue(failures.values.isEmpty)
+        XCTAssertEqual(live.count, 1)
+        XCTAssertEqual(saved.chunks.first?.captureAnalysisAsset?.frameCount, 480)
+        let mapping = try XCTUnwrap(saved.chunks.first?.clockMapping)
+        XCTAssertEqual(mapping.frameCount, 480)
+        XCTAssertEqual(try XCTUnwrap(mapping.spans.last).hostEnd.seconds, 100.01005, accuracy: 1e-9)
+    }
+
     func testMappedEchoProcessingStaysActiveBeyondTheLegacyNominalClockDriftLimit() async throws {
         for drift in [5e-6, 300e-6] {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-shared-rate-\(UUID())")
