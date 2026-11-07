@@ -1430,7 +1430,13 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     }
 
     var duration: TimeInterval {
-        (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)
+        if self.timebase.recordingTimePolicy == .hostMonotonicV1,
+           let end = self.timebase.endedHostTime, end >= self.timebase.startedHostTime,
+           self.timebase.machTimebaseDenominator > 0 {
+            return Double(end - self.timebase.startedHostTime) * Double(self.timebase.machTimebaseNumerator)
+                / Double(self.timebase.machTimebaseDenominator) / 1_000_000_000
+        }
+        return (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)
     }
 
     var microphoneEchoWarning: String? {
