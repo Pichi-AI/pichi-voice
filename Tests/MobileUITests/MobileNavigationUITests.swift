@@ -1322,7 +1322,9 @@ final class MobileNavigationUITests: XCTestCase {
                 // Compact Files presents the current folder first; its Cancel
                 // action is on the enclosing locations page, unlike iPad.
                 if !cancel.exists {
-                    let locations = app.buttons["BackButton"]
+                    // The presenting transcript also exposes BackButton under the Files sheet.
+                    let locations = app.navigationBars["FullDocumentManagerViewControllerNavigationBar"]
+                        .buttons["BackButton"]
                     XCTAssertTrue(locations.waitForExistence(timeout: 5))
                     locations.tap()
                     capture("protected-export-files-locations")
