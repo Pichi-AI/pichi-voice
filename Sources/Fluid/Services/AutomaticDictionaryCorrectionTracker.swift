@@ -681,7 +681,8 @@ final class AutomaticDictionaryCorrectionTracker {
             if self.session?.acceptedCorrections.count ?? 0 > 64 { self.session?.acceptedCorrections.removeFirst() }
         }
 
-        if let candidate, let context, DictionaryMatcherExperiment.collectNegatives,
+        if !SettingsStore.shared.automaticDictionaryLearningEnabled,
+           let candidate, let context, DictionaryMatcherExperiment.collectNegatives,
            !SettingsStore.shared.shouldShowOnboarding, !AppServices.shared.asr.isRunning,
            !DictionaryCorrectionOverlayController.shared.isPresented,
            let negative = DictionaryNegativeEvidenceResolver.resolve(context: context, heard: candidate.heardText, corrected: candidate.correctedText)
@@ -703,14 +704,12 @@ final class AutomaticDictionaryCorrectionTracker {
 
         guard let candidate else { return }
         guard SettingsStore.shared.automaticDictionaryLearningEnabled,
-              !SettingsStore.shared.shouldShowOnboarding,
-              !AppServices.shared.asr.isRunning
+              !SettingsStore.shared.shouldShowOnboarding
         else {
-            DebugLogger.shared.info("DICTIONARY_CORRECTION suggestion_skipped reason=inactive_or_busy", source: "DictionaryLearning")
+            DebugLogger.shared.info("DICTIONARY_CORRECTION suggestion_skipped reason=inactive", source: "DictionaryLearning")
             return
         }
         let generation = self.suggestionGeneration
-        let pronunciationGeneration = DictionaryMatcherExperiment.generation
         let preparationID = candidate.id
         guard self.evidencePreparationTasks.count < 32 else { return }
         let approval = CorrectionApproval(id: candidate.id,
@@ -718,34 +717,25 @@ final class AutomaticDictionaryCorrectionTracker {
             text: candidate.correctedText)
         self.session?.approvals.removeAll { !$0.isValid }
         self.session?.approvals.append(approval)
-        self.evidencePreparationTasks[preparationID] = Task { @MainActor [weak self, context, approval] in
+        let revocations = Array(self.correctionRevocations.values)
+        self.evidencePreparationTasks[preparationID] = Task { @MainActor [weak self, approval] in
             defer { self?.evidencePreparationTasks.removeValue(forKey: preparationID) }
-            let observedText = candidate.heardText
-            let evidence = await Task.detached(priority: .utility) {
-                guard DictionaryMatcherExperiment.sharedFeaturesEnabled, pronunciationGeneration == DictionaryMatcherExperiment.generation,
-                      let context else { return DictionaryLearningAudioEvidence?.none }
-                return try? DictionaryLearningAlignmentResolver.resolve(
-                    recording: context.recording,
-                    deliveredTextBeforeEdit: context.deliveredTextBeforeEdit,
-                    selectedUTF16Range: context.selectedUTF16Range,
-                    observedText: observedText
-                )
-            }.value
-            guard !Task.isCancelled, approval.isValid, let self, self.suggestionGeneration == generation,
-                  SettingsStore.shared.automaticDictionaryLearningEnabled,
-                  !SettingsStore.shared.shouldShowOnboarding,
-                  !AppServices.shared.asr.isRunning
-            else { return }
-            var prepared = candidate
-            prepared.audioEvidence = DictionaryMatcherExperiment.sharedFeaturesEnabled && pronunciationGeneration == DictionaryMatcherExperiment.generation ? evidence : nil
-            DebugLogger.shared.info(
-                "DICTIONARY_CORRECTION suggestion_prepared originalAudio=\(prepared.audioEvidence != nil)",
-                source: "DictionaryLearning"
-            )
-            AutomaticDictionarySuggestionPolicy.shared.markShown(prepared)
-            DictionaryCorrectionOverlayController.shared.show(candidate: prepared) { outcome in
-                AutomaticDictionarySuggestionPolicy.shared.record(outcome, for: prepared)
-            }
+            for task in revocations { await task.value }
+            guard !Task.isCancelled, approval.isValid, let self, self.suggestionGeneration == generation else { return }
+            self.saveWordWithoutAudio(candidate, approval: approval)
+        }
+    }
+
+    private func saveWordWithoutAudio(_ candidate: AutomaticDictionaryCorrectionCandidate, approval: CorrectionApproval) {
+        guard approval.isValid, approval.saved == nil, SettingsStore.shared.automaticDictionaryLearningEnabled,
+              PrivateProfileStorage.isReadable(self.profile), PrivateProfileStorage.acceptsNewWork else { return }
+        if let receipt = DictionaryAudioLearningService.shared.saveCorrectionWithoutAudio(candidate: candidate,
+            evidenceID: approval.id, isValid: { approval.isValid }) {
+            approval.saved = receipt
+            DictionaryCorrectionOverlayController.shared.showSavedCorrection(receipt)
+        } else {
+            // A genuine save failure is visible, never converted into an Add request.
+            DictionaryCorrectionOverlayController.shared.show(candidate: candidate) { _ in }
         }
     }
 
@@ -765,22 +755,26 @@ final class AutomaticDictionaryCorrectionTracker {
         let evidence = DictionaryLearningAudioEvidence(recordingID: resolved.recordingID, modelKey: resolved.modelKey,
             observedText: observed, sourceWordRange: resolved.sourceWordRange, sourceSampleRange: resolved.sourceSampleRange,
             focalSampleRange: resolved.focalSampleRange, samples: resolved.samples, featureFrames: resolved.featureFrames)
-        let approval = CorrectionApproval(range: range, text: candidate.correctedText)
+        let approval = CorrectionApproval(id: candidate.id, range: range, text: candidate.correctedText)
         self.session?.approvals.removeAll { !$0.isValid }
         self.session?.approvals.append(approval)
         let profile = self.profile
         let corrected = AutomaticDictionaryCorrectionCandidate(heardText: heard, correctedText: candidate.correctedText)
         // Only the bounded resolved clip is retained by the queue, never the full recording.
         let revocations = Array(self.correctionRevocations.values)
-        return DictionaryAudioLearningService.shared.learnCorrection(candidate: corrected, evidence: evidence, evidenceID: approval.id, isValid: {
+        let admitted = DictionaryAudioLearningService.shared.learnCorrection(candidate: corrected, evidence: evidence, evidenceID: approval.id, isValid: {
             approval.isValid && PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork
         }, didSave: { receipt in
             guard approval.isValid else { return }
             approval.saved = receipt
             DictionaryCorrectionOverlayController.shared.showSavedCorrection(receipt)
+        }, didFail: { [weak self] in
+            self?.saveWordWithoutAudio(candidate, approval: approval)
         }, beforePreparation: {
             for task in revocations { await task.value }
         })
+        if !admitted { self.saveWordWithoutAudio(candidate, approval: approval) }
+        return true
     }
 
     private func revoke(_ approval: CorrectionApproval) {

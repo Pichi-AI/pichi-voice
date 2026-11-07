@@ -881,7 +881,8 @@ private struct DictionaryCorrectionOverlayRoot: View {
     }
 }
 
-private struct DictionaryCorrectionOverlayGroupView: View {    @Environment(\.theme) private var theme
+private struct DictionaryCorrectionOverlayGroupView: View {
+    @Environment(\.theme) private var theme
 
     @ObservedObject var state: DictionaryCorrectionOverlayState
     let onDismissAll: () -> Void
@@ -1066,55 +1067,30 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
         }
     }
 
-    private var correctionChoiceDescription: String {
-        if self.session.candidate.negativeCorrection != nil {
-            return "Confirm only if you said a different word, not a spelling change."
-        }
-        return self.pronunciationEnabled
-            ? AppBrand.text("Save only this correction, or teach FluidVoice other pronunciations.")
-            : "Save this text correction to your dictionary."
-    }
-
     private var choiceContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            self.header(title: self.session.candidate.negativeCorrection == nil ? "Learn this word?" : "Was this a wrong match?", allowsBack: false)
-
+        VStack(alignment: .leading, spacing: 8) {
             self.correctionPair
-
-            Text(PichiLocalization.text(self.correctionChoiceDescription, locale: self.interfaceLocale))
-                .font(.fluidSystem(size: 11))
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 8) {
-                if self.session.candidate.negativeCorrection != nil {
-                    CorrectionOverlayActionButton(title: "That Was a Wrong Match", systemImage: "xmark.circle", style: .accent, accent: self.accent, action: self.session.confirmWrongMatch)
-                        .disabled(!self.pronunciationEnabled || self.session.capturePhase != .idle)
-                    CorrectionOverlayActionButton(title: "Ignore", systemImage: "minus", style: .secondary, accent: self.accent, action: self.onIgnore)
-                } else {
-                    if self.pronunciationEnabled {
-                        CorrectionOverlayActionButton(
-                            title: "Record pronunciation",
-                            systemImage: "mic.fill",
-                            style: .secondary,
-                            accent: self.accent,
-                            action: self.session.continueInDictionary
-                        )
-                    }
-
-                    CorrectionOverlayActionButton(
-                        title: "Add This Correction",
-                        systemImage: "plus",
-                        style: .accent,
-                        accent: self.accent,
-                        action: self.session.addOnlyCorrection
-                    )
-
-                    self.moreOptionsMenu
-                }
+            if self.session.candidate.negativeCorrection != nil {
+                Text("Confirm only if you said a different word, not a spelling change.")
+                    .font(self.theme.typography.captionSmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("That Was a Wrong Match", action: self.session.confirmWrongMatch)
+                    .font(self.theme.typography.captionStrong)
+                    .fluidButton(.accent, size: .small)
+                    .disabled(!self.pronunciationEnabled || self.session.capturePhase != .idle)
+            } else {
+                Text("Couldn't save this correction automatically.")
+                    .font(self.theme.typography.captionSmall)
+                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            if self.session.hasError {
-                Text(PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale)).font(.fluidSystem(size: 11)).foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning)).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Undo save", action: self.onDismiss)
+                    .buttonStyle(FluidOutlinedButtonStyle(height: 28))
+                Button("Done", action: self.onDismiss)
+                    .buttonStyle(FluidOutlinedButtonStyle(height: 28, foreground: self.theme.palette.accentText))
             }
         }
         .transition(.opacity)
@@ -1122,6 +1098,10 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
     private var moreOptionsMenu: some View {
         Menu {
+            if self.pronunciationEnabled {
+                Button("Record pronunciation", systemImage: "mic.fill", action: self.session.continueInDictionary)
+                Divider()
+            }
             Button("Ignore This Correction", systemImage: "eye.slash", action: self.onIgnore)
 
             Menu("Ask after") {
@@ -1146,13 +1126,14 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
             Image(systemName: "ellipsis")
                 .font(.fluidSystem(size: 12, weight: .semibold))
                 .foregroundStyle(self.theme.palette.secondaryText)
-                .frame(width: 36, height: 36)
+                .frame(width: 28, height: 28)
                 .background(self.panelSurface)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
         .help("More correction options")
+        .accessibilityLabel("More correction options")
     }
 
     private var trainingContent: some View {
@@ -1310,20 +1291,23 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 Label {
                     Text(PichiLocalization.text(self.savedStatus, locale: self.interfaceLocale))
                 } icon: {
-                    Image(systemName: self.session.didUndoSavedCorrection ? "arrow.uturn.backward" : "waveform")
+                    Image(systemName: self.session.didUndoSavedCorrection ? "arrow.uturn.backward" :
+                        self.session.savedCorrection?.audioWasSaved == false ? "text.book.closed" : "waveform")
                 }
                 .font(self.theme.typography.captionSmall)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
-                if !self.session.didUndoSavedCorrection && self.session.savedCorrection?.wasAlreadyPresent != true {
+                if !self.session.didUndoSavedCorrection {
                     Button(action: self.session.undoSavedCorrection) {
                         Text(PichiLocalization.text(self.session.isUndoingSavedCorrection ? "Undoing..." : "Undo dictionary save", locale: self.interfaceLocale))
                     }
                     .buttonStyle(FluidOutlinedButtonStyle(height: 28))
                     .fixedSize()
                     .disabled(self.session.isUndoingSavedCorrection)
-                    .help("Undo removes this dictionary save. Your text stays as edited.")
+                    .help(PichiLocalization.text(self.session.savedCorrection?.wasAlreadyPresent == true
+                        ? "No new sample was added. Undo only dismisses this confirmation."
+                        : "Undo removes this dictionary save. Your text stays as edited.", locale: self.interfaceLocale))
                 }
                 Button("Done", action: self.onConfirm)
                     .buttonStyle(FluidOutlinedButtonStyle(height: 28, foreground: self.theme.palette.accentText))
@@ -1351,6 +1335,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
     private var savedStatus: String {
         if self.session.didUndoSavedCorrection { return self.session.successTitle }
+        if self.session.savedCorrection?.audioWasSaved == false { return "Word saved. Audio clip not saved." }
         if self.session.savedCorrection?.wasAlreadyPresent == true { return "Word and audio already saved" }
         return "Word and audio saved"
     }

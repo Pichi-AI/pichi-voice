@@ -10126,6 +10126,23 @@
         }
       }
     },
+    "Check this match": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check this match"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте распознавание"
+          }
+        }
+      }
+    },
     "Checked %@": {
       "localizations": {
         "en": {
@@ -15062,6 +15079,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Не удалось сохранить голосовой профиль. Попробуйте снова."
+          }
+        }
+      }
+    },
+    "Couldn't save this correction automatically.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't save this correction automatically."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось автоматически сохранить исправление."
           }
         }
       }
@@ -32432,6 +32466,23 @@
         }
       }
     },
+    "Needs adding to dictionary": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needs adding to dictionary"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нужно добавить в словарь"
+          }
+        }
+      }
+    },
     "Needs an AI provider before it can run.": {
       "localizations": {
         "ru": {
@@ -33768,6 +33819,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сервер не вернул модели. Загрузите модель на сервере и повторите попытку или введите её идентификатор через «+»."
+          }
+        }
+      }
+    },
+    "No new sample was added. Undo only dismisses this confirmation.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No new sample was added. Undo only dismisses this confirmation."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новый образец не добавлялся. Отмена закроет только это подтверждение."
           }
         }
       }
@@ -60062,6 +60130,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Слово сохранено"
+          }
+        }
+      }
+    },
+    "Word saved. Audio clip not saved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Word saved. Audio clip not saved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слово сохранено. Аудиофрагмент не сохранён."
           }
         }
       }
