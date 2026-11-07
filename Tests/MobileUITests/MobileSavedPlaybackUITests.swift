@@ -18,10 +18,11 @@ final class MobileSavedPlaybackUITests: XCTestCase {
         let app = XCUIApplication()
         defer { app.terminate() }
         XCUIDevice.shared.orientation = .portrait
-        for (language, appearance, recordings, play, pause, close) in [
-            ("en", "light", "Recordings", "Play audio chunk", "Pause audio chunk", "Close audio player"),
+        for (language, appearance, recordings, play, pause, close, positionLabel) in [
+            ("en", "light", "Recordings", "Play audio chunk", "Pause audio chunk", "Close audio player",
+             "Audio chunk position"),
             ("ru", "dark", "Записи", "Воспроизвести аудиофрагмент",
-             "Приостановить воспроизведение фрагмента", "Закрыть аудиоплеер")
+             "Приостановить воспроизведение фрагмента", "Закрыть аудиоплеер", "Позиция в аудиофрагменте")
         ] {
             app.launchArguments = ["-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
                 "-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
@@ -30,12 +31,13 @@ final class MobileSavedPlaybackUITests: XCTestCase {
             try openOwnedTranscript(app, recordings: recordings)
             let prefix = "saved-playback-\(language)-\(appearance)"
             capture("\(prefix)-01-transcript", app: app)
-            try exercisePlayer(app, segmentID: segmentID, play: play, pause: pause, close: close, prefix: prefix)
+            try exercisePlayer(app, segmentID: segmentID, play: play, pause: pause, close: close,
+                               positionLabel: positionLabel, prefix: prefix)
             app.terminate()
             app.launch()
             try openOwnedTranscript(app, recordings: recordings)
             XCTAssertTrue(app.buttons["transcript.audio.\(segmentID)"].isHittable)
-            XCTAssertFalse(app.sliders["Audio chunk position"].exists,
+            XCTAssertFalse(app.sliders[positionLabel].exists,
                            "A reopened saved transcript must not retain a running player")
             XCTAssertTrue(app.staticTexts["Synthetic playback acceptance clip."].exists)
             capture("\(prefix)-07-reopened", app: app)
@@ -64,9 +66,9 @@ final class MobileSavedPlaybackUITests: XCTestCase {
 
     @MainActor
     private func exercisePlayer(_ app: XCUIApplication, segmentID: String, play: String,
-                                pause: String, close: String, prefix: String) throws {
+                                pause: String, close: String, positionLabel: String, prefix: String) throws {
         let audio = app.buttons["transcript.audio.\(segmentID)"]
-        let slider = app.sliders["Audio chunk position"]
+        let slider = app.sliders[positionLabel]
         audio.tap()
         defer {
             // Close only the player this test opened. Never stop a recording.
@@ -85,7 +87,10 @@ final class MobileSavedPlaybackUITests: XCTestCase {
         let advanced = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
             (try? position(slider)).map { $0 > pausedPosition + 1 } ?? false
         }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [advanced], timeout: 1.5), .timedOut,
+        // Allow one integer-second boundary from an already queued 0.2-second
+        // progress callback. A player still running must cross two boundaries
+        // during this interval and fail the observation.
+        XCTAssertEqual(XCTWaiter.wait(for: [advanced], timeout: 3.5), .timedOut,
                        "Paused native playback must not continue advancing")
         XCTAssertTrue(playButton.exists)
         capture("\(prefix)-03-paused", app: app)
