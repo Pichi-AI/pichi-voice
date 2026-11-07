@@ -6,9 +6,16 @@ nonisolated enum MeetingSpeakerActivityCoverage {
         _ unit: MeetingFinalTextUnit,
         activityByEpoch: [MeetingAnalysisEpochID: [MeetingBackendSpeakerActivity]],
         tolerance: TimeInterval = MeetingAnalysisManifestSchema.mappingToleranceSeconds,
-        boundaryAssignments: [String: MeetingBackendSpeakerAssignment] = [:]
+        boundaryAssignments: [String: MeetingBackendSpeakerAssignment] = [:],
+        preservesTokenEmissions: Bool = false
     ) -> Bool {
         if boundaryAssignments[unit.id] != nil { return false }
+        // An emission marks where the decoder produced text, not the full interval in
+        // which it was spoken. Nonintersection cannot classify that word as non-speech.
+        // Capture/coverage/privacy admission is unchanged; contextual attribution later
+        // uses the same validated recognition provenance and independent voice evidence.
+        if preservesTokenEmissions, unit.wordTimingProvenance?.basis == .tokenEmission,
+           unit.wordTimingProvenance?.hasValidSourceContext == true { return false }
         guard let activity = activityByEpoch[unit.analysisEpochID], !activity.isEmpty else {
             return false
         }
@@ -360,7 +367,8 @@ nonisolated struct MeetingTranscriptAssembler {
                               !MeetingSpeakerActivityCoverage.isOutside(
                                   duplicate,
                                   activityByEpoch: activityByEpoch,
-                                  boundaryAssignments: boundaryAssignments
+                                  boundaryAssignments: boundaryAssignments,
+                                  preservesTokenEmissions: input.speakerAttributionPolicy?.enableTokenEmissionContext == true
                               )
                         else {
                             throw MeetingAssemblyError.echoDuplicateTargetNotVisible(
@@ -381,7 +389,8 @@ nonisolated struct MeetingTranscriptAssembler {
             }
 
             if MeetingSpeakerActivityCoverage.isOutside(
-                unit, activityByEpoch: activityByEpoch, boundaryAssignments: boundaryAssignments
+                unit, activityByEpoch: activityByEpoch, boundaryAssignments: boundaryAssignments,
+                preservesTokenEmissions: input.speakerAttributionPolicy?.enableTokenEmissionContext == true
             ) {
                 dispositions.append(MeetingTextUnitDispositionRecord(
                     unitID: unit.id,
