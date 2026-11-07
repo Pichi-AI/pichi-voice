@@ -282,6 +282,11 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
                          "readingSpeakerID": presentations[segment.id]?.participantID?.uuidString ?? "",
                          "readable": segment.hasReadableContent, "echo": segment.isEcho]
                     }
+                    report["readingParagraphDetails"] = paragraphs.map { paragraph -> [String: Any] in
+                        ["id": paragraph.id.uuidString, "text": paragraph.text,
+                         "speakerID": MeetingTranscriptExporter.speakerPresentation(for: paragraph, in: session,
+                            speakerNames: names).participantID?.uuidString ?? ""]
+                    }
                 }
                 reports.append(report)
             }
