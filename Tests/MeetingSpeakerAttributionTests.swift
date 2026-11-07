@@ -911,6 +911,7 @@ struct MeetingSpeakerAttributionTests {
         self.check(oldRoundTrip == oldPolicy && oldRoundTrip.fingerprint == oldFingerprint)
         var priorObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         priorObject.removeValue(forKey: "enableCompleteReadingAssignment")
+        priorObject.removeValue(forKey: "enableIncomingGapReading")
         priorObject.removeValue(forKey: "enableProvisionalSpeakerIdentities")
         priorObject.removeValue(forKey: "enableStableSpeakerOpening")
         priorObject.removeValue(forKey: "enableMainSpeakerContinuation")
@@ -928,6 +929,7 @@ struct MeetingSpeakerAttributionTests {
             from: JSONEncoder().encode(priorPolicy)).fingerprint == priorPolicy.fingerprint)
         var beforeAcoustic = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         beforeAcoustic.removeValue(forKey: "enableCompleteReadingAssignment")
+        beforeAcoustic.removeValue(forKey: "enableIncomingGapReading")
         beforeAcoustic.removeValue(forKey: "enableProvisionalSpeakerIdentities")
         beforeAcoustic.removeValue(forKey: "enableStableSpeakerOpening")
         beforeAcoustic.removeValue(forKey: "enableIndependentAcousticAnchors")
@@ -944,6 +946,7 @@ struct MeetingSpeakerAttributionTests {
             from: JSONEncoder().encode(frozen)) == frozen)
         var beforeTurnBoundaries = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         beforeTurnBoundaries.removeValue(forKey: "enableCompleteReadingAssignment")
+        beforeTurnBoundaries.removeValue(forKey: "enableIncomingGapReading")
         beforeTurnBoundaries.removeValue(forKey: "enableProvisionalSpeakerIdentities")
         beforeTurnBoundaries.removeValue(forKey: "enableStableSpeakerOpening")
         beforeTurnBoundaries.removeValue(forKey: "preserveIndependentSpeakerTurns")

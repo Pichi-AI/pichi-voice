@@ -295,6 +295,18 @@ nonisolated enum MeetingReadingSpeakerResolver {
                     // A previously admitted identity may be absent from the current window's
                     // admission table. Reuse its exact scoped token, including coarse mixtures.
                     var chosen = knownTokenID(source.speakerAttribution?.selectedToken)
+                    if chosen == nil, policy.enableIncomingGapReading,
+                       source.nativePrecision != .utterance,
+                       source.nativeSpeakerAssignment == nil || source.nativeSpeakerAssignment == .unassigned,
+                       source.speakerAttribution?.relation == nil || source.speakerAttribution?.relation == .none,
+                       let left, let right, left.id != right.id,
+                       time.start > left.end + policy.comparisonTolerance,
+                       right.start > time.end + policy.comparisonTolerance {
+                        // An unscored word in an actual pause is a turn-boundary case, not a
+                        // mixture. Earlier long speech must not outvote the incoming reply.
+                        // This makes no claim of acoustic support inside the pause itself.
+                        chosen = right.id
+                    }
                     var best = -Double.infinity
                     if chosen == nil {
                         for id in candidates {
