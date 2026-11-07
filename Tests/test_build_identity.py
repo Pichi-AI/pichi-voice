@@ -99,7 +99,7 @@ class BuildIdentityTests(unittest.TestCase):
             ui = settings('Mobile test ' + configuration)
             app = settings('Mobile ' + configuration)
             extension = settings('Mobile activity ' + configuration)
-            self.assertEqual(ui['PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER'], 'ai.pichi.voice.mobile.uitests')
+            self.assertEqual(ui['PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER'], 'ai.pichi.voice.uitests')
             self.assertEqual(ui['PRODUCT_BUNDLE_IDENTIFIER'], '$(PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER)')
             self.assertEqual(app['PRODUCT_BUNDLE_IDENTIFIER'], '$(PICHI_MOBILE_BUNDLE_IDENTIFIER)')
             self.assertEqual(extension['PRODUCT_BUNDLE_IDENTIFIER'], '$(PICHI_MOBILE_BUNDLE_IDENTIFIER).activity')
