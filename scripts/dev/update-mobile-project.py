@@ -122,7 +122,9 @@ def configs(label, test=False, hosted=False, extension=False):
             settings.update(BUNDLE_LOADER="$(TEST_HOST)",
                 TEST_HOST="$(BUILT_PRODUCTS_DIR)/PichiVoiceMobile.app/PichiVoiceMobile")
         elif test:
-            settings.update(TEST_TARGET_NAME="PichiVoiceMobile", BUNDLE_LOADER="", TEST_HOST="")
+            settings.update(TEST_TARGET_NAME="PichiVoiceMobile", BUNDLE_LOADER="", TEST_HOST="",
+                PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER=APP_BUNDLE + ".uitests",
+                PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER)")
         elif extension:
             # The extension has no String Catalog; the app passes it already localized copy.
             settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER="$(PICHI_BUNDLE_IDENTIFIER)", PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER).activity",
