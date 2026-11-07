@@ -10,6 +10,7 @@ import ScreenCaptureKit
 
 
 actor MeetingCaptureEngine: MeetingCaptureControlling {
+    nonisolated var recordingTimePolicy: MeetingRecordingTimePolicy? { .hostMonotonicV1 }
     typealias MemoryConsumerFactory = @MainActor @Sendable (
         MeetingSession, MeetingCaptureConfiguration, MeetingAudioTrack, @escaping @Sendable (MeetingCaptureEvent) -> Void
     ) async throws -> any MeetingMemoryAudioConsuming
@@ -87,8 +88,15 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             comparisonProbe = nil
         }
         if let comparisonProbe { eventHandler(.audioComparisonProbeStarted(comparisonProbe)) }
+        let tracks = Self.makeTracks(session: session, configuration: configuration)
+        let recordingClock = session.timebase.recordingTimePolicy == .hostMonotonicV1
+            ? try MeetingRecordingClock(timebase: session.timebase) : nil
+        let clockContexts = Dictionary(uniqueKeysWithValues: tracks.compactMap { track in
+            recordingClock.map { (track.kind, $0.source(track.id)) }
+        })
         let privacyGate = configuration.mode == .onlineCall
-            ? MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions)) : nil
+            ? MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions),
+                                          clockContext: clockContexts[.microphone]) : nil
         let muteMonitor: MeetingCallMicrophoneObservation?
         let microphoneControl = privacyGate.map { gate in
             MeetingMicrophoneRecordingControl(gate: gate) { eventHandler(.microphoneMuteStateChanged($0)) }
@@ -114,7 +122,6 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         var startingStreamingConsumers: [any MeetingMemoryAudioConsuming] = []
         do {
             try await muteMonitor?.start()
-            let tracks = Self.makeTracks(session: session, configuration: configuration)
             for track in tracks {
                 let writer = try MeetingAudioChunkWriter(
                     track: track,
@@ -127,7 +134,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                     },
                     sampleAdmission: track.kind == .microphone ? privacyGate.map { gate in
                         { sample in gate.permitsReleasedSample(sample) }
-                    } : nil
+                    } : nil,
+                    clockContext: clockContexts[track.kind]
                 )
                 startingWriters.append(writer)
             }
@@ -154,7 +162,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                     liveAudioHandler: liveAudioHandler,
                     sampleAdmission: { kind, sample in
                         kind != .microphone || privacyGate?.permitsReleasedSample(sample) != false
-                    })
+                    }, clockContexts: clockContexts)
                 startingStreamingTee = streamingTee
             }
             let captureAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
@@ -348,6 +356,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             // Recording ends when the audio runtime joins, before writer/model finalization.
             // Keep this same boundary on partial failure; inference latency is not capture time.
             let stoppedAt = Date()
+            let stoppedHostTime = mach_absolute_time()
             #if DEBUG
             AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .writerStop)
             #endif
@@ -362,7 +371,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             catch { runtimeFailure = runtimeFailure ?? error }
             do { try await activeCapture.streamingTee?.finish() }
             catch { runtimeFailure = runtimeFailure ?? error }
-            let result = MeetingCaptureStopResult(tracks: tracks, stoppedAt: stoppedAt)
+            let result = MeetingCaptureStopResult(tracks: tracks, stoppedAt: stoppedAt,
+                                                 stoppedHostTime: stoppedHostTime)
             if let runtimeFailure {
                 throw MeetingCaptureError.captureStopFailed(
                     runtimeFailure.localizedDescription,
@@ -4699,6 +4709,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         let outcome = try await capture.start(
             microphone: self.originalMicrophone,
             privacyGate: self.privacyGate,
+            clockContext: self.microphoneWriter.clockContext,
             onSample: { sample in
                 guard fence.beginSample() else { return }
                 defer { fence.endSample() }
@@ -5227,6 +5238,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             component = try MeetingAVCaptureMicrophoneComponent(
                 microphone: elected.identity,
                 privacyGate: self.privacyGate,
+                clockContext: self.microphoneWriter.clockContext,
                 onSample: { sample in
                     guard newFence.beginSample() else { return }
                     defer { newFence.endSample() }
@@ -5573,6 +5585,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 candidate = try MeetingAVCaptureMicrophoneComponent(
                     microphone: candidateElection.identity,
                     privacyGate: self.privacyGate,
+                clockContext: self.microphoneWriter.clockContext,
                     onSample: { sample in
                         guard candidateFence.beginSample() else { return }
                         defer { candidateFence.endSample() }
@@ -5882,6 +5895,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             outcome = try await candidateMicCapture.start(
                 microphone: elected.identity,
                 privacyGate: self.privacyGate,
+            clockContext: self.microphoneWriter.clockContext,
                 onSample: { sample in
                     guard candidateFence.beginSample() else { return }
                     defer { candidateFence.endSample() }
@@ -6210,6 +6224,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 microphone: elected.identity,
                 authorizationPreflighted: true,
                 privacyGate: self.privacyGate,
+            clockContext: self.microphoneWriter.clockContext,
                 onSample: { sample in
                     guard candidateFence.beginSample() else { return }
                     defer { candidateFence.endSample() }
@@ -6424,6 +6439,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             component = try MeetingAVCaptureMicrophoneComponent(
                 microphone: elected.identity,
                 privacyGate: self.privacyGate,
+                clockContext: self.microphoneWriter.clockContext,
                 onSample: { sample in
                     guard fence.beginSample() else { return }
                     defer { fence.endSample() }
@@ -6795,9 +6811,14 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
         let gate = MeetingPCMIntakeGate()
         var converter: MeetingCapturePCMConverter
         var expectedNativeEnd: CMTime?
-        init(kind: MeetingAudioTrackKind, consumer: any MeetingMemoryAudioConsuming) throws {
+        let clockContext: MeetingRecordingClockContext?
+        var expectedClockEnd: MeetingMediaTime?
+        var clockProducerEpoch: UInt64?
+        init(kind: MeetingAudioTrackKind, consumer: any MeetingMemoryAudioConsuming,
+             clockContext: MeetingRecordingClockContext?) throws {
             self.kind = kind
             self.consumer = consumer
+            self.clockContext = clockContext
             self.converter = try MeetingCapturePCMConverter()
         }
     }
@@ -6815,9 +6836,10 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
     init(consumers: [MeetingAudioTrackKind: any MeetingMemoryAudioConsuming], originHostTime: UInt64,
          eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
          liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?,
-         sampleAdmission: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Bool)? = nil) throws {
+         sampleAdmission: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Bool)? = nil,
+         clockContexts: [MeetingAudioTrackKind: MeetingRecordingClockContext] = [:]) throws {
         self.tracks = try Dictionary(uniqueKeysWithValues: consumers.map { kind, consumer in
-            (kind, try Track(kind: kind, consumer: consumer))
+            (kind, try Track(kind: kind, consumer: consumer, clockContext: clockContexts[kind]))
         })
         self.origin = CMTime(seconds: AVAudioTime.seconds(forHostTime: originHostTime), preferredTimescale: 1_000_000_000)
         self.eventHandler = eventHandler
@@ -6847,17 +6869,44 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
                 defer { track.gate.release(reservation) }
                 guard self.lock.withLock({ self.terminalError == nil }) else { return }
                 do {
-                    try self.deliver(owned.buffer, pts: owned.pts, track: track)
+                    try self.deliver(owned.buffer, pts: owned.pts, clockPacket: owned.clockPacket, track: track)
                 } catch { self.fail(error) }
             }
         }
         if let failure { self.fail(failure) }
     }
 
-    private func deliver(_ buffer: AVAudioPCMBuffer, pts: CMTime, track: Track) throws {
+    private func deliver(_ buffer: AVAudioPCMBuffer, pts: CMTime,
+                         clockPacket: MeetingCaptureClockMetadata.Packet?, track: Track) throws {
         let start = CMTimeGetSeconds(pts - self.origin)
         guard start.isFinite, start >= -0.02, start <= Double(Int.max / 16_000) else {
             throw MeetingCapturePCMError.invalidPresentationTime
+        }
+        if let context = track.clockContext {
+            guard let packet = clockPacket, context.accepts(packet),
+                  let first = packet.mapping.spans.first, let last = packet.mapping.spans.last else {
+                throw MeetingRecordingClock.Failure.invalidPacket
+            }
+            if let priorEpoch = track.clockProducerEpoch, packet.producerEpoch < priorEpoch {
+                throw MeetingRecordingClock.Failure.retiredProducer
+            }
+            var mapping = packet.mapping
+            let excludedInterval = track.expectedClockEnd.map { first.hostStart.seconds > $0.seconds + 1e-9 } ?? false
+            let boundary = first.discontinuityBefore || excludedInterval
+                || track.clockProducerEpoch.map({ $0 != packet.producerEpoch }) == true
+            if boundary, track.clockProducerEpoch != nil {
+                if let tail = try track.converter.finish() { try self.enqueue(tail, track: track) }
+                track.converter = try MeetingCapturePCMConverter()
+            }
+            if excludedInterval { mapping.spans[0].discontinuityBefore = true }
+            let mapped = MeetingCaptureClockMetadata.Packet(mapping: mapping, clockID: packet.clockID,
+                sourceID: packet.sourceID, producerEpoch: packet.producerEpoch)
+            track.clockProducerEpoch = packet.producerEpoch
+            track.expectedClockEnd = last.hostEnd
+            if let converted = try track.converter.convert(buffer, presentationTime: pts, clockPacket: mapped) {
+                try self.enqueue(converted, track: track)
+            }
+            return
         }
         if let end = track.expectedNativeEnd {
             let gap = CMTimeGetSeconds(pts - end)

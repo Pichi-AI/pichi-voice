@@ -415,7 +415,8 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
             if let sourceTimeline {
                 do {
                     if try sourceTimeline.record(sourceStartSample: sourceStartFrame, frameCount: frameCount,
-                        presentationTime: CMTimeGetSeconds(pts)) {
+                        presentationTime: CMTimeGetSeconds(pts),
+                        clockMapping: MeetingCaptureClockMetadata.read(from: sampleBuffer)?.mapping) {
                         self.sealSourceBoundaryLocked()
                     }
                 } catch {

@@ -454,6 +454,7 @@ nonisolated struct MeetingTimebaseMetadata: Codable, Equatable, Sendable {
     var machTimebaseDenominator: UInt32
     var firstPresentationTime: MeetingMediaTime?
     var recordingTimePolicy: MeetingRecordingTimePolicy? = nil
+    var endedHostTime: UInt64? = nil
 }
 
 nonisolated struct MeetingAudioFormat: Codable, Equatable, Sendable {
@@ -1801,6 +1802,7 @@ nonisolated struct MeetingCaptureStartResult: Sendable {
 nonisolated struct MeetingCaptureStopResult: Sendable {
     var tracks: [MeetingAudioTrack]
     var stoppedAt: Date
+    var stoppedHostTime: UInt64? = nil
 }
 
 nonisolated struct MeetingProcessingResult: Codable, Sendable {

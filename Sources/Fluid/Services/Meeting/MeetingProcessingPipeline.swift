@@ -1626,7 +1626,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         //
         // The request is frozen first, so the host capability handed to the factory can be bound to
         // this exact value.
-        let configuration: MeetingFinalProcessingConfiguration
+        var configuration: MeetingFinalProcessingConfiguration
         if let retainedPin {
             configuration = retainedPin.configuration
         } else {
@@ -1639,6 +1639,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 speakerProcessingMode: session.effectiveSpeakerProcessingMode
             )
         }
+        configuration.recordingTimePolicy = session.timebase.recordingTimePolicy
         let request = MeetingBackendRequest(
             attemptID: Self.resolvedAttemptID(session: session),
             session: session,

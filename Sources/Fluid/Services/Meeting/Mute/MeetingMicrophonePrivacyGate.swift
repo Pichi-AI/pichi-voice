@@ -81,6 +81,7 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
     private let acquisitionDivergenceTicks = MeetingMicrophonePrivacyGate.ticks(MeetingMicrophonePrivacyGate.maximumAcquisitionDivergenceSeconds)
     private var usesAcquisitionClock = false
     private let configuration: Configuration
+    private let clockContext: MeetingRecordingClockContext?
     private let hostTime: @Sendable () -> UInt64
     private let createdAt: UInt64
     private let quarantineTicks: UInt64
@@ -107,6 +108,7 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
     private static let maximumApprovedIntervals = 64
 
     init(configuration: Configuration = .init(),
+         clockContext: MeetingRecordingClockContext? = nil,
          hostTime: @escaping @Sendable () -> UInt64 = { mach_absolute_time() },
          automaticWatchdog: Bool = true) {
         precondition(configuration.quarantineSeconds.isFinite && (1...5).contains(configuration.quarantineSeconds))
@@ -119,6 +121,7 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
         precondition(configuration.confirmedPrefixSafetySeconds.isFinite && configuration.confirmedPrefixSafetySeconds >= 0
                      && configuration.confirmedPrefixSafetySeconds < configuration.observationLeaseSeconds)
         self.configuration = configuration
+        self.clockContext = clockContext
         self.hostTime = hostTime
         self.createdAt = hostTime()
         self.quarantineTicks = Self.ticks(configuration.quarantineSeconds)
@@ -356,7 +359,7 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
         // Mature the original against both clocks, including that conservative downstream margin,
         // so the second check cannot discard a just-released valid block without a retry.
         let maturityEnd = max(metadata.end, metadata.canonicalEnd)
-        let maturityMargin = self.usesAcquisitionClock ? self.acquisitionDivergenceTicks : 0
+        let maturityMargin = self.clockContext == nil && self.usesAcquisitionClock ? self.acquisitionDivergenceTicks : 0
         guard maturityEnd <= now, now - maturityEnd >= self.quarantineTicks + maturityMargin else { return false }
         if self.isApprovedLocked(metadata) { return true }
         return self.freshLocked(now: now)
@@ -368,7 +371,7 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
     private func acquisitionMarginLocked(_ metadata: SampleMetadata) -> UInt64 {
         // Resampling can construct a new buffer without the gate-owned attachment. Such output
         // keeps its canonical clock, with conservative edges instead of inventing acquisition proof.
-        self.usesAcquisitionClock && !metadata.hasAcquisitionProof ? self.acquisitionDivergenceTicks : 0
+        self.clockContext == nil && self.usesAcquisitionClock && !metadata.hasAcquisitionProof ? self.acquisitionDivergenceTicks : 0
     }
 
     private func startsInEpochLocked(_ metadata: SampleMetadata, epochStart: UInt64) -> Bool {
@@ -477,6 +480,17 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
         let duration = Self.ticks(Double(frames) / asbd.mSampleRate)
         guard canonicalStart > 0, duration > 0, canonicalStart <= UInt64.max - duration else { return nil }
         let canonicalEnd = canonicalStart + duration
+        if let clockContext {
+            guard let packet = MeetingCaptureClockMetadata.read(from: sample), clockContext.accepts(packet),
+                  let first = packet.mapping.spans.first, let last = packet.mapping.spans.last else { return nil }
+            let start = CMClockConvertHostTimeToSystemUnits(CMTime(value: first.hostStart.value,
+                timescale: first.hostStart.timescale))
+            let end = CMClockConvertHostTimeToSystemUnits(CMTime(value: last.hostEnd.value,
+                timescale: last.hostEnd.timescale))
+            guard start > 0, end > start else { return nil }
+            return SampleMetadata(start: start, end: end, canonicalStart: start, canonicalEnd: end,
+                hasAcquisitionProof: true, bytes: bytes, frames: frames, format: format, timing: timing)
+        }
         let attached = CMGetAttachment(sample, key: Self.acquisitionAttachmentKey, attachmentModeOut: nil) as? AcquisitionInterval
         let provenStart: UInt64?
         if let acquisitionHostTime {
@@ -516,6 +530,10 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
             CMSetAttachment(result, key: Self.acquisitionAttachmentKey,
                 value: AcquisitionInterval(owner: self.owner, metadata: metadata),
                 attachmentMode: kCMAttachmentMode_ShouldPropagate)
+        }
+        if self.clockContext != nil {
+            do { try MeetingCaptureClockMetadata.copyExact(from: sample, to: result) }
+            catch { return nil }
         }
         return result
     }

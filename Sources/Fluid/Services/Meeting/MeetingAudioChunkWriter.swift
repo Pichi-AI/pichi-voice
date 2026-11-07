@@ -44,6 +44,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         var producerEpoch: UInt64
         var framesWritten: Int64
         var lastCheckpointFrames: Int64
+        var clockMapping: MeetingAudioClockMapping? = nil
     }
 
     private enum FinalizationResult: @unchecked Sendable {
@@ -397,6 +398,15 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             self.recordDroppedSample(detail: "Capture delivered an invalid audio sample.")
             return
         }
+        let clockPacket = MeetingCaptureClockMetadata.read(from: sourceSampleBuffer)
+        if let clockContext {
+            guard let clockPacket, clockContext.accepts(clockPacket) else {
+                self.reportWriterFailure(detail: "Capture packet has no recording-clock mapping.", sampleBuffer: sourceSampleBuffer)
+                return
+            }
+        }
+        let producerEpoch = self.clockContext != nil ? clockPacket!.producerEpoch : producerEpoch
+        let hostMapping = self.clockContext != nil ? clockPacket?.mapping : nil
         let sourcePresentationTime = CMSampleBufferGetPresentationTimeStamp(sourceSampleBuffer)
         guard sourcePresentationTime.isValid, sourcePresentationTime.isNumeric else {
             self.recordDroppedSample(detail: "Capture delivered audio without a valid presentation timestamp.")
@@ -408,7 +418,10 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             return
         }
 
-        let duration = Self.sampleDuration(sourceSampleBuffer)
+        let duration = hostMapping.map {
+            CMTime(seconds: ($0.spans.last?.hostEnd.seconds ?? 0) - ($0.spans.first?.hostStart.seconds ?? 0),
+                   preferredTimescale: 1_000_000_000)
+        } ?? Self.sampleDuration(sourceSampleBuffer)
         let previousEnd = self.activeChunk?.end ?? self.lastFinalizedEnd
         let epochChanged = self.currentProducerEpoch.map { producerEpoch > $0 } ?? false
         self.currentProducerEpoch = max(self.currentProducerEpoch ?? producerEpoch, producerEpoch)
@@ -420,9 +433,14 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             self.canonicalTimelineOffsetEpoch = nil
         }
 
-        var presentationTime = sourcePresentationTime + self.canonicalTimelineOffset
+        var presentationTime = sourcePresentationTime + (hostMapping == nil ? self.canonicalTimelineOffset : .zero)
         var backwardReset = false
-        if let previousEnd, presentationTime < previousEnd {
+        if hostMapping != nil {
+            if let previousEnd, presentationTime < previousEnd - CMTime(value: 1, timescale: 1_000_000) {
+                self.reportWriterFailure(detail: "Recording-clock packets overlap.", sampleBuffer: sourceSampleBuffer)
+                return
+            }
+        } else if let previousEnd, presentationTime < previousEnd {
             // SCK nanosecond stamps and frame-derived durations can differ by tens of
             // nanoseconds after CMTime rescaling. Keep them contiguous without creating
             // hundreds of tiny analysis epochs. A real one-frame overlap still rotates.
@@ -466,7 +484,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             let gap = CMTimeGetSeconds(presentationTime - activeChunk.end)
             // Compared on the canonical timeline: once the epoch's offset is established, later
             // samples are contiguous here even though their raw stamps are far behind `end`.
-            let clockBoundary = epochChanged || backwardReset
+            let clockBoundary = epochChanged || backwardReset || hostMapping?.spans.first?.discontinuityBefore == true
             if elapsed >= self.chunkDuration || clockBoundary || gap > 0.5 {
                 if clockBoundary || gap > 0.5 {
                     self.silenceAccumulatedSeconds = 0
@@ -504,6 +522,9 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 )
             }
             guard var activeChunk = self.activeChunk else { return }
+            if let hostMapping {
+                activeChunk.clockMapping = try activeChunk.clockMapping.map { try $0.appending(hostMapping) } ?? hostMapping
+            }
             let receipt = try activeChunk.sink.append(sampleBuffer)
             guard receipt.framesAccepted == receipt.framesWritten,
                   receipt.framesAccepted == Int64(CMSampleBufferGetNumSamples(sampleBuffer))
@@ -790,7 +811,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 finalizationState: .finalized,
                 audioSchemaVersion: 2,
                 captureAnalysisAsset: asset,
-                playbackArchiveAsset: nil
+                playbackArchiveAsset: nil,
+                clockMapping: activeChunk.clockMapping
             ), activeChunk.format)
         case let .failure(error):
             return .failed(self.failedChunk(from: activeChunk), "PCM chunk finalization failed: \(error)")

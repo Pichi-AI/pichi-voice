@@ -35,11 +35,17 @@ extension MeetingProcessingPipeline {
             let timebase = attempt.request.session.timebase
             let origin = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
                 / Double(timebase.machTimebaseDenominator) / 1_000_000_000
-            let timeline = try MeetingPCMSourceTimeline(originSeconds: origin)
+            let timeline = try MeetingPCMSourceTimeline(originSeconds: origin,
+                recordingTimePolicy: timebase.recordingTimePolicy)
             attempt.sourceTimelines[track.id] = timeline
             sourceTimeline = timeline
         } else {
-            sourceTimeline = try MeetingPCMSourceTimeline()
+            let timebase = attempt.request.session.timebase
+            let origin = timebase.recordingTimePolicy == .hostMonotonicV1
+                ? Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
+                    / Double(timebase.machTimebaseDenominator) / 1_000_000_000 : nil
+            sourceTimeline = try MeetingPCMSourceTimeline(originSeconds: origin,
+                recordingTimePolicy: timebase.recordingTimePolicy)
             attempt.sourceTimelines[track.id] = sourceTimeline
         }
         let state = try MeetingStreamingTranscriptState(attemptID: attemptID, track: track,

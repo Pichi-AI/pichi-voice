@@ -202,7 +202,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// this token until recognition/privacy finalization and terminal persistence have completed.
     private var memoryCheckpointGeneration: UUID?
     private var operationGeneration: UUID?
-    private var stopRequestedAt: (sessionID: MeetingSessionID, date: Date)?
+    private var stopRequestedAt: (sessionID: MeetingSessionID, date: Date, hostTime: UInt64)?
     /// A joined capture can outlive the processing generation during termination. Retain
     /// only its immutable physical facts, never an older transcript/session snapshot.
     private var captureStopHandoff: (sessionID: MeetingSessionID, generation: UUID,
@@ -411,6 +411,16 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     var elapsedTime: TimeInterval {
         guard let session = self.activeSession else { return 0 }
+        if session.timebase.recordingTimePolicy == .hostMonotonicV1 {
+            let end: UInt64
+            if self.state == .stopping(session.id), let request = self.stopRequestedAt, request.sessionID == session.id {
+                end = session.timebase.endedHostTime ?? request.hostTime
+            } else { end = session.timebase.endedHostTime ?? mach_absolute_time() }
+            let start = session.timebase.startedHostTime
+            guard end >= start else { return 0 }
+            return Double(end - start) * Double(session.timebase.machTimebaseNumerator)
+                / Double(session.timebase.machTimebaseDenominator) / 1_000_000_000
+        }
         // Freeze the visible timer immediately on Stop. The final persisted boundary is
         // supplied by capture after the audio runtime joins, not this UI request estimate.
         if self.state == .stopping(session.id), let request = self.stopRequestedAt, request.sessionID == session.id {
@@ -600,20 +610,22 @@ final class MeetingSessionCoordinator: ObservableObject {
         // changed while they were open; final preparation still binds the exact session request.
         let initialDescriptor = try self.processing.validateRecordingInput(
             configuration: configuration, backendID: requestedBackendID)
-        let validationSnapshot = PichiMeetingProviderFactory.validationConfiguration(
+        var validationSnapshot = PichiMeetingProviderFactory.validationConfiguration(
             backendID: requestedBackendID, languageCode: configuration.languageCode,
             preferredASRModel: selectedSpeechModel,
             diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
             speakerProcessingMode: configuration.effectiveSpeakerProcessingMode)
+        validationSnapshot.recordingTimePolicy = self.capture.recordingTimePolicy
         try initialDescriptor?.validateSpeakerProcessingMode(configuration: validationSnapshot, mode: configuration.mode)
         // Explicit registered requests require a preinstalled artifact. Capture its identity
         // before any dependency work or permission prompt and retain this exact snapshot.
         let explicitRecordingConfiguration: MeetingFinalProcessingConfiguration?
         if configuration.transcriptionBackendID != nil {
-            let snapshot = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: requestedBackendID,
+            var snapshot = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: requestedBackendID,
                 languageCode: configuration.languageCode, preferredASRModel: selectedSpeechModel,
                 diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
                 speakerProcessingMode: configuration.effectiveSpeakerProcessingMode)
+            snapshot.recordingTimePolicy = self.capture.recordingTimePolicy
             let registeredOverride = PichiMeetingProviderFactory.registeredBackendDescriptor(for: snapshot.asrModel)?.id == requestedBackendID
             try PichiMeetingProviderFactory.validateRecordingConfiguration(snapshot,
                 isAppleSilicon: CPUArchitecture.isAppleSilicon, requiresInstalledArtifact: registeredOverride,
@@ -696,9 +708,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         let recordingSessionID = UUID()
         let recordingModelID: String
         let recordingBackendID: MeetingBackendID
-        let recordingASRConfiguration: MeetingFinalProcessingConfiguration
+        var recordingASRConfiguration: MeetingFinalProcessingConfiguration
         let recordingLiveModelID: String
-        let recordingLiveConfiguration: MeetingFinalProcessingConfiguration
+        var recordingLiveConfiguration: MeetingFinalProcessingConfiguration
         let recordingProfileOwnership: MeetingProfileOwnership?
         do {
             try Task.checkCancellation()
@@ -783,7 +795,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.trackHealth = [:]
             self.state = .idle
         }
-        let timebase = Self.makeTimebase()
+        let timebase = Self.makeTimebase(recordingTimePolicy: self.capture.recordingTimePolicy)
+        recordingASRConfiguration.recordingTimePolicy = timebase.recordingTimePolicy
+        recordingLiveConfiguration.recordingTimePolicy = timebase.recordingTimePolicy
         var session = MeetingSession(id: recordingSessionID, configuration: publicationConfiguration, timebase: timebase)
         session.profileOwnership = recordingProfileOwnership
         session.recordingBackendID = recordingBackendID.rawValue
@@ -805,10 +819,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         await self.pendingSpeechTeardownTask?.value
         self.pendingSpeechTeardownTask = nil
         let captureOrigin = MeetingLiveOriginBox()
-        if configuration.mode == .onlineCall, Self.usesPCMProcessing(configuration) {
+        if timebase.recordingTimePolicy == .hostMonotonicV1 || (configuration.mode == .onlineCall && Self.usesPCMProcessing(configuration)) {
             let seconds = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
                 / Double(timebase.machTimebaseDenominator) / 1_000_000_000
-            _ = captureOrigin.establish(CMTime(seconds: seconds, preferredTimescale: 1_000_000_000))
+            let origin = CMTime(seconds: seconds, preferredTimescale: 1_000_000_000)
+            if timebase.recordingTimePolicy != nil { _ = captureOrigin.freeze(origin) }
+            else { _ = captureOrigin.establish(origin) }
         }
         let liveTranscriptionCoordinator = MeetingLiveTranscriptionCoordinator(originBox: captureOrigin,
             onResolvedAudioWithoutCaption: { [weak self] source, start, end in
@@ -2471,7 +2487,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         if self.captureStopHandoff?.sessionID != session.id || self.captureStopHandoff?.generation != generation {
             self.captureStopHandoff = (session.id, generation, nil, nil)
         }
-        self.stopRequestedAt = (session.id, Date())
+        self.stopRequestedAt = (session.id, Date(), mach_absolute_time())
         self.state = .stopping(session.id)
         session.state = .stopping
         session.updatedAt = Date()
@@ -3404,14 +3420,15 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
     }
 
-    private static func makeTimebase() -> MeetingTimebaseMetadata {
+    private static func makeTimebase(recordingTimePolicy: MeetingRecordingTimePolicy?) -> MeetingTimebaseMetadata {
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)
         return MeetingTimebaseMetadata(
             startedHostTime: mach_absolute_time(),
             machTimebaseNumerator: info.numer,
             machTimebaseDenominator: info.denom,
-            firstPresentationTime: nil
+            firstPresentationTime: nil,
+            recordingTimePolicy: recordingTimePolicy
         )
     }
 
@@ -3460,6 +3477,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private static func apply(_ stopResult: MeetingCaptureStopResult, to session: inout MeetingSession) {
         session.audioTracks = stopResult.tracks
         session.endedAt = stopResult.stoppedAt
+        session.timebase.endedHostTime = stopResult.stoppedHostTime
         session.timebase.firstPresentationTime = self.firstPresentationTime(in: stopResult.tracks)
     }
 

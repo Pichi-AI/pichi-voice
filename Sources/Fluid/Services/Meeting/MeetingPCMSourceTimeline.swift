@@ -22,18 +22,21 @@ final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
     private let lock = NSLock()
     private var originSeconds: Double?
     private let maximumSpans: Int
+    private let recordingTimePolicy: MeetingRecordingTimePolicy?
     private var spans: [Span] = []
     private var acceptedThroughSample = 0
     private var lastPhysicalEnd: Double?
     private var observedGaps = false
 
-    init(originSeconds: Double? = nil, maximumSpans: Int = 8_192) throws {
+    init(originSeconds: Double? = nil, maximumSpans: Int = 8_192,
+         recordingTimePolicy: MeetingRecordingTimePolicy? = nil) throws {
         guard originSeconds.map({ $0.isFinite && $0 >= 0 }) != false,
               maximumSpans > 0, maximumSpans <= 8_192 else {
             throw Failure.invalidConfiguration
         }
         self.originSeconds = originSeconds
         self.maximumSpans = maximumSpans
+        self.recordingTimePolicy = recordingTimePolicy
     }
 
     /// Atomic admission before the transport owns this packet. True seals the preceding ASR
@@ -42,6 +45,7 @@ final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
     func record(sourceStartSample: Int, frameCount: Int, presentationTime: Double,
                 clockMapping: MeetingAudioClockMapping? = nil) throws -> Bool {
         try self.lock.withLock {
+            guard self.recordingTimePolicy == nil || clockMapping != nil else { throw Failure.invalidTimestamp }
             guard sourceStartSample == self.acceptedThroughSample, frameCount > 0,
                   frameCount <= Int.max - sourceStartSample else { throw Failure.nonContiguousInput }
             guard presentationTime.isFinite, presentationTime >= 0 else { throw Failure.invalidTimestamp }

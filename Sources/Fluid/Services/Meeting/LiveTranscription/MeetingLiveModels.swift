@@ -524,6 +524,7 @@ nonisolated enum MeetingLiveSampleCopy {
         let buffer: AVAudioPCMBuffer
         let pts: CMTime
         let duration: CMTime
+        var clockPacket: MeetingCaptureClockMetadata.Packet? = nil
     }
 
     static func copy(_ sampleBuffer: CMSampleBuffer) -> Sample? {
@@ -563,7 +564,8 @@ nonisolated enum MeetingLiveSampleCopy {
         if !duration.isValid || !duration.isNumeric || duration <= .zero {
             duration = CMTime(value: CMTimeValue(frameCount), timescale: CMTimeScale(copiedBuffer.format.sampleRate.rounded()))
         }
-        return Sample(buffer: copiedBuffer, pts: pts, duration: duration)
+        return Sample(buffer: copiedBuffer, pts: pts, duration: duration,
+                      clockPacket: MeetingCaptureClockMetadata.read(from: sampleBuffer))
     }
 
     private static func downmixLayoutlessMultichannel(_ source: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
