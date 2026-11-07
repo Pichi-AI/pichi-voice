@@ -951,7 +951,7 @@ nonisolated enum MeetingTranscriptExporter {
                 }) {
                 readingSpeakers = MeetingSessionSpeaker.numberingGeneratedParticipants(reading.speakers, speakerNameFormat: format)
                 for (original, resolved) in zip(source, reading.segments) {
-                    if let id = resolved.speakerID, original.hasReadableContent,
+                    if readingOwners[original.id] == nil, let id = resolved.speakerID, original.hasReadableContent,
                        original.speakerID != id || original.attributionState != .assigned {
                         readingOwners[original.id] = id
                     }

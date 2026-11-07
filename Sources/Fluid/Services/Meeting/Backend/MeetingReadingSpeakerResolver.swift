@@ -296,7 +296,7 @@ nonisolated enum MeetingReadingSpeakerResolver {
                     // admission table. Reuse its exact scoped token, including coarse mixtures.
                     var chosen = knownTokenID(source.speakerAttribution?.selectedToken)
                     if chosen == nil, policy.enableIncomingGapReading,
-                       source.nativePrecision != .utterance,
+                       source.nativePrecision == .word,
                        source.nativeSpeakerAssignment == nil || source.nativeSpeakerAssignment == .unassigned,
                        source.speakerAttribution?.relation == nil
                         || source.speakerAttribution?.relation == MeetingSpeakerAttributionRelation.none,

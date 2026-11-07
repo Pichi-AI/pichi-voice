@@ -109,7 +109,12 @@ keeps the former policy when replaying older attempts. The ordinary default enab
    activity, select that foreground participant for reading, including indivisible utterances.
    Preserve native ambiguity. This `foregroundDominance` rule cannot become an acoustic anchor
    or train identity; unsafe epochs and coverage barriers retain their diagnostic abstention.
-3. For remaining unresolved text, compare independently assigned intervals in a 15-second
+3. A native unassigned word in a pause between different independently supported voices follows
+   the incoming turn. Earlier long speech must not outvote that turn-boundary decision. This
+   remains a reading inference, with no claim of acoustic speech inside the pause. The additive
+   `enableIncomingGapReading` flag freezes this rule; older complete-reading policies stay replayable.
+   Existing archive neighbor/continuation decisions keep priority over completion.
+   For other unresolved text, compare independently assigned intervals in a 15-second
    surrounding window. Union intervals before counting, so duplicate/fragmented timestamps
    cannot inflate support. Prefer the continuing left participant on equal support. Word/ASR
    envelope support is a contextual heuristic, distinct from actual diarizer activity.
