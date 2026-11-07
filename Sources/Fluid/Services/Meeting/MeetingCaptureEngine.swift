@@ -6989,6 +6989,9 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
             throw MeetingCapturePCMError.invalidPresentationTime
         }
         if let context = track.clockContext {
+            // Memory packing may change without a signal-format or producer boundary.
+            // Canonical mono input preserves one resampler state across those changes.
+            let buffer = try MeetingCapturePCMConverter.ownedMonoCopy(of: buffer)
             guard let packet = clockPacket, context.accepts(packet),
                   let first = packet.mapping.spans.first, let last = packet.mapping.spans.last else {
                 throw MeetingRecordingClock.Failure.invalidPacket

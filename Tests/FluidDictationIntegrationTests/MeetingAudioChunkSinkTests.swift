@@ -67,7 +67,7 @@ final class MeetingAudioChunkSinkTests: XCTestCase {
         for index in 0..<25 {
             let layout: UInt32? = index.isMultiple(of: 2) ? nil : kAudioChannelLayoutTag_Mono
             let raw = try makeRawSampleBuffer(channelCount: 1, layoutTag: layout, frameCount: 512,
-                pts: base + Double(index * 512) / 48_000)
+                pts: base + Double(index * 512) / 48_000, interleaved: index.isMultiple(of: 2))
             let generation: UInt64 = changesProducer && index >= 12 ? 2 : 1
             for measured in try clock.offer(raw, producerGeneration: generation, sourceFrameStart: Int64(index * 512)) { try offer(measured) }
             _ = await writer.snapshot(); await tee.drainEnqueuedPackets()
@@ -514,12 +514,13 @@ final class MeetingAudioChunkSinkTests: XCTestCase {
         return url
     }
 
-    private func makeRawSampleBuffer(channelCount: Int, layoutTag: UInt32?, frameCount: Int, pts: Double) throws -> CMSampleBuffer {
-        let bytesPerFrame = channelCount * MemoryLayout<Float>.size
+    private func makeRawSampleBuffer(channelCount: Int, layoutTag: UInt32?, frameCount: Int, pts: Double,
+                                     interleaved: Bool = true) throws -> CMSampleBuffer {
+        let bytesPerFrame = (interleaved ? channelCount : 1) * MemoryLayout<Float>.size
         var asbd = AudioStreamBasicDescription(
             mSampleRate: 48_000,
             mFormatID: kAudioFormatLinearPCM,
-            mFormatFlags: kAudioFormatFlagsNativeFloatPacked,
+            mFormatFlags: kAudioFormatFlagsNativeFloatPacked | (interleaved ? 0 : kAudioFormatFlagIsNonInterleaved),
             mBytesPerPacket: UInt32(bytesPerFrame),
             mFramesPerPacket: 1,
             mBytesPerFrame: UInt32(bytesPerFrame),
