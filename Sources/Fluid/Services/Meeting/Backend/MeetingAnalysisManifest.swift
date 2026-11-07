@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // Stage C2a of `MEETING_TRANSCRIPTION_IMPLEMENTATION_PLAN.md` (§3, §4) and
@@ -100,6 +101,66 @@ nonisolated enum MeetingCodecPriming: Codable, Equatable {
         case .notApplicable(.linearPCMFloat32CAFV1): return true
         case .unknown, .notApplicable: return false
         }
+    }
+}
+
+/// Validated persisted frame mapping consumed by the existing manifest and playback paths.
+nonisolated enum MeetingHostClockMapping {
+    enum Failure: Error { case invalid }
+    struct Piece {
+        let source: MeetingAnalysisInterval
+        let rate: Double
+    }
+
+    static func validated(chunk: MeetingAudioChunk, decoded: MeetingChunkDecodedFacts? = nil) throws -> MeetingAudioClockMapping {
+        guard let mapping = chunk.clockMapping, let asset = chunk.captureAnalysisAsset,
+              asset.role == .captureAnalysis, asset.presence == .ready,
+              asset.encoding == .linearPCMFloat32CAFV1, asset.validationIssues().isEmpty,
+              let assetFrames = asset.frameCount, assetFrames == mapping.frameCount,
+              let sampleRate = asset.sampleRate, sampleRate.isFinite, sampleRate > 0 else { throw Failure.invalid }
+        let validated = try mapping.validated(expectedFrameCount: assetFrames)
+        let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
+        guard let first = validated.spans.first, let last = validated.spans.last,
+              abs(first.hostStart.seconds - chunk.presentationStart.seconds) <= tolerance,
+              abs(last.hostEnd.seconds - chunk.presentationEnd.seconds) <= tolerance else { throw Failure.invalid }
+        if let decoded {
+            guard decoded.frameCount == mapping.frameCount, decoded.sampleRate == sampleRate,
+                  decoded.channelCount == asset.channelCount,
+                  (decoded.primingSeconds ?? 0) == 0 else { throw Failure.invalid }
+        }
+        return validated
+    }
+
+    static func validatePlaybackSpan(_ span: MeetingAnalysisSpan, chunk: MeetingAudioChunk, origin: Double) throws {
+        let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
+        guard span.chunk == MeetingAnalysisChunkIdentity(trackID: span.trackID, chunk: chunk),
+              let mapped = try piece(in: span.recordedInterval, chunk: chunk, origin: origin, decoded: span.observed.decoded),
+              abs(mapped.rate - span.presentationMapping.rateRatio) <= tolerance,
+              abs(mapped.source.start - span.sourceLocalInterval.start) <= tolerance,
+              abs(mapped.source.end - span.sourceLocalInterval.end) <= tolerance,
+              abs(span.presentationInterval.start - span.recordedInterval.start) <= tolerance,
+              abs(span.presentationInterval.end - span.recordedInterval.end) <= tolerance,
+              abs(span.presentationMapping.presentationTime(forAnalysisTime: span.analysisInterval.start)
+                - span.recordedInterval.start) <= tolerance,
+              abs(span.presentationMapping.presentationTime(forAnalysisTime: span.analysisInterval.end)
+                - span.recordedInterval.end) <= tolerance else { throw Failure.invalid }
+    }
+
+    static func piece(in interval: MeetingAnalysisInterval, chunk: MeetingAudioChunk,
+                      origin: Double, decoded: MeetingChunkDecodedFacts? = nil) throws -> Piece? {
+        let mapping = try validated(chunk: chunk, decoded: decoded)
+        let rate = decoded?.sampleRate ?? chunk.captureAnalysisAsset?.sampleRate ?? 0
+        let start = interval.start + origin, end = interval.end + origin
+        let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
+        guard let span = mapping.spans.first(where: {
+            start >= $0.hostStart.seconds - tolerance && end <= $0.hostEnd.seconds + tolerance
+                && start < $0.hostEnd.seconds - tolerance
+        }) else { return nil }
+        let duration = span.hostEnd.seconds - span.hostStart.seconds
+        let frameDuration = span.frameEnd - span.frameStart
+        let first = span.frameStart + max(0, start - span.hostStart.seconds) / duration * frameDuration
+        let last = min(span.frameEnd, span.frameStart + (end - span.hostStart.seconds) / duration * frameDuration)
+        return Piece(source: .init(start: first / rate, end: last / rate), rate: duration / (frameDuration / rate))
     }
 }
 
@@ -547,7 +608,11 @@ nonisolated struct MeetingSpanDiscontinuityFacts: Codable, Equatable {
                     gapSeconds: discontinuity.gapSeconds,
                     detail: discontinuity.detail
                 )
-            },
+            } + (chunk.clockMapping?.spans.filter(\.discontinuityBefore).map {
+                MeetingSpanDiscontinuityBoundary(kind: .sourceLost,
+                    presentationSeconds: $0.hostStart.seconds - origin, gapSeconds: nil,
+                    detail: "Measured source clock discontinuity.")
+            } ?? []),
             precededByChunkTimeGap: (precedingGap ?? 0)
                 > MeetingAnalysisManifestSchema.chunkContiguityToleranceSeconds,
             precedingGapSeconds: precedingGap
@@ -567,6 +632,8 @@ nonisolated struct MeetingAnalysisChunkIdentity: Codable, Equatable, Hashable {
     let relativeFilePath: String
     let storedByteCount: Int64
     let storedSHA256: String
+    /// Binds every persisted frame anchor into the existing source/checkpoint fingerprint.
+    let clockMappingDigest: String?
 
     /// The authoritative bytes used for analysis. For legacy chunks these equal the stored chunk
     /// fields; for an activated PCM-first chunk they point at the ready capture-analysis asset.
@@ -576,6 +643,7 @@ nonisolated struct MeetingAnalysisChunkIdentity: Codable, Equatable, Hashable {
         self.trackID = trackID
         self.chunkID = chunk.id
         self.sequence = chunk.sequence
+        self.clockMappingDigest = chunk.clockMapping?.identityFingerprint
         if let asset = chunk.captureAnalysisAsset,
            asset.presence == .ready,
            asset.role == .captureAnalysis,
@@ -656,12 +724,16 @@ nonisolated enum MeetingAnalysisGapReason: String, Codable, CaseIterable {
     /// The decoder returned less audio than the chunk's recorded interval claims, so this trailing
     /// piece has no samples behind it at all.
     case decodedAudioExhausted
+    /// Dense PCM frame ranges have no captured signal over this measured host interval.
+    case sourceClockGap
     case inadmissibleCaptureEra
 
     var epochResetReason: MeetingAnalysisEpochResetReason {
         switch self {
         case .inadmissibleCaptureEra:
             return .inadmissibleCaptureEra
+        case .sourceClockGap:
+            return .chunkDiscontinuity
         case .chunkFileMissing,
              .chunkPathRejected,
              .chunkByteCountChanged,
@@ -886,6 +958,11 @@ nonisolated struct MeetingAnalysisManifest: Equatable {
     static func presentationOrigin(of session: MeetingSession) -> Double {
         if session.transcriptTimeDomain == .meetingRelative, let explicit = session.transcriptPresentationOrigin {
             return explicit.seconds
+        }
+        if session.timebase.recordingTimePolicy == .hostMonotonicV1,
+           session.timebase.machTimebaseDenominator > 0 {
+            return Double(session.timebase.startedHostTime) * Double(session.timebase.machTimebaseNumerator)
+                / Double(session.timebase.machTimebaseDenominator) / 1_000_000_000
         }
         return session.audioTracks
             .flatMap(\.chunks)
@@ -1176,6 +1253,7 @@ nonisolated enum MeetingAnalysisManifestError: LocalizedError, Equatable {
 /// against whatever the builder happened to remember.
 nonisolated struct MeetingAnalysisPlanProjection {
     let origin: Double
+    let recordingTimePolicy: MeetingRecordingTimePolicy?
     let tracksByID: [MeetingAudioTrackID: MeetingAudioTrack]
     let chunksByKey: [MeetingAnalysisChunkKey: MeetingAudioChunk]
     /// Planned chunks per track, in recorded sequence order.
@@ -1187,6 +1265,7 @@ nonisolated struct MeetingAnalysisPlanProjection {
         let session = plan.request.session
         let origin = MeetingAnalysisManifest.presentationOrigin(of: session)
         self.origin = origin
+        self.recordingTimePolicy = session.timebase.recordingTimePolicy
 
         var tracksByID: [MeetingAudioTrackID: MeetingAudioTrack] = [:]
         var chunksByKey: [MeetingAnalysisChunkKey: MeetingAudioChunk] = [:]
@@ -1261,6 +1340,9 @@ nonisolated extension MeetingAnalysisManifest {
     @discardableResult
     func validated(against plan: MeetingBackendPlan) throws -> Self {
         let projection = MeetingAnalysisPlanProjection(plan: plan)
+        guard plan.request.configuration.recordingTimePolicy == projection.recordingTimePolicy else {
+            throw MeetingHostClockMapping.Failure.invalid
+        }
         try self.validateHeader(plan: plan, projection: projection)
 
         var seenTrackIDs = Set<MeetingAudioTrackID>()
@@ -1435,7 +1517,7 @@ nonisolated extension MeetingAnalysisManifest {
             throw MeetingAnalysisManifestError.inadmissibleSpan(spanID: span.id)
         }
 
-        try self.validateSourceMapping(span, chunkInterval: recordedChunkInterval)
+        try self.validateSourceMapping(span, chunkInterval: recordedChunkInterval, projection: projection)
         try self.validateTransform(span, era: era, track: track, projection: projection)
         try self.validateTiming(span, chunkInterval: recordedChunkInterval, era: era, projection: projection)
 
@@ -1466,10 +1548,22 @@ nonisolated extension MeetingAnalysisManifest {
     /// measured priming, truncated only where the decoder actually ran out of audio.
     private func validateSourceMapping(
         _ span: MeetingAnalysisSpan,
-        chunkInterval: MeetingAnalysisInterval
+        chunkInterval: MeetingAnalysisInterval,
+        projection: MeetingAnalysisPlanProjection
     ) throws {
         let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
         let decoded = span.observed.decoded
+        if projection.recordingTimePolicy == .hostMonotonicV1 {
+            guard let chunk = projection.chunksByKey[span.chunk.key],
+                  let piece = try MeetingHostClockMapping.piece(in: span.recordedInterval, chunk: chunk,
+                    origin: projection.origin, decoded: decoded),
+                  abs(span.sourceLocalInterval.start - piece.source.start) <= tolerance,
+                  abs(span.sourceLocalInterval.end - piece.source.end) <= tolerance,
+                  abs(span.analysisInterval.duration - piece.source.duration) <= tolerance else {
+                throw MeetingAnalysisManifestError.sourceLocalIntervalDisagreesWithRecordedPiece(spanID: span.id)
+            }
+            return
+        }
         let priming = decoded.primingSeconds ?? 0
         let expectedStart = priming + (span.recordedInterval.start - chunkInterval.start)
         let expectedEnd = min(
@@ -1559,6 +1653,18 @@ nonisolated extension MeetingAnalysisManifest {
             throw MeetingAnalysisManifestError.transformDisagreesWithIntervals(spanID: span.id)
         }
 
+        if projection.recordingTimePolicy == .hostMonotonicV1 {
+            guard let chunk = projection.chunksByKey[span.chunk.key],
+                  let piece = try MeetingHostClockMapping.piece(in: span.recordedInterval, chunk: chunk,
+                    origin: projection.origin, decoded: decoded),
+                  abs(transform.rateRatio - piece.rate) <= tolerance,
+                  abs(span.presentationInterval.start - span.recordedInterval.start) <= affineTolerance,
+                  abs(span.presentationInterval.end - span.recordedInterval.end) <= affineTolerance else {
+                throw MeetingAnalysisManifestError.presentationMappingDisagreesWithPlan(spanID: span.id)
+            }
+            return
+        }
+
         // And the presentation interval must be where this era's de-drift actually puts the
         // recorded piece — not somewhere a self-consistent but invented transform reaches.
         let anchor = projection.anchorSeconds(forTrack: track.id, era: era)
@@ -1581,6 +1687,20 @@ nonisolated extension MeetingAnalysisManifest {
         let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
         guard span.timing.residualBoundSeconds == self.residualBoundSeconds else {
             throw MeetingAnalysisManifestError.spanResidualBoundMismatch(spanID: span.id)
+        }
+
+        if projection.recordingTimePolicy == .hostMonotonicV1 {
+            guard let chunk = projection.chunksByKey[span.chunk.key],
+                  let piece = try MeetingHostClockMapping.piece(in: span.recordedInterval, chunk: chunk,
+                    origin: projection.origin, decoded: span.observed.decoded),
+                  span.timing.deDrift == .notApplicable,
+                  abs(span.presentationMapping.rateRatio - piece.rate) <= tolerance,
+                  let residual = span.timing.fitResidualSeconds, residual.isFinite, abs(residual) <= tolerance,
+                  span.timing.certainty == MeetingSpanTimingMetadata.certainty(fitResidualSeconds: residual,
+                    residualBoundSeconds: self.residualBoundSeconds, codecPriming: span.observed.decoded.codecPriming) else {
+                throw MeetingAnalysisManifestError.deDriftDisagreesWithPlan(spanID: span.id)
+            }
+            return
         }
 
         // Exactly one owner of the de-drift correction: the decision must be the one this era's
@@ -1631,7 +1751,22 @@ nonisolated extension MeetingAnalysisManifest {
         guard gap.id == expectedID else {
             throw MeetingAnalysisManifestError.unstableGapID(expected: expectedID, actual: gap.id)
         }
-        let (_, recordedChunkInterval) = try self.plannedChunk(for: gap.chunk, projection: projection)
+        let (chunk, recordedChunkInterval) = try self.plannedChunk(for: gap.chunk, projection: projection)
+        if projection.recordingTimePolicy == .hostMonotonicV1 {
+            _ = try MeetingHostClockMapping.validated(chunk: chunk)
+            if gap.reason == .sourceClockGap {
+                guard let interval = gap.recordedInterval,
+                      chunk.clockMapping?.spans.contains(where: {
+                          min(interval.end + projection.origin, $0.hostEnd.seconds)
+                              - max(interval.start + projection.origin, $0.hostStart.seconds)
+                              > MeetingAnalysisManifestSchema.mappingToleranceSeconds
+                      }) == false else {
+                    throw MeetingAnalysisManifestError.gapReasonInconsistent(gapID: gap.id)
+                }
+            }
+        } else if gap.reason == .sourceClockGap {
+            throw MeetingAnalysisManifestError.gapReasonInconsistent(gapID: gap.id)
+        }
 
         switch (gap.recordedInterval, recordedChunkInterval) {
         case let (.some(interval), .some(chunkInterval)):

@@ -3,6 +3,7 @@ import CoreMedia
 import Foundation
 
 nonisolated protocol MeetingCaptureControlling: Sendable {
+    var recordingTimePolicy: MeetingRecordingTimePolicy? { get }
     /// Any user-facing permission request must complete before the coordinator reserves
     /// the exclusive ASR meeting lease.
     func preflightPermissions() async throws
@@ -20,6 +21,10 @@ nonisolated protocol MeetingCaptureControlling: Sendable {
     func setMicrophoneManuallyMuted(_ muted: Bool, sessionID: MeetingSessionID) async throws
     #endif
     func shutdownForTermination() async
+}
+
+nonisolated extension MeetingCaptureControlling {
+    var recordingTimePolicy: MeetingRecordingTimePolicy? { nil }
 }
 
 #if os(macOS)

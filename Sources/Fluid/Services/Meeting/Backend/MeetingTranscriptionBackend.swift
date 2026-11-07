@@ -186,6 +186,9 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     /// Scheduling and topology are declared capabilities. Online streaming must explicitly
     /// support both capture tracks and a shared prepared inference owner.
     func validateSpeakerProcessingMode(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {
+        if let policy = configuration.recordingTimePolicy, self.resultContract != .canonicalEvidence {
+            throw MeetingRecordingTimePolicyError.legacyProcessingUnsupported(policy)
+        }
         guard configuration.speakerLabelsEnabled else { return }
         let processingMode = configuration.effectiveSpeakerProcessingMode
         guard self.supportedSpeakerProcessingModes.contains(processingMode) else {

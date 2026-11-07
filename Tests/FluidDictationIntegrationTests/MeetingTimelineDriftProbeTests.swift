@@ -182,3 +182,393 @@ private final class DriftStreamOutput: NSObject, SCStreamOutput {
         Task { [recorder] in await recorder.record(mach: mach, pts: pts.seconds) }
     }
 }
+
+/// Model-free checks of the same frame mapping, attachment and converter used by native capture.
+final class MeetingRecordingClockCoreTests: XCTestCase {
+    func testNanosecondBoundaryAllowanceUsesExactTicksAtLargeHostUptime() throws {
+        let endpoint: Int64 = 207_042_531_395_835
+        func point(_ value: Int64) -> MeetingMediaTime { .init(value: value, timescale: 1_000_000_000) }
+        let first = MeetingAudioClockMapping(frameCount: 160, spans: [.init(frameStart: 0, frameEnd: 160,
+            hostStart: point(endpoint - 10_000_000), hostEnd: point(endpoint))])
+        let second = MeetingAudioClockMapping(frameCount: 160, spans: [.init(frameStart: 0, frameEnd: 160,
+            hostStart: point(endpoint + 1), hostEnd: point(endpoint + 10_000_001))])
+        XCTAssertNoThrow(try first.appending(second).validated())
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: 207_041.139, recordingTimePolicy: .hostMonotonicV1)
+        XCTAssertFalse(try timeline.record(sourceStartSample: 0, frameCount: 160,
+            presentationTime: first.spans[0].hostStart.seconds, clockMapping: first))
+        XCTAssertFalse(try timeline.record(sourceStartSample: 160, frameCount: 160,
+            presentationTime: second.spans[0].hostStart.seconds, clockMapping: second))
+        XCTAssertFalse(timeline.hasGaps)
+        XCTAssertFalse(MeetingAudioClockMapping.isOrderedBoundary(from: point(endpoint), to: point(endpoint + 2), discontinuityBefore: false))
+        XCTAssertTrue(MeetingAudioClockMapping.isOrderedBoundary(from: point(endpoint), to: point(endpoint + 2), discontinuityBefore: true))
+        XCTAssertFalse(MeetingAudioClockMapping.isOrderedBoundary(from: point(endpoint), to: point(endpoint - 2), discontinuityBefore: true))
+    }
+    func testSmallNativePacketResamplingRetainsProtectedHistoryWithoutExhaustingScalarBudget() throws {
+        let base = 203_316.843104167
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: base - 1, recordingTimePolicy: .hostMonotonicV1)
+        let converter = try MeetingCapturePCMConverter()
+        let input = try pcm(rate: 48_000, frames: 512)
+        var outputFrames = 0, maximumHistory = 0
+        func host(_ index: Int) -> Double {
+            let ideal = base + Double(index * 512) / 48_000 * 0.999995
+            return CMClockMakeHostTimeFromSystemUnits(AVAudioTime.hostTime(forSeconds: ideal)).seconds
+        }
+        func consume(_ sample: CMSampleBuffer?) throws {
+            guard let sample else { return }
+            let proof = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: sample))
+            XCTAssertFalse(try timeline.record(sourceStartSample: outputFrames,
+                frameCount: CMSampleBufferGetNumSamples(sample),
+                presentationTime: CMSampleBufferGetPresentationTimeStamp(sample).seconds, clockMapping: proof.mapping))
+            outputFrames += CMSampleBufferGetNumSamples(sample)
+            timeline.discard(beforeSample: max(0, outputFrames - 47 * 16_000))
+            maximumHistory = max(maximumHistory, timeline.retainedSpanCount)
+        }
+        for index in 0..<12_000 {
+            try consume(converter.convert(input,
+                presentationTime: CMTime(seconds: host(index), preferredTimescale: 1_000_000_000),
+                clockPacket: packet(mapping(frames: 512, start: host(index), end: host(index + 1), boundary: index == 0))))
+        }
+        try consume(converter.finish())
+        XCTAssertEqual(outputFrames, 12_000 * 512 / 3)
+        XCTAssertGreaterThan(maximumHistory, 8_192, "This cadence must exercise the old failing history bound")
+        XCTAssertLessThan(maximumHistory, 20_000, "Retirement keeps history bounded across repeated protected windows")
+        XCTAssertLessThan(timeline.retainedSpanCount, MeetingPCMSourceTimeline.maximumRetainedSpans)
+        XCTAssertFalse(timeline.hasGaps)
+        XCTAssertEqual(try XCTUnwrap(timeline.mapEndTime(Double(outputFrames) / 16_000)), host(12_000) - (base - 1), accuracy: 2e-9)
+    }
+    func testOptInCapturedClockMetadataReplayWithSyntheticPCM() throws {
+        guard let path = ProcessInfo.processInfo.environment["PICHI_CLOCK_REPLAY_SESSION_FILE"] else {
+            throw XCTSkip("Set PICHI_CLOCK_REPLAY_SESSION_FILE to replay capture timing with synthetic PCM")
+        }
+        let session = try JSONDecoder().decode(MeetingSession.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+        let track = try XCTUnwrap(session.audioTracks.first { $0.kind == .microphone })
+        let mapping = try XCTUnwrap(track.chunks.first?.clockMapping).validated()
+        let base = session.timebase
+        let origin = Double(base.startedHostTime) * Double(base.machTimebaseNumerator)
+            / Double(base.machTimebaseDenominator) / 1_000_000_000
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: origin, recordingTimePolicy: .hostMonotonicV1)
+        let converter = try MeetingCapturePCMConverter()
+        let clockID = UUID(), sourceID = UUID()
+        var outputFrames = 0, nativeCursor = 0
+        func consume(_ buffer: CMSampleBuffer?) throws {
+            guard let buffer else { return }
+            let packet = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: buffer))
+            try timeline.record(sourceStartSample: outputFrames, frameCount: CMSampleBufferGetNumSamples(buffer),
+                presentationTime: CMSampleBufferGetPresentationTimeStamp(buffer).seconds, clockMapping: packet.mapping)
+            outputFrames += CMSampleBufferGetNumSamples(buffer)
+            timeline.discard(beforeSample: max(0, outputFrames - 47 * 16_000))
+        }
+        do {
+            while nativeCursor < Int(mapping.frameCount) {
+                let count = min(512, Int(mapping.frameCount) - nativeCursor)
+                let slice = try mapping.sliced(frames: Double(nativeCursor)..<Double(nativeCursor + count))
+                let start = try XCTUnwrap(slice.spans.first).hostStart
+                try consume(converter.convert(pcm(rate: 48_000, frames: AVAudioFrameCount(count)),
+                    presentationTime: CMTime(value: start.value, timescale: start.timescale),
+                    clockPacket: .init(mapping: slice, clockID: clockID, sourceID: sourceID, producerEpoch: 1)))
+                nativeCursor += count
+            }
+            try consume(converter.finish())
+        } catch {
+            XCTFail("Timing replay failure \(error); nativeCursor=\(nativeCursor), outputFrames=\(outputFrames), retainedSpans=\(timeline.retainedSpanCount)")
+            throw error
+        }
+        XCTAssertEqual(outputFrames, Int(mapping.frameCount) / 3)
+    }
+    private let clockID = UUID(), sourceID = UUID()
+    private func time(_ seconds: Double) -> MeetingMediaTime { MeetingAudioClockMapping.mediaTime(seconds) }
+    private func mapping(frames: Int64, start: Double, end: Double, boundary: Bool = false) -> MeetingAudioClockMapping {
+        .init(frameCount: frames, spans: [.init(frameStart: 0, frameEnd: Double(frames),
+            hostStart: time(start), hostEnd: time(end), discontinuityBefore: boundary)])
+    }
+    private func packet(_ mapping: MeetingAudioClockMapping, source: UUID? = nil,
+                        epoch: UInt64 = 0) -> MeetingCaptureClockMetadata.Packet {
+        .init(mapping: mapping, clockID: clockID, sourceID: source ?? sourceID, producerEpoch: epoch)
+    }
+    private func pcm(rate: Double, frames: AVAudioFrameCount) throws -> AVAudioPCMBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false))
+        let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+        pcm.frameLength = frames
+        try XCTUnwrap(pcm.floatChannelData?[0]).initialize(repeating: 0.25, count: Int(frames))
+        return pcm
+    }
+    private func sample(rate: Double = 16_000, frames: AVAudioFrameCount = 160,
+                        at seconds: Double = 1_000) throws -> CMSampleBuffer {
+        try MeetingCapturePCMConverter.sampleBuffer(buffer: pcm(rate: rate, frames: frames),
+            presentationTime: CMTime(seconds: seconds, preferredTimescale: 1_000_000_000), sampleRate: rate)
+    }
+
+    private final class ActivityEvidence: @unchecked Sendable {
+        private let lock = NSLock()
+        private var resets = 0
+        private var values: [(Double, Double, MeetingSpeechActivity)] = []
+        func reset() { lock.withLock { resets += 1 } }
+        func append(_ start: Double, _ end: Double, _ activity: MeetingSpeechActivity) {
+            lock.withLock { values.append((start, end, activity)) }
+        }
+        var snapshot: (Int, [(Double, Double, MeetingSpeechActivity)]) { lock.withLock { (resets, values) } }
+    }
+    private struct QuietModel: MeetingSpeechActivityFrameModel {
+        let evidence: ActivityEvidence
+        mutating func probability(samples: [Float], reset: Bool) throws -> Float {
+            if reset { evidence.reset() }
+            return 0.01
+        }
+    }
+
+    func testSpeechActivityUsesMappedFrameEndsWithoutResettingForDriftOrScoringMuteGaps() async throws {
+        let evidence = ActivityEvidence()
+        let worker = MeetingCaptureSpeechActivityWorker(factory: { QuietModel(evidence: evidence) }, clock: { 0 }) {
+            evidence.append($0, $1, $2)
+        }
+        let context = try MeetingRecordingClock(timebase: .init(startedHostTime: 1_000_000_000_000,
+            machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)).source(UUID())
+        for index in 0..<8 {
+            let gap = index >= 6 ? 0.1 : 0
+            let start = 2 + Double(index) * 0.256 * 1.0003 + gap
+            let end = 2 + Double(index + 1) * 0.256 * 1.0003 + gap
+            let mapping = try context.mapping(frameCount: 4096,
+                start: CMTime(seconds: 1_000 + start, preferredTimescale: 1_000_000_000),
+                end: CMTime(seconds: 1_000 + end, preferredTimescale: 1_000_000_000), discontinuityBefore: index == 0 || index == 6)
+            let packet = try context.timedCopy(sample(frames: 4096, at: 1_000 + start), mapping: mapping,
+                producerEpoch: index < 6 ? 1 : 2)
+            worker.offer(packet, start: start)
+            await worker.drainForTesting()
+        }
+        let snapshot = evidence.snapshot
+        XCTAssertEqual(snapshot.0, 2, "Only a true source boundary resets recurrent state")
+        XCTAssertEqual(snapshot.1.count, 8)
+        XCTAssertEqual(snapshot.1[5].1, 2 + 6 * 0.256 * 1.0003, accuracy: 2e-9)
+        XCTAssertEqual(snapshot.1[6].0, 2 + 6 * 0.256 * 1.0003 + 0.1, accuracy: 2e-9)
+        XCTAssertTrue(worker.confidentlyNonSpeech(start: snapshot.1[7].0, end: snapshot.1[7].1))
+        XCTAssertFalse(worker.confidentlyNonSpeech(start: snapshot.1[5].0, end: snapshot.1[7].1))
+        worker.stop(); await worker.join()
+    }
+
+    func testSourceClockCalibratesAdjacentAcquisitionAnchorsAndFiniteTailWithoutRetaggingNativeTime() throws {
+        let clock = try MeetingRecordingClock(timebase: .init(startedHostTime: 1_000_000_000_000,
+            machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil,
+            recordingTimePolicy: .hostMonotonicV1))
+        let context = clock.source(UUID())
+        let source = MeetingCaptureSourceClock(context: context)
+        let first = try sample(rate: 48_000, frames: 480, at: 0)
+        let second = try sample(rate: 48_000, frames: 480, at: 0.01)
+        XCTAssertTrue(try source.offer(first, producerGeneration: 1,
+            acquisitionStart: CMTime(seconds: 1_000.1, preferredTimescale: 1_000_000_000), sourceFrameStart: 0).isEmpty)
+        let output = try source.offer(second, producerGeneration: 1,
+            acquisitionStart: CMTime(seconds: 1_000.110003, preferredTimescale: 1_000_000_000), sourceFrameStart: 480)
+        let measured = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: XCTUnwrap(output.first)))
+        XCTAssertEqual(measured.mapping.spans.first?.hostStart.seconds ?? 0, 1_000.1, accuracy: 1e-9)
+        XCTAssertEqual(measured.mapping.spans.last?.hostEnd.seconds ?? 0, 1_000.110003, accuracy: 1e-9)
+        let tail = try XCTUnwrap(source.finish().first)
+        let tailMap = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: tail)).mapping
+        XCTAssertEqual(tailMap.spans.last?.hostEnd.seconds ?? 0, 1_000.120006, accuracy: 2e-9)
+        XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(first), .zero, "The source-owned packet remains unchanged")
+        XCTAssertNil(MeetingCaptureClockMetadata.read(from: first))
+        let copy = try context.timedCopy(tail, mapping: tailMap, producerEpoch: measured.producerEpoch)
+        XCTAssertEqual(MeetingCaptureClockMetadata.read(from: copy)?.mapping, tailMap)
+        let foreign = try MeetingRecordingClock(timebase: .init(startedHostTime: 0,
+            machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)).source(context.sourceID)
+        XCTAssertThrowsError(try foreign.timedCopy(tail, mapping: tailMap, producerEpoch: 1))
+    }
+
+    func testContinuousNativeFramesCannotClaimAnImplausibleHostInterval() throws {
+        let clock = try MeetingRecordingClock(timebase: .init(startedHostTime: 0,
+            machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        let source = MeetingCaptureSourceClock(context: clock.source(UUID()))
+        _ = try source.offer(sample(at: 0), producerGeneration: 1,
+            acquisitionStart: CMTime(seconds: 100, preferredTimescale: 1_000), sourceFrameStart: 0)
+        XCTAssertThrowsError(try source.offer(sample(at: 0.01), producerGeneration: 1,
+            acquisitionStart: CMTime(seconds: 105, preferredTimescale: 1_000), sourceFrameStart: 160),
+            "Ten milliseconds of PCM cannot authorize five seconds of speech or silence evidence")
+    }
+
+    func testNinetyMinuteIndependentSourcesMapOneHostAxisWithoutFalseBoundariesOrUnboundedHistory() throws {
+        for (delay, drift) in [(0.3, -5e-6), (2.1, 7e-6)] {
+            let timeline = try MeetingPCMSourceTimeline(originSeconds: 1_000, maximumSpans: 128)
+            func host(_ index: Int) -> Double {
+                1_000 + delay + Double(index) * 0.1 * (1 + drift) + sin(Double(index) * 0.17) * 0.0004
+            }
+            for index in 0..<54_000 {
+                let current = mapping(frames: 1_600, start: host(index), end: host(index + 1))
+                XCTAssertFalse(try timeline.record(sourceStartSample: index * 1_600, frameCount: 1_600,
+                    presentationTime: host(index), clockMapping: current))
+                if index > 0 {
+                    XCTAssertNotNil(timeline.mapInterval(start: Double(index) * 0.1 - 0.05,
+                        end: Double(index) * 0.1 + 0.05), "Calibration boundaries are not missing audio")
+                }
+                if index % 25 == 0 { timeline.discard(beforeSample: max(0, (index - 30) * 1_600)) }
+                XCTAssertLessThanOrEqual(timeline.retainedSpanCount, 60)
+            }
+            XCTAssertFalse(timeline.hasGaps)
+            XCTAssertEqual(try XCTUnwrap(timeline.mapEndTime(5_400)), host(54_000) - 1_000, accuracy: 2e-9)
+        }
+    }
+
+    func testLegacyResidualsKeepNominalCoalescingAndOriginalSpanBudget() throws {
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: 100, maximumSpans: 1)
+        XCTAssertFalse(try timeline.record(sourceStartSample: 0, frameCount: 16_000, presentationTime: 100))
+        XCTAssertFalse(try timeline.record(sourceStartSample: 16_000, frameCount: 16_000, presentationTime: 101.000020))
+        XCTAssertEqual(timeline.retainedSpanCount, 1)
+        XCTAssertEqual(try XCTUnwrap(timeline.mapEndTime(2)), 2, accuracy: 1e-9)
+    }
+
+    func testExplicitGapPreservesBothBoundarySidesAndRejectsCrossGapQuery() throws {
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: 1_000)
+        XCTAssertFalse(try timeline.record(sourceStartSample: 0, frameCount: 1_600, presentationTime: 1_001,
+            clockMapping: mapping(frames: 1_600, start: 1_001, end: 1_001.1)))
+        XCTAssertThrowsError(try timeline.record(sourceStartSample: 1_600, frameCount: 1_600, presentationTime: 1_003.5,
+            clockMapping: mapping(frames: 1_600, start: 1_003.5, end: 1_003.6)), "Cross-packet gaps require an explicit source boundary")
+        XCTAssertTrue(try timeline.record(sourceStartSample: 1_600, frameCount: 1_600, presentationTime: 1_003.5,
+            clockMapping: mapping(frames: 1_600, start: 1_003.5, end: 1_003.6, boundary: true)))
+        XCTAssertEqual(try XCTUnwrap(timeline.mapTime(0.1)), 3.5, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(timeline.mapEndTime(0.1)), 1.1, accuracy: 1e-9)
+        XCTAssertNil(timeline.mapInterval(start: 0.05, end: 0.15))
+        let measured = try timeline.measuredIntervals(fromSample: 800, throughSample: 2_400)
+        XCTAssertEqual(measured.count, 2)
+        XCTAssertEqual(measured[0].lowerBound, 1.05, accuracy: 1e-9)
+        XCTAssertEqual(measured[0].upperBound, 1.1, accuracy: 1e-9)
+        XCTAssertEqual(measured[1].lowerBound, 3.5, accuracy: 1e-9)
+        XCTAssertEqual(measured[1].upperBound, 3.55, accuracy: 1e-9)
+    }
+
+    func testMappingValidationSliceAppendAndInversePreserveFractionalAndGapEvidence() throws {
+        let first = mapping(frames: 100, start: 1_000, end: 1_000.1)
+        let second = mapping(frames: 100, start: 1_002, end: 1_002.1, boundary: true)
+        let combined = try first.appending(second)
+        XCTAssertEqual(combined.frameCount, 200)
+        XCTAssertEqual(combined.spans.count, 2)
+        XCTAssertEqual(try XCTUnwrap(combined.hostTime(atFrame: 100)), time(1_002))
+        XCTAssertEqual(try XCTUnwrap(combined.hostTime(atFrame: 100, side: .end)), time(1_000.1))
+        XCTAssertNil(combined.frame(atHostTime: time(1_001)))
+        XCTAssertEqual(try XCTUnwrap(combined.frame(atHostTime: time(1_002.05))), 150, accuracy: 1e-6)
+        let slice = try combined.sliced(frames: 50.5..<150.5, outputFrameCount: 80)
+        XCTAssertEqual(slice.frameCount, 80)
+        XCTAssertEqual(slice.spans.count, 2)
+        XCTAssertTrue(slice.spans[1].discontinuityBefore)
+        XCTAssertEqual(try XCTUnwrap(slice.hostTime(atFrame: 0)).seconds, 1_000.0505, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(slice.hostTime(atFrame: 80)).seconds, 1_002.0505, accuracy: 1e-9)
+        var unflaggedGap = combined; unflaggedGap.spans[1].discontinuityBefore = false
+        XCTAssertThrowsError(try unflaggedGap.validated(), "Unknown host time cannot be blessed by an omitted boundary flag")
+        XCTAssertThrowsError(try first.appending(mapping(frames: 100, start: 1_002, end: 1_002.1)))
+        XCTAssertThrowsError(try first.validated(expectedFrameCount: 99))
+        var corrupt = first; corrupt.spans[0].frameEnd = .nan
+        XCTAssertThrowsError(try corrupt.validated())
+        corrupt = first; corrupt.spans[0].hostEnd.timescale = 0
+        XCTAssertThrowsError(try corrupt.validated())
+        corrupt = first; corrupt.spans[0].frameStart = 1
+        XCTAssertThrowsError(try corrupt.validated())
+        XCTAssertThrowsError(try first.appending(mapping(frames: 100, start: 999, end: 999.1)))
+        XCTAssertNil(first.hostTime(atFrame: .infinity))
+    }
+
+    func testCarrierBindsExactFrameAndRateCopiesAndNeverConfersCrossContextAuthority() throws {
+        let original = try sample()
+        let originalMapping = mapping(frames: 160, start: 1_000, end: 1_000.010001)
+        try MeetingCaptureClockMetadata.attach(mapping: originalMapping, clockID: clockID, sourceID: sourceID,
+            producerEpoch: 4, to: original)
+        XCTAssertThrowsError(try MeetingCaptureClockMetadata.attach(mapping: originalMapping, clockID: UUID(),
+            sourceID: sourceID, producerEpoch: 4, to: original), "A packet's recording owner is immutable")
+        let exact = try sample()
+        try MeetingCaptureClockMetadata.copyExact(from: original, to: exact)
+        XCTAssertEqual(MeetingCaptureClockMetadata.read(from: original), MeetingCaptureClockMetadata.read(from: exact))
+        var retimed: CMSampleBuffer?
+        var changedTiming = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 16_000),
+            presentationTimeStamp: CMTime(seconds: 1_001, preferredTimescale: 16_000), decodeTimeStamp: .invalid)
+        XCTAssertEqual(CMSampleBufferCreateCopyWithNewTiming(allocator: kCFAllocatorDefault, sampleBuffer: original,
+            sampleTimingEntryCount: 1, sampleTimingArray: &changedTiming, sampleBufferOut: &retimed), noErr)
+        XCTAssertNil(MeetingCaptureClockMetadata.read(from: try XCTUnwrap(retimed)),
+            "Automatically propagated attachments cannot authorize an independently retimed buffer")
+        XCTAssertThrowsError(try MeetingCaptureClockMetadata.copyExact(from: original, to: sample(frames: 159)))
+        XCTAssertThrowsError(try MeetingCaptureClockMetadata.copyExact(from: original, to: sample(rate: 48_000)))
+        XCTAssertThrowsError(try MeetingCaptureClockMetadata.copyExact(from: original, to: sample(at: 1_001)))
+        XCTAssertThrowsError(try MeetingCaptureClockMetadata.attach(mapping: originalMapping, clockID: clockID,
+            sourceID: sourceID, producerEpoch: 4, to: sample(frames: 159)))
+        let converter = try MeetingCapturePCMConverter()
+        let input = try pcm(rate: 48_000, frames: 480)
+        let current = packet(mapping(frames: 480, start: 1_000, end: 1_000.01))
+        _ = try converter.convert(input, presentationTime: CMTime(seconds: 1_000, preferredTimescale: 48_000), clockPacket: current)
+        XCTAssertThrowsError(try converter.convert(input, presentationTime: CMTime(seconds: 1_000.01, preferredTimescale: 48_000),
+            clockPacket: packet(mapping(frames: 480, start: 1_000.01, end: 1_000.02), source: UUID())))
+        XCTAssertThrowsError(try converter.convert(input, presentationTime: CMTime(seconds: 1_000.01, preferredTimescale: 48_000)))
+    }
+
+    func testNativeConversionAndFiniteTailRetainMeasuredHostCoverageAtBothSupportedRates() throws {
+        for rate in [44_100.0, 48_000.0] {
+            for target in [16_000.0, 48_000.0] {
+                let converter = try MeetingCapturePCMConverter(targetSampleRate: target)
+                let frames = AVAudioFrameCount(rate / 100)
+                let input = try pcm(rate: rate, frames: frames)
+                let drift = -7e-6
+                let count = 200
+                var emitted: Int64 = 0, previousHostEnd: Double?
+                func consume(_ sample: CMSampleBuffer?) throws {
+                    guard let sample else { return }
+                    let proof = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: sample))
+                    XCTAssertEqual(proof.clockID, clockID); XCTAssertEqual(proof.sourceID, sourceID)
+                    XCTAssertEqual(proof.mapping.frameCount, Int64(CMSampleBufferGetNumSamples(sample)))
+                    let start = try XCTUnwrap(proof.mapping.hostTime(atFrame: 0)).seconds
+                    let end = try XCTUnwrap(proof.mapping.hostTime(atFrame: Double(proof.mapping.frameCount), side: .end)).seconds
+                    XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(sample).seconds, start, accuracy: 1e-9)
+                    if let previousHostEnd { XCTAssertEqual(start, previousHostEnd, accuracy: 2e-9) }
+                    previousHostEnd = end
+                    emitted += proof.mapping.frameCount
+                }
+                for index in 0..<count {
+                    let start = 1_002 + Double(index) * 0.01 * (1 + drift)
+                    let end = 1_002 + Double(index + 1) * 0.01 * (1 + drift)
+                    try consume(converter.convert(input, presentationTime: CMTime(seconds: start, preferredTimescale: 1_000_000_000),
+                        clockPacket: packet(mapping(frames: Int64(frames), start: start, end: end))))
+                    XCTAssertLessThan(converter.retainedClockSpanCount, 10)
+                }
+                try consume(converter.finish())
+                XCTAssertEqual(emitted, Int64(target * 2), "Finite conversion tail retains every measured output frame")
+                XCTAssertEqual(try XCTUnwrap(previousHostEnd), 1_002 + 2 * (1 + drift), accuracy: 2e-9)
+                XCTAssertEqual(converter.retainedClockSpanCount, 0)
+            }
+        }
+    }
+
+    func testExplicitBoundaryRequiresFreshConverterAndKeepsTailBeforeGap() throws {
+        let converter = try MeetingCapturePCMConverter()
+        let input = try pcm(rate: 48_000, frames: 4_800)
+        _ = try converter.convert(input, presentationTime: CMTime(seconds: 1_000, preferredTimescale: 48_000),
+            clockPacket: packet(mapping(frames: 4_800, start: 1_000, end: 1_000.1)))
+        let afterGap = packet(mapping(frames: 4_800, start: 1_002.5, end: 1_002.6, boundary: true))
+        XCTAssertThrowsError(try converter.convert(input, presentationTime: CMTime(seconds: 1_002.5, preferredTimescale: 48_000), clockPacket: afterGap))
+        if let tail = try converter.finish(), let last = MeetingCaptureClockMetadata.read(from: tail) {
+            XCTAssertLessThanOrEqual(try XCTUnwrap(last.mapping.hostTime(atFrame: Double(last.mapping.frameCount), side: .end)).seconds, 1_000.1 + 1e-9)
+        }
+        let resumed = try MeetingCapturePCMConverter()
+        let first = try resumed.convert(input, presentationTime: CMTime(seconds: 1_002.5, preferredTimescale: 48_000), clockPacket: afterGap)
+        if let first { XCTAssertTrue(try XCTUnwrap(MeetingCaptureClockMetadata.read(from: first)).mapping.spans[0].discontinuityBefore) }
+    }
+
+    func testFractionalResamplingConsumesTheBoundaryMarkerExactlyOnceAcrossConsecutiveOutputs() throws {
+        let converter = try MeetingCapturePCMConverter()
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: 1_000, recordingTimePolicy: .hostMonotonicV1)
+        let input = try pcm(rate: 48_000, frames: 256)
+        var frames = 0, outputCount = 0, boundaryCount = 0
+        func consume(_ sample: CMSampleBuffer?) throws {
+            guard let sample else { return }
+            let packet = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: sample))
+            boundaryCount += packet.mapping.spans.filter(\.discontinuityBefore).count
+            let discontinuous = try timeline.record(sourceStartSample: frames,
+                frameCount: CMSampleBufferGetNumSamples(sample),
+                presentationTime: CMSampleBufferGetPresentationTimeStamp(sample).seconds, clockMapping: packet.mapping)
+            XCTAssertFalse(discontinuous, "A retained fraction of the first source span is still the same continuous epoch")
+            frames += CMSampleBufferGetNumSamples(sample); outputCount += 1
+        }
+        for index in 0..<20 {
+            let start = 1_000 + Double(index * 256) / 48_000
+            let end = 1_000 + Double((index + 1) * 256) / 48_000
+            try consume(converter.convert(input, presentationTime: CMTime(seconds: start, preferredTimescale: 1_000_000_000),
+                clockPacket: packet(mapping(frames: 256, start: start, end: end, boundary: index == 0))))
+        }
+        try consume(converter.finish())
+        XCTAssertGreaterThan(outputCount, 2)
+        XCTAssertEqual(boundaryCount, 1)
+        XCTAssertEqual(frames, 20 * 256 / 3)
+        XCTAssertFalse(timeline.hasGaps)
+    }
+}

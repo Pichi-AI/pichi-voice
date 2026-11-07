@@ -3339,6 +3339,68 @@ extension MeetingParakeetNemotronBackendTests {
         }
     }
 
+    func testSharedHostClockKeepsTwoDriftingSourcesAndMuteGapsThroughStopAndStoreReload() async throws {
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: "synthetic-streaming",
+            languageCode: "en", diarizationFingerprint: "synthetic-speaker-state",
+            speakerProcessingMode: .streaming, recordingTimePolicy: .hostMonotonicV1)
+        let runtime = OnlinePipelineRuntime()
+        let fixture = try self.onlinePipelineFixture(service: OnlinePipelineService(), runtime: runtime,
+            configuration: configuration)
+        fixture.publication.collectBatches = true
+        let store = MeetingSessionStore(rootDirectory: fixture.directory)
+        fixture.publication.persistentStore = store
+        try await store.create(fixture.publication.session)
+        let tracks = fixture.session.audioTracks
+        let clock = try MeetingRecordingClock(timebase: fixture.session.timebase)
+        let consumers = try await tracks.asyncOnlineMap { track in
+            try await fixture.pipeline.memoryConsumer(for: fixture.session.id, track: track, eventHandler: { _ in })
+        }
+        func host(_ source: Int, _ packet: Int) -> Double {
+            let rate = source == 0 ? 1.0003 : 0.9997
+            let delay = source == 0 ? 2.0 : 4.0
+            let gap = packet >= 20 ? (source == 0 ? 0.1 : 2.4) : 0
+            return clock.origin.seconds + delay + Double(packet) * 0.5 * rate + gap
+        }
+        let timelines = try tracks.map { try XCTUnwrap(fixture.attempt.sourceTimelines[$0.id]) }
+        for index in 0..<32 {
+            // Stay inside the existing 20-second source budget while the main actor owns the fixture.
+            // Reverse source delivery order on alternating packets. Arrival order cannot move the origin.
+            for source in (index.isMultiple(of: 2) ? [1, 0] : [0, 1]) {
+                let sample = try Self.onlinePCM(frames: 8_000, startFrame: index * 8_000)
+                let end = host(source, index) + 0.5 * (source == 0 ? 1.0003 : 0.9997)
+                let context = clock.source(tracks[source].id)
+                let mapping = try context.mapping(frameCount: 8_000,
+                    start: CMTime(seconds: host(source, index), preferredTimescale: 1_000_000_000),
+                    end: CMTime(seconds: end, preferredTimescale: 1_000_000_000), discontinuityBefore: index == 20)
+                XCTAssertTrue(consumers[source].enqueue(try context.timedCopy(sample, mapping: mapping, producerEpoch: 1)))
+            }
+        }
+        async let first: Void = consumers[0].finish()
+        async let second: Void = consumers[1].finish()
+        _ = try await (first, second)
+        let live = fixture.publication.session.transcriptSegments
+        let result = try await fixture.pipeline.process(session: fixture.publication.session,
+            sessionDirectory: fixture.directory, progress: { _ in })
+        XCTAssertEqual(result.segments, live, "Stop publishes the same already mapped words without another clock conversion")
+        var completed = fixture.publication.session
+        completed.state = .completed; completed.transcriptSegments = result.segments; completed.speakers = result.speakers
+        try await store.save(completed)
+        let loaded = try await store.load(id: completed.id)
+        let restored = try XCTUnwrap(loaded)
+        XCTAssertEqual(restored.transcriptSegments, result.segments)
+        XCTAssertEqual(restored.timebase.recordingTimePolicy, .hostMonotonicV1)
+        for (source, track) in tracks.enumerated() {
+            let words = restored.transcriptSegments.filter { $0.sourceTrackID == track.id }
+            XCTAssertEqual(words.count, 32)
+            XCTAssertEqual(try XCTUnwrap(words.first).start.seconds, host(source, 0) - clock.origin.seconds, accuracy: 2e-6)
+            let gapStart = host(source, 19) - clock.origin.seconds + 0.5 * (source == 0 ? 1.0003 : 0.9997)
+            let gapEnd = host(source, 20) - clock.origin.seconds
+            XCTAssertTrue(words.allSatisfy { $0.end.seconds <= gapStart + 1e-6 || $0.start.seconds >= gapEnd - 1e-6 })
+            XCTAssertTrue(timelines[source].hasGaps)
+        }
+        XCTAssertEqual(runtime.evidence.count("replay"), 0)
+    }
+
     func testOnlineStreamingRetiresSourceSpansAfterProtectedPublication() async throws {
         let service = OnlinePipelineService(), runtime = OnlinePipelineRuntime()
         let fixture = try self.onlinePipelineFixture(service: service, runtime: runtime)
@@ -3563,6 +3625,13 @@ extension MeetingParakeetNemotronBackendTests {
         session.transcriptIsComplete = true
         let configuration = configuration ?? MeetingFinalProcessingConfiguration(asrModel: "synthetic-streaming",
             languageCode: "en", diarizationFingerprint: "synthetic-speaker-state", speakerProcessingMode: .streaming)
+        if configuration.recordingTimePolicy == .hostMonotonicV1 {
+            session.timebase = .init(startedHostTime: 1_000_123_456_789, machTimebaseNumerator: 1,
+                machTimebaseDenominator: 1, firstPresentationTime: nil, recordingTimePolicy: .hostMonotonicV1)
+            session.transcriptPresentationOrigin = .init(value: 1_000_123_456_789, timescale: 1_000_000_000)
+            session.transcriptTimeDomain = .meetingRelative
+            for index in session.audioTracks.indices { session.audioTracks[index].timebase = session.timebase }
+        }
         session.languageCode = configuration.languageCode
         let descriptor = descriptor ?? MeetingBackendDescriptor(id: .init(rawValue: "synthetic-online-stream"), version: "1",
             execution: .local, supportedLanguageCodes: [configuration.languageCode], supportedTrackKinds: [.microphone, .applicationAudio],
