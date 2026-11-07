@@ -47,8 +47,12 @@ final class MobileRecordingDeletionUITests: XCTestCase {
             let fullRow = app.buttons["history.session.\(fullID)"]
             XCTAssertTrue(fullRow.exists)
             let fullCell = app.cells.containing(.button, identifier: "history.session.\(fullID)").firstMatch
+            // On iPad the list starts after the sidebar. Finish at the window's leading
+            // edge so the native full-swipe threshold is crossed in the split layout too.
+            let end = app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: 1, dy: fullCell.frame.midY))
             fullCell.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5))
-                .press(forDuration: 0, thenDragTo: fullCell.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)),
+                .press(forDuration: 0, thenDragTo: end,
                        withVelocity: .default, thenHoldForDuration: 0)
             XCTAssertTrue(fullRow.waitForNonExistence(timeout: 10), "Full swipe commits deletion")
             XCTAssertTrue(app.buttons[survivor].exists, "Other recordings remain")
