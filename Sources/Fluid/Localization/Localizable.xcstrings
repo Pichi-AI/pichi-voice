@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Choose a transcription engine that supports recording time alignment.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a transcription engine that supports recording time alignment."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите движок расшифровки с поддержкой общей временной шкалы записи."
+          }
+        }
+      }
+    },
     "Audio timing could not be verified.": {
       "extractionState": "manual",
       "localizations": {

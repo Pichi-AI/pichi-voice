@@ -402,6 +402,13 @@ nonisolated enum MeetingRecordingTimePolicy: String, Codable, Sendable {
     case hostMonotonicV1
 }
 
+nonisolated enum MeetingRecordingTimePolicyError: LocalizedError, Equatable {
+    case legacyProcessingUnsupported(MeetingRecordingTimePolicy)
+    var errorDescription: String? {
+        PichiLocalization.text("Choose a transcription engine that supports recording time alignment.")
+    }
+}
+
 /// One measured affine interval from chunk-local PCM frames to absolute monotonic host time.
 /// Fractional frame boundaries survive conversion to another native or analysis sample rate.
 nonisolated struct MeetingAudioClockSpan: Codable, Equatable, Sendable {
@@ -1848,6 +1855,7 @@ nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
         var id: MeetingAudioChunkID
         var byteCount: Int64
         var sha256: String
+        var clockMappingDigest: String? = nil
     }
 
     nonisolated struct SpeechInterval: Codable, Equatable, Sendable {
@@ -1877,7 +1885,8 @@ nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
                 track.id,
                 track.chunks
                     .filter { $0.finalizationState == .finalized && $0.byteCount > 0 }
-                    .map { ChunkFingerprint(id: $0.id, byteCount: $0.byteCount, sha256: $0.sha256) }
+                    .map { ChunkFingerprint(id: $0.id, byteCount: $0.byteCount, sha256: $0.sha256,
+                        clockMappingDigest: MeetingAnalysisChunkIdentity(trackID: track.id, chunk: $0).clockMappingDigest) }
             )
         })
     }

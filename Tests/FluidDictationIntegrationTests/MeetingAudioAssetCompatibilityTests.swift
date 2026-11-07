@@ -66,6 +66,25 @@ final class MeetingAudioAssetCompatibilityTests: XCTestCase {
         XCTAssertEqual(MeetingAnalysisManifest.presentationOrigin(of: session), live.origin.seconds, accuracy: 1e-9)
     }
 
+    func testLegacyCheckpointBindsClockAnchorsWithoutChangingUnmappedFingerprintJSON() throws {
+        let legacy = try JSONDecoder().decode(MeetingProcessingCheckpoint.ChunkFingerprint.self,
+            from: Data(#"{"id":"00000000-0000-0000-0000-000000000001","byteCount":42,"sha256":"same"}"#.utf8))
+        XCTAssertNil(legacy.clockMappingDigest)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
+        XCTAssertNil(json["clockMappingDigest"])
+        var chunk = MeetingAudioChunk(id: legacy.id, sequence: 0, relativeFilePath: "tracks/0.caf",
+            presentationStart: .init(value: 1_000, timescale: 1), presentationEnd: .init(value: 1_001, timescale: 1),
+            discontinuities: [], sha256: legacy.sha256, byteCount: legacy.byteCount, finalizationState: .finalized)
+        chunk.clockMapping = .init(frameCount: 16_000, spans: [.init(frameStart: 0, frameEnd: 16_000,
+            hostStart: chunk.presentationStart, hostEnd: chunk.presentationEnd)])
+        var track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "fixture",
+            sourceDisplayName: "Fixture", format: nil, timebase: .init(startedHostTime: 0,
+                machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil), health: .waiting, chunks: [chunk])
+        let before = MeetingProcessingCheckpoint.fingerprints(for: [track])
+        track.chunks[0].clockMapping?.spans[0].hostEnd = .init(value: 1_001_001, timescale: 1_000)
+        XCTAssertNotEqual(before, MeetingProcessingCheckpoint.fingerprints(for: [track]))
+    }
+
     func testLegacyChunkOmitsAllP0aKeysAndRoundTripsFullSession() throws {
         let chunk = MeetingAudioChunk(
             id: UUID(),

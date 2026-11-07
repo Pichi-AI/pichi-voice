@@ -2053,6 +2053,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         attemptID: UUID,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
+        if let policy = session.timebase.recordingTimePolicy {
+            throw MeetingRecordingTimePolicyError.legacyProcessingUnsupported(policy)
+        }
         let asrService = self.asrServiceProvider()
         guard !asrService.isRunning else { throw MeetingProcessingError.dictationActive }
 
