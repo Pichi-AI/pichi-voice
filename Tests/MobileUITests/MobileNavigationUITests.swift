@@ -9,6 +9,13 @@ final class MobileNavigationUITests: XCTestCase {
     private var app: XCUIApplication!
 
     override func setUpWithError() throws {
+        let syntheticLiveCaptionReview = name.contains("testFastManualReturnToCaptionBottomRestoresFollowing")
+            || name.contains("testCaptureSourceHeaderInBothLanguagesAndThemes")
+        #if !targetEnvironment(simulator)
+        if syntheticLiveCaptionReview {
+            throw XCTSkip("Synthetic live-caption presentation is simulator-only")
+        }
+        #endif
         if name.contains("testSpeakerColorsNativeSmoke") || name.contains("testParticipantInlineNameAndOwnerTransferSmoke") {
             #if !targetEnvironment(simulator)
             throw XCTSkip("Synthetic speaker color smoke is simulator-only")
@@ -61,8 +68,7 @@ final class MobileNavigationUITests: XCTestCase {
         continueAfterFailure = false
         if !productionDownload { XCUIDevice.shared.orientation = .portrait }
         app = XCUIApplication()
-        if name.contains("testFastManualReturnToCaptionBottomRestoresFollowing")
-            || name.contains("testCaptureSourceHeaderInBothLanguagesAndThemes") {
+        if syntheticLiveCaptionReview {
             app.launchEnvironment["PICHI_UI_CAPTION_REVIEW"] = "1"
         }
         if !productionDownload {
