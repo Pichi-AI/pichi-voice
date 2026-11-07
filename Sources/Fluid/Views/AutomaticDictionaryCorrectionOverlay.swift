@@ -315,6 +315,15 @@ final class DictionaryCorrectionOverlayController {
         self.resizeAndPositionPanel(animated: true)
     }
 
+    /// The compact unsaved row uses the same existing dictionary operation as
+    /// the former choice card; it cannot re-save a receipt or a negative match.
+    func add(id: UUID) {
+        guard let session = self.state.sessions.first(where: { $0.candidate.id == id }),
+              session.screen == .choice, session.capturePhase == .idle,
+              session.candidate.negativeCorrection == nil else { return }
+        session.addOnlyCorrection()
+    }
+
     /// Acknowledging a saved row only removes its notice. It never saves again
     /// or revokes the receipt, and leaves the shared deadline unchanged.
     func confirm(id: UUID) {
@@ -373,6 +382,7 @@ final class DictionaryCorrectionOverlayController {
             onDismissAll: { [weak self] in self?.dismiss() },
             onDismissRow: { [weak self] in self?.dismiss(id: $0) },
             onConfirmRow: { [weak self] in self?.confirm(id: $0) },
+            onAddRow: { [weak self] in self?.add(id: $0) },
             onDragBegan: { [weak self] in self?.isDragging = true },
             onDragEnded: { [weak self] frame in
                 guard let self else { return }
@@ -881,12 +891,14 @@ private struct DictionaryCorrectionOverlayRoot: View {
     }
 }
 
-private struct DictionaryCorrectionOverlayGroupView: View {    @Environment(\.theme) private var theme
+private struct DictionaryCorrectionOverlayGroupView: View {
+    @Environment(\.theme) private var theme
 
     @ObservedObject var state: DictionaryCorrectionOverlayState
     let onDismissAll: () -> Void
     let onDismissRow: (UUID) -> Void
     let onConfirmRow: (UUID) -> Void
+    let onAddRow: (UUID) -> Void
     let onDragBegan: () -> Void
     let onDragEnded: (CGRect) -> Void
     let onIgnore: (UUID) -> Void
@@ -933,6 +945,7 @@ private struct DictionaryCorrectionOverlayGroupView: View {    @Environment(\.th
                         AutomaticDictionaryCorrectionOverlayView(session: session, displayDuration: 10,
                             onDismiss: { self.onDismissRow(session.candidate.id) },
                             onConfirm: { self.onConfirmRow(session.candidate.id) },
+                            onAdd: { self.onAddRow(session.candidate.id) },
                             onIgnore: { self.onIgnore(session.candidate.id) },
                             onFrequencyChange: self.onFrequencyChange, onDisableSuggestions: self.onDisableSuggestions,
                             grouped: true)
@@ -1013,6 +1026,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
     let displayDuration: TimeInterval
     let onDismiss: () -> Void
     let onConfirm: () -> Void
+    let onAdd: () -> Void
     let onIgnore: () -> Void
     let onFrequencyChange: (SettingsStore.AutomaticDictionarySuggestionFrequency) -> Void
     let onDisableSuggestions: () -> Void
@@ -1066,55 +1080,48 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
         }
     }
 
-    private var correctionChoiceDescription: String {
-        if self.session.candidate.negativeCorrection != nil {
-            return "Confirm only if you said a different word, not a spelling change."
-        }
-        return self.pronunciationEnabled
-            ? AppBrand.text("Save only this correction, or teach FluidVoice other pronunciations.")
-            : "Save this text correction to your dictionary."
-    }
-
     private var choiceContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            self.header(title: self.session.candidate.negativeCorrection == nil ? "Learn this word?" : "Was this a wrong match?", allowsBack: false)
-
+        VStack(alignment: .leading, spacing: 8) {
             self.correctionPair
-
-            Text(PichiLocalization.text(self.correctionChoiceDescription, locale: self.interfaceLocale))
-                .font(.fluidSystem(size: 11))
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-
+            if self.session.candidate.negativeCorrection != nil {
+                Text("Confirm only if you said a different word, not a spelling change.")
+                    .font(self.theme.typography.captionSmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack(spacing: 8) {
+                Text(PichiLocalization.text(self.session.candidate.negativeCorrection == nil
+                     ? "Needs adding to dictionary" : "Check this match", locale: self.interfaceLocale))
+                    .font(self.theme.typography.captionSmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button("Not now", action: self.onDismiss)
+                    .buttonStyle(FluidOutlinedButtonStyle(height: 28))
+                    .fixedSize()
                 if self.session.candidate.negativeCorrection != nil {
-                    CorrectionOverlayActionButton(title: "That Was a Wrong Match", systemImage: "xmark.circle", style: .accent, accent: self.accent, action: self.session.confirmWrongMatch)
+                    Button("That Was a Wrong Match", action: self.session.confirmWrongMatch)
+                        .font(self.theme.typography.captionStrong)
+                        .fluidButton(.accent, size: .small)
                         .disabled(!self.pronunciationEnabled || self.session.capturePhase != .idle)
-                    CorrectionOverlayActionButton(title: "Ignore", systemImage: "minus", style: .secondary, accent: self.accent, action: self.onIgnore)
                 } else {
-                    if self.pronunciationEnabled {
-                        CorrectionOverlayActionButton(
-                            title: "Record pronunciation",
-                            systemImage: "mic.fill",
-                            style: .secondary,
-                            accent: self.accent,
-                            action: self.session.continueInDictionary
-                        )
+                    Button(action: self.onAdd) {
+                        Label("Add", systemImage: "plus")
+                            .font(self.theme.typography.captionStrong)
                     }
-
-                    CorrectionOverlayActionButton(
-                        title: "Add This Correction",
-                        systemImage: "plus",
-                        style: .accent,
-                        accent: self.accent,
-                        action: self.session.addOnlyCorrection
-                    )
-
+                    .fluidButton(.accent, size: .small)
+                    .fixedSize()
+                    .accessibilityIdentifier("DictionaryCorrection.Add")
+                    .help("Save this text correction to your dictionary.")
+                    .disabled(self.session.capturePhase != .idle)
                     self.moreOptionsMenu
                 }
             }
             if self.session.hasError {
-                Text(PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale)).font(.fluidSystem(size: 11)).foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning)).fixedSize(horizontal: false, vertical: true)
+                Text(PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale))
+                    .font(self.theme.typography.captionSmall)
+                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .transition(.opacity)
@@ -1122,6 +1129,10 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
     private var moreOptionsMenu: some View {
         Menu {
+            if self.pronunciationEnabled {
+                Button("Record pronunciation", systemImage: "mic.fill", action: self.session.continueInDictionary)
+                Divider()
+            }
             Button("Ignore This Correction", systemImage: "eye.slash", action: self.onIgnore)
 
             Menu("Ask after") {
@@ -1146,13 +1157,14 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
             Image(systemName: "ellipsis")
                 .font(.fluidSystem(size: 12, weight: .semibold))
                 .foregroundStyle(self.theme.palette.secondaryText)
-                .frame(width: 36, height: 36)
+                .frame(width: 28, height: 28)
                 .background(self.panelSurface)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
         .help("More correction options")
+        .accessibilityLabel("More correction options")
     }
 
     private var trainingContent: some View {
