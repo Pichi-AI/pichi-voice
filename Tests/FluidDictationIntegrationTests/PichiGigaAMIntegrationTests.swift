@@ -22,7 +22,7 @@ extension PichiGigaAMIntegrationTests {
         XCTAssertEqual(words.map { $0.timingProvenance?.sourceWordIndex }, [1, 2],
             "The first returned word is not necessarily the first word emitted in its native window")
         let missing = PichiGigaAMProvider.wordTimings([.init(text: "legacy", start: 0.04, end: 0.08, confidence: 0)])
-        XCTAssertEqual(missing.first?.timingProvenance, .init(basis: .tokenEmission))
+        XCTAssertEqual(missing.first?.timingProvenance, ASRWordTimingProvenance(basis: .tokenEmission))
         let malformed = PichiGigaAMProvider.wordTimings([.init(text: "bad-context", start: 0.04, end: 0.08,
             confidence: 0, sourceContext: .init(sampleRange: -1..<1, wordIndex: 0))])
         XCTAssertNil(malformed.first?.timingProvenance)
