@@ -2,6 +2,18 @@ import XCTest
 @testable import PichiGigaAM
 
 final class GigaAMResourcePolicyTests: XCTestCase {
+    func testBackgroundRecordingNeverAdmitsGPUAndPreservesArtifactAtEveryMemoryBudget() {
+        for hasGPU in [true, false] {
+            for memory: UInt64? in [nil, 0, 600 * 1_024 * 1_024, 16_000_000_000] {
+                let policy = GigaAMResourcePolicy(hasGPU: hasGPU, physicalMemory: 16_000_000_000,
+                    availableProcessMemory: memory, requiresBackgroundExecution: true)
+                XCTAssertEqual(policy.gpuAdmissionReason, .backgroundExecution)
+                XCTAssertEqual(policy.defaultCPUReason, .backgroundExecution)
+                XCTAssertEqual(policy.preferredDownload.fingerprint, GigaAMModelCatalog.downloadableModel.fingerprint)
+            }
+        }
+    }
+
     func testCapableGPUSelectsOnlyTheUniversalQuantizedArtifact() {
         let policy = GigaAMResourcePolicy(hasGPU: true, physicalMemory: 16_000_000_000)
         XCTAssertEqual(policy.preferredDownload, GigaAMModelCatalog.downloadableModel)

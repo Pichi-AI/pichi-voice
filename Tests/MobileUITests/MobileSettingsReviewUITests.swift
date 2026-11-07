@@ -24,17 +24,17 @@ final class MobileSettingsReviewUITests: XCTestCase {
         super.tearDown()
     }
 
-    /// Ready-to-download capability is shown without claiming a prepared GPU session.
-    func testGPUPreferenceOnModelPageInRussianLightAndDark() throws {
+    /// Mobile CPU policy is visible before preparation, without claiming a live session.
+    func testMobileCPUPreferenceOnModelPageInRussianLightAndDark() throws {
         for appearance in ["light", "dark"] {
             app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
             app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", appearance,
                                    "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
             app.launch()
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
-            capture("gpu-preference-ru-\(appearance)-home")
+            capture("cpu-preference-ru-\(appearance)-home")
             openSettings(title: "Настройки")
-            capture("gpu-preference-ru-\(appearance)-settings")
+            capture("cpu-preference-ru-\(appearance)-settings")
             let models = app.buttons["settings.models"]
             reveal(models)
             XCTAssertTrue(models.isHittable)
@@ -43,11 +43,11 @@ final class MobileSettingsReviewUITests: XCTestCase {
             let preference = app.staticTexts["model.computePreference.gigaam-v3-eou"]
             reveal(preference)
             XCTAssertTrue(preference.exists && preference.isHittable)
-            XCTAssertEqual(preference.label, "Приоритет GPU; резервный CPU")
+            XCTAssertEqual(preference.label, "CPU для записи в фоне")
             XCTAssertFalse(app.descendants(matching: .any)["model.executionStatus.gigaam-v3-eou"].firstMatch.exists,
-                           "An unprepared provider must not claim GPU execution")
+                           "An unprepared provider must not claim active execution")
             settle()
-            capture("gpu-preference-ru-\(appearance)-models")
+            capture("cpu-preference-ru-\(appearance)-models")
             app.terminate()
         }
     }
