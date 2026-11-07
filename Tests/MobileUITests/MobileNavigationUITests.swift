@@ -1334,7 +1334,9 @@ final class MobileNavigationUITests: XCTestCase {
                 let body = row.staticTexts[text].firstMatch
                 XCTAssertTrue(body.waitForExistence(timeout: 5))
                 try revealParagraphAboveNavigation(body, step: "\(step)-\(suffix)", container: row)
-                XCTAssertTrue(row.staticTexts[speaker].exists,
+                let caption = row.buttons["transcript.reassign.00000000-0000-0000-0000-202610170\(suffix)"]
+                XCTAssertTrue(caption.exists)
+                XCTAssertEqual(caption.label, speaker,
                               "Each complete paragraph must retain its own participant caption")
             }
             XCTAssertFalse(app.staticTexts["Нет, это ответ. Короткая вставка и продолжение."].exists,
@@ -1359,8 +1361,10 @@ final class MobileNavigationUITests: XCTestCase {
             meeting.tap()
             XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
             capture("legacy-attribution-\(language)-opened")
-            let label = app.staticTexts[participantLabel].firstMatch
+            // Captions are the existing participant action buttons, not separate StaticText.
+            let label = app.buttons["transcript.reassign.\(firstID)"]
             XCTAssertTrue(label.waitForExistence(timeout: 5))
+            XCTAssertEqual(label.label, participantLabel)
             let paragraph = app.staticTexts["Обсудим и продолжим."].firstMatch
             XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
             try revealParagraphAboveNavigation(paragraph, step: "legacy-attribution-\(language)-portrait")
