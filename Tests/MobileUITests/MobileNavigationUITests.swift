@@ -1115,15 +1115,22 @@ final class MobileNavigationUITests: XCTestCase {
                 if paragraph.exists { continue }
                 let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
                 let to = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
-                from.press(forDuration: 0.05, thenDragTo: to)
+                from.press(forDuration: 0.1, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.2)
                 capture("\(step)-reveal-\(attempt)")
                 continue
             }
             if paragraph.isHittable && paragraph.frame.minY >= top && paragraph.frame.maxY <= bottom { return }
-            let upwards = paragraph.frame.maxY > bottom
-            let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upwards ? 0.65 : 0.35))
-            let to = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upwards ? 0.35 : 0.65))
-            from.press(forDuration: 0.05, thenDragTo: to)
+            // Fixed fast swipes oscillate past a one-line paragraph in a short landscape
+            // viewport. Move toward its measured center without fling, retaining the same
+            // full-visibility assertion and bounded number of attempts.
+            let center = (top + bottom) / 2
+            let maximumStep = max(1, (bottom - top) * 0.25)
+            let delta = max(-maximumStep, min(maximumStep, paragraph.frame.midY - center))
+            let height = max(1, scroll.frame.height)
+            let origin = (center - scroll.frame.minY) / height
+            let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: origin))
+            let to = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: origin - delta / height))
+            from.press(forDuration: 0.1, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.2)
             capture("\(step)-scroll-\(attempt)")
         }
         recordSavedParagraphAccessibility(step: step, container: container)
