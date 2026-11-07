@@ -291,7 +291,7 @@ extension MeetingAudioClockMapping {
 /// microphone permission always remains with the session's existing admission owner.
 nonisolated enum MeetingCaptureClockMetadata {
     enum Failure: Error, Equatable { case invalidBuffer, contextMismatch }
-    struct Packet: Sendable, Equatable {
+    struct Packet: Codable, Sendable, Equatable {
         let mapping: MeetingAudioClockMapping
         let clockID: UUID
         let sourceID: UUID

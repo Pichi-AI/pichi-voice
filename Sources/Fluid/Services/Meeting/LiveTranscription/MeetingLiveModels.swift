@@ -578,11 +578,14 @@ nonisolated enum MeetingLiveSampleCopy {
         guard pts.isValid, pts.isNumeric else { return nil }
 
         var duration = CMSampleBufferGetDuration(sampleBuffer)
-        if !duration.isValid || !duration.isNumeric || duration <= .zero {
+        let clockPacket = MeetingCaptureClockMetadata.read(from: sampleBuffer)
+        if let first = clockPacket?.mapping.spans.first, let last = clockPacket?.mapping.spans.last {
+            duration = CMTime(seconds: last.hostEnd.seconds - first.hostStart.seconds, preferredTimescale: 1_000_000_000)
+        } else if !duration.isValid || !duration.isNumeric || duration <= .zero {
             duration = CMTime(value: CMTimeValue(frameCount), timescale: CMTimeScale(copiedBuffer.format.sampleRate.rounded()))
         }
         return Sample(buffer: copiedBuffer, pts: pts, duration: duration,
-                      clockPacket: MeetingCaptureClockMetadata.read(from: sampleBuffer))
+                      clockPacket: clockPacket)
     }
 
     private static func downmixLayoutlessMultichannel(_ source: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {

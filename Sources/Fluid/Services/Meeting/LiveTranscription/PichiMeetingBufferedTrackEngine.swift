@@ -244,6 +244,10 @@ actor PichiMeetingBufferedTrackEngine {
     )!
     private var converter: AVAudioConverter?
     private var converterSourceFormat: AVAudioFormat?
+    private var mappedConverter: MeetingCapturePCMConverter?
+    private var lastClockPacket: MeetingCaptureClockMetadata.Packet?
+    private var preRollMapping: MeetingAudioClockMapping?
+    private var turnMapping: MeetingAudioClockMapping?
     private var loadTask: Task<Void, Never>?
     private var drainTask: Task<Void, Never>?
     private var isReady = false
@@ -314,6 +318,9 @@ actor PichiMeetingBufferedTrackEngine {
         self.clearTurn()
         self.preRoll.removeAll(keepingCapacity: true)
         self.lastBufferEndPTS = nil
+        self.preRollMapping = nil
+        self.mappedConverter = nil
+        self.lastClockPacket = nil
     }
 
     func stop() async {
@@ -330,6 +337,9 @@ actor PichiMeetingBufferedTrackEngine {
         self.clearTurn()
         self.preRoll.removeAll()
         self.converter = nil
+        self.mappedConverter = nil
+        self.lastClockPacket = nil
+        self.preRollMapping = nil
         self.onPartial = nil
         self.onUtterance = nil
         self.onDegraded = nil
@@ -389,13 +399,37 @@ actor PichiMeetingBufferedTrackEngine {
             self.reset()
             self.activeInputEpoch = input.epoch
         }
-        let sample = input.sample
+        var sample = input.sample
+        if let packet = sample.clockPacket {
+            do {
+                _ = try packet.mapping.validated(expectedFrameCount: Int64(sample.buffer.frameLength))
+                guard let first = packet.mapping.spans.first, let last = packet.mapping.spans.last else { return }
+                if let previous = self.lastClockPacket {
+                    guard previous.clockID == packet.clockID, previous.sourceID == packet.sourceID,
+                          packet.producerEpoch >= previous.producerEpoch else { self.reset(); return }
+                    if packet.producerEpoch != previous.producerEpoch || first.discontinuityBefore
+                        || abs(first.hostStart.seconds - (previous.mapping.spans.last?.hostEnd.seconds ?? first.hostStart.seconds)) > 1e-9 {
+                        self.reset()
+                    }
+                }
+                self.lastClockPacket = packet
+                if sample.buffer.format.sampleRate != Self.sampleRate || sample.buffer.format.channelCount != 1 {
+                    if self.mappedConverter == nil { self.mappedConverter = try MeetingCapturePCMConverter() }
+                    guard let normalized = try self.mappedConverter?.convert(sample.buffer, presentationTime: sample.pts,
+                        clockPacket: packet), let copied = MeetingLiveSampleCopy.copy(normalized) else { return }
+                    sample = copied
+                }
+                self.lastBufferEndPTS = CMTime(seconds: last.hostEnd.seconds, preferredTimescale: 1_000_000_000)
+            } catch { self.reset(); return }
+        } else if self.lastClockPacket != nil { self.reset(); return }
         guard !self.isStopped, let converted = self.convert(sample.buffer), !converted.isEmpty else { return }
-        if let previous = self.lastBufferEndPTS,
+        if sample.clockPacket == nil, let previous = self.lastBufferEndPTS,
            abs((sample.pts - previous).seconds) > 0.25 {
             self.reset()
         }
-        self.lastBufferEndPTS = sample.pts + sample.duration
+        self.lastBufferEndPTS = sample.clockPacket?.mapping.spans.last.map {
+            CMTime(seconds: $0.hostEnd.seconds, preferredTimescale: 1_000_000_000)
+        } ?? (sample.pts + sample.duration)
         var offset = 0
         while offset < converted.count {
             guard !Task.isCancelled, !self.isStopped, input.epoch == self.inputEpoch.current else { return }
@@ -410,27 +444,45 @@ actor PichiMeetingBufferedTrackEngine {
                 seconds: sample.duration.seconds * Double(upper) / Double(converted.count),
                 preferredTimescale: 1_000_000_000
             )
-            await self.consumeBlock(block, start: start, end: end)
+            let mapping = try? sample.clockPacket?.mapping.sliced(frames: Double(offset)..<Double(upper))
+            let mappedStart = mapping?.spans.first.map { CMTime(seconds: $0.hostStart.seconds, preferredTimescale: 1_000_000_000) } ?? start
+            let mappedEnd = mapping?.spans.last.map { CMTime(seconds: $0.hostEnd.seconds, preferredTimescale: 1_000_000_000) } ?? end
+            await self.consumeBlock(block, start: mappedStart, end: mappedEnd, mapping: mapping)
             offset = upper
         }
     }
 
-    private func consumeBlock(_ block: [Float], start: CMTime, end: CMTime) async {
+    private func consumeBlock(_ block: [Float], start: CMTime, end: CMTime,
+                              mapping: MeetingAudioClockMapping? = nil) async {
         guard block.allSatisfy(\.isFinite) else { self.reset(); return }
         let squareMean = block.reduce(Float(0)) { $0 + $1 * $1 } / Float(block.count)
         let active = squareMean.squareRoot() >= Self.energyThreshold
         if self.turnID == nil {
             guard active else {
                 self.preRoll.append(contentsOf: block)
+                if let mapping {
+                    do {
+                        let joined = try self.preRollMapping.map { try $0.appending(mapping) } ?? mapping
+                        self.preRollMapping = try joined.sliced(frames: Double(max(0, Int(joined.frameCount) - Self.preRollSamples))..<Double(joined.frameCount))
+                    } catch { self.reset(); return }
+                }
                 self.preRoll = Array(self.preRoll.suffix(Self.preRollSamples))
                 return
             }
             self.turnID = UUID()
-            self.startPTS = start - CMTime(seconds: Double(self.preRoll.count) / Self.sampleRate, preferredTimescale: 16_000)
+            self.startPTS = self.preRollMapping?.spans.first.map {
+                CMTime(seconds: $0.hostStart.seconds, preferredTimescale: 1_000_000_000)
+            } ?? (start - CMTime(seconds: Double(self.preRoll.count) / Self.sampleRate, preferredTimescale: 16_000))
             self.samples = self.preRoll
+            self.turnMapping = self.preRollMapping
+            self.preRollMapping = nil
             self.preRoll.removeAll(keepingCapacity: true)
         }
         self.samples.append(contentsOf: block)
+        if let mapping {
+            do { self.turnMapping = try self.turnMapping.map { try $0.appending(mapping) } ?? mapping }
+            catch { self.reset(); return }
+        }
         self.endPTS = end
         self.quietSamples = active ? 0 : self.quietSamples + block.count
         let shouldFinish = self.quietSamples >= Self.pauseSamples || self.samples.count >= Self.maximumTurnSamples
@@ -466,10 +518,10 @@ actor PichiMeetingBufferedTrackEngine {
             self.lastRecognitionSampleCount = input.count
             let coverage = result.nativeCoverage(sampleCount: input.count, sampleRate: Self.sampleRate)
             let coveredStart = coverage.map {
-                startPTS + CMTime(seconds: $0.lowerBound, preferredTimescale: 16_000)
+                self.mappedTurnTime(at: $0.lowerBound * Self.sampleRate, fallback: startPTS, side: .start)
             } ?? startPTS
             let coveredEnd = coverage.map {
-                startPTS + CMTime(seconds: $0.upperBound, preferredTimescale: 16_000)
+                self.mappedTurnTime(at: $0.upperBound * Self.sampleRate, fallback: startPTS, side: .end)
             } ?? .invalid
             self.onPartial?(self.kind, turnID, result.text, coveredStart, coveredEnd)
             // The model head sees only this current utterance. Require a small acoustic pause,
@@ -502,7 +554,10 @@ actor PichiMeetingBufferedTrackEngine {
                   self.activeInputEpoch == self.inputEpoch.current else { return }
             let rotation = rotateAtWordBoundary ? result.rotation(sampleCount: self.samples.count, sampleRate: Self.sampleRate) : nil
             let retained = rotation.map { Array(self.samples[$0.sample...]) } ?? []
-            let boundary = rotation.map { startPTS + CMTime(value: Int64($0.sample), timescale: 16_000) } ?? endPTS
+            let boundary = rotation.map { self.mappedTurnTime(at: Double($0.sample), fallback: startPTS, side: .end) } ?? endPTS
+            let retainedMapping = rotation.flatMap { rotation in
+                try? self.turnMapping?.sliced(frames: Double(rotation.sample)..<Double(self.samples.count))
+            }
             let quietSamples = self.quietSamples
             let text = rotation?.text ?? result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if rotateAtWordBoundary {
@@ -526,6 +581,7 @@ actor PichiMeetingBufferedTrackEngine {
                 self.startPTS = boundary
                 self.endPTS = endPTS
                 self.samples = retained
+                self.turnMapping = retainedMapping
                 self.quietSamples = min(quietSamples, retained.count)
             }
         } catch {
@@ -541,12 +597,21 @@ actor PichiMeetingBufferedTrackEngine {
         }
         self.generation &+= 1
         self.samples.removeAll(keepingCapacity: true)
+        self.turnMapping = nil
         self.quietSamples = 0
         self.lastRecognitionSampleCount = 0
         self.lastRecognition = nil
         self.turnID = nil
         self.startPTS = nil
         self.endPTS = nil
+    }
+
+    private func mappedTurnTime(at frame: Double, fallback: CMTime,
+                                side: MeetingAudioClockMapping.BoundarySide) -> CMTime {
+        if let time = self.turnMapping?.hostTime(atFrame: frame, side: side) {
+            return CMTime(seconds: time.seconds, preferredTimescale: 1_000_000_000)
+        }
+        return fallback + CMTime(seconds: frame / Self.sampleRate, preferredTimescale: 16_000)
     }
 
     /// Identical target contract to the upstream live engine, with a persistent converter.

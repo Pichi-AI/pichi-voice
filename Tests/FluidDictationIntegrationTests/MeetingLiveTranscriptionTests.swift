@@ -868,14 +868,21 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
     private final nonisolated class Events: @unchecked Sendable {
         private let lock = NSLock()
         private var partialValues: [(UUID, String)] = []
+        private var partialTimeValues: [(String, Double, Double)] = []
         private var utteranceValues: [(MeetingAudioTrackKind, UUID, String, Double, Double)] = []
         private var degradedValues: [String] = []
-        func partial(_ id: UUID, _ text: String) { self.lock.withLock { self.partialValues.append((id, text)) } }
+        func partial(_ id: UUID, _ text: String, start: CMTime = .invalid, end: CMTime = .invalid) {
+            self.lock.withLock {
+                self.partialValues.append((id, text))
+                self.partialTimeValues.append((text, start.seconds, end.seconds))
+            }
+        }
         func utterance(_ kind: MeetingAudioTrackKind, _ id: UUID, _ text: String, _ start: CMTime, _ end: CMTime) {
             self.lock.withLock { self.utteranceValues.append((kind, id, text, start.seconds, end.seconds)) }
         }
         func degraded(_ text: String) { self.lock.withLock { self.degradedValues.append(text) } }
         var partials: [(UUID, String)] { self.lock.withLock { self.partialValues } }
+        var partialTimes: [(String, Double, Double)] { self.lock.withLock { self.partialTimeValues } }
         var utterances: [(MeetingAudioTrackKind, UUID, String, Double, Double)] { self.lock.withLock { self.utteranceValues } }
         var degraded: [String] { self.lock.withLock { self.degradedValues } }
     }
@@ -892,7 +899,7 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
 
     private func configure(_ engine: PichiMeetingBufferedTrackEngine, events: Events) async {
         await engine.configure(
-            onPartial: { _, id, text, _, _ in events.partial(id, text) },
+            onPartial: { _, id, text, start, end in events.partial(id, text, start: start, end: end) },
             onUtterance: { kind, id, text, start, end in events.utterance(kind, id, text, start, end) },
             onDegraded: { _, text in events.degraded(text) },
             onReady: { _ in }
@@ -1303,6 +1310,49 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
         XCTAssertEqual(utterance.3, 4, accuracy: 0.0001)
         XCTAssertEqual(utterance.4, 6.3, accuracy: 0.0001)
         XCTAssertTrue(events.degraded.isEmpty)
+        await engine.stop()
+    }
+
+    func testMappedCaptionsKeepPrerollAndNativeWordCoverageOnTheRecordingClock() async throws {
+        actor TimedRecognizer: PichiMeetingCaptionRecognizing {
+            func prepare() {}
+            func recognize(_ samples: [Float]) -> PichiMeetingCaptionRecognition {
+                .init(text: "два слова", endOfUtteranceProbability: nil, words: [
+                    .init(text: "два", start: 0.1, end: 0.3), .init(text: "слова", start: 0.3, end: 0.5)
+                ])
+            }
+            func unload() {}
+        }
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: TimedRecognizer())
+        let events = Events()
+        await self.configure(engine, events: events)
+        let clockID = UUID(), sourceID = UUID()
+        func mapped(_ offset: Double, _ duration: Double, _ value: Float, gap: Bool = false) throws -> MeetingLiveSampleCopy.Sample {
+            let start = 4 + offset * 1.0003
+            let end = 4 + (offset + duration) * 1.0003
+            let source = try self.sample(start: start, seconds: duration, value: value)
+            let mapping = MeetingAudioClockMapping(frameCount: Int64(source.buffer.frameLength), spans: [
+                .init(frameStart: 0, frameEnd: Double(source.buffer.frameLength),
+                      hostStart: MeetingAudioClockMapping.mediaTime(start), hostEnd: MeetingAudioClockMapping.mediaTime(end),
+                      discontinuityBefore: gap)
+            ])
+            return .init(buffer: source.buffer, pts: CMTime(seconds: start, preferredTimescale: 1_000_000_000),
+                duration: CMTime(seconds: end - start, preferredTimescale: 1_000_000_000),
+                clockPacket: .init(mapping: mapping, clockID: clockID, sourceID: sourceID, producerEpoch: 1))
+        }
+        try await engine.consumeForTesting(mapped(0, 0.1, 0))
+        try await engine.consumeForTesting(mapped(0.1, 1.6, 0.1))
+        try await engine.consumeForTesting(mapped(1.7, 0.8, 0))
+        let partial = try XCTUnwrap(events.partialTimes.first { !$0.0.isEmpty })
+        XCTAssertEqual(partial.1, 4 + 0.1 * 1.0003, accuracy: 2e-9)
+        XCTAssertEqual(partial.2, 4 + 0.5 * 1.0003, accuracy: 2e-9)
+        let final = try XCTUnwrap(events.utterances.first)
+        XCTAssertEqual(final.3, 4, accuracy: 2e-9)
+        XCTAssertEqual(final.4, 4 + 2.4 * 1.0003, accuracy: 2e-9)
+        // A 50ms real source gap must discard preroll from the preceding interval.
+        try await engine.consumeForTesting(mapped(2.55, 1.6, 0.2, gap: true))
+        try await engine.consumeForTesting(mapped(4.15, 0.8, 0))
+        XCTAssertEqual(try XCTUnwrap(events.utterances.last).3, 4 + 2.55 * 1.0003, accuracy: 2e-9)
         await engine.stop()
     }
 
