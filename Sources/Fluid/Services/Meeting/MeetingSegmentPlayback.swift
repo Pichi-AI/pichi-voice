@@ -88,9 +88,9 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
     private let audioSession: any MeetingPlaybackAudioSessionControlling
 
     init(store: any MeetingSessionStoring = MeetingSessionStore.shared,
-         audioSession: any MeetingPlaybackAudioSessionControlling = MeetingPlaybackAudioSession()) {
+         audioSession: (any MeetingPlaybackAudioSessionControlling)? = nil) {
         self.store = store
-        self.audioSession = audioSession
+        self.audioSession = audioSession ?? MeetingPlaybackAudioSession()
         PrivateProfileService.shared.register(self)
     }
 
