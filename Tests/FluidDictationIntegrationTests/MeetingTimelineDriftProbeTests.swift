@@ -185,6 +185,24 @@ private final class DriftStreamOutput: NSObject, SCStreamOutput {
 
 /// Model-free checks of the same frame mapping, attachment and converter used by native capture.
 final class MeetingRecordingClockCoreTests: XCTestCase {
+    func testNanosecondBoundaryAllowanceUsesExactTicksAtLargeHostUptime() throws {
+        let endpoint: Int64 = 207_042_531_395_835
+        func point(_ value: Int64) -> MeetingMediaTime { .init(value: value, timescale: 1_000_000_000) }
+        let first = MeetingAudioClockMapping(frameCount: 160, spans: [.init(frameStart: 0, frameEnd: 160,
+            hostStart: point(endpoint - 10_000_000), hostEnd: point(endpoint))])
+        let second = MeetingAudioClockMapping(frameCount: 160, spans: [.init(frameStart: 0, frameEnd: 160,
+            hostStart: point(endpoint + 1), hostEnd: point(endpoint + 10_000_001))])
+        XCTAssertNoThrow(try first.appending(second).validated())
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: 207_041.139, recordingTimePolicy: .hostMonotonicV1)
+        XCTAssertFalse(try timeline.record(sourceStartSample: 0, frameCount: 160,
+            presentationTime: first.spans[0].hostStart.seconds, clockMapping: first))
+        XCTAssertFalse(try timeline.record(sourceStartSample: 160, frameCount: 160,
+            presentationTime: second.spans[0].hostStart.seconds, clockMapping: second))
+        XCTAssertFalse(timeline.hasGaps)
+        XCTAssertFalse(MeetingAudioClockMapping.isOrderedBoundary(from: point(endpoint), to: point(endpoint + 2), discontinuityBefore: false))
+        XCTAssertTrue(MeetingAudioClockMapping.isOrderedBoundary(from: point(endpoint), to: point(endpoint + 2), discontinuityBefore: true))
+        XCTAssertFalse(MeetingAudioClockMapping.isOrderedBoundary(from: point(endpoint), to: point(endpoint - 2), discontinuityBefore: true))
+    }
     func testSmallNativePacketResamplingRetainsProtectedHistoryWithoutExhaustingScalarBudget() throws {
         let base = 203_316.843104167
         let timeline = try MeetingPCMSourceTimeline(originSeconds: base - 1, recordingTimePolicy: .hostMonotonicV1)

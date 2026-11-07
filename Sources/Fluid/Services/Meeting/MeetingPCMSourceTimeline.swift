@@ -30,6 +30,7 @@ final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
     private var spans: [Span] = []
     private var acceptedThroughSample = 0
     private var lastPhysicalEnd: Double?
+    private var lastHostEnd: MeetingMediaTime?
     private var observedGaps = false
 
     init(originSeconds: Double? = nil, maximumSpans: Int = MeetingPCMSourceTimeline.maximumRetainedSpans,
@@ -71,10 +72,19 @@ final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
                          physicalEnd: $0.hostEnd.seconds - origin,
                          discontinuityBefore: $0.discontinuityBefore)
                 }
+                let orderedBoundary: Bool
+                if let previous = self.lastHostEnd, let first = clockMapping.spans.first?.hostStart {
+                    orderedBoundary = MeetingAudioClockMapping.isOrderedBoundary(from: previous, to: first,
+                        discontinuityBefore: clockMapping.spans.first?.discontinuityBefore == true)
+                } else {
+                    orderedBoundary = self.lastPhysicalEnd.map { previous in
+                        additions.first.map { first in first.physicalStart >= previous - 1e-9
+                            && (first.discontinuityBefore || abs(first.physicalStart - previous) <= 1e-9) } ?? false
+                    } ?? true
+                }
                 guard let first = additions.first,
                       additions.allSatisfy({ $0.physicalStart >= -1e-9 }),
-                      self.lastPhysicalEnd.map({ first.physicalStart >= $0 - 1e-9
-                          && (first.discontinuityBefore || abs(first.physicalStart - $0) <= 1e-9) }) ?? true
+                      orderedBoundary
                 else { throw Failure.invalidTimestamp }
                 discontinuous = self.lastPhysicalEnd != nil && additions.first?.discontinuityBefore == true
             } else {
@@ -108,6 +118,7 @@ final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
             self.spans = candidate
             self.acceptedThroughSample = end
             self.lastPhysicalEnd = additions.last?.physicalEnd
+            self.lastHostEnd = clockMapping?.spans.last?.hostEnd
             self.observedGaps = self.observedGaps || discontinuous || additions.dropFirst().contains(where: { $0.discontinuityBefore })
             return discontinuous
         }
@@ -183,6 +194,17 @@ extension MeetingAudioClockMapping {
     enum BoundarySide { case start, end }
     static let maximumSpans = 8_192
 
+    /// Preserve the existing one-nanosecond rounding allowance using rational clock values.
+    /// Subtracting large absolute Double uptimes can turn exactly 1 ns into 1.0186 ns.
+    static func isOrderedBoundary(from previous: MeetingMediaTime, to next: MeetingMediaTime,
+                                  discontinuityBefore: Bool) -> Bool {
+        guard previous.timescale > 0, next.timescale > 0 else { return false }
+        let delta = CMTimeSubtract(CMTime(value: next.value, timescale: next.timescale),
+                                   CMTime(value: previous.value, timescale: previous.timescale))
+        guard delta.isNumeric, delta >= CMTime(value: -1, timescale: 1_000_000_000) else { return false }
+        return discontinuityBefore || delta <= CMTime(value: 1, timescale: 1_000_000_000)
+    }
+
     @discardableResult
     func validated(expectedFrameCount: Int64? = nil) throws -> Self {
         guard self.version == 1, self.frameCount >= 0, self.frameCount <= Int64(1 << 52),
@@ -194,7 +216,7 @@ extension MeetingAudioClockMapping {
         }
         guard !self.spans.isEmpty else { throw Failure.invalidMapping }
         var frameEnd: Double = 0
-        var hostEnd: Double?
+        var hostEnd: MeetingMediaTime?
         for span in self.spans {
             guard span.frameStart.isFinite, span.frameEnd.isFinite,
                   abs(span.frameStart - frameEnd) <= 1e-7, span.frameEnd > span.frameStart,
@@ -204,10 +226,10 @@ extension MeetingAudioClockMapping {
                   span.hostStart.seconds.isFinite, span.hostEnd.seconds.isFinite,
                   span.hostEnd.seconds < Double(Int64.max) / 1_000_000_000 - 1,
                   span.hostEnd.seconds > span.hostStart.seconds,
-                  hostEnd.map({ span.hostStart.seconds >= $0 - 1e-9
-                      && (span.discontinuityBefore || abs(span.hostStart.seconds - $0) <= 1e-9) }) ?? true
+                  hostEnd.map({ Self.isOrderedBoundary(from: $0, to: span.hostStart,
+                      discontinuityBefore: span.discontinuityBefore) }) ?? true
             else { throw Failure.invalidMapping }
-            frameEnd = span.frameEnd; hostEnd = span.hostEnd.seconds
+            frameEnd = span.frameEnd; hostEnd = span.hostEnd
         }
         guard abs(frameEnd - Double(self.frameCount)) <= 1e-7 else { throw Failure.invalidMapping }
         return self
