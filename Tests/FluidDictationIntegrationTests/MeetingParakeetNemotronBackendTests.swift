@@ -3225,9 +3225,20 @@ extension MeetingParakeetNemotronBackendTests {
             }
         }
         try await Self.onlineWait { fixture.publication.session.transcriptSegments.count >= 350 }
+        let policy = try XCTUnwrap(fixture.attempt.request.configuration.speakerAttributionPolicy)
+        let tail = try MeetingStreamingProtectedWordTail(attemptID: fixture.attempt.request.attemptID,
+            epoch: .init(trackID: tracks[0].id, ordinal: 0), speakerNameFormat: "Speaker %lld", policy: policy)
+        // Two attribution horizons (pending words and their left context), interruption
+        // preroll and the preceding 20-second ASR window. Each source island carries 0.5s
+        // of compact audio; four terminal/in-flight islands cover the joined checkpoint.
+        let boundedSeconds = 2 * tail.policyLookahead + policy.maximumBriefInterruptionSeconds
+            + policy.maximumBriefInterruptionGapSeconds + 20
+        let maximumRetainedIslands = Int(ceil(boundedSeconds / 0.5)) + 4
+        XCTAssertLessThan(maximumRetainedIslands, 180, "Retirement must not retain the entire recording")
         for track in tracks {
             let timeline = try XCTUnwrap(fixture.attempt.sourceTimelines[track.id])
-            XCTAssertLessThan(timeline.retainedSpanCount, 90, "Joined protected publication retires old source islands")
+            XCTAssertLessThanOrEqual(timeline.retainedSpanCount, maximumRetainedIslands,
+                "Joined protected publication retires islands outside the frozen attribution horizon")
             XCTAssertTrue(timeline.hasGaps)
         }
         async let first: Void = consumers[0].finish()
