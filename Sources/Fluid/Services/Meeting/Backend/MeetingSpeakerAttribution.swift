@@ -8,7 +8,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     // A previous attempt cannot replay changed ownership semantics under the same fingerprint.
     static let currentVersion = 2
     static let standard = Self(enableProvisionalSpeakerIdentities: true, enableStableSpeakerOpening: true,
-                               enableCompleteReadingAssignment: true)
+                               enableCompleteReadingAssignment: true, enableIncomingGapReading: true)
 
     let schemaVersion: Int
     /// Arithmetic slack only. It never expands intervals or creates positive overlap.
@@ -47,6 +47,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     /// Every admitted speech fragment has a reading participant. Acoustic uncertainty remains
     /// in native evidence; this additive flag preserves replay of older frozen attempts.
     let enableCompleteReadingAssignment: Bool
+    /// Tokenless words in a real pause before a different voice follow the incoming turn.
+    /// Missing keeps the former complete-reading policy and its exact fingerprint.
+    let enableIncomingGapReading: Bool
 
     init(
         schemaVersion: Int = Self.currentVersion,
@@ -73,7 +76,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         enableVoicedSpeakerAdmission: Bool = true,
         enableProvisionalSpeakerIdentities: Bool = false,
         enableStableSpeakerOpening: Bool = false,
-        enableCompleteReadingAssignment: Bool = false
+        enableCompleteReadingAssignment: Bool = false,
+        enableIncomingGapReading: Bool = false
     ) {
         self.schemaVersion = schemaVersion
         self.comparisonTolerance = comparisonTolerance
@@ -100,6 +104,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         self.enableProvisionalSpeakerIdentities = enableProvisionalSpeakerIdentities
         self.enableStableSpeakerOpening = enableStableSpeakerOpening
         self.enableCompleteReadingAssignment = enableCompleteReadingAssignment
+        self.enableIncomingGapReading = enableIncomingGapReading
     }
 
     /// Exact, length-framed values avoid locale, delimiter and rounding collisions. Zero has one
@@ -153,6 +158,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         if self.enableCompleteReadingAssignment {
             entries.append(("completeReadingAssignmentV1", "true"))
         }
+        if self.enableIncomingGapReading {
+            entries.append(("incomingGapReadingV1", "true"))
+        }
         let canonical = MeetingConfigFingerprintEncoding.encode(entries)
         let digest = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
         return "speaker-attribution-v\(self.schemaVersion):\(digest)"
@@ -193,6 +201,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         case enableProvisionalSpeakerIdentities
         case enableStableSpeakerOpening
         case enableCompleteReadingAssignment
+        case enableIncomingGapReading
     }
 
     init(from decoder: Decoder) throws {
@@ -222,7 +231,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
             enableVoicedSpeakerAdmission: c.decodeIfPresent(Bool.self, forKey: .enableVoicedSpeakerAdmission) ?? false,
             enableProvisionalSpeakerIdentities: c.decodeIfPresent(Bool.self, forKey: .enableProvisionalSpeakerIdentities) ?? false,
             enableStableSpeakerOpening: c.decodeIfPresent(Bool.self, forKey: .enableStableSpeakerOpening) ?? false,
-            enableCompleteReadingAssignment: c.decodeIfPresent(Bool.self, forKey: .enableCompleteReadingAssignment) ?? false
+            enableCompleteReadingAssignment: c.decodeIfPresent(Bool.self, forKey: .enableCompleteReadingAssignment) ?? false,
+            enableIncomingGapReading: c.decodeIfPresent(Bool.self, forKey: .enableIncomingGapReading) ?? false
         )
         _ = try self.validated()
     }

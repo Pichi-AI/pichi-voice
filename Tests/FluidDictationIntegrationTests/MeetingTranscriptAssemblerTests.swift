@@ -116,6 +116,21 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(result.segments[3].speakerID, session.speakers[2].id)
     }
 
+    func testUnscoredWordInPauseFollowsIncomingVoiceInsteadOfEarlierLongTurn() throws {
+        let (session, epoch) = self.readingFixture([(0, 10, 0), (12, 12.04, nil), (13, 19, 1)])
+        let result = try self.resolveReading(session, epoch: epoch)
+        XCTAssertEqual(result.segments[1].speakerID, session.speakers[1].id)
+        XCTAssertEqual(result.segments[1].nativeSpeakerAssignment, .unassigned)
+        XCTAssertNil(result.segments[1].speakerAttribution?.selectedToken)
+        let oldPolicy = MeetingSpeakerAttributionPolicy(enableProvisionalSpeakerIdentities: true,
+            enableStableSpeakerOpening: true, enableCompleteReadingAssignment: true)
+        let old = try MeetingReadingSpeakerResolver.resolve(segments: session.transcriptSegments,
+            speakers: session.speakers, policy: oldPolicy, scopeForSegment: { _ in epoch },
+            fallbackSpeaker: { MeetingTranscriptAssembler().readingFallbackSpeaker(attemptID: session.id, epoch: $0) })
+        XCTAssertEqual(old.segments[1].speakerID, session.speakers[0].id)
+        XCTAssertNotEqual(oldPolicy.fingerprint, MeetingSpeakerAttributionPolicy.standard.fingerprint)
+    }
+
     func testReadingOwnershipDoesNotCrossCoverageBarrierOrReplaceManualCorrection() throws {
         var (session, epoch) = self.readingFixture([(0, 10, 0), (12, 12.2, nil), (13, 14, 1), (15, 16, 2)])
         session.transcriptSegments[3].isUserSpeakerAssigned = true
