@@ -1563,7 +1563,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }
         let retainedPin = try await withTaskCancellationHandler { try await pinTask.value } onCancel: { pinTask.cancel() }
         try Task.checkCancellation()
-        if let retainedPin, retainedPin.privacyFingerprint != attemptRedactor?.checkpointIdentity {
+        if let retainedPin, retainedPin.privacyFingerprint != attemptRedactor?.checkpointIdentity
+            || retainedPin.configuration.recordingTimePolicy != session.timebase.recordingTimePolicy {
             throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
         }
 

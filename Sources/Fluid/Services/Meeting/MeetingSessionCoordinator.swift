@@ -3477,7 +3477,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     private static func apply(_ stopResult: MeetingCaptureStopResult, to session: inout MeetingSession) {
         session.audioTracks = stopResult.tracks
         session.endedAt = stopResult.stoppedAt
-        session.timebase.endedHostTime = stopResult.stoppedHostTime
+        if session.timebase.recordingTimePolicy == .hostMonotonicV1 {
+            session.timebase.endedHostTime = stopResult.stoppedHostTime ?? mach_absolute_time()
+        }
         session.timebase.firstPresentationTime = self.firstPresentationTime(in: stopResult.tracks)
     }
 
