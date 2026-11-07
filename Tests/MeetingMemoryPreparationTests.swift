@@ -46,6 +46,7 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
     var echoRevisions: [String] = []
     var livePreview: MeetingLivePartial?
     var protectedSourceThroughSample: Int?
+    var protectedSourceIntervals: [Range<TimeInterval>] = []
 }
 nonisolated struct MeetingLivePartial: Sendable { var start: Double; var end: Double? }
 nonisolated struct MeetingProcessingResult: Sendable {}

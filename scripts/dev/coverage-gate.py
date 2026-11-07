@@ -10,6 +10,7 @@ import subprocess
 import sys
 
 SCOPES = {"macos", "ios", "packages", "python"}
+PACKAGE_CONSUMERS = {"NativeTextInference": ("packages", "macos"), "WebRTCAudioProcessing": ("macos",)}
 STATIC = {".md", ".txt", ".json", ".toml", ".yml", ".yaml", ".png", ".jpg", ".jpeg", ".svg", ".xcstrings", ".plist", ".entitlements", ".xcconfig", ".pbxproj", ".xcscheme", ".xctestplan", ".resolved", ".zip", ".pdf", ".wav", ".m4a", ".mp3", ".lock"}
 NATIVE = {".swift", ".c", ".cc", ".cpp", ".h", ".hpp", ".m", ".mm"}
 UNSUPPORTED = {".sh", ".bash", ".zsh", ".js", ".mjs", ".ts", ".tsx", ".rs", ".go", ".rb"}
@@ -73,7 +74,8 @@ def classify(root, base, head):
             elif suffix == ".py":
                 scopes.add("python")
             elif name.startswith("Vendor/"):
-                scopes.add("packages")
+                consumers = PACKAGE_CONSUMERS.get(parts[1], ("packages", "macos", "ios"))
+                scopes.update(("packages",) if "packages" in consumers else consumers)
             elif suffix in NATIVE:
                 scopes.add("macos")
             continue
@@ -81,7 +83,7 @@ def classify(root, base, head):
             scopes.add("python")
             continue
         if PurePosixPath(name).name in ("Package.swift", "Package.resolved"):
-            scopes.update(("macos", "ios", "packages"))
+            scopes.update(PACKAGE_CONSUMERS.get(parts[1], ("macos", "ios", "packages")) if name.startswith("Vendor/") else ("macos", "ios", "packages"))
             continue
         if name == ".gitignore":
             scopes.add("python")
@@ -90,7 +92,7 @@ def classify(root, base, head):
             scopes.update(("macos", "ios"))
             continue
         if suffix in STATIC and name.startswith(("Sources/", "Configuration/", "Vendor/", "tools/")):
-            scopes.update(("macos", "ios") if name.startswith(("Sources/", "Configuration/")) else ("packages", "macos", "ios") if name.startswith("Vendor/") else ("python",))
+            scopes.update(("macos", "ios") if name.startswith(("Sources/", "Configuration/")) else PACKAGE_CONSUMERS.get(parts[1], ("packages", "macos", "ios")) if name.startswith("Vendor/") else ("python",))
             continue
         if suffix not in NATIVE | {".py"}:
             if status == "D":
@@ -101,9 +103,7 @@ def classify(root, base, head):
         if name in ("scripts/dev/coverage-ci.py", "scripts/dev/coverage-gate.py"):
             scopes.update(SCOPES)
         if name.startswith("Vendor/") and suffix in NATIVE:
-            scopes.update(("packages", "macos"))
-            if not name.startswith("Vendor/NativeTextInference/"):
-                scopes.add("ios")
+            scopes.update(PACKAGE_CONSUMERS.get(parts[1], ("packages", "macos", "ios")))
         elif suffix == ".py":
             scopes.add("python")
         elif name.startswith("Sources/Mobile/"):

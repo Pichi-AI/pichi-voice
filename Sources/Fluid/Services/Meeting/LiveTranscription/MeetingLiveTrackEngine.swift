@@ -101,6 +101,7 @@ actor MeetingLiveTrackEngine {
     private var lastPartialUptime: Double?
     private var lastConsumedPTS: CMTime?
     private var currentFeedPTS: CMTime?
+    private var processingStartPTS: CMTime?
     private var lastUtteranceEndPTS: CMTime?
     private var pendingResync = false
     private var drainTask: Task<Void, Never>?
@@ -324,6 +325,7 @@ actor MeetingLiveTrackEngine {
             comparisonProbe.offer(input, stage: self.kind == .microphone ? .microphoneRecognizerInput : .browserRecognizerInput)
         }
         self.currentFeedPTS = sample.pts
+        if self.processingStartPTS == nil { self.processingStartPTS = sample.pts }
         if self.firstFeedUptime == nil { self.firstFeedUptime = self.uptime() }
         if self.comparisonProbe?.isRecordingDiagnostics == true || self.diagnosticsEnabled,
            let channel = converted.floatChannelData?[0], converted.frameLength > 0
@@ -509,6 +511,7 @@ actor MeetingLiveTrackEngine {
         guard !self.isStopped else { return }
         if self.diagnosticsEnabled { self.diagnosticSnapshot.eouCallbacks += 1 }
         let start = self.utteranceStartPTS
+        let processedStart = self.processingStartPTS
         let end = self.lastConsumedPTS ?? start
         let turnID = self.utteranceTurnID
         let now = self.uptime()
@@ -520,7 +523,14 @@ actor MeetingLiveTrackEngine {
         self.lastPartialUptime = nil
         await self.resetRecognizer(reason: .modelEndOfUtterance)
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !self.isStopped, !trimmed.isEmpty else { return }
+        guard !self.isStopped else { return }
+        if trimmed.isEmpty {
+            if let processedStart, let end, end > processedStart {
+                self.lastUtteranceEndPTS = end
+                self.onUtterance?(self.kind, turnID ?? UUID(), "", processedStart, end)
+            }
+            return
+        }
         guard let start, let end, let turnID else {
             self.diag("EOU fired but no start PTS — dropped (chars=\(text.count))")
             return
@@ -566,6 +576,7 @@ actor MeetingLiveTrackEngine {
     }
 
     private func resetRecognizer(reason: ResetReason) async {
+        self.processingStartPTS = nil
         self.comparisonProbe?.recordEvent("recognizer-reset", track: self.kind, detail: reason.rawValue)
         self.diag("reset reason=\(reason.rawValue)")
         if self.diagnosticsEnabled {

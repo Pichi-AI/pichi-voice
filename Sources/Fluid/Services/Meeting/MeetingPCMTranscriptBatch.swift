@@ -70,6 +70,10 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
     /// through joined ASR, acoustic and privacy admission. Apply after publishing its
     /// protected history; never serialize it as a word or use it for speaker identity.
     var protectedSourceThroughSample: Int? = nil
+    /// Measured meeting-time intervals admitted by the same protected checkpoint.
+    /// Source gaps are deliberately absent; these are not a continuous prefix.
+    /// Like the source cursor above, this is transient presentation evidence only.
+    var protectedSourceIntervals: [Range<TimeInterval>] = []
     /// Ephemeral ASR observation metadata. True only after this audio window seals.
     var speechObservationIsFinal = false
     /// Ephemeral only. Neither this identity nor unfiltered speech enters a session.

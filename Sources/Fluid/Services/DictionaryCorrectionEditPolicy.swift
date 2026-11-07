@@ -89,6 +89,7 @@ nonisolated enum DictionaryTrainingSpellingPolicy {
 /// One user correction propagates only to identical complete terms in this text.
 /// This does not create a permanent dictionary replacement rule.
 nonisolated struct DictionaryCorrectionReplacementPlan {
+    let sourceText: String
     let ranges: [NSRange]
     let text: String
     let replacement: String
@@ -108,6 +109,7 @@ nonisolated struct DictionaryCorrectionReplacementPlan {
             }
         }
         self.ranges = matches.sorted { $0.location < $1.location }
+        self.sourceText = sourceText
         self.replacement = replacement
         var result = sourceText
         for match in self.ranges.reversed() {
@@ -117,6 +119,19 @@ nonisolated struct DictionaryCorrectionReplacementPlan {
         self.text = result
     }
 
+    /// Editors differ in which AX write attribute they expose. Use the full
+    /// planned value only when selected-text writing is unavailable. A failed
+    /// attempted write may be uncertain even while AX still returns old text.
+    @MainActor
+    static func dispatchReplacement(isCurrent: () -> Bool,
+                                    writeSelectedText: (() -> Bool)?,
+                                    writeValue: (() -> Bool)?) -> Bool {
+        guard isCurrent() else { return false }
+        if let writeSelectedText { return writeSelectedText() }
+        guard isCurrent(), let writeValue else { return false }
+        return writeValue()
+    }
+
     func mappedRange(_ range: NSRange) -> NSRange? {
         var result = range
         for edit in self.ranges.reversed() {
@@ -124,6 +139,19 @@ nonisolated struct DictionaryCorrectionReplacementPlan {
             result = mapped
         }
         return result
+    }
+
+    /// An editor may acknowledge a selected-text write after another keystroke.
+    /// Accept only a full echo, an unchanged written occurrence outside that edit,
+    /// or an edit wholly inside the single occurrence we replaced.
+    func confirmsAppliedText(_ observed: String, differenceFromExpected: NSRange?) -> Bool {
+        if observed == self.text { return true }
+        if observed == self.sourceText { return false }
+        guard let differenceFromExpected else { return false }
+        let written = self.ranges.compactMap { self.mappedRange($0) }
+        if written.contains(where: { NSIntersectionRange($0, differenceFromExpected).length == 0 }) { return true }
+        return written.count == 1 && differenceFromExpected.location >= written[0].location &&
+            NSMaxRange(differenceFromExpected) <= NSMaxRange(written[0])
     }
 
     static func exactTermRanges(of term: String, in text: String, scope: NSRange) -> [NSRange] {

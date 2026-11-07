@@ -19,7 +19,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 
-PACKAGES = ("NativeTextInference", "PichiGigaAM", "RussianMorphology", "TranscribeCpp")
+PACKAGES = ("NativeTextInference", "PichiGigaAM", "RussianMorphology", "TranscribeCpp", "PichiCallObservation")
 SCOPES = ("macos", "ios", "packages", "python")
 
 

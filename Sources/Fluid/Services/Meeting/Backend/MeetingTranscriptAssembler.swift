@@ -1149,6 +1149,14 @@ nonisolated struct MeetingTranscriptAssembler {
             generatedParticipantNumber: 1, identityIsProvisional: true)
     }
 
+    /// One fallback reading identity for a source scope, independent of pauses, transport
+    /// chunks and ASR segmentation. It is never a voice profile or an owner-identification cue.
+    func readingFallbackSpeaker(attemptID: UUID, epoch: MeetingAnalysisEpochID,
+                                trackKind: MeetingAudioTrackKind = .microphone) -> MeetingSessionSpeaker {
+        MeetingReadingSpeakerResolver.fallbackSpeaker(namespace: attemptID, scope: epoch,
+            trackKind: trackKind, speakerNameFormat: self.speakerNameFormat)
+    }
+
     private static func mediaTime(_ seconds: TimeInterval) -> MeetingMediaTime {
         MeetingMediaTime(value: Int64((max(0, seconds) * 1000).rounded()), timescale: 1000)
     }

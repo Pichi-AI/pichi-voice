@@ -202,6 +202,15 @@ class GateTests(unittest.TestCase):
         self.assertEqual(set(plan["required_scopes"]), {"macos", "ios", "packages", "python"})
         self.assertIn("Sources/test_production.py", plan["changed_files"])
 
+    def test_app_tested_bridge_requires_its_actual_consumer_not_nonexistent_package_tests(self):
+        for path in ["Vendor/WebRTCAudioProcessing/Sources/Bridge.cpp", "Vendor/WebRTCAudioProcessing/Tests/Bridge.swift",
+                     "Vendor/WebRTCAudioProcessing/Package.swift", "Vendor/WebRTCAudioProcessing/Metadata/manifest.json"]:
+            with self.subTest(path=path):
+                self.put(path, "fixture\n")
+                self.commit()
+                self.assertEqual(self.plan()["required_scopes"], ["macos"])
+                self.base = self.run_git("rev-parse", "HEAD")
+
     def test_required_scope_union_preserves_every_executable_line(self):
         self.put("Sources/Mobile/shared-sources.txt", "Sources/Fluid/Shared.swift\n")
         self.put("Sources/Fluid/Shared.swift", "let first = 1\nlet second = 2\n")

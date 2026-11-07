@@ -45,6 +45,14 @@ class CoverageProducerTests(unittest.TestCase):
         self.out = self.root / "out"
         self.out.mkdir()
 
+    def test_package_registry_covers_every_versioned_vendor_package(self):
+        packages = {path.parent.name for path in (ROOT / "Vendor").glob("*/Package.swift")}
+        policy = runpy.run_path(str(ROOT / "scripts/dev/coverage-gate.py"))["PACKAGE_CONSUMERS"]
+        app_consumed = {name for name, scopes in policy.items() if "packages" not in scopes}
+        self.assertEqual(set(CI.PACKAGES) | app_consumed, packages)
+        self.assertFalse(set(CI.PACKAGES) & app_consumed)
+        self.assertEqual(len(CI.PACKAGES) + len(app_consumed), len(packages))
+
     def test_command_handles_capture_logs_and_failures(self):
         self.assertEqual(CI.command([sys.executable, "-c", "print('fixture')"]).stdout.strip(), "fixture")
         log = self.out / "command.log"

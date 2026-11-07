@@ -62,7 +62,7 @@ subprocess.run([
     "-default-isolation", "MainActor", "-parse-as-library", "-module-cache-path", str(BUILD / "ModuleCache"),
     str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
     str(BUILD / "ValueContracts.swift"), str(meeting / "Backend/MeetingCanonicalEvidenceTypes.swift"),
-    str(meeting / "Backend/MeetingSpeakerAttribution.swift"), str(meeting / "MeetingPCMTranscriptBatch.swift"),
+    str(meeting / "Backend/MeetingSpeakerAttribution.swift"), str(meeting / "Backend/MeetingReadingSpeakerResolver.swift"), str(meeting / "MeetingPCMTranscriptBatch.swift"),
     str(BUILD / "PCMAssembly.swift"), str(meeting / "Backend/MeetingStreamingProtectedWordTail.swift"),
     str(ROOT / "Tests/MeetingStreamingProtectedWordTailTests.swift"), "-o", str(BUILD / "tests")
 ], cwd=ROOT, check=True)
@@ -72,7 +72,7 @@ subprocess.run([
     "-default-isolation", "MainActor", "-parse-as-library", "-module-cache-path", str(BUILD / "ModuleCache"),
     str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
     str(BUILD / "ValueContracts.swift"), str(meeting / "Backend/MeetingCanonicalEvidenceTypes.swift"),
-    str(meeting / "Backend/MeetingSpeakerAttribution.swift"), str(meeting / "MeetingPCMTranscriptBatch.swift"),
+    str(meeting / "Backend/MeetingSpeakerAttribution.swift"), str(meeting / "Backend/MeetingReadingSpeakerResolver.swift"), str(meeting / "MeetingPCMTranscriptBatch.swift"),
     str(BUILD / "PCMAssembly.swift"), str(meeting / "Backend/MeetingStreamingProtectedWordTail.swift"),
     str(ROOT / "Tests/MeetingKnownSpeakerRegistryTests.swift"),
     "-o", str(BUILD / "registry-tests")
@@ -83,7 +83,7 @@ subprocess.run([
     "-default-isolation", "MainActor", "-parse-as-library", "-module-cache-path", str(BUILD / "ModuleCache"),
     str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
     str(BUILD / "ValueContracts.swift"), str(meeting / "Backend/MeetingCanonicalEvidenceTypes.swift"),
-    str(meeting / "Backend/MeetingSpeakerAttribution.swift"), str(meeting / "MeetingPCMTranscriptBatch.swift"),
+    str(meeting / "Backend/MeetingSpeakerAttribution.swift"), str(meeting / "Backend/MeetingReadingSpeakerResolver.swift"), str(meeting / "MeetingPCMTranscriptBatch.swift"),
     str(BUILD / "PCMAssembly.swift"), str(meeting / "Backend/MeetingStreamingProtectedWordTail.swift"),
     str(ROOT / "Tests/MeetingVoicedSpeakerAdmissionTests.swift"), "-o", str(BUILD / "admission-tests")
 ], cwd=ROOT, check=True)
@@ -152,7 +152,7 @@ state_command = [
     str(BUILD / "StreamingStateContracts.swift"), str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
     str(meeting / "MeetingModels.swift"), str(meeting / "MeetingSpeakerPresentation.swift"),
     str(meeting / "MeetingAudioAsset.swift"), str(meeting / "MeetingPersistedMetadata.swift"),
-    str(meeting / "Backend/MeetingCanonicalEvidenceTypes.swift"), str(meeting / "Backend/MeetingSpeakerAttribution.swift"),
+    str(meeting / "Backend/MeetingCanonicalEvidenceTypes.swift"), str(meeting / "Backend/MeetingSpeakerAttribution.swift"), str(meeting / "Backend/MeetingReadingSpeakerResolver.swift"),
     str(meeting / "MeetingPCMTranscriptBatch.swift"),
     str(ROOT / "Sources/Fluid/Services/Privacy/TranscriptTextRedacting.swift"),
     str(ROOT / "Sources/Fluid/Services/Privacy/TranscriptSensitiveDictionary.swift"),

@@ -1903,7 +1903,8 @@ nonisolated extension MeetingSession {
                             && segment.speakerID.map { id in self.speakers.contains {
                                 $0.id == id && $0.identityIsProvisional != nil
                             } } == true)),
-                      attribution.selectedSpeakerID == nil || attribution.selectedToken != nil,
+                      attribution.selectedSpeakerID == nil || attribution.selectedToken != nil
+                        || attribution.rule == .readingParticipantContext,
                       attribution.selectedSpeakerID.map({ speakerIDs.contains($0) }) ?? true,
                       Set(attribution.candidates.map(\.token)).count == attribution.candidates.count,
                       tokens.allSatisfy({ $0.analysisEpochID == epoch

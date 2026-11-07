@@ -49,12 +49,19 @@ final class MeetingMemoryProcessingAttempt {
     var streamingConsumers: [MeetingAudioTrackID: any MeetingMemoryAudioConsuming] = [:]
     let publicationGate = MeetingProcessingSerializationGate()
     var sourceTimelines: [MeetingAudioTrackID: MeetingPCMSourceTimeline] = [:]
+    private var publishedSourceThroughSamples: [MeetingAudioTrackID: Int] = [:]
     var echoAdmission: MeetingStreamingEchoAdmission?
     var streamingFailureTask: Task<Void, Never>?
 
     func observeEcho(_ observation: MeetingStreamingPCMObservation, track: MeetingAudioTrack) async throws -> MeetingStreamingPCMObservation {
         guard let echoAdmission else { return observation }
-        let result = try await echoAdmission.observe(track: track, observation: observation)
+        let result: MeetingStreamingPCMObservation
+        do { result = try await echoAdmission.observe(track: track, observation: observation) }
+        catch let error as MeetingStreamingEchoAdmission.Failure {
+            // This enum has scalar cases only. Never log the observation or raw words.
+            DebugLogger.shared.warning("echo_admission_failure reason=\(String(describing: error))", source: "MeetingStreamingPCM")
+            throw error
+        }
         if let revisions = await echoAdmission.pendingRevisionBatch() { try await publish(revisions) }
         return result
     }
@@ -108,10 +115,13 @@ final class MeetingMemoryProcessingAttempt {
         }
         batch.livePreview = try projectedPreview(batch.livePreview, trackID: track.id)
         if let through = batch.protectedSourceThroughSample {
-            // A source gap has no measured continuous prefix. Individual mapped words still
-            // retire their own visible estimates; never acknowledge an unknown physical gap.
-            batch.protectedSourceThroughSample = timeline.hasGaps ? nil : timeline.mapEndTime(Double(through) / 16_000)
-                .map { Int(($0 * 16_000).rounded(.down)) }
+            // Projection is pure. Advance the publication cursor only after the protected
+            // checkpoint below joins, so a failed/cancelled save can be retried intact.
+            let from = self.publishedSourceThroughSamples[track.id] ?? 0
+            if through > from {
+                batch.protectedSourceIntervals = try timeline.measuredIntervals(fromSample: from, throughSample: through)
+            }
+            batch.protectedSourceThroughSample = nil
         }
         return batch
     }
@@ -127,8 +137,11 @@ final class MeetingMemoryProcessingAttempt {
             var safe = try projectedBatch(batch)
             if let echoAdmission { safe = try await echoAdmission.admitting(safe) }
             if !safe.segments.isEmpty || !safe.speakers.isEmpty || !safe.speakerRevisions.isEmpty
-                || !safe.echoRevisions.isEmpty || safe.protectedSourceThroughSample != nil {
+                || !safe.echoRevisions.isEmpty || safe.protectedSourceThroughSample != nil || !safe.protectedSourceIntervals.isEmpty {
                 try await checkpoint(safe)
+                if let track = batch.sourceTrack, let through = batch.protectedSourceThroughSample {
+                    self.publishedSourceThroughSamples[track.id] = max(self.publishedSourceThroughSamples[track.id] ?? 0, through)
+                }
             }
             await publicationGate.release()
         } catch {
@@ -629,17 +642,22 @@ extension MeetingProcessingPipeline {
             }
         }
         try Task.checkCancellation()
-        if attempt.request.configuration.speakerLabelsEnabled,
-           attempt.request.configuration.effectiveSpeakerProcessingMode != .streaming, let track {
+        if attempt.request.configuration.speakerLabelsEnabled, track != nil,
+           attempt.request.configuration.effectiveSpeakerProcessingMode != .streaming
+            || attempt.request.configuration.speakerAttributionPolicy?.enableCompleteReadingAssignment == true {
             // Recognition/replay has already passed the existing privacy gate. Final batch
             // diarization can still abstain; use the same protected reading identity policy
             // as streaming without replaying speech or inventing native speaker evidence.
+            let scopes = MeetingReadingSpeakerResolver.readingScopes(for: batch.segments)
+            let readingBarriers = Dictionary(grouping: session.transcriptCoverageGaps ?? [], by: \.trackID)
+                .mapValues { $0.map { MeetingSpeakerAttributionInterval(start: $0.start, end: $0.end) } }
             batch = try MeetingStreamingProtectedWordTail.finalizingProtectedTranscript(batch,
                 attemptID: attempt.request.attemptID,
                 policy: attempt.request.configuration.speakerAttributionPolicy,
                 speakerNameFormat: batch.speakerNameFormat ?? PichiLocalization.text("Speaker %lld"),
-                trackKinds: [track.id: track.kind],
-                epochForSegment: { _ in .init(trackID: track.id, ordinal: 0) })
+                trackKinds: Dictionary(session.audioTracks.map { ($0.id, $0.kind) }, uniquingKeysWith: { first, _ in first }),
+                barriersByTrack: readingBarriers,
+                epochForSegment: { scopes[$0.id] })
         }
         progress(.finalizing)
         // Stop-time pending records can predate or differ from the admitted PCM request.
