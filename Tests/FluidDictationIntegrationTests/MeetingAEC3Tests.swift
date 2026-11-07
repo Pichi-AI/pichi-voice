@@ -33,7 +33,7 @@ final class MeetingAEC3Tests: XCTestCase {
             func measured(_ context: MeetingRecordingClockContext, value: Float) throws -> CMSampleBuffer {
                 let mapping = try context.mapping(frameCount: 480,
                     start: CMTime(seconds: start, preferredTimescale: 1_000_000_000),
-                    end: CMTime(seconds: start + duration, preferredTimescale: 1_000_000_000))
+                    end: CMTime(seconds: start + duration, preferredTimescale: 1_000_000_000), discontinuityBefore: index == 0)
                 return try XCTUnwrap(MeetingAECPCMAdapter.synthesize(samples: [Float](repeating: value, count: 480),
                     presentationTime: CMTime(seconds: start, preferredTimescale: 1_000_000_000),
                     clockPacket: .init(mapping: mapping, clockID: context.clockID,
