@@ -24,9 +24,14 @@ final class MobileRecordingDeletionUITests: XCTestCase {
             let fullID = String(format: "F0000000-0000-4000-8000-%012d", index * 2 + 2)
             let row = app.buttons["history.session.\(buttonID)"]
             XCTAssertTrue(row.waitForExistence(timeout: 15))
+            XCTAssertTrue(app.buttons["meeting.start"].isEnabled)
             let before = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "history.session.")).count
-            row.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
-                .press(forDuration: 0.05, thenDragTo: row.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.5)))
+            let cell = app.cells.containing(.button, identifier: "history.session.\(buttonID)").firstMatch
+            XCTAssertTrue(cell.exists)
+            capture("\(language)-\(appearance)-00-before-swipe")
+            cell.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+                .press(forDuration: 0, thenDragTo: cell.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
+                       withVelocity: .slow, thenHoldForDuration: 0.2)
             let delete = app.buttons["history.delete.\(buttonID)"]
             XCTAssertTrue(delete.waitForExistence(timeout: 5), "Short swipe reveals Delete")
             XCTAssertEqual(delete.label, language == "ru" ? "Удалить" : "Delete")
@@ -39,8 +44,8 @@ final class MobileRecordingDeletionUITests: XCTestCase {
             XCTAssertEqual(app.alerts.count, 0)
             let fullRow = app.buttons["history.session.\(fullID)"]
             XCTAssertTrue(fullRow.exists)
-            fullRow.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5))
-                .press(forDuration: 0.05, thenDragTo: fullRow.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)))
+            let fullCell = app.cells.containing(.button, identifier: "history.session.\(fullID)").firstMatch
+            fullCell.swipeLeft(velocity: .slow)
             XCTAssertTrue(fullRow.waitForNonExistence(timeout: 10), "Full swipe commits deletion")
             XCTAssertTrue(app.buttons[survivor].exists, "Other recordings remain")
             XCTAssertEqual(app.sheets.count, 0)

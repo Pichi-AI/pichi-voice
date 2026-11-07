@@ -102,6 +102,8 @@ final class MobileRecordingDeletionTests: XCTestCase {
                 machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
             session.state = .completed
             session.endedAt = session.startedAt.addingTimeInterval(30)
+            session.audioTracks = [.init(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
+                sourceDisplayName: "Synthetic", format: nil, timebase: session.timebase, health: .waiting, chunks: [])]
             try await store.create(session)
             return session
         }
