@@ -881,11 +881,13 @@ final class MobileNavigationUITests: XCTestCase {
             app.launch()
             let viewport = app.tables["meeting.liveTranscript.viewport"]
             XCTAssertTrue(viewport.waitForExistence(timeout: 10))
-            let header = app.staticTexts[source].firstMatch
-            for _ in 0..<20 where !header.exists || !header.isHittable {
+            let header = app.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "meeting.liveParagraph.", source + ",")).firstMatch
+            for _ in 0..<20 where !header.exists || !header.isHittable || header.frame.minY < viewport.frame.minY {
                 viewport.swipeDown(velocity: .fast)
             }
             XCTAssertTrue(header.exists && header.isHittable, "The actual live source header must be visible")
+            XCTAssertGreaterThanOrEqual(header.frame.minY, viewport.frame.minY)
             capture("source-header-\(language)-\(appearance)")
         }
         #endif
