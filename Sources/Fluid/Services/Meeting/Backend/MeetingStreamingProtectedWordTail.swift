@@ -143,7 +143,8 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
             policy.enableBriefInterruption ? policy.maximumInterruptionWordSeconds + policy.maximumNeighborGapSeconds
                 + policy.maximumBriefInterruptionSeconds + policy.maximumBriefInterruptionGapSeconds : 0)
         let lookahead = max(acousticLookahead,
-            policy.enableCompleteReadingAssignment ? MeetingReadingSpeakerResolver.contextRadiusSeconds : 0)
+            policy.enableCompleteReadingAssignment ? MeetingReadingSpeakerResolver.contextRadiusSeconds : 0,
+            policy.enableTokenEmissionContext ? policy.maximumEmissionContextSeconds : 0)
         guard limits.maximumRetainedWords > 0, limits.maximumRetainedSeconds.isFinite,
               limits.maximumRetainedSeconds > lookahead,
               limits.maximumActivityIntervals > 0,

@@ -48,7 +48,7 @@ nonisolated struct MeetingTextOverlapEchoVerdictProvider: MeetingUnitEchoVerdict
     func echoVerdicts(
         for evidence: MeetingFinalTranscriptEvidence,
         manifest: MeetingAnalysisManifest,
-        plan _: MeetingBackendPlan
+        plan: MeetingBackendPlan
     ) async throws -> [String: MeetingUnitEchoVerdict] {
         guard manifest.captureMode == .onlineCall else { return [:] }
 
@@ -83,7 +83,8 @@ nonisolated struct MeetingTextOverlapEchoVerdictProvider: MeetingUnitEchoVerdict
                 guard !MeetingSpeakerActivityCoverage.isOutside(
                     unit,
                     activityByEpoch: activityByEpoch,
-                    boundaryAssignments: boundaryAssignments
+                    boundaryAssignments: boundaryAssignments,
+                    preservesTokenEmissions: plan.request.configuration.speakerAttributionPolicy?.enableTokenEmissionContext == true
                 ) else { continue }
                 applicationUnits.append(positioned)
             case .microphone:

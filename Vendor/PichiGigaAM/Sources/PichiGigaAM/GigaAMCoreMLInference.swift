@@ -6,7 +6,7 @@ public struct GigaAMExecutionStatus: Sendable, Equatable {
     public enum FallbackReason: String, Sendable {
         case compatibleExportMissing, invalidExport, gpuUnavailable, incompatibleExport
         case acceleratorLoadFailed, acceleratorInferenceFailed, explicitCPU, unsupportedInputShape
-        case memoryBudget
+        case memoryBudget, backgroundExecution
     }
     public let backend: Backend
     public let fallbackReason: FallbackReason?

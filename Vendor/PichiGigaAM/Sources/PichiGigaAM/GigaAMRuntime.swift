@@ -59,10 +59,12 @@ public actor GigaAMRuntime {
                         self.vocabulary = try GigaAMVocabulary(contents: String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8))
                     } else { self.vocabulary = .russianCharacters }
                     self.frontend = try GigaAMFrontend()
-                    try self.loadONNX(modelURL: modelURL, useGPU: executionProvider == .coreML)
-                    self.executionStatus = executionProvider == .coreML
+                    let backgroundReason: GigaAMExecutionStatus.FallbackReason? = self.resources().requiresBackgroundExecution ? .backgroundExecution : nil
+                    let useGPU = executionProvider == .coreML && backgroundReason == nil
+                    try self.loadONNX(modelURL: modelURL, useGPU: useGPU)
+                    self.executionStatus = useGPU
                         ? .init(backend: .gpu, fallbackReason: nil)
-                        : .init(backend: .cpu, fallbackReason: executionProvider == .cpu ? .explicitCPU : .incompatibleExport)
+                        : .init(backend: .cpu, fallbackReason: executionProvider == .cpu ? .explicitCPU : (backgroundReason ?? .incompatibleExport))
                 case .coreML(let configuration):
                     // Explicit legacy imports do not bypass capacity admission.
                     // In particular, do not compile the FP16 package on a 4 GB
@@ -84,9 +86,9 @@ public actor GigaAMRuntime {
                     if executionProvider == .cpu {
                         try native.load(gpu: false)
                         self.executionStatus = .init(backend: .cpu, fallbackReason: .explicitCPU)
-                    } else if !self.resources().hasGPU {
+                    } else if self.resources().requiresBackgroundExecution || !self.resources().hasGPU {
                         try native.load(gpu: false)
-                        self.executionStatus = .init(backend: .cpu, fallbackReason: .gpuUnavailable)
+                        self.executionStatus = .init(backend: .cpu, fallbackReason: self.resources().requiresBackgroundExecution ? .backgroundExecution : .gpuUnavailable)
                     } else {
                         do {
                             try native.load(gpu: true)
@@ -310,11 +312,8 @@ public actor GigaAMRuntime {
             let offset = Double(windowStart) / Double(GigaAMFrontend.sampleRate)
             let lower = Double(coreStart) / Double(GigaAMFrontend.sampleRate)
             let upper = Double(coreEnd) / Double(GigaAMFrontend.sampleRate)
-            for word in output.words {
-                let midpoint = (word.start + word.end) / 2 + offset
-                guard midpoint >= lower, midpoint < upper else { continue }
-                words.append(GigaAMWordTiming(text: word.text, start: word.start + offset, end: word.end + offset, confidence: word.confidence))
-            }
+            words.append(contentsOf: try Self.ownedWords(output.words,
+                windowSampleRange: windowStart..<windowEnd, coreSampleRange: coreStart..<coreEnd))
             for window in output.encoderWindows {
                 let ownLower = max(lower, window.ownership.lowerBound + offset)
                 let ownUpper = min(upper, window.ownership.upperBound + offset)
@@ -341,6 +340,28 @@ public actor GigaAMRuntime {
             endOfUtteranceProbability: samples.count <= 8 * GigaAMFrontend.sampleRate ? finalProbability : nil,
             processingDuration: ProcessInfo.processInfo.systemUptime - start, encoderWindows: encoderWindows
         )
+    }
+
+    /// Midpoint ownership changes neither the native word position nor its inference window.
+    /// Enumerate before filtering: after an empty core, the first retained word may be native
+    /// word one or later from the overlapping context of the following inference call.
+    nonisolated static func ownedWords(_ words: [GigaAMWordTiming],
+                                      windowSampleRange: Range<Int>, coreSampleRange: Range<Int>) throws -> [GigaAMWordTiming] {
+        guard windowSampleRange.lowerBound >= 0, !windowSampleRange.isEmpty,
+              !coreSampleRange.isEmpty, coreSampleRange.lowerBound >= windowSampleRange.lowerBound,
+              coreSampleRange.upperBound <= windowSampleRange.upperBound else { throw GigaAMError.invalidAudio }
+        let sampleRate = Double(GigaAMFrontend.sampleRate)
+        let offset = Double(windowSampleRange.lowerBound) / sampleRate
+        let lower = Double(coreSampleRange.lowerBound) / sampleRate
+        let upper = Double(coreSampleRange.upperBound) / sampleRate
+        return try words.enumerated().compactMap { index, word in
+            try Task.checkCancellation()
+            let midpoint = (word.start + word.end) / 2 + offset
+            guard midpoint >= lower, midpoint < upper else { return nil }
+            return GigaAMWordTiming(text: word.text, start: word.start + offset, end: word.end + offset,
+                confidence: word.confidence,
+                sourceContext: .init(sampleRange: windowSampleRange, wordIndex: index))
+        }
     }
 
     private static func encoderWindows(_ snapshot: TranscribeCpp.EncoderFeatureSnapshot?, duration: Double) throws -> [GigaAMEncoderWindow] {

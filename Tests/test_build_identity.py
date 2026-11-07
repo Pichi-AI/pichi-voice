@@ -1,5 +1,6 @@
 """Portable guards for installation identity across upstream project merges."""
 import pathlib
+import json
 import plistlib
 import re
 import shutil
@@ -46,6 +47,7 @@ class BuildIdentityTests(unittest.TestCase):
                 'Fluid.xcodeproj/project.pbxproj', 'scripts/dev/update-mobile-project.py',
                 'Sources/Mobile/shared-sources.txt', 'Sources/Fluid/Branding/brand-package.json',
                 'Sources/Mobile/Info.plist', 'Sources/Mobile/Version.xcconfig',
+                'Configuration/PichiBrand.xcconfig',
             ]:
                 destination = root / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -108,7 +110,30 @@ class BuildIdentityTests(unittest.TestCase):
             self.assertEqual(info['CFBundleShortVersionString'], '$(MARKETING_VERSION)')
         defaults = (ROOT / 'Sources/Mobile/Version.xcconfig').read_text()
         self.assertRegex(defaults, r'(?m)^CURRENT_PROJECT_VERSION = [1-9][0-9]*$')
-        self.assertRegex(defaults, r'(?m)^MARKETING_VERSION = 0\.1\.0$')
+        self.assertRegex(defaults, r'(?m)^MARKETING_VERSION = [0-9]+(?:\.[0-9]+){1,2}$')
+
+    def testMobileAndMacShareCanonicalDistributionIdentity(self):
+        brand = ROOT / 'Configuration/PichiBrand.xcconfig'
+        identifier = re.findall(r'^PICHI_BUNDLE_IDENTIFIER\s*=\s*(\S+)\s*$', brand.read_text(), re.MULTILINE)
+        self.assertEqual(identifier, ['ai.pichi.voice'])
+        defaults = (ROOT / 'Sources/Mobile/Version.xcconfig').read_text()
+        include = re.search(r'^#include "([^"]+)"$', defaults, re.MULTILINE)
+        self.assertIsNotNone(include)
+        self.assertEqual((ROOT / 'Sources/Mobile' / include.group(1)).resolve(), brand.resolve())
+        project = PROJECT.read_text()
+        for label in ['Mobile Debug', 'Mobile Release', 'Mobile activity Debug', 'Mobile activity Release']:
+            with self.subTest(configuration=label):
+                configuration = re.search(r'/\* ' + label + r' \*/ = \{([^\n]+)', project).group(1)
+                self.assertIn('PICHI_MOBILE_BUNDLE_IDENTIFIER = "$(PICHI_BUNDLE_IDENTIFIER)";', configuration)
+                suffix = '.activity' if 'activity' in label else ''
+                self.assertIn('PRODUCT_BUNDLE_IDENTIFIER = "$(PICHI_MOBILE_BUNDLE_IDENTIFIER)' + suffix + '";', configuration)
+        distribution = json.loads((ROOT / 'Sources/Mobile/Resources/brand-distribution.json').read_text())
+        self.assertEqual(distribution['legacyAccount']['bundleIdentifier'], identifier[0],
+                         'Legacy account composition must match the installed app identity')
+        info = plistlib.loads((ROOT / 'Sources/Mobile/Info.plist').read_bytes())
+        self.assertEqual(info['CFBundleURLTypes'][0]['CFBundleURLSchemes'], ['$(PRODUCT_BUNDLE_IDENTIFIER)'])
+        entitlements = plistlib.loads((ROOT / 'Sources/Mobile/Mobile.entitlements').read_bytes())
+        self.assertEqual(entitlements['keychain-access-groups'], ['$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)'])
 
     def testDuplicateUpstreamIdentityAndReleaseSettingsAreRejected(self):
         project = PROJECT.read_text()

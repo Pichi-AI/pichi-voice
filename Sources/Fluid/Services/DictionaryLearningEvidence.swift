@@ -165,6 +165,12 @@ nonisolated enum DictionaryLearningAlignmentResolver {
             delivered: delivered.map(\.text),
             selected: first..<(last + 1)
         )
+        // An ASR timing can cover several lexical tokens (for example a compound
+        // name). It has no timing for a selected subpart. Including its whole
+        // interval would teach the neighbouring word as this word's pronunciation.
+        guard (sourceTokens.lowerBound == 0 || wordIndices[sourceTokens.lowerBound - 1] != wordIndices[sourceTokens.lowerBound]),
+              (sourceTokens.upperBound == wordIndices.count || wordIndices[sourceTokens.upperBound - 1] != wordIndices[sourceTokens.upperBound])
+        else { throw DictionaryLearningAlignmentError.invalidTiming }
         let wordRange = wordIndices[sourceTokens.lowerBound]..<(wordIndices[sourceTokens.upperBound - 1] + 1)
         return try self.makeEvidence(
             recording: recording,
@@ -286,11 +292,29 @@ nonisolated enum DictionaryLearningAlignmentResolver {
         let words = recording.alignment.words
         let selected = words[wordRange]
         let duration = Double(recording.samples.count) / Double(DictionaryLearningRecording.sampleRate)
-        guard selected.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start }),
+        func validTiming(_ word: ASRWordTiming) -> Bool {
+            word.start.isFinite && word.end.isFinite && word.start >= 0 && word.end > word.start &&
+                word.start < duration && word.end <= duration + 0.08
+        }
+        guard selected.allSatisfy(validTiming),
               zip(selected, selected.dropFirst()).allSatisfy({ $0.start <= $1.start && $0.end <= $1.end }),
-              let first = selected.first, let last = selected.last,
-              first.start < duration, last.end <= duration + 0.08
+              let first = selected.first, let last = selected.last
         else { throw DictionaryLearningAlignmentError.invalidTiming }
+        // A valid focal interval must also exclude adjacent ASR words. Do not
+        // clip an overlap at an invented midpoint, or expand into a timing gap:
+        // neither establishes where speech belonging to this word really ends.
+        if wordRange.lowerBound > 0 {
+            let previous = words[wordRange.lowerBound - 1]
+            guard validTiming(previous), previous.end <= first.start else {
+                throw DictionaryLearningAlignmentError.invalidTiming
+            }
+        }
+        if wordRange.upperBound < words.count {
+            let next = words[wordRange.upperBound]
+            guard validTiming(next), last.end <= next.start else {
+                throw DictionaryLearningAlignmentError.invalidTiming
+            }
+        }
         let start = Int((first.start * Double(DictionaryLearningRecording.sampleRate)).rounded(.down))
         let end = min(recording.samples.count, Int((last.end * Double(DictionaryLearningRecording.sampleRate)).rounded(.up)))
         guard end > start else { throw DictionaryLearningAlignmentError.invalidTiming }

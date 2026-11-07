@@ -52,7 +52,9 @@ python3 -S Tests/test_local_api_live_harness.py
 python3 -S Tests/test_command_profile_quality_probe.py
 python3 -S Tests/run_diarization_repeatability_tests.py
 python3 -S Tests/test_signed_build_product.py
+python3 -B -S Tests/test_physical_ui_smoke_observation.py
 python3 -S Tests/test_meeting_diarization_eval.py
+python3 -S Tests/test_lint_changed.py
 python3 -B -S -m unittest discover -s tools -p test_meeting_asr_text_eval.py
 python3 -S tools/meeting-native-eval/test_batch_preflight.py
 python3 -B -S tools/meeting-native-eval/test_weak_score.py

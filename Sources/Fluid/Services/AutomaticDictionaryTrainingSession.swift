@@ -98,9 +98,15 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     func undoSavedCorrection() {
-        guard let receipt = self.savedCorrection, !receipt.wasAlreadyPresent, receipt.isCurrent, self.isProfileVisible,
+        guard let receipt = self.savedCorrection, receipt.isCurrent, self.isProfileVisible,
               !self.isCancelled, !self.isUndoingSavedCorrection, !self.didUndoSavedCorrection else { return }
         self.onInteraction?()
+        if receipt.wasAlreadyPresent {
+            // This acknowledgement owns no new sample. Cancel only its notice.
+            self.didUndoSavedCorrection = true
+            self.onSuccess?()
+            return
+        }
         self.isUndoingSavedCorrection = true
         self.hasError = false
         self.statusMessage = ""

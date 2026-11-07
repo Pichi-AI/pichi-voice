@@ -48,6 +48,14 @@ jobs:
       - run: git worktree add --detach "$CI_ROOT" HEAD
       - working-directory: ${{ env.CI_ROOT }}
         run: bash scripts/dev/check.sh
+      - name: Lint changed Swift lines
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ env.CI_ROOT }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          python3 -S scripts/dev/lint-changed.py --base "origin/$BASE_REF" \
+            --swiftlint "docker run --rm --volume $PWD:$PWD --workdir $PWD ghcr.io/realm/swiftlint:0.65.1@sha256:f47e083201e47a136cda5ae847595bfe00226c444ca226fa74fa5dc648a9b057"
       - id: plan
         working-directory: ${{ env.CI_ROOT }}
         run: python3 -S scripts/dev/coverage-ci.py plan --output .build/coverage/plan.json >> "$GITHUB_OUTPUT"

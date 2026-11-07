@@ -51,6 +51,7 @@ actor MeetingStreamingEchoAdmission {
     private let limits: Limits
     private let presentationInterval: PresentationInterval
     private let presentationThrough: PresentationThrough
+    private let preservesTokenEmissions: Bool
     private var latestPresentation = 0.0
     private var latestFlags: [MeetingTranscriptSegmentID: Bool] = [:]
     private var unpublished = Set<MeetingTranscriptSegmentID>()
@@ -58,7 +59,7 @@ actor MeetingStreamingEchoAdmission {
     private var expiredEvidenceUnits = 0
     private var closed = false
 
-    init(tracks: [MeetingAudioTrack], limits: Limits = .init(),
+    init(tracks: [MeetingAudioTrack], limits: Limits = .init(), preservesTokenEmissions: Bool = false,
          presentationInterval: @escaping PresentationInterval = { _, start, end in (start, end) },
          presentationThrough: @escaping PresentationThrough = { _, time in time }) throws {
         guard tracks.count == 2, Set(tracks.map(\.id)).count == 2,
@@ -75,6 +76,7 @@ actor MeetingStreamingEchoAdmission {
         self.limits = limits
         self.presentationInterval = presentationInterval
         self.presentationThrough = presentationThrough
+        self.preservesTokenEmissions = preservesTokenEmissions
     }
 
     /// Native acoustic progress may revise candidate visibility independently of ASR. Neither
@@ -160,7 +162,8 @@ actor MeetingStreamingEchoAdmission {
                 let raw = MeetingFinalTextUnit(id: id, trackID: track.id, analysisEpochID: epoch,
                     precision: precision, text: segment.text, analysisStart: native.start, analysisEnd: native.end,
                     speaker: segment.nativeSpeakerAssignment ?? .unassigned,
-                    analysisSpanIDs: ["streaming-offset:\(offset)"], confidence: nil)
+                    analysisSpanIDs: ["streaming-offset:\(offset)"], confidence: nil,
+                    wordTimingProvenance: segment.nativeWordTimingProvenance)
                 source.units.append(.init(positioned: positioned, segmentID: segment.id, native: raw))
                 if track.kind == .microphone { self.unpublished.insert(segment.id) }
             }
@@ -249,7 +252,7 @@ actor MeetingStreamingEchoAdmission {
         let boundaryAssignments = MeetingWordBoundaryRecovery.assignments(units: units, activityByEpoch: activityByEpoch)
         let eligibleApplication = application.units.filter {
             !MeetingSpeakerActivityCoverage.isOutside($0.native, activityByEpoch: activityByEpoch,
-                boundaryAssignments: boundaryAssignments)
+                boundaryAssignments: boundaryAssignments, preservesTokenEmissions: self.preservesTokenEmissions)
         }.map(\.positioned)
         let verdicts = try MeetingPositionedEchoScoring.verdicts(microphoneUnits: microphone.units.map(\.positioned),
             applicationUnits: eligibleApplication)

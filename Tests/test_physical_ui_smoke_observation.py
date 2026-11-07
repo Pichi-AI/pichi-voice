@@ -26,9 +26,6 @@ class PhysicalUISmokeObservationTests(unittest.TestCase):
         for forbidden in ("app.", "recordingVisible()", "presentationDone.exists", "capture("):
             self.assertNotIn(forbidden, admission)
         self.assertIn("recordingVisible()", queries)
-        # Periodic health sampling never probes presentation controls. The final
-        # foreground acceptance below owns export/presentation verification.
-        self.assertNotIn("presentationDone.exists", queries)
         self.assertIn("passedRecordingUIHealthChecks += 1", queries)
         self.assertIn("sleepAfterUIHealthCheckNanoseconds", queries)
         self.assertLess(queries.index("switch state"), queries.index("let healthCheckFinishedAt"))

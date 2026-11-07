@@ -105,15 +105,22 @@ nonisolated enum MeetingLiveCaptionParagraphs {
 }
 
 extension MeetingLiveBubbleComposer.Row {
-    var captionLabel: String? {
-        guard self.hasReadableParticipant, let participant else { return nil }
+    var captionLabel: String {
+        self.captionLabel(language: PichiLocalization.language)
+    }
+
+    func captionLabel(language: PichiInterfaceLanguage) -> String {
+        // Capture provenance is available even when no participant has been identified.
+        let source = PichiLocalization.text(self.speaker == .you ? "Microphone" : "Meeting audio",
+            language: language, bundle: .main)
+        guard self.hasReadableParticipant, let participant else { return source }
         return MeetingTranscriptExporter.timestampText(self.readingTurnStart) + " "
-            + MeetingTranscriptExporter.speakerLabel(for: participant, language: PichiLocalization.language)
+            + MeetingTranscriptExporter.speakerLabel(for: participant, language: language) + " · " + source
     }
 }
 
 extension MeetingLiveCaptionParagraphs.Paragraph {
-    var captionLabel: String? { rows[0].captionLabel }
+    var captionLabel: String { rows[0].captionLabel }
 }
 
 /// Snapshot-to-row work changes with protected recognition, not the much more frequent
@@ -999,8 +1006,8 @@ private struct MeetingLiveParagraphRow: View, Equatable {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if self.paragraph.showsLabel, let label = self.paragraph.captionLabel {
-                Text(label)
+            if self.paragraph.showsLabel {
+                Text(self.paragraph.captionLabel)
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(MeetingSpeakerPalette.labelColor(forSpeakerIndex: self.paragraph.participant?.participantIndex,
                         theme: self.theme, colorScheme: self.colorScheme))
@@ -1051,7 +1058,7 @@ struct MeetingLiveBubbleRow: View, Equatable {
 
     private var isMicrophone: Bool { self.row.speaker == .you }
 
-    private var sourceLabel: String? {
+    private var sourceLabel: String {
         self.row.captionLabel
     }
 
@@ -1065,8 +1072,8 @@ struct MeetingLiveBubbleRow: View, Equatable {
 
     var body: some View {
         VStack(alignment: self.isMicrophone && !self.documentStyle ? .trailing : .leading, spacing: 4) {
-            if self.row.showsLabel, let label = self.sourceLabel {
-                Text(label)
+            if self.row.showsLabel {
+                Text(self.sourceLabel)
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(MeetingSpeakerPalette.labelColor(forSpeakerIndex: self.row.participant?.participantIndex,
                         theme: self.theme, colorScheme: self.colorScheme))

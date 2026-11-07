@@ -161,6 +161,8 @@ Feature results and then-open validation gaps are retained in [Initial verificat
 
 ## CI and cleanup
 
+`python3 -S scripts/dev/lint-changed.py` lints only the Swift lines a branch changed. The repository has a large inherited baseline, so `force_cast`, `force_try` and `force_unwrapping` in `Sources/` block a change and every other rule is a note, including anything in `Vendor/`. The same check runs on each PR in `pichi-ci.yml`.
+
 [Pichi Voice CI](../../.github/workflows/pichi-ci.yml) runs portable checks and Python patch coverage in one Linux job. Native verification uses [the manual self-hosted workflow](../../.github/workflows/pichi-native.yml) on a prepared isolated Mac. Its admission, commands and coverage boundaries are defined in [Testing](testing.md#isolated-native-runner-admission). Ordinary PR updates do not start paid macOS/iOS builds.
 
 Upstream community moderation and archive workflows are retained but guarded to run only in `altic-dev/FluidVoice`. Our repository does not inherit their scheduled issue closing or comment policies.

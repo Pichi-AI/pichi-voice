@@ -24,17 +24,17 @@ final class MobileSettingsReviewUITests: XCTestCase {
         super.tearDown()
     }
 
-    /// Ready-to-download capability is shown without claiming a prepared GPU session.
-    func testGPUPreferenceOnModelPageInRussianLightAndDark() throws {
+    /// Mobile CPU policy is visible before preparation, without claiming a live session.
+    func testMobileCPUPreferenceOnModelPageInRussianLightAndDark() throws {
         for appearance in ["light", "dark"] {
             app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
             app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", appearance,
                                    "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
             app.launch()
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
-            capture("gpu-preference-ru-\(appearance)-home")
+            capture("cpu-preference-ru-\(appearance)-home")
             openSettings(title: "Настройки")
-            capture("gpu-preference-ru-\(appearance)-settings")
+            capture("cpu-preference-ru-\(appearance)-settings")
             let models = app.buttons["settings.models"]
             reveal(models)
             XCTAssertTrue(models.isHittable)
@@ -43,11 +43,46 @@ final class MobileSettingsReviewUITests: XCTestCase {
             let preference = app.staticTexts["model.computePreference.gigaam-v3-eou"]
             reveal(preference)
             XCTAssertTrue(preference.exists && preference.isHittable)
-            XCTAssertEqual(preference.label, "Приоритет GPU; резервный CPU")
+            XCTAssertEqual(preference.label, "CPU для записи в фоне")
             XCTAssertFalse(app.descendants(matching: .any)["model.executionStatus.gigaam-v3-eou"].firstMatch.exists,
-                           "An unprepared provider must not claim GPU execution")
+                           "An unprepared provider must not claim active execution")
             settle()
-            capture("gpu-preference-ru-\(appearance)-models")
+            capture("cpu-preference-ru-\(appearance)-models")
+            app.terminate()
+        }
+    }
+
+    /// Offline legal resources are reachable from the guest Settings stack in every app appearance.
+    func testLicensesInBothLanguagesAndThemes() throws {
+        for (language, appearance) in [("ru", "light"), ("ru", "dark"), ("en", "light"), ("en", "dark")] {
+            let settingsTitle = language == "ru" ? "Настройки" : "Settings"
+            let licensesTitle = language == "ru" ? "Лицензии" : "Licenses"
+            let prefix = "licenses-\(language)-\(appearance)"
+            app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                                   "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
+            app.launch()
+            openSettings(title: settingsTitle)
+            let licenses = app.buttons["settings.licenses"]
+            reveal(licenses)
+            XCTAssertTrue(licenses.exists && licenses.isHittable)
+            licenses.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["settings.licenses.detail"].firstMatch.waitForExistence(timeout: 10))
+            XCTAssertTrue(app.navigationBars[licensesTitle].exists)
+            capture(prefix + "-list")
+            let component = app.buttons["licenses.component.fluidvoice"]
+            XCTAssertTrue(component.exists && component.isHittable)
+            component.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["licenses.component.detail"].firstMatch.waitForExistence(timeout: 5))
+            let license = app.staticTexts["licenses.document.FluidVoice-LICENSE.txt"]
+            XCTAssertTrue(license.exists)
+            XCTAssertTrue(license.label.contains("GNU GENERAL PUBLIC LICENSE"))
+            XCTAssertTrue(license.label.contains("How to Apply These Terms to Your New Programs"), "The full bundled text must load")
+            capture(prefix + "-detail")
+            app.navigationBars.buttons[licensesTitle].firstMatch.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["settings.licenses.detail"].firstMatch.waitForExistence(timeout: 5))
+            app.navigationBars.buttons[settingsTitle].firstMatch.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 5))
             app.terminate()
         }
     }
@@ -156,7 +191,7 @@ final class MobileSettingsReviewUITests: XCTestCase {
 
     /// Navigation rows only. In-place controls such as pickers and actions stay on the root.
     private func destinationIdentifiers() -> [String] {
-        let inPlace: Set<String> = ["settings.replaySetup", "settings.interfaceLanguage", "settings.appearance"]
+        let inPlace: Set<String> = ["settings.replaySetup", "settings.interfaceLanguage", "settings.appearance", "settings.privacyPolicy"]
         let rows = app.collectionViews.firstMatch.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "settings."))
         var identifiers: [String] = []
         for _ in 0..<3 {

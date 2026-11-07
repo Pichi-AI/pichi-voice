@@ -139,16 +139,9 @@ struct DictionarySavedSamplesView: View {
         self.deleting = true
         self.error = nil
         defer { self.deleting = false }
-        let store = PronunciationDictionaryStore.shared
-        DictionaryAudioLearningService.shared.preserveDictionaryEntry(self.entry.id)
-        if let evidenceID = sample.capture.originalAudioID {
-            DictionaryAudioLearningService.shared.discardPendingEvidence(evidenceID)
-        }
         do {
-            try await store.removeSavedSample(sample.capture, dictionaryEntryID: self.entry.id, expectedProfileLabel: sample.profileLabel)
+            try await DictionaryAudioLearningService.shared.removeSavedSample(sample.capture, dictionaryEntryID: self.entry.id, expectedProfileLabel: sample.profileLabel)
             guard self.isCurrent else { return }
-            ASRService.invalidateDictionaryCache()
-            DictionaryEntriesChangeNotice.post()
             self.refresh &+= 1
         } catch {
             guard self.isCurrent else { return }

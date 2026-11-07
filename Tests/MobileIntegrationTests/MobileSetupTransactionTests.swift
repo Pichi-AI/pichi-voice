@@ -107,8 +107,8 @@ final class MobileSetupTransactionTests: XCTestCase {
         XCTAssertEqual(value.selectedSpeechModel, .parakeetTDT)
         XCTAssertTrue(value.meetingSpeakerLabelsEnabled)
         XCTAssertEqual(value.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
-        XCTAssertEqual(value.meetingSpeakerProcessingMode(for: .onlineCall), .streaming,
-                       "Retired implicit controls use the registered multi-track streaming capability")
+        // Parakeet now declares bounded multi-track streaming as well as microphone streaming.
+        XCTAssertEqual(value.meetingSpeakerProcessingMode(for: .onlineCall), .streaming)
     }
 
     func testRequiredSetupSharesOneJobAndCancellationDetachesOnlyItsWaiter() async throws {

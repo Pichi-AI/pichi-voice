@@ -67,7 +67,7 @@ The [development command reference](codex.md#reproducible-macos-regression) expl
 
 ## CI and review
 
-[Pichi CI](../../.github/workflows/pichi-ci.yml) runs one Linux job for PR updates, pushes to main and manual dispatch. Branch pushes without a PR do not duplicate this job. It checks portable configuration, localization, project membership, Python unit tests and 100% Python patch coverage. Keep routine hosted validation lightweight; native builds do not run on GitHub-hosted macOS runners.
+[Pichi CI](../../.github/workflows/pichi-ci.yml) runs one Linux job for PR updates, pushes to main and manual dispatch. Branch pushes without a PR do not duplicate this job. It checks portable configuration, localization, project membership, changed Swift-line lint, Python unit tests and 100% Python patch coverage. Keep routine hosted validation lightweight; native builds do not run on GitHub-hosted macOS runners.
 
 The automatic status is **Portable checks and Python coverage**. Its report declares `coverage_scope: python` and lists deferred native scopes. It never claims that Swift code or native UI has been tested. Unsupported executable languages still fail closed. A green portable check does not satisfy full native coverage or authorize merging without the required native evidence.
 
