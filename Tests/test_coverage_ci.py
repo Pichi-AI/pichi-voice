@@ -1,5 +1,6 @@
 """Coverage producer contracts use synthetic tool responses and owned temp roots."""
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import types
 import unittest
+import zipfile
 from unittest.mock import patch, Mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -353,6 +355,89 @@ class CoverageProducerTests(unittest.TestCase):
             self.assertEqual(run.call_count, 1)
             self.assertEqual(CI.read(path), record)
 
+    def local_evidence_fixture(self):
+        source = self.root / "checkout"
+        reports = source / ".build/coverage"
+        reports.mkdir(parents=True)
+        CI.save(reports / "python.json", {"fixture": 1})
+        return source, reports
+
+    def test_local_archive_preserves_evidence_without_recordings_or_build_products(self):
+        source, reports = self.local_evidence_fixture()
+        CI.save(reports / "manifest.json", {"source": "ordinary evidence file"})
+        shot = reports / "ios/run-fixture/screenshots-0/shot.png"
+        shot.parent.mkdir(parents=True)
+        shot.write_bytes(b"synthetic pixels")
+        (reports / "private-recording.wav").write_bytes(b"excluded fixture")
+        build = reports / "ios/run-fixture/DerivedData"
+        build.mkdir()
+        (build / "build.log").write_text("excluded build product")
+        output = self.out / "evidence"
+        with patch.object(CI, "git", return_value="head"), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(CI.archive_evidence(source, reports, output), 0)
+        with zipfile.ZipFile(output / "coverage-evidence.zip") as packed:
+            self.assertEqual(set(packed.namelist()), {"manifest.json", "files/manifest.json", "files/python.json", "files/ios/run-fixture/screenshots-0/shot.png"})
+            manifest = json.loads(packed.read("manifest.json"))
+            self.assertEqual(manifest["source_sha"], "head")
+            for name, digest in manifest["files"].items():
+                self.assertEqual(hashlib.sha256(packed.read("files/" + name)).hexdigest(), digest)
+        receipt = CI.read(output / "receipt.json")
+        self.assertEqual(receipt["files"], 3)
+        self.assertEqual(receipt["archive_sha256"], hashlib.sha256((output / "coverage-evidence.zip").read_bytes()).hexdigest())
+        self.assertTrue((reports / "private-recording.wav").exists())
+
+    def test_local_archive_refuses_missing_unsafe_or_disposable_destinations(self):
+        source, reports = self.local_evidence_fixture()
+        output = self.out / "evidence"
+        empty = source / "empty"
+        empty.mkdir()
+        for selected, destination in [(None, output), (self.out, output), (empty, output), (reports, source / "lost-evidence")]:
+            with self.assertRaises(ValueError):
+                CI.archive_evidence(source, selected, destination)
+        private = self.root / "outside.json"
+        private.write_text("synthetic private fixture")
+        alias = reports / "alias.json"
+        alias.symlink_to(private)
+        with self.assertRaisesRegex(ValueError, "Unsafe"):
+            CI.archive_evidence(source, reports, output)
+        alias.unlink()
+        (reports / "unsafe\\name.json").write_text("fixture")
+        with self.assertRaisesRegex(ValueError, "Unsafe"):
+            CI.archive_evidence(source, reports, output)
+        self.assertFalse(output.exists())
+        self.assertEqual(private.read_text(), "synthetic private fixture")
+
+    def test_local_archive_never_overwrites_preserved_evidence(self):
+        source, reports = self.local_evidence_fixture()
+        output = self.out / "evidence"
+        with patch.object(CI, "git", return_value="head"), contextlib.redirect_stdout(io.StringIO()):
+            CI.archive_evidence(source, reports, output)
+            previous = (output / "coverage-evidence.zip").read_bytes()
+            with self.assertRaises(FileExistsError):
+                CI.archive_evidence(source, reports, output)
+        self.assertEqual((output / "coverage-evidence.zip").read_bytes(), previous)
+
+    def test_local_archive_detects_content_and_inventory_changes(self):
+        source, reports = self.local_evidence_fixture()
+        original = zipfile.ZipFile.write
+        for mutation in ["content", "inventory"]:
+            CI.save(reports / "python.json", {"fixture": 1})
+            added = reports / "late.log"
+            added.unlink(missing_ok=True)
+            def changed(packed, filename, *args, **kwargs):
+                result = original(packed, filename, *args, **kwargs)
+                if mutation == "content":
+                    Path(filename).write_text("changed after copy")
+                else:
+                    added.write_text("late evidence")
+                return result
+            output = self.out / mutation
+            with patch.object(CI, "git", return_value="head"), patch.object(zipfile.ZipFile, "write", new=changed), self.assertRaisesRegex(ValueError, "changed during preservation"):
+                CI.archive_evidence(source, reports, output)
+            self.assertFalse((output / "coverage-evidence.zip").exists())
+            self.assertEqual(list(output.glob("*.partial.zip")), [])
+            self.assertTrue((reports / "python.json").exists())
+
     def test_app_coverage_uses_executable_path_and_cannot_accept_embedded_test_bundle(self):
         # Xcode's display name omits Debug even though the actual executable includes it.
         target = dict(name="Pichi Voice.app", buildProductPath="/build/Pichi Voice Debug.app/Contents/MacOS/Pichi Voice Debug", executableLines=10)
@@ -502,13 +587,15 @@ class CoverageProducerTests(unittest.TestCase):
         self.assertEqual(len(list((self.out / "python").glob("run-*"))), 2)
 
     def test_cli_dispatch_and_errors(self):
-        for mode, function in [("plan", "plan"), ("finish", "finish"), ("native", "native"), ("packages", "packages"), ("python", "python"), ("verify", "verify"), ("cleanup", "cleanup")]:
+        for mode, function in [("plan", "plan"), ("finish", "finish"), ("native", "native"), ("packages", "packages"), ("python", "python"), ("verify", "verify"), ("cleanup", "cleanup"), ("archive", "archive_evidence")]:
             with patch.object(CI, function, return_value=0) as target:
                 self.assertEqual(CI.main([mode, "--output", str(self.out)]), 0)
                 target.assert_called_once()
         with patch.object(CI, "native", side_effect=ValueError("bad report")), contextlib.redirect_stderr(io.StringIO()) as error:
             self.assertEqual(CI.main(["native", "--output", str(self.out)]), 1)
         self.assertIn("bad report", error.getvalue())
+        with patch.object(CI, "archive_evidence", side_effect=zipfile.BadZipFile("broken archive")), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(CI.main(["archive", "--output", str(self.out)]), 1)
 
 
 if __name__ == "__main__":

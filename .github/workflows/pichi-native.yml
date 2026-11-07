@@ -58,6 +58,7 @@ jobs:
           python3 -m venv .build/coverage-venv
           .build/coverage-venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir coverage==7.17.2
       - name: Execute selected native contracts and full coverage gate
+        id: verification
         timeout-minutes: 80
         working-directory: ${{ env.CI_ROOT }}
         env:
@@ -73,37 +74,25 @@ jobs:
           if [[ ! -d "$CI_ROOT" ]]; then exit 0; fi
           mkdir -p "$CI_ROOT/.build/coverage"
           python3 -B -S scripts/dev/coverage-ci.py cleanup --root "$CI_ROOT" --output "$CI_ROOT/.build/coverage" > "$CI_ROOT/.build/coverage/cleanup.log" 2>&1
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - name: Preserve verified evidence locally
         id: evidence
         if: always() && steps.workspace.outputs.owned == 'true'
-        with:
-          name: native-coverage-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ env.CI_ROOT }}/.build/coverage/*.json
-            ${{ env.CI_ROOT }}/.build/coverage/*.log
-            ${{ env.CI_ROOT }}/.build/coverage/macos/*/*.log
-            ${{ env.CI_ROOT }}/.build/coverage/macos/*/*.json
-            ${{ env.CI_ROOT }}/.build/coverage/ios/*/*.log
-            ${{ env.CI_ROOT }}/.build/coverage/ios/*/*.json
-            ${{ env.CI_ROOT }}/.build/coverage/ios/*/screenshots-*/*.png
-            ${{ env.CI_ROOT }}/.build/coverage/packages/*/*.log
-            ${{ env.CI_ROOT }}/.build/coverage/packages/*/*.lcov
-            ${{ env.CI_ROOT }}/.build/coverage/python/*/tests.log
-            ${{ env.CI_ROOT }}/.build/coverage/python/*/coverage.json
-          if-no-files-found: error
-          retention-days: 1
+        run: |
+          if [[ ! -d "$CI_ROOT" ]]; then exit 0; fi
+          python3 -B -S scripts/dev/coverage-ci.py archive --root "$CI_ROOT" --reports-dir "$CI_ROOT/.build/coverage" --output "$NATIVE_ROOT/evidence"
       - name: Release owned worktree after evidence preservation
         if: always() && steps.workspace.outputs.owned == 'true'
         env:
           EVIDENCE_SAVED: ${{ steps.evidence.outcome }}
           DEVICES_RELEASED: ${{ steps.devices.outcome }}
+          VERIFICATION_RESULT: ${{ steps.verification.outcome }}
         run: |
           if [[ ! -d "$CI_ROOT" ]]; then
             rm -rf -- "$NATIVE_ROOT"
             exit 0
           fi
-          if [[ "$EVIDENCE_SAVED" != success || "$DEVICES_RELEASED" != success ]]; then
-            echo "::error::Preserve $NATIVE_ROOT; evidence or simulator cleanup needs recovery."
+          if [[ "$EVIDENCE_SAVED" != success || "$DEVICES_RELEASED" != success || "$VERIFICATION_RESULT" != success ]]; then
+            echo "::error::Preserve $NATIVE_ROOT; verification, evidence or simulator cleanup needs recovery."
             exit 1
           fi
           rm -rf -- "$CI_ROOT/.build"
@@ -113,4 +102,4 @@ jobs:
           fi
           git --git-dir="$NATIVE_ROOT/repository.git" worktree remove "$CI_ROOT"
           rm -rf -- "$NATIVE_ROOT/repository.git"
-          rmdir "$NATIVE_ROOT"
+          echo "Verified local evidence retained: $NATIVE_ROOT/evidence/coverage-evidence.zip"

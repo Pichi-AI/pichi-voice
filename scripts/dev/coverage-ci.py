@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import importlib.util
 import json
 import os
@@ -15,6 +16,7 @@ import sys
 import unittest
 import uuid
 import xml.etree.ElementTree as ET
+import zipfile
 
 
 PACKAGES = ("NativeTextInference", "PichiGigaAM", "RussianMorphology", "TranscribeCpp")
@@ -484,9 +486,64 @@ def cleanup(root, output):
     return 0
 
 
+def evidence_paths(reports):
+    patterns = ("*.json", "*.log", "macos/run-*/*.json", "macos/run-*/*.log",
+                "ios/run-*/*.json", "ios/run-*/*.log", "ios/run-*/screenshots-*/*.png",
+                "packages/run-*/*.log", "packages/run-*/*.lcov",
+                "python/run-*/tests.log", "python/run-*/coverage.json")
+    paths = sorted({path for pattern in patterns for path in reports.glob(pattern) if path.is_file()})
+    for path in paths:
+        relative = path.relative_to(reports).as_posix()
+        if path.is_symlink() or not path.resolve().is_relative_to(reports) or any(c in relative for c in "\\\r\n\t\0"):
+            raise ValueError("Unsafe local evidence path")
+    return paths
+
+
+def file_digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def archive_evidence(root, reports, output):
+    if reports is None:
+        raise ValueError("Missing local evidence reports directory")
+    reports, output, root = reports.resolve(), output.resolve(), root.resolve()
+    reports.relative_to(root)
+    if output.is_relative_to(root):
+        raise ValueError("Preserved evidence must be outside the disposable worktree")
+    paths = evidence_paths(reports)
+    if not paths:
+        raise ValueError("No local coverage evidence to preserve")
+    manifest = {"schema_version": 1, "source_sha": git(root, "rev-parse", "HEAD"),
+                "files": {path.relative_to(reports).as_posix(): file_digest(path) for path in paths}}
+    output.mkdir(parents=True, exist_ok=False, mode=0o700)
+    temporary, archive = output / ".coverage-evidence.partial.zip", output / "coverage-evidence.zip"
+    try:
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as packed:
+            packed.writestr("manifest.json", json.dumps(manifest, sort_keys=True))
+            for path in paths:
+                packed.write(path, "files/" + path.relative_to(reports).as_posix())
+        with zipfile.ZipFile(temporary) as packed:
+            for relative, expected in manifest["files"].items():
+                with packed.open("files/" + relative) as stream:
+                    archived = hashlib.file_digest(stream, "sha256").hexdigest()
+                if archived != expected or file_digest(reports / relative) != expected:
+                    raise ValueError("Local evidence changed during preservation")
+        if evidence_paths(reports) != paths:
+            raise ValueError("Local evidence inventory changed during preservation")
+        temporary.replace(archive)
+        archive.chmod(0o600)
+        save(output / "receipt.json", {"source_sha": manifest["source_sha"], "files": len(paths),
+             "archive_sha256": file_digest(archive)})
+    finally:
+        temporary.unlink(missing_ok=True)
+    print("Verified local evidence: " + str(archive))
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("plan", "finish", "native", "packages", "python", "verify", "cleanup"))
+    parser.add_argument("mode", choices=("plan", "finish", "native", "packages", "python", "verify", "cleanup", "archive"))
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--all", action="store_true")
@@ -510,8 +567,10 @@ def main(argv=None):
             return verify(args.root, args.output, args.all)
         if args.mode == "cleanup":
             return cleanup(args.root, args.output)
+        if args.mode == "archive":
+            return archive_evidence(args.root, args.reports_dir, args.output)
         return python(args.root, args.output)
-    except (ValueError, RuntimeError, OSError, KeyError, StopIteration, ET.ParseError) as error:
+    except (ValueError, RuntimeError, OSError, KeyError, StopIteration, ET.ParseError, zipfile.BadZipFile) as error:
         print(f"Coverage producer failed: {error}", file=sys.stderr)
         return 1
 
