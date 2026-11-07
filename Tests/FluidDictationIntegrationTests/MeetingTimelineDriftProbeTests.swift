@@ -208,6 +208,44 @@ final class MeetingRecordingClockCoreTests: XCTestCase {
             presentationTime: CMTime(seconds: seconds, preferredTimescale: 1_000_000_000), sampleRate: rate)
     }
 
+    func testSourceClockCalibratesAdjacentAcquisitionAnchorsAndFiniteTailWithoutRetaggingNativeTime() throws {
+        let clock = try MeetingRecordingClock(timebase: .init(startedHostTime: 1_000_000_000_000,
+            machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil,
+            recordingTimePolicy: .hostMonotonicV1))
+        let context = clock.source(UUID())
+        let source = MeetingCaptureSourceClock(context: context)
+        let first = try sample(rate: 48_000, frames: 480, at: 0)
+        let second = try sample(rate: 48_000, frames: 480, at: 0.01)
+        XCTAssertTrue(try source.offer(first, producerGeneration: 1,
+            acquisitionStart: CMTime(seconds: 1_000.1, preferredTimescale: 1_000_000_000), sourceFrameStart: 0).isEmpty)
+        let output = try source.offer(second, producerGeneration: 1,
+            acquisitionStart: CMTime(seconds: 1_000.110003, preferredTimescale: 1_000_000_000), sourceFrameStart: 480)
+        let measured = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: XCTUnwrap(output.first)))
+        XCTAssertEqual(measured.mapping.spans.first?.hostStart.seconds ?? 0, 1_000.1, accuracy: 1e-9)
+        XCTAssertEqual(measured.mapping.spans.last?.hostEnd.seconds ?? 0, 1_000.110003, accuracy: 1e-9)
+        let tail = try XCTUnwrap(source.finish().first)
+        let tailMap = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: tail)).mapping
+        XCTAssertEqual(tailMap.spans.last?.hostEnd.seconds ?? 0, 1_000.120006, accuracy: 2e-9)
+        XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(first), .zero, "The source-owned packet remains unchanged")
+        XCTAssertNil(MeetingCaptureClockMetadata.read(from: first))
+        let copy = try context.timedCopy(tail, mapping: tailMap, producerEpoch: measured.producerEpoch)
+        XCTAssertEqual(MeetingCaptureClockMetadata.read(from: copy)?.mapping, tailMap)
+        let foreign = try MeetingRecordingClock(timebase: .init(startedHostTime: 0,
+            machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)).source(context.sourceID)
+        XCTAssertThrowsError(try foreign.timedCopy(tail, mapping: tailMap, producerEpoch: 1))
+    }
+
+    func testContinuousNativeFramesCannotClaimAnImplausibleHostInterval() throws {
+        let clock = try MeetingRecordingClock(timebase: .init(startedHostTime: 0,
+            machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        let source = MeetingCaptureSourceClock(context: clock.source(UUID()))
+        _ = try source.offer(sample(at: 0), producerGeneration: 1,
+            acquisitionStart: CMTime(seconds: 100, preferredTimescale: 1_000), sourceFrameStart: 0)
+        XCTAssertThrowsError(try source.offer(sample(at: 0.01), producerGeneration: 1,
+            acquisitionStart: CMTime(seconds: 105, preferredTimescale: 1_000), sourceFrameStart: 160),
+            "Ten milliseconds of PCM cannot authorize five seconds of speech or silence evidence")
+    }
+
     func testNinetyMinuteIndependentSourcesMapOneHostAxisWithoutFalseBoundariesOrUnboundedHistory() throws {
         for (delay, drift) in [(0.3, -5e-6), (2.1, 7e-6)] {
             let timeline = try MeetingPCMSourceTimeline(originSeconds: 1_000, maximumSpans: 128)
