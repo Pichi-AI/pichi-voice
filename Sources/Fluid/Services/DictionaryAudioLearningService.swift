@@ -22,6 +22,8 @@ final class DictionaryAudioLearningService {
         let profile: PrivateProfileSnapshot
         let createdEntry: Bool
         var wasAlreadyPresent = false
+        /// False is an explicitly word-only save, never a claim of persisted audio.
+        var audioWasSaved = true
 
         var isCurrent: Bool {
             PrivateProfileStorage.isReadable(self.profile) && PrivateProfileStorage.acceptsNewWork
@@ -38,6 +40,7 @@ final class DictionaryAudioLearningService {
         let publishTarget: (@MainActor () -> TargetPublication)?
         let didPublishTarget: (@MainActor () -> Void)?
         let didPersist: (@MainActor (SavedCorrection) -> Void)?
+        let didFail: (@MainActor () -> Void)?
         let explicitHistory: Bool
         let expiresAt: Date
         let pronunciationGeneration: String
@@ -70,6 +73,7 @@ final class DictionaryAudioLearningService {
     private var activeEvidenceID: UUID?
     private var recentCorrections: [String: (receipt: SavedCorrection, savedAt: Date)] = [:]
     private var createdEntries: [UUID: (entry: SettingsStore.CustomDictionaryEntry, savedAt: Date)] = [:]
+    private var wordOnlyCorrections: [UUID: (entry: SettingsStore.CustomDictionaryEntry, savedAt: Date)] = [:]
     private var undoTasks: [UUID: Task<Bool, Error>] = [:]
     private let profile = PrivateProfileStorage.current
     var pendingCount: Int { self.queue.count }
@@ -150,6 +154,39 @@ final class DictionaryAudioLearningService {
         }
     }
 
+    /// A completed editor correction still approves its word when trustworthy source
+    /// audio cannot be obtained. Do not invent a clip or a permanent text trigger.
+    func saveCorrectionWithoutAudio(candidate: AutomaticDictionaryCorrectionCandidate, evidenceID: UUID,
+                                    isValid: @MainActor () -> Bool) -> SavedCorrection? {
+        guard !self.retired, SettingsStore.shared.automaticDictionaryLearningEnabled, isValid(),
+              PrivateProfileStorage.isReadable(self.profile), PrivateProfileStorage.acceptsNewWork,
+              let entry = Self.correctionTarget(label: candidate.correctedText.trimmingCharacters(in: .whitespacesAndNewlines),
+                                               entries: SettingsStore.shared.customDictionaryEntries) else { return nil }
+        self.wordOnlyCorrections = self.wordOnlyCorrections.filter { Date().timeIntervalSince($0.value.savedAt) < 600 }
+        self.createdEntries = self.createdEntries.filter { Date().timeIntervalSince($0.value.savedAt) < 600 }
+        if let previous = self.wordOnlyCorrections[evidenceID] {
+            guard previous.entry == entry, SettingsStore.shared.customDictionaryEntries.contains(entry) else { return nil }
+            return SavedCorrection(id: evidenceID, entry: entry, heardText: candidate.heardText,
+                correctedText: candidate.correctedText, profile: self.profile,
+                createdEntry: self.createdEntries[entry.id]?.entry == entry, audioWasSaved: false)
+        }
+        guard self.wordOnlyCorrections.count < 128 else { return nil }
+        let created = !SettingsStore.shared.customDictionaryEntries.contains(entry)
+        if created {
+            guard self.createdEntries.count < 128 else { return nil }
+            SettingsStore.shared.customDictionaryEntries.append(entry)
+            self.createdEntries[entry.id] = (entry, Date())
+        }
+        self.wordOnlyCorrections[evidenceID] = (entry, Date())
+        if created {
+            ASRService.invalidateDictionaryCache()
+            DictionaryEntriesChangeNotice.post()
+        }
+        return SavedCorrection(id: evidenceID, entry: entry, heardText: candidate.heardText,
+            correctedText: candidate.correctedText, profile: self.profile,
+            createdEntry: self.createdEntries[entry.id]?.entry == entry, audioWasSaved: false)
+    }
+
     /// Revert only this event. Existing words, other examples and later edits survive.
     func undoSavedCorrection(_ receipt: SavedCorrection) async throws -> Bool {
         guard !receipt.wasAlreadyPresent else { return false }
@@ -169,18 +206,25 @@ final class DictionaryAudioLearningService {
         let matches = profiles.filter { $0.dictionaryEntryID == receipt.entry.id }.flatMap { profile in
             profile.enrollments.filter { $0.originalAudioID == receipt.id }.map { (profile, $0) }
         }
-        guard matches.count == 1, let (stored, capture) = matches.first else { return false }
-        try Task.checkCancellation()
-        guard receipt.isCurrent, !self.retired else { throw PronunciationDictionaryStoreError.staleEvidence }
-        try await self.store.removeSavedSample(capture, dictionaryEntryID: receipt.entry.id, expectedProfileLabel: stored.label)
+        if receipt.audioWasSaved {
+            guard matches.count == 1, let (stored, capture) = matches.first else { return false }
+            try Task.checkCancellation()
+            guard receipt.isCurrent, !self.retired else { throw PronunciationDictionaryStoreError.staleEvidence }
+            try await self.store.removeSavedSample(capture, dictionaryEntryID: receipt.entry.id, expectedProfileLabel: stored.label)
+        } else {
+            guard self.wordOnlyCorrections[receipt.id]?.entry == receipt.entry else { return false }
+            try Task.checkCancellation()
+        }
         let remaining = await self.store.allProfiles()
         guard receipt.isCurrent, PrivateProfileStorage.isReadable(self.profile), !self.retired else {
             throw PronunciationDictionaryStoreError.staleEvidence
         }
+        if !receipt.audioWasSaved { self.wordOnlyCorrections.removeValue(forKey: receipt.id) }
         if receipt.createdEntry,
            self.createdEntries[receipt.entry.id]?.entry == receipt.entry,
            !remaining.contains(where: { $0.dictionaryEntryID == receipt.entry.id }),
            !self.queue.contains(where: { $0.entry.id == receipt.entry.id }),
+           !self.wordOnlyCorrections.values.contains(where: { $0.entry.id == receipt.entry.id }),
            SettingsStore.shared.customDictionaryEntries.contains(receipt.entry) {
             SettingsStore.shared.customDictionaryEntries.removeAll { $0 == receipt.entry }
             self.createdEntries.removeValue(forKey: receipt.entry.id)
@@ -210,6 +254,7 @@ final class DictionaryAudioLearningService {
         removedOccurrences.removeAll()
         recentCorrections.removeAll()
         createdEntries.removeAll()
+        wordOnlyCorrections.removeAll()
         let work = task, expiry = expiryTask
         let undos = Array(self.undoTasks.values)
         work?.cancel(); expiry?.cancel()
@@ -239,6 +284,7 @@ final class DictionaryAudioLearningService {
         evidenceID: UUID = UUID(),
         isValid: @escaping @MainActor () -> Bool,
         didSave: (@MainActor (SavedCorrection) -> Void)? = nil,
+        didFail: (@MainActor () -> Void)? = nil,
         beforePreparation: (@MainActor () async -> Void)? = nil
     ) -> Bool {
         let label = candidate.correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -263,7 +309,7 @@ final class DictionaryAudioLearningService {
             }, didPublishTarget: {
                 ASRService.invalidateDictionaryCache()
                 DictionaryEntriesChangeNotice.post()
-            }, didPersist: didSave, prepare: {
+            }, didPersist: didSave, didFail: didFail, prepare: {
                 await beforePreparation?()
                 return eligible() ? evidence : nil
             })
@@ -297,6 +343,7 @@ final class DictionaryAudioLearningService {
         publishTarget: (@MainActor () -> TargetPublication)? = nil,
         didPublishTarget: (@MainActor () -> Void)? = nil,
         didPersist: (@MainActor (SavedCorrection) -> Void)? = nil,
+        didFail: (@MainActor () -> Void)? = nil,
         prepare: @escaping @MainActor () async throws -> DictionaryLearningAudioEvidence?
     ) -> Bool {
         guard !retired, PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
@@ -325,6 +372,7 @@ final class DictionaryAudioLearningService {
             publishTarget: publishTarget,
             didPublishTarget: didPublishTarget,
             didPersist: didPersist,
+            didFail: didFail,
             explicitHistory: explicitHistory,
             expiresAt: Date().addingTimeInterval(self.lifetime),
             pronunciationGeneration: DictionaryMatcherExperiment.generation,
@@ -344,8 +392,12 @@ final class DictionaryAudioLearningService {
             guard let self else { return }
             var retry = false
             var notifyPublication = false
+            var persisted = false
             defer {
-                if !retry { self.queue.removeAll { $0.evidenceID == request.evidenceID } }
+                if !retry {
+                    self.queue.removeAll { $0.evidenceID == request.evidenceID }
+                    if !persisted { self.reportFailure(request) }
+                }
                 self.pruneRemovedOccurrences()
                 self.task = nil
                 self.activeEvidenceID = nil
@@ -398,13 +450,16 @@ final class DictionaryAudioLearningService {
                     case .created: notifyPublication = true
                     }
                 }
+                persisted = true
                 if inserted {
                     self.createdEntries = self.createdEntries.filter { Date().timeIntervalSince($0.value.savedAt) < 600 }
                     if notifyPublication || self.createdEntries[request.entry.id]?.entry == request.entry {
                         self.createdEntries[request.entry.id] = (request.entry, Date())
                     }
                     if self.createdEntries.count > 128,
-                       let oldest = self.createdEntries.min(by: { $0.value.savedAt < $1.value.savedAt })?.key {
+                       let oldest = self.createdEntries.filter({ candidate in
+                           !self.wordOnlyCorrections.values.contains { $0.entry.id == candidate.key }
+                       }).min(by: { $0.value.savedAt < $1.value.savedAt })?.key {
                         self.createdEntries.removeValue(forKey: oldest)
                     }
                     let receipt = SavedCorrection(id: request.evidenceID, entry: request.entry,
@@ -448,9 +503,18 @@ final class DictionaryAudioLearningService {
         }
     }
 
+    private func reportFailure(_ request: Request) {
+        guard !self.retired, PrivateProfileStorage.isReadable(self.profile), PrivateProfileStorage.acceptsNewWork,
+              request.isValid(), request.isCurrentBeforePreparation(),
+              request.pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
+        request.didFail?()
+    }
+
     private func pruneExpired() {
-        if self.queue.contains(where: { $0.evidenceID == self.activeEvidenceID && $0.expiresAt <= Date() }) { self.task?.cancel() }
+        let expired = self.queue.filter { $0.expiresAt <= Date() }
+        if expired.contains(where: { $0.evidenceID == self.activeEvidenceID }) { self.task?.cancel() }
         self.queue.removeAll { $0.expiresAt <= Date() }
+        for request in expired where request.evidenceID != self.activeEvidenceID { self.reportFailure(request) }
         self.pruneRemovedOccurrences()
     }
 
