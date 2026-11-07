@@ -101,6 +101,7 @@ final class MobileRecordingDeletionTests: XCTestCase {
             var session = MeetingSession(configuration: configuration, timebase: .init(startedHostTime: 0,
                 machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
             session.state = .completed
+            session.profileOwnership = .guest
             session.endedAt = session.startedAt.addingTimeInterval(30)
             session.audioTracks = [.init(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
                 sourceDisplayName: "Synthetic", format: nil, timebase: session.timebase, health: .waiting, chunks: [])]
