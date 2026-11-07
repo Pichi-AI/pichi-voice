@@ -5956,3 +5956,31 @@ extension DictationE2ETests {
         await worker.prepareForPrivateProfileTransition()
     }
 }
+
+
+extension DictationE2ETests {
+    func testFreshWordOnlyEventKeepsUndoOwnershipAfterOriginalEventExpires() async throws {
+        let settings = SettingsStore.shared, previous = SettingsStore.shared.customDictionaryEntries
+        let enabled = settings.automaticDictionaryLearningEnabled
+        defer { settings.customDictionaryEntries = previous; settings.automaticDictionaryLearningEnabled = enabled }
+        settings.customDictionaryEntries = []; settings.automaticDictionaryLearningEnabled = true
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        var now = Date(timeIntervalSince1970: 1_000)
+        let worker = DictionaryAudioLearningService(store: store, ownershipNow: { now }, canProcess: { false })
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Ownrship", correctedText: "OwnershipRenewalE2E")
+        _ = try XCTUnwrap(worker.saveCorrectionWithoutAudio(candidate: candidate, evidenceID: UUID(), isValid: { true }))
+        now.addTimeInterval(599)
+        let fresh = try XCTUnwrap(worker.saveCorrectionWithoutAudio(candidate: candidate, evidenceID: UUID(), isValid: { true }))
+        XCTAssertTrue(fresh.createdEntry)
+        now.addTimeInterval(2)
+        let other = try XCTUnwrap(worker.saveCorrectionWithoutAudio(candidate: .init(heardText: "Othr", correctedText: "OtherOwnershipE2E"),
+            evidenceID: UUID(), isValid: { true }))
+        let undone = try await worker.undoSavedCorrection(fresh)
+        XCTAssertTrue(undone)
+        XCTAssertFalse(settings.customDictionaryEntries.contains(fresh.entry), "The currently visible event retains Undo ownership")
+        XCTAssertTrue(settings.customDictionaryEntries.contains(other.entry))
+        await worker.prepareForPrivateProfileTransition()
+    }
+}

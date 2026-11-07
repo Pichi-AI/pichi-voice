@@ -60,6 +60,7 @@ final class DictionaryAudioLearningService {
     private let store: PronunciationDictionaryStore
     private let extract: Extractor
     private let lifetime: TimeInterval
+    private let ownershipNow: @MainActor () -> Date
     private let canProcess: @MainActor () -> Bool
     private let canProcessHistory: @MainActor () -> Bool
     private let isCurrent: @MainActor (SettingsStore.CustomDictionaryEntry) -> Bool
@@ -81,6 +82,7 @@ final class DictionaryAudioLearningService {
     init(
         store: PronunciationDictionaryStore = .shared,
         lifetime: TimeInterval = 120,
+        ownershipNow: @escaping @MainActor () -> Date = { Date() },
         extract: @escaping Extractor = { evidence in
             try await AppServices.shared.asr.originalAudioEnrollment(evidence)
         },
@@ -96,6 +98,7 @@ final class DictionaryAudioLearningService {
     ) {
         self.store = store
         self.lifetime = min(120, max(0, lifetime))
+        self.ownershipNow = ownershipNow
         self.extract = extract
         self.canProcess = canProcess
         self.canProcessHistory = canProcessHistory
@@ -162,8 +165,9 @@ final class DictionaryAudioLearningService {
               PrivateProfileStorage.isReadable(self.profile), PrivateProfileStorage.acceptsNewWork,
               let entry = Self.correctionTarget(label: candidate.correctedText.trimmingCharacters(in: .whitespacesAndNewlines),
                                                entries: SettingsStore.shared.customDictionaryEntries) else { return nil }
-        self.wordOnlyCorrections = self.wordOnlyCorrections.filter { Date().timeIntervalSince($0.value.savedAt) < 600 }
-        self.createdEntries = self.createdEntries.filter { Date().timeIntervalSince($0.value.savedAt) < 600 }
+        let ownershipDate = self.ownershipNow()
+        self.wordOnlyCorrections = self.wordOnlyCorrections.filter { ownershipDate.timeIntervalSince($0.value.savedAt) < 600 }
+        self.createdEntries = self.createdEntries.filter { ownershipDate.timeIntervalSince($0.value.savedAt) < 600 }
         if let previous = self.wordOnlyCorrections[evidenceID] {
             guard previous.entry == entry, SettingsStore.shared.customDictionaryEntries.contains(entry) else { return nil }
             return SavedCorrection(id: evidenceID, entry: entry, heardText: candidate.heardText,
@@ -175,9 +179,12 @@ final class DictionaryAudioLearningService {
         if created {
             guard self.createdEntries.count < 128 else { return nil }
             SettingsStore.shared.customDictionaryEntries.append(entry)
-            self.createdEntries[entry.id] = (entry, Date())
         }
-        self.wordOnlyCorrections[evidenceID] = (entry, Date())
+        if created || self.createdEntries[entry.id]?.entry == entry {
+            // A fresh event renews the ownership needed by its own Undo notice.
+            self.createdEntries[entry.id] = (entry, ownershipDate)
+        }
+        self.wordOnlyCorrections[evidenceID] = (entry, ownershipDate)
         if created {
             ASRService.invalidateDictionaryCache()
             DictionaryEntriesChangeNotice.post()
@@ -452,9 +459,10 @@ final class DictionaryAudioLearningService {
                 }
                 persisted = true
                 if inserted {
-                    self.createdEntries = self.createdEntries.filter { Date().timeIntervalSince($0.value.savedAt) < 600 }
+                    let ownershipDate = self.ownershipNow()
+                    self.createdEntries = self.createdEntries.filter { ownershipDate.timeIntervalSince($0.value.savedAt) < 600 }
                     if notifyPublication || self.createdEntries[request.entry.id]?.entry == request.entry {
-                        self.createdEntries[request.entry.id] = (request.entry, Date())
+                        self.createdEntries[request.entry.id] = (request.entry, ownershipDate)
                     }
                     if self.createdEntries.count > 128,
                        let oldest = self.createdEntries.filter({ candidate in
