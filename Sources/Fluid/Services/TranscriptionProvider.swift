@@ -157,9 +157,7 @@ nonisolated struct ASRWordTimingProvenance: Codable, Equatable, Sendable {
 
     var hasValidSourceContext: Bool {
         guard let sourceWindowID, let sourceWordIndex,
-              !sourceWindowID.isEmpty, sourceWindowID.utf8.count <= 512,
-              !sourceWindowID.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
-              !sourceWindowID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              Self.validWindowID(sourceWindowID),
               (0..<8_192).contains(sourceWordIndex) else { return false }
         return true
     }
@@ -168,11 +166,19 @@ nonisolated struct ASRWordTimingProvenance: Codable, Equatable, Sendable {
         (self.sourceWindowID == nil && self.sourceWordIndex == nil) || self.hasValidSourceContext
     }
 
-    /// Only the owner of this exact inference call can establish its word positions.
-    /// Invalid incoming metadata cannot be repaired into apparently trustworthy context.
-    func scoped(to sourceWindowID: String, wordIndex: Int) -> Self? {
-        guard self.isValid else { return nil }
-        let scoped = Self(basis: self.basis, sourceWindowID: sourceWindowID, sourceWordIndex: wordIndex)
+    private static func validWindowID(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 512
+            && !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+            && !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Namespace the provider's original inference context, never enumerate its filtered output.
+    /// Basis-only metadata stays unscoped; missing native positions cannot be reconstructed here.
+    func scoped(to namespace: String) -> Self? {
+        guard self.isValid, Self.validWindowID(namespace) else { return nil }
+        guard let sourceWindowID, let sourceWordIndex else { return self }
+        let scoped = Self(basis: self.basis, sourceWindowID: "\(namespace)/\(sourceWindowID)",
+                          sourceWordIndex: sourceWordIndex)
         return scoped.hasValidSourceContext ? scoped : nil
     }
 }

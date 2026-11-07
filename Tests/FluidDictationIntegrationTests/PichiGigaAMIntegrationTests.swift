@@ -8,16 +8,24 @@ import AppKit
 
 extension PichiGigaAMIntegrationTests {
     func testNativeCTCWordMappingKeepsEmissionSemanticsWithoutInventingSpeechDuration() throws {
-        let native = [GigaAMWordTiming(text: "A", start: 0.08, end: 0.12, confidence: 0.7),
-                      GigaAMWordTiming(text: "reply", start: 1.44, end: 1.80, confidence: 0.8)]
+        let range = 304_000..<352_000
+        let native = [GigaAMWordTiming(text: "A", start: 20.08, end: 20.12, confidence: 0.7,
+                          sourceContext: .init(sampleRange: range, wordIndex: 1)),
+                      GigaAMWordTiming(text: "reply", start: 20.44, end: 20.80, confidence: 0.8,
+                          sourceContext: .init(sampleRange: range, wordIndex: 2))]
         let words = PichiGigaAMProvider.wordTimings(native)
         XCTAssertEqual(words.map(\.text), native.map(\.text))
         XCTAssertEqual(words.map(\.start), native.map(\.start))
         XCTAssertEqual(words.map(\.end), native.map(\.end))
         XCTAssertTrue(words.allSatisfy { $0.timingProvenance?.basis == .tokenEmission })
-        XCTAssertTrue(words.allSatisfy { $0.timingProvenance?.sourceWindowID == nil
-            && $0.timingProvenance?.sourceWordIndex == nil },
-            "Only the recognition-call owner can identify the source window")
+        XCTAssertEqual(words.map { $0.timingProvenance?.sourceWindowID }, ["ctc:304000:352000", "ctc:304000:352000"])
+        XCTAssertEqual(words.map { $0.timingProvenance?.sourceWordIndex }, [1, 2],
+            "The first returned word is not necessarily the first word emitted in its native window")
+        let missing = PichiGigaAMProvider.wordTimings([.init(text: "legacy", start: 0.04, end: 0.08, confidence: 0)])
+        XCTAssertEqual(missing.first?.timingProvenance, .init(basis: .tokenEmission))
+        let malformed = PichiGigaAMProvider.wordTimings([.init(text: "bad-context", start: 0.04, end: 0.08,
+            confidence: 0, sourceContext: .init(sampleRange: -1..<1, wordIndex: 0))])
+        XCTAssertNil(malformed.first?.timingProvenance)
         let legacy = try JSONDecoder().decode(ASRWordTiming.self,
             from: Data(#"{"text":"legacy","start":0.08,"end":0.12}"#.utf8))
         XCTAssertNil(legacy.timingProvenance)

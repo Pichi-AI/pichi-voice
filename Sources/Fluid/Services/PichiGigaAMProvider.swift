@@ -813,8 +813,17 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     /// The native decoder reports lexical CTC emission envelopes, not forced alignment.
     /// Keep their exact values while making the distinction available to every consumer.
     nonisolated static func wordTimings(_ words: [GigaAMWordTiming]) -> [ASRWordTiming] {
-        words.map { ASRWordTiming(text: $0.text, start: $0.start, end: $0.end,
-            timingProvenance: .init(basis: .tokenEmission)) }
+        words.map { word in
+            let provenance: ASRWordTimingProvenance?
+            if let source = word.sourceContext {
+                provenance = source.isValid ? .init(basis: .tokenEmission,
+                    sourceWindowID: "ctc:\(source.sampleRange.lowerBound):\(source.sampleRange.upperBound)",
+                    sourceWordIndex: source.wordIndex) : nil
+            } else {
+                provenance = .init(basis: .tokenEmission)
+            }
+            return ASRWordTiming(text: word.text, start: word.start, end: word.end, timingProvenance: provenance)
+        }
     }
 
     func modelsExistOnDisk() -> Bool {
