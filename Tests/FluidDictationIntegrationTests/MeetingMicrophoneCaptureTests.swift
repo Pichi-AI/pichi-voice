@@ -996,6 +996,23 @@ extension MeetingMicrophoneCaptureTests {
         XCTAssertEqual(fixture.sink.frames, count, "A retired tap cannot publish delayed raw PCM")
     }
 
+    func testNativeMasterTapExplicitRouteResetStartsNewEpochWithoutDiscardingOwnedPCM() async throws {
+        let fixture = try self.masterTapFixture()
+        let raw = try self.masterRawPCM(rate: 48_000, frames: 4_800, channels: 1)
+        for index in 0..<4 {
+            if index == 2 { fixture.tap.requestTimelineReset() }
+            fixture.tap.handle(buffer: raw, time: AVAudioTime(hostTime: Self.privacyHostTime(1_000 + Double(index) * 0.1),
+                sampleTime: Int64(index) * 4_800, atRate: 48_000))
+            await fixture.tap.drainClockHandoff()
+        }
+        await fixture.tap.finishClockInput()
+        XCTAssertEqual(fixture.sink.frames, 19_200)
+        XCTAssertEqual(fixture.sink.discontinuities, 2)
+        XCTAssertEqual(fixture.sink.producerEpochs.count, 2)
+        XCTAssertEqual(fixture.stats.snapshot().conversionFailures, 0)
+        await fixture.tap.stopPrivacyDelivery()
+    }
+
     func testNativeMasterTapRejectsUnprovenClockOnceAndJoinsWithoutPublishingLaterPCM() async throws {
         let failure = MasterClockFailureCounter()
         let fixture = try self.masterTapFixture(onFailure: failure.record)
@@ -1070,11 +1087,13 @@ extension MeetingMicrophoneCaptureTests {
         private(set) var discontinuities = 0
         private(set) var observedGap = false
         private(set) var consistentContext = true
+        private(set) var producerEpochs: Set<UInt64> = []
         private(set) var samplesValid = true
         init(context: MeetingRecordingClockContext) { self.context = context }
         func receive(_ sample: CMSampleBuffer) {
             guard let packet = MeetingCaptureClockMetadata.read(from: sample) else { self.consistentContext = false; return }
             self.consistentContext = self.consistentContext && self.context.accepts(packet)
+            self.producerEpochs.insert(packet.producerEpoch)
             if let first = packet.mapping.spans.first {
                 if self.firstHost.isNaN { self.firstHost = first.hostStart.seconds }
                 if first.discontinuityBefore {

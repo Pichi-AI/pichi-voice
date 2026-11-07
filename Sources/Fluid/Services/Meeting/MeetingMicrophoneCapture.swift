@@ -888,12 +888,15 @@ final nonisolated class MeetingMicrophoneTapState: @unchecked Sendable {
         }
         let acquiredAt = CMClockMakeHostTimeFromSystemUnits(time.hostTime)
         let sourceFrame = time.sampleTime
-        let boxed = MasterRawSample(sample: sample, acquiredAt: acquiredAt, sourceFrame: sourceFrame)
+        // Freeze a route/reset boundary at acquisition admission. A delayed queue must not
+        // retroactively apply a newer notification to an earlier already-owned raw packet.
+        let resetTimeline = self.pendingTimelineReset.withLock { value -> Bool in defer { value = false }; return value }
+        let boxed = MasterRawSample(sample: sample, acquiredAt: acquiredAt, sourceFrame: sourceFrame, resetTimeline: resetTimeline)
         self.privacyQueue.async { [self, boxed] in
             defer { self.privacySlots.signal(); self.privacyHandoffGroup.leave() }
             guard self.privacyStateLock.withLock({ !self.privacyDeliveryStopped && !self.masterClockFailed }), let sourceClock else { return }
             do {
-                if self.pendingTimelineReset.withLock({ value -> Bool in defer { value = false }; return value }) {
+                if boxed.resetTimeline {
                     for pending in try sourceClock.finish() { try self.consumeMasterClockPacket(pending) }
                     try self.flushMasterConverter()
                     self.masterGeneration &+= 1
@@ -921,8 +924,10 @@ final nonisolated class MeetingMicrophoneTapState: @unchecked Sendable {
         let sample: CMSampleBuffer
         let acquiredAt: CMTime
         let sourceFrame: Int64
-        init(sample: CMSampleBuffer, acquiredAt: CMTime, sourceFrame: Int64) {
+        let resetTimeline: Bool
+        init(sample: CMSampleBuffer, acquiredAt: CMTime, sourceFrame: Int64, resetTimeline: Bool) {
             self.sample = sample; self.acquiredAt = acquiredAt; self.sourceFrame = sourceFrame
+            self.resetTimeline = resetTimeline
         }
     }
 
