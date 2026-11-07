@@ -1155,15 +1155,22 @@ final class MobileNavigationUITests: XCTestCase {
                 if paragraph.exists { continue }
                 let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
                 let to = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
-                from.press(forDuration: 0.05, thenDragTo: to)
+                from.press(forDuration: 0.1, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.2)
                 capture("\(step)-reveal-\(attempt)")
                 continue
             }
             if paragraph.isHittable && paragraph.frame.minY >= top && paragraph.frame.maxY <= bottom { return }
-            let upwards = paragraph.frame.maxY > bottom
-            let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upwards ? 0.65 : 0.35))
-            let to = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upwards ? 0.35 : 0.65))
-            from.press(forDuration: 0.05, thenDragTo: to)
+            // Fixed fast swipes oscillate past a one-line paragraph in a short landscape
+            // viewport. Move toward its measured center without fling, retaining the same
+            // full-visibility assertion and bounded number of attempts.
+            let center = (top + bottom) / 2
+            let maximumStep = max(1, (bottom - top) * 0.25)
+            let delta = max(-maximumStep, min(maximumStep, paragraph.frame.midY - center))
+            let height = max(1, scroll.frame.height)
+            let origin = (center - scroll.frame.minY) / height
+            let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: origin))
+            let to = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: origin - delta / height))
+            from.press(forDuration: 0.1, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.2)
             capture("\(step)-scroll-\(attempt)")
         }
         recordSavedParagraphAccessibility(step: step, container: container)
@@ -1196,7 +1203,8 @@ final class MobileNavigationUITests: XCTestCase {
 
     /// Prefixes only locate the body within its stable paragraph container. Passing still
     /// requires the complete label, preserving every non-whitespace character and word.
-    private func assertSavedParagraphs(_ expected: [String], identifiers: [String]?, step: String) throws {
+    private func assertSavedParagraphs(_ expected: [String], identifiers: [String]?, step: String,
+                                      speakerLabels: [String]? = nil) throws {
         let checked = try XCTUnwrap(expected.count >= 3 ? Array(expected.prefix(3)) : nil,
                                    "The saved-session review checks three complete original paragraphs")
         for (index, text) in checked.enumerated() {
@@ -1218,6 +1226,12 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertTrue(body.exists, "The expected body must exist inside the original saved paragraph")
             XCTAssertEqual(normalizedParagraphText(body.label), normalizedParagraphText(text),
                            "The complete saved paragraph must match the protected replay; a matching prefix is insufficient")
+            if let speakerLabels {
+                let id = try XCTUnwrap(identifiers?[index])
+                let caption = app.buttons["transcript.reassign.\(id)"]
+                XCTAssertTrue(caption.exists, "Each reviewed paragraph must retain its participant action")
+                XCTAssertEqual(caption.label, speakerLabels[index], "The visible participant must match the reviewed source mapping")
+            }
             capture("\(step)-\(index)-visible")
         }
     }
@@ -1939,7 +1953,14 @@ final class MobileNavigationUITests: XCTestCase {
         capture("private-saved-transcript")
         let scroll = app.scrollViews.matching(identifier: "meeting.transcript").firstMatch
         XCTAssertTrue(scroll.waitForExistence(timeout: 5))
-        try assertSavedParagraphs(expected, identifiers: identifiers, step: "private-saved")
+        var speakerLabels: [String]?
+        if let encoded = environment["PICHI_PRIVATE_SAVED_EXPECTED_SPEAKER_LABELS"] {
+            let labels = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String])
+            speakerLabels = try XCTUnwrap(labels.count == expected.count ? labels : nil,
+                "Every expected paragraph needs one participant caption")
+            _ = try XCTUnwrap(identifiers, "Speaker review requires stable paragraph identifiers")
+        }
+        try assertSavedParagraphs(expected, identifiers: identifiers, step: "private-saved", speakerLabels: speakerLabels)
         #endif
     }
 
