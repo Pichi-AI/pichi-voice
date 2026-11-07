@@ -315,15 +315,6 @@ final class DictionaryCorrectionOverlayController {
         self.resizeAndPositionPanel(animated: true)
     }
 
-    /// The compact unsaved row uses the same existing dictionary operation as
-    /// the former choice card; it cannot re-save a receipt or a negative match.
-    func add(id: UUID) {
-        guard let session = self.state.sessions.first(where: { $0.candidate.id == id }),
-              session.screen == .choice, session.capturePhase == .idle,
-              session.candidate.negativeCorrection == nil else { return }
-        session.addOnlyCorrection()
-    }
-
     /// Acknowledging a saved row only removes its notice. It never saves again
     /// or revokes the receipt, and leaves the shared deadline unchanged.
     func confirm(id: UUID) {
@@ -382,7 +373,6 @@ final class DictionaryCorrectionOverlayController {
             onDismissAll: { [weak self] in self?.dismiss() },
             onDismissRow: { [weak self] in self?.dismiss(id: $0) },
             onConfirmRow: { [weak self] in self?.confirm(id: $0) },
-            onAddRow: { [weak self] in self?.add(id: $0) },
             onDragBegan: { [weak self] in self?.isDragging = true },
             onDragEnded: { [weak self] frame in
                 guard let self else { return }
@@ -898,7 +888,6 @@ private struct DictionaryCorrectionOverlayGroupView: View {
     let onDismissAll: () -> Void
     let onDismissRow: (UUID) -> Void
     let onConfirmRow: (UUID) -> Void
-    let onAddRow: (UUID) -> Void
     let onDragBegan: () -> Void
     let onDragEnded: (CGRect) -> Void
     let onIgnore: (UUID) -> Void
@@ -945,7 +934,6 @@ private struct DictionaryCorrectionOverlayGroupView: View {
                         AutomaticDictionaryCorrectionOverlayView(session: session, displayDuration: 10,
                             onDismiss: { self.onDismissRow(session.candidate.id) },
                             onConfirm: { self.onConfirmRow(session.candidate.id) },
-                            onAdd: { self.onAddRow(session.candidate.id) },
                             onIgnore: { self.onIgnore(session.candidate.id) },
                             onFrequencyChange: self.onFrequencyChange, onDisableSuggestions: self.onDisableSuggestions,
                             grouped: true)
@@ -1026,7 +1014,6 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
     let displayDuration: TimeInterval
     let onDismiss: () -> Void
     let onConfirm: () -> Void
-    let onAdd: () -> Void
     let onIgnore: () -> Void
     let onFrequencyChange: (SettingsStore.AutomaticDictionarySuggestionFrequency) -> Void
     let onDisableSuggestions: () -> Void
@@ -1088,40 +1075,22 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                     .font(self.theme.typography.captionSmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-            HStack(spacing: 8) {
-                Text(PichiLocalization.text(self.session.candidate.negativeCorrection == nil
-                     ? "Needs adding to dictionary" : "Check this match", locale: self.interfaceLocale))
-                    .font(self.theme.typography.captionSmall)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                Button("Not now", action: self.onDismiss)
-                    .buttonStyle(FluidOutlinedButtonStyle(height: 28))
-                    .fixedSize()
-                if self.session.candidate.negativeCorrection != nil {
-                    Button("That Was a Wrong Match", action: self.session.confirmWrongMatch)
-                        .font(self.theme.typography.captionStrong)
-                        .fluidButton(.accent, size: .small)
-                        .disabled(!self.pronunciationEnabled || self.session.capturePhase != .idle)
-                } else {
-                    Button(action: self.onAdd) {
-                        Label("Add", systemImage: "plus")
-                            .font(self.theme.typography.captionStrong)
-                    }
+                Button("That Was a Wrong Match", action: self.session.confirmWrongMatch)
+                    .font(self.theme.typography.captionStrong)
                     .fluidButton(.accent, size: .small)
-                    .fixedSize()
-                    .accessibilityIdentifier("DictionaryCorrection.Add")
-                    .help("Save this text correction to your dictionary.")
-                    .disabled(self.session.capturePhase != .idle)
-                    self.moreOptionsMenu
-                }
-            }
-            if self.session.hasError {
-                Text(PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale))
+                    .disabled(!self.pronunciationEnabled || self.session.capturePhase != .idle)
+            } else {
+                Text("Couldn't save this correction automatically.")
                     .font(self.theme.typography.captionSmall)
                     .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                Button("Undo save", action: self.onDismiss)
+                    .buttonStyle(FluidOutlinedButtonStyle(height: 28))
+                Button("Done", action: self.onDismiss)
+                    .buttonStyle(FluidOutlinedButtonStyle(height: 28, foreground: self.theme.palette.accentText))
             }
         }
         .transition(.opacity)
@@ -1322,20 +1291,23 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 Label {
                     Text(PichiLocalization.text(self.savedStatus, locale: self.interfaceLocale))
                 } icon: {
-                    Image(systemName: self.session.didUndoSavedCorrection ? "arrow.uturn.backward" : "waveform")
+                    Image(systemName: self.session.didUndoSavedCorrection ? "arrow.uturn.backward" :
+                        self.session.savedCorrection?.audioWasSaved == false ? "text.book.closed" : "waveform")
                 }
                 .font(self.theme.typography.captionSmall)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
-                if !self.session.didUndoSavedCorrection && self.session.savedCorrection?.wasAlreadyPresent != true {
+                if !self.session.didUndoSavedCorrection {
                     Button(action: self.session.undoSavedCorrection) {
                         Text(PichiLocalization.text(self.session.isUndoingSavedCorrection ? "Undoing..." : "Undo dictionary save", locale: self.interfaceLocale))
                     }
                     .buttonStyle(FluidOutlinedButtonStyle(height: 28))
                     .fixedSize()
                     .disabled(self.session.isUndoingSavedCorrection)
-                    .help("Undo removes this dictionary save. Your text stays as edited.")
+                    .help(PichiLocalization.text(self.session.savedCorrection?.wasAlreadyPresent == true
+                        ? "No new sample was added. Undo only dismisses this confirmation."
+                        : "Undo removes this dictionary save. Your text stays as edited.", locale: self.interfaceLocale))
                 }
                 Button("Done", action: self.onConfirm)
                     .buttonStyle(FluidOutlinedButtonStyle(height: 28, foreground: self.theme.palette.accentText))
@@ -1363,6 +1335,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
     private var savedStatus: String {
         if self.session.didUndoSavedCorrection { return self.session.successTitle }
+        if self.session.savedCorrection?.audioWasSaved == false { return "Word saved. Audio clip not saved." }
         if self.session.savedCorrection?.wasAlreadyPresent == true { return "Word and audio already saved" }
         return "Word and audio saved"
     }
