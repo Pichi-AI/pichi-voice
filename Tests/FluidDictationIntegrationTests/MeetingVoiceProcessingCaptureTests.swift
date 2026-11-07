@@ -1350,7 +1350,9 @@ final class MeetingNativeCaptureClockTests: XCTestCase {
             XCTAssertEqual(span.hostStart.seconds, 100, accuracy: 0.000_001)
             XCTAssertEqual(span.hostEnd.seconds, 100 + 0.1 / rate, accuracy: 0.000_001)
             XCTAssertEqual(CMSampleBufferGetNumSamples(output), 4_800)
-            XCTAssertEqual(CMSampleBufferGetDuration(output).seconds, 0.1 / rate, accuracy: 2.0 / 48_000)
+            // The per-frame CMTime duration is quantized; the exact physical endpoints
+            // above are carried by the mapping used by privacy, storage and ASR.
+            XCTAssertEqual(CMSampleBufferGetDuration(output).seconds, 0.1 / rate, accuracy: 1.0 / 48_000)
             XCTAssertEqual(try source.finish().count, 1)
             XCTAssertTrue(try source.finish().isEmpty)
         }

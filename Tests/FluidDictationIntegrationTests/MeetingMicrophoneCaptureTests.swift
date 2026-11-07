@@ -983,10 +983,8 @@ extension MeetingMicrophoneCaptureTests {
                               (120_000, 1_002.5), (124_800, 1_002.6)] {
             fixture.tap.handle(buffer: raw, time: AVAudioTime(hostTime: Self.privacyHostTime(host), sampleTime: Int64(frame), atRate: 48_000))
             await fixture.tap.drainClockHandoff()
-            print("GAP-CLOCK", frame, fixture.sink.frames, fixture.stats.snapshot().conversionFailures)
         }
         await fixture.tap.finishClockInput()
-        print("GAP-FINISH", fixture.sink.frames, fixture.stats.snapshot().conversionFailures)
         XCTAssertEqual(fixture.sink.frames, 24_000)
         XCTAssertEqual(fixture.sink.discontinuities, 2)
         XCTAssertTrue(fixture.sink.observedGap)
