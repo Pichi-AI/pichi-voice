@@ -666,6 +666,7 @@ struct MobileMeetingRoot: View {
                         Button(PichiLocalization.text("Delete"), role: .destructive) {
                             run(session: session) { try await deleteMeeting(session) }
                         }
+                        .buttonStyle(.automatic)
                         .tint(.red)
                         .disabled(isBusy || !coordinator.isQuiescent || !canPresent(session))
                         .accessibilityIdentifier("history.delete.\(session.id)")
