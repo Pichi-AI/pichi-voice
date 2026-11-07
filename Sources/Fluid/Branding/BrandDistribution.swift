@@ -12,6 +12,7 @@ nonisolated struct BrandDistribution: Codable, Equatable, Sendable {
     var updatesEnabled: Bool = false
     var expectedSigningTeam: String?
     var feedbackEndpoint: String?
+    var privacyPolicyURL: String?
     var account: AccountConfiguration?
     var legacyAccount: LegacyAccountConfiguration?
 
@@ -46,6 +47,7 @@ nonisolated struct BrandDistribution: Codable, Equatable, Sendable {
         try self.account?.validate()
         try self.legacyAccount?.validate()
         if let feedbackEndpoint { try BrandProfile.validateHTTPS(feedbackEndpoint) }
+        if let privacyPolicyURL { try BrandProfile.validateHTTPS(privacyPolicyURL) }
         if let expectedSigningTeam {
             guard expectedSigningTeam.range(of: "^[A-Z0-9]{10}$", options: .regularExpression) != nil else {
                 throw BrandProfile.ValidationError.invalid("Signing team must contain 10 uppercase letters or digits.")

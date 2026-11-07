@@ -1,0 +1,12 @@
+Shared application components from FluidVoice
+
+Source: https://github.com/altic-dev/FluidVoice
+License: GNU General Public License, version 3
+
+This application includes adapted meeting-processing, session-storage and other
+shared application components from FluidVoice. Original copyright notices and
+contributor attribution are preserved in the corresponding source.
+The full GPL-3.0 license is included in FluidVoice-LICENSE.txt.
+
+This notice identifies the included code. It does not assert endorsement by
+FluidVoice or grant rights beyond the applicable license.
