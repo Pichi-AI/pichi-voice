@@ -878,8 +878,14 @@ final nonisolated class MeetingMicrophoneTapState: @unchecked Sendable {
             self.failMasterClock(); return
         }
         mono.frameLength = buffer.frameLength
-        samples.withUnsafeBufferPointer { source in
-            mono.floatChannelData?[0].update(from: source.baseAddress!, count: samples.count)
+        let copied = samples.withUnsafeBufferPointer { source -> Bool in
+            guard let input = source.baseAddress, let output = mono.floatChannelData?[0] else { return false }
+            output.update(from: input, count: samples.count)
+            return true
+        }
+        guard copied else {
+            self.privacySlots.signal(); self.privacyHandoffGroup.leave()
+            self.failMasterClock(); return
         }
         let nativePTS = CMTime(value: time.sampleTime, timescale: CMTimeScale(buffer.format.sampleRate.rounded()))
         guard let sample = meetingMicrophoneSynthesizeSampleBuffer(from: mono, presentationTime: nativePTS) else {
@@ -967,8 +973,11 @@ final nonisolated class MeetingMicrophoneTapState: @unchecked Sendable {
               let pcm = AVAudioPCMBuffer(pcmFormat: self.canonicalFormat, frameCapacity: AVAudioFrameCount(frames)),
               let start = mapping.hostTime(atFrame: 0) else { throw MeetingCapturePCMError.invalidBuffer }
         pcm.frameLength = AVAudioFrameCount(frames)
-        self.masterSamples.withUnsafeBufferPointer { values in
-            pcm.floatChannelData?[0].update(from: values.baseAddress!, count: frames)
+        try self.masterSamples.withUnsafeBufferPointer { values in
+            guard let input = values.baseAddress, let output = pcm.floatChannelData?[0] else {
+                throw MeetingCapturePCMError.invalidBuffer
+            }
+            output.update(from: input, count: frames)
         }
         guard let raw = meetingMicrophoneSynthesizeSampleBuffer(from: pcm,
             presentationTime: CMTime(value: start.value, timescale: start.timescale)) else { throw MeetingCapturePCMError.invalidBuffer }
