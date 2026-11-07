@@ -55,7 +55,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     /// Join an unsupported opening emission to the next independently supported word from
     /// that same recognition invocation before publishing a participant turn.
     let enableTokenEmissionContext: Bool
-    let maximumEmissionOnsetGapSeconds: Double
+    let maximumEmissionContextSeconds: Double
 
     init(
         schemaVersion: Int = Self.currentVersion,
@@ -85,7 +85,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         enableCompleteReadingAssignment: Bool = false,
         enableIncomingGapReading: Bool = false,
         enableTokenEmissionContext: Bool = false,
-        maximumEmissionOnsetGapSeconds: Double = 2
+        maximumEmissionContextSeconds: Double = 2
     ) {
         self.schemaVersion = schemaVersion
         self.comparisonTolerance = comparisonTolerance
@@ -114,7 +114,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         self.enableCompleteReadingAssignment = enableCompleteReadingAssignment
         self.enableIncomingGapReading = enableIncomingGapReading
         self.enableTokenEmissionContext = enableTokenEmissionContext
-        self.maximumEmissionOnsetGapSeconds = maximumEmissionOnsetGapSeconds
+        self.maximumEmissionContextSeconds = maximumEmissionContextSeconds
     }
 
     /// Exact, length-framed values avoid locale, delimiter and rounding collisions. Zero has one
@@ -173,7 +173,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         }
         if self.enableTokenEmissionContext {
             entries.append(("tokenEmissionContextV1", "true"))
-            entries.append(("emissionOnsetGap", bits(self.maximumEmissionOnsetGapSeconds)))
+            entries.append(("emissionContextSeconds", bits(self.maximumEmissionContextSeconds)))
         }
         let canonical = MeetingConfigFingerprintEncoding.encode(entries)
         let digest = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -187,7 +187,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         let nonnegative = [self.maximumCandidateNoiseSeconds, self.minimumInterruptionSupportSeconds, self.maximumUnknownRunSeconds,
                            self.maximumNeighborGapSeconds, self.maximumBoundaryResidualSeconds,
                            self.maximumBriefInterruptionSeconds, self.maximumInterruptionWordSeconds,
-                           self.maximumBriefInterruptionGapSeconds, self.maximumEmissionOnsetGapSeconds]
+                           self.maximumBriefInterruptionGapSeconds, self.maximumEmissionContextSeconds]
         guard self.comparisonTolerance.isFinite, (0...0.000_001).contains(self.comparisonTolerance),
               nonnegative.allSatisfy({ $0.isFinite && $0 >= 0 }),
               self.maximumCandidateNoiseActiveFraction.isFinite,
@@ -216,7 +216,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         case enableStableSpeakerOpening
         case enableCompleteReadingAssignment
         case enableIncomingGapReading
-        case enableTokenEmissionContext, maximumEmissionOnsetGapSeconds
+        case enableTokenEmissionContext, maximumEmissionContextSeconds
     }
 
     init(from decoder: Decoder) throws {
@@ -249,7 +249,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
             enableCompleteReadingAssignment: c.decodeIfPresent(Bool.self, forKey: .enableCompleteReadingAssignment) ?? false,
             enableIncomingGapReading: c.decodeIfPresent(Bool.self, forKey: .enableIncomingGapReading) ?? false,
             enableTokenEmissionContext: c.decodeIfPresent(Bool.self, forKey: .enableTokenEmissionContext) ?? false,
-            maximumEmissionOnsetGapSeconds: c.decodeIfPresent(Double.self, forKey: .maximumEmissionOnsetGapSeconds) ?? 2
+            maximumEmissionContextSeconds: c.decodeIfPresent(Double.self, forKey: .maximumEmissionContextSeconds) ?? 2
         )
         _ = try self.validated()
     }
@@ -967,7 +967,7 @@ nonisolated enum MeetingSpeakerAttribution {
                   !temporalBarriers.contains(opening.id), !temporalBarriers.contains(following.id),
                   opening.analysisEnd - opening.analysisStart <= policy.maximumUnknownRunSeconds,
                   following.analysisStart >= opening.analysisEnd - policy.comparisonTolerance,
-                  following.analysisStart - opening.analysisEnd <= policy.maximumEmissionOnsetGapSeconds + policy.comparisonTolerance,
+                  following.analysisEnd - opening.analysisEnd <= policy.maximumEmissionContextSeconds + policy.comparisonTolerance,
                   contextBarriers?.intersects(start: opening.analysisStart, end: following.analysisEnd) != true
             else { continue }
             let path = try index.query(start: opening.analysisStart, end: following.analysisEnd,

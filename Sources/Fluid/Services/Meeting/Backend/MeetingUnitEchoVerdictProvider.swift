@@ -27,7 +27,7 @@ nonisolated struct MeetingFailClosedEchoVerdictProvider: MeetingUnitEchoVerdictP
     func echoVerdicts(
         for _: MeetingFinalTranscriptEvidence,
         manifest _: MeetingAnalysisManifest,
-        plan: MeetingBackendPlan
+        plan _: MeetingBackendPlan
     ) async throws -> [String: MeetingUnitEchoVerdict] {
         [:]
     }
