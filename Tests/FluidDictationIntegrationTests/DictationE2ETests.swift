@@ -5780,3 +5780,53 @@ extension DictationE2ETests {
         XCTAssertEqual(plan.text, "Whitelabel, Whitelabel. White Labeling and White Labele stay distinct.")
     }
 }
+
+
+extension DictationE2ETests {
+    func testCompactFallbackAddSavesThroughControllerAndOnlyRemovesChosenRow() throws {
+        let settings = SettingsStore.shared, previousEntries = SettingsStore.shared.customDictionaryEntries
+        defer { settings.customDictionaryEntries = previousEntries }
+        settings.customDictionaryEntries = []
+        let controller = DictionaryCorrectionOverlayController()
+        defer { controller.concealPrivatePresentation() }
+        let first = AutomaticDictionaryCorrectionCandidate(heardText: "ComapctAlhpa", correctedText: "CompactAlphaE2E")
+        let second = AutomaticDictionaryCorrectionCandidate(heardText: "ComapctBtea", correctedText: "CompactBetaE2E")
+        controller.show(candidate: first) { _ in }
+        controller.show(candidate: second) { _ in }
+        let deadline = controller.displayDeadline, generation = controller.progressGeneration
+        let firstSession = try XCTUnwrap(controller.presentedSessions.first)
+        XCTAssertFalse(firstSession.isSavedCorrection, "A fallback must not claim audio was already saved")
+        controller.add(id: first.id)
+        XCTAssertEqual(controller.presentedCandidateIDs, [second.id])
+        let entry = try XCTUnwrap(settings.customDictionaryEntries.first { $0.replacement == first.correctedText })
+        XCTAssertTrue(entry.triggers.contains(first.heardText))
+        XCTAssertEqual(controller.displayDeadline, deadline)
+        XCTAssertEqual(controller.progressGeneration, generation)
+        let entries = settings.customDictionaryEntries
+        controller.add(id: first.id)
+        XCTAssertEqual(settings.customDictionaryEntries, entries, "A retired row cannot re-save")
+        controller.add(id: second.id)
+        XCTAssertTrue(controller.presentedCandidateIDs.isEmpty)
+        XCTAssertTrue(settings.customDictionaryEntries.contains { $0.replacement == second.correctedText })
+    }
+
+    func testCompactFallbackAddKeepsFailedSaveVisibleForCorrection() throws {
+        let settings = SettingsStore.shared, previousEntries = SettingsStore.shared.customDictionaryEntries
+        defer { settings.customDictionaryEntries = previousEntries }
+        settings.customDictionaryEntries = []
+        let controller = DictionaryCorrectionOverlayController()
+        defer { controller.concealPrivatePresentation() }
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "ComapctKnown", correctedText: "CompactKnownE2E")
+        controller.show(candidate: candidate) { _ in }
+        // Another editor/manual action already saved this spelling while the row was visible.
+        settings.customDictionaryEntries = CustomDictionaryTrainingMerge.mergedEntries(current: [],
+            replacement: candidate.correctedText, triggers: [candidate.heardText])
+        let entries = settings.customDictionaryEntries
+        controller.add(id: candidate.id)
+        XCTAssertEqual(controller.presentedCandidateIDs, [candidate.id])
+        let row = try XCTUnwrap(controller.presentedSessions.first)
+        XCTAssertTrue(row.hasError)
+        XCTAssertFalse(row.isSavedCorrection)
+        XCTAssertEqual(settings.customDictionaryEntries, entries)
+    }
+}

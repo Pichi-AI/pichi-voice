@@ -67215,6 +67215,40 @@
           }
         }
       }
+    },
+    "Needs adding to dictionary": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needs adding to dictionary"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нужно добавить в словарь"
+          }
+        }
+      }
+    },
+    "Check this match": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check this match"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте распознавание"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
