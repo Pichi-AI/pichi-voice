@@ -996,6 +996,23 @@ extension MeetingMicrophoneCaptureTests {
         XCTAssertEqual(fixture.sink.frames, count, "A retired tap cannot publish delayed raw PCM")
     }
 
+    func testNativeMasterTapSplitsLargeNativeBlocksIntoBoundedMappedPrivacyPackets() async throws {
+        let fixture = try self.masterTapFixture()
+        let raw = try self.masterRawPCM(rate: 48_000, frames: 48_000, channels: 1)
+        for index in 0..<3 {
+            fixture.tap.handle(buffer: raw, time: AVAudioTime(hostTime: Self.privacyHostTime(1_000 + Double(index)),
+                sampleTime: Int64(index) * 48_000, atRate: 48_000))
+            await fixture.tap.drainClockHandoff()
+        }
+        await fixture.tap.finishClockInput()
+        XCTAssertEqual(fixture.sink.frames, 144_000)
+        XCTAssertLessThanOrEqual(fixture.sink.maximumPacketFrames, 4_800,
+            "A supported large native block cannot exceed privacy intake's duration budget")
+        XCTAssertEqual(fixture.sink.lastHost, 1_003, accuracy: 1e-9)
+        XCTAssertEqual(fixture.stats.snapshot().conversionFailures, 0)
+        await fixture.tap.stopPrivacyDelivery()
+    }
+
     func testNativeMasterTapExplicitRouteResetStartsNewEpochWithoutDiscardingOwnedPCM() async throws {
         let fixture = try self.masterTapFixture()
         let raw = try self.masterRawPCM(rate: 48_000, frames: 4_800, channels: 1)
@@ -1082,6 +1099,7 @@ extension MeetingMicrophoneCaptureTests {
     private final nonisolated class MasterTapSink: @unchecked Sendable {
         let context: MeetingRecordingClockContext
         private(set) var frames = 0
+        private(set) var maximumPacketFrames = 0
         private(set) var firstHost = Double.nan
         private(set) var lastHost = Double.nan
         private(set) var discontinuities = 0
@@ -1103,6 +1121,7 @@ extension MeetingMicrophoneCaptureTests {
             }
             self.lastHost = packet.mapping.spans.last?.hostEnd.seconds ?? .nan
             self.frames += CMSampleBufferGetNumSamples(sample)
+            self.maximumPacketFrames = max(self.maximumPacketFrames, CMSampleBufferGetNumSamples(sample))
             if let block = CMSampleBufferGetDataBuffer(sample) {
                 var marker: Float = 0
                 let status = withUnsafeMutableBytes(of: &marker) {

@@ -954,24 +954,32 @@ final nonisolated class MeetingMicrophoneTapState: @unchecked Sendable {
         }
         self.masterMapping = try self.masterMapping.appending(packet.mapping)
         self.masterSamples.append(contentsOf: UnsafeBufferPointer(start: values, count: Int(copied.buffer.frameLength)))
-        if self.masterSamples.count >= Self.accumulationFrameThreshold { try self.emitMasterClockOutput() }
+        while self.masterSamples.count >= Self.accumulationFrameThreshold {
+            try self.emitMasterClockOutput(frameCount: Self.accumulationFrameThreshold)
+        }
     }
 
-    private func emitMasterClockOutput() throws {
+    private func emitMasterClockOutput(frameCount: Int? = nil) throws {
         guard !self.masterSamples.isEmpty, let context = self.clockContext, let epoch = self.masterEpoch else { return }
-        let frames = self.masterSamples.count
+        let frames = min(frameCount ?? self.masterSamples.count, self.masterSamples.count)
+        let mapping = try self.masterMapping.sliced(frames: 0..<Double(frames))
         guard frames <= 65_536,
               let pcm = AVAudioPCMBuffer(pcmFormat: self.canonicalFormat, frameCapacity: AVAudioFrameCount(frames)),
-              let start = self.masterMapping.hostTime(atFrame: 0) else { throw MeetingCapturePCMError.invalidBuffer }
+              let start = mapping.hostTime(atFrame: 0) else { throw MeetingCapturePCMError.invalidBuffer }
         pcm.frameLength = AVAudioFrameCount(frames)
         self.masterSamples.withUnsafeBufferPointer { values in
             pcm.floatChannelData?[0].update(from: values.baseAddress!, count: frames)
         }
         guard let raw = meetingMicrophoneSynthesizeSampleBuffer(from: pcm,
             presentationTime: CMTime(value: start.value, timescale: start.timescale)) else { throw MeetingCapturePCMError.invalidBuffer }
-        let sample = try context.timedCopy(raw, mapping: self.masterMapping, producerEpoch: epoch)
-        self.masterSamples.removeAll(keepingCapacity: true)
-        self.masterMapping = MeetingAudioClockMapping(frameCount: 0, spans: [])
+        let sample = try context.timedCopy(raw, mapping: mapping, producerEpoch: epoch)
+        if frames == self.masterSamples.count {
+            self.masterSamples.removeAll(keepingCapacity: true)
+            self.masterMapping = MeetingAudioClockMapping(frameCount: 0, spans: [])
+        } else {
+            self.masterMapping = try self.masterMapping.sliced(frames: Double(frames)..<Double(self.masterSamples.count))
+            self.masterSamples.removeFirst(frames)
+        }
         self.statsBox.mutate { $0.buffersEmitted += 1; $0.validHostTimeCount += 1 }
         if let gate = self.privacyGate {
             gate.submit(sample, deliveryQueue: self.privacyQueue) { [weak self] approved in
