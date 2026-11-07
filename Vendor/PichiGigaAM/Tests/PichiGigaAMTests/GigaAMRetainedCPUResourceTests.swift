@@ -4,6 +4,34 @@ import XCTest
 @testable import PichiGigaAM
 
 final class GigaAMRetainedCPUResourceTests: XCTestCase {
+    func testBackgroundSafeGGUFNeverUpgradesCPUWithinThePreparedSession() async throws {
+        guard let path = ProcessInfo.processInfo.environment["PICHI_GIGAAM_Q8_MODEL_DIR"] else {
+            throw XCTSkip("Set a verified local Q8 GGUF path for native background-safe execution.")
+        }
+        let resources = Resources()
+        resources.set(.init(hasGPU: true, physicalMemory: 16_000_000_000,
+            availableProcessMemory: 2_000_000_000, requiresBackgroundExecution: true))
+        let runtime = try GigaAMRuntime(resources: { resources.read() })
+        do {
+            try await runtime.load(descriptor: GigaAMModelCatalog.downloadableModel, directory: URL(fileURLWithPath: path))
+            for _ in 0..<2 {
+                try await runtime.beginAttempt()
+                let transcript = try await runtime.transcribe([Float](repeating: 0, count: 16_000))
+                XCTAssertTrue(transcript.text.isEmpty)
+                let status = await runtime.executionStatus
+                XCTAssertEqual(status?.backend, .cpu)
+                XCTAssertEqual(status?.fallbackReason, .backgroundExecution)
+                // More headroom or a later foreground operation cannot reintroduce
+                // GPU work behind a prepared background-safe session's owner.
+                resources.set(.init(hasGPU: true, physicalMemory: 16_000_000_000,
+                    availableProcessMemory: 8_000_000_000))
+            }
+            await runtime.unload()
+            let ready = await runtime.isReady
+            XCTAssertFalse(ready)
+        } catch { await runtime.unload(); throw error }
+    }
+
     private final class Resources: @unchecked Sendable {
         private let lock = NSLock()
         private var value = GigaAMResourcePolicy(hasGPU: false, physicalMemory: 16_000_000_000,

@@ -596,6 +596,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         case .unsupportedInputShape: reason = "CPU fallback: the GPU export does not support this input shape."
         case .incompatibleExport: reason = "CPU fallback: this imported export does not support GPU execution."
         case .memoryBudget: reason = "CPU fallback: Not enough available memory to prepare GPU execution."
+        case .backgroundExecution: reason = "CPU is used to keep recording available in the background."
         case nil: reason = nil
         }
         let next = TranscriptionExecutionStatus(backend: backend, fallbackReason: reason)

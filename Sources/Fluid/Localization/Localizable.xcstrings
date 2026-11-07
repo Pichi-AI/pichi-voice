@@ -8989,6 +8989,23 @@
         }
       }
     },
+    "CPU is used to keep recording available in the background.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU is used to keep recording available in the background."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU используется, чтобы запись продолжалась в фоне."
+          }
+        }
+      }
+    },
     "CPU fallback: Not enough available memory to prepare GPU execution.": {
       "extractionState": "manual",
       "localizations": {

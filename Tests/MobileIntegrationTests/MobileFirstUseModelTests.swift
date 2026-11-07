@@ -198,6 +198,39 @@ final class MobileFirstUseModelTests: XCTestCase {
         #endif
     }
 
+    func testMobileGigaAMAdmissionIsBackgroundSafeBeforeAnySceneTransition() {
+        let policy = GigaAMResourcePolicy.current
+        XCTAssertTrue(policy.requiresBackgroundExecution)
+        XCTAssertEqual(policy.gpuAdmissionReason, .backgroundExecution)
+        XCTAssertEqual(policy.defaultCPUReason, .backgroundExecution)
+        XCTAssertEqual(policy.preferredDownload.fingerprint, GigaAMModelCatalog.downloadableModel.fingerprint)
+    }
+
+    func testNativeGigaAMProviderKeepsCPUThroughRepeatedAdmittedPCM() async throws {
+        guard let path = ProcessInfo.processInfo.environment["PICHI_GIGAAM_Q8_MODEL_DIR"] else {
+            throw XCTSkip("Set a verified local Q8 GGUF path for native mobile provider execution.")
+        }
+        let (_, defaults, _) = try self.settings()
+        let store = PichiGigaAMModelStore(directory: URL(fileURLWithPath: path), preferences: defaults, environment: [:])
+        let provider = PichiGigaAMProvider(modelStore: store)
+        let lease = UUID()
+        try provider.beginAdmittedTranscription(leaseID: lease)
+        addTeardownBlock { @MainActor in
+            provider.endAdmittedTranscription(leaseID: lease)
+            await provider.unloadModel()
+        }
+        try await provider.prepare()
+        XCTAssertEqual(provider.executionStatus?.backend, .cpu)
+        let fingerprint = provider.loadedModelFingerprint
+        for _ in 0..<2 {
+            let transcript = try await provider.transcribeDetailed([Float](repeating: 0, count: 16_000))
+            XCTAssertTrue(transcript.text.isEmpty)
+            XCTAssertEqual(provider.executionStatus?.backend, .cpu)
+            XCTAssertEqual(provider.loadedModelFingerprint, fingerprint)
+            XCTAssertTrue(provider.isReady)
+        }
+    }
+
     /// Setup renders preparation errors through the catalog. The vendor text is the key,
     /// so the Russian interface must not fall back to the English GigaAM message.
     func testGigaAMMemoryErrorResolvesThroughTheInterfaceCatalog() {
