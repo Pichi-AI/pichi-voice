@@ -54,6 +54,10 @@ extension MeetingSessionStoreCheckpointTests {
                   "Default and enabled reading assign lexical speech to the established participant")
             check(complete.readableSpeakers.map(\.id) == [b] && complete.transcriptSegments == original,
                   "Complete reading excludes punctuation-only identities without rewriting source evidence")
+            let portable = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: complete)) as! [String: Any]
+            let exported = portable["segments"] as! [[String: Any]]
+            check(!exported.isEmpty && exported.allSatisfy { $0["speakerID"] as? String == b.uuidString },
+                  "Default and enabled portable reading export keep the established lexical owner")
         }
         do {
             var value = session
