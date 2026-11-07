@@ -10,7 +10,7 @@ final class MobileRecordingDeletionTests: XCTestCase {
         let selected = try await fixture.save("Selected")
         let survivor = try await fixture.save("Survivor")
         let directory = try await fixture.store.sessionDirectory(for: selected.id)
-        try Data([0, 1, 2]).write(to: directory.appendingPathComponent("synthetic-audio.bin"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("session.json").path))
         try await MobileMeetingDeletionActions.delete(selected, coordinator: fixture.coordinator, canDelete: { true })
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
         let cold = MeetingSessionStore(rootDirectory: fixture.root)

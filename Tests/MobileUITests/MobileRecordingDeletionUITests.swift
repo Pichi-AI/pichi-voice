@@ -40,12 +40,16 @@ final class MobileRecordingDeletionUITests: XCTestCase {
             capture("\(language)-\(appearance)-01-delete-revealed")
             delete.tap()
             XCTAssertTrue(row.waitForNonExistence(timeout: 10), "The red button deletes immediately")
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: app.buttons["meeting.start"])
+            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
             XCTAssertEqual(app.sheets.count, 0, "Swipe deletion must not require confirmation")
             XCTAssertEqual(app.alerts.count, 0)
             let fullRow = app.buttons["history.session.\(fullID)"]
             XCTAssertTrue(fullRow.exists)
             let fullCell = app.cells.containing(.button, identifier: "history.session.\(fullID)").firstMatch
-            fullCell.swipeLeft(velocity: .slow)
+            fullCell.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5))
+                .press(forDuration: 0, thenDragTo: fullCell.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)),
+                       withVelocity: .default, thenHoldForDuration: 0)
             XCTAssertTrue(fullRow.waitForNonExistence(timeout: 10), "Full swipe commits deletion")
             XCTAssertTrue(app.buttons[survivor].exists, "Other recordings remain")
             XCTAssertEqual(app.sheets.count, 0)
