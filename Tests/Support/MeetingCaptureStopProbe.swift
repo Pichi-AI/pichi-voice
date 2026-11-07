@@ -81,6 +81,10 @@ actor MeetingDesktopCaptureStopProbe {
     struct PrivacyStopProbe: Sendable {
         func stop() async { fatalError("Mute observation is outside this transport probe") }
     }
+    struct MicrophoneControlProbe: Sendable {
+        func beginFinishing() { fatalError("Microphone control is outside this transport probe") }
+        func finish() { fatalError("Microphone control is outside this transport probe") }
+    }
     // Explicit diagnostic recording is disabled in this model-free PCM probe.
     // If enabled accidentally, fail rather than create a comparison recording.
     struct ComparisonProbe: Sendable {
@@ -95,6 +99,7 @@ actor MeetingDesktopCaptureStopProbe {
         let streamingTee: MeetingMultiTrackCaptureTee? = nil
         let privacyGate: PrivacyStopProbe? = nil
         let muteMonitor: PrivacyStopProbe? = nil
+        let microphoneControl: MicrophoneControlProbe? = nil
     }
     private var activeCapture: ActiveCapture?
     private var stopTask: Task<MeetingCaptureStopResult, Error>?

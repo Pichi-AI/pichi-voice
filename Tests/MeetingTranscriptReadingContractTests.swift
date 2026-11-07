@@ -75,8 +75,8 @@ extension MeetingSessionStoreCheckpointTests {
             let real = word("Следующая реплика.", 10, raw: tb, selected: tb, owner: b, map: both)
             value.transcriptSegments = [punctuation, short, real]
             let reading = MeetingTranscriptExporter.speakerPresentations(in: value)
-            check(reading[short.id]?.participantID == nil,
-                  "Punctuation-only native evidence cannot sponsor a phantom owner for a short lexical fragment")
+            check(reading[short.id]?.participantID == b,
+                  "A short lexical fragment uses the established lexical owner rather than a punctuation-only phantom")
             check(value.readableSpeakers.map(\.id) == [b], "A punctuation-only native person stays out of the roster")
             let portable = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: value)) as! [String: Any]
             let roster = Set((portable["speakers"] as! [[String: Any]]).compactMap { $0["id"] as? String })
