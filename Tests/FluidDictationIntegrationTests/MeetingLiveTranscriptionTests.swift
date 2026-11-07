@@ -1384,6 +1384,47 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
         await engine.stop()
     }
 
+    func testMappedBufferedCaptionsKeepOneTurnAcrossActualPCMTopologyChanges() async throws {
+        for (rate, channels) in [(16_000.0, AVAudioChannelCount(1)), (48_000.0, AVAudioChannelCount(2))] {
+            let recognizer = Recognizer()
+            let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+            addTeardownBlock { await engine.stop() }
+            let events = Events()
+            await configure(engine, events: events)
+            let clockID = UUID(), sourceID = UUID()
+            for index in 0..<26 {
+                let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                    sampleRate: rate, channels: channels, interleaved: index.isMultiple(of: 2)))
+                let frames = AVAudioFrameCount(rate / 10)
+                let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+                buffer.frameLength = frames
+                for audio in UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList) {
+                    let pointer = try XCTUnwrap(audio.mData?.assumingMemoryBound(to: Float.self))
+                    pointer.initialize(repeating: index < 16 ? 0.1 : 0, count: Int(audio.mDataByteSize) / 4)
+                }
+                let start = CMTime(seconds: 100 + Double(index) * 0.1 * 1.000005, preferredTimescale: 1_000_000_000)
+                let end = CMTime(seconds: 100 + Double(index + 1) * 0.1 * 1.000005, preferredTimescale: 1_000_000_000)
+                let mapping = MeetingAudioClockMapping(frameCount: Int64(frames), spans: [
+                    .init(frameStart: 0, frameEnd: Double(frames),
+                        hostStart: .init(value: start.value, timescale: start.timescale),
+                        hostEnd: .init(value: end.value, timescale: end.timescale), discontinuityBefore: index == 0)
+                ])
+                await engine.consumeForTesting(.init(buffer: buffer, pts: start, duration: end - start,
+                    clockPacket: .init(mapping: mapping, clockID: clockID, sourceID: sourceID, producerEpoch: 1)))
+            }
+            XCTAssertEqual(events.utterances.count, 1)
+            let utterance = try XCTUnwrap(events.utterances.first)
+            XCTAssertEqual(utterance.2, "Русская встреча")
+            XCTAssertEqual(utterance.3, 100, accuracy: 1e-9)
+            XCTAssertGreaterThan(utterance.4, 102.2)
+            XCTAssertLessThanOrEqual(utterance.4, 102.60002)
+            XCTAssertTrue(events.degraded.isEmpty)
+            let inputs = await recognizer.inputs
+            XCTAssertTrue(inputs.contains { $0.count > 20_000 })
+            await engine.stop()
+        }
+    }
+
     func testSharedRecognizerNeverMixesOnlineCallTrackBuffers() async throws {
         let recognizer = Recognizer()
         let microphone = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)

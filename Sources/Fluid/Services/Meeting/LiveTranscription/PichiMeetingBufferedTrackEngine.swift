@@ -413,11 +413,14 @@ actor PichiMeetingBufferedTrackEngine {
                     }
                 }
                 self.lastClockPacket = packet
-                if sample.buffer.format.sampleRate != Self.sampleRate || sample.buffer.format.channelCount != 1 {
+                let mono = try MeetingCapturePCMConverter.ownedMonoCopy(of: sample.buffer)
+                if mono.format.sampleRate != Self.sampleRate {
                     if self.mappedConverter == nil { self.mappedConverter = try MeetingCapturePCMConverter() }
-                    guard let normalized = try self.mappedConverter?.convert(sample.buffer, presentationTime: sample.pts,
+                    guard let normalized = try self.mappedConverter?.convert(mono, presentationTime: sample.pts,
                         clockPacket: packet), let copied = MeetingLiveSampleCopy.copy(normalized) else { return }
                     sample = copied
+                } else {
+                    sample = .init(buffer: mono, pts: sample.pts, duration: sample.duration, clockPacket: packet)
                 }
                 self.lastBufferEndPTS = CMTime(seconds: last.hostEnd.seconds, preferredTimescale: 1_000_000_000)
             } catch { self.reset(); return }
