@@ -22,6 +22,12 @@ the application and Live Activity retain `PICHI_MOBILE_BUNDLE_IDENTIFIER`. Do no
 override `PRODUCT_BUNDLE_IDENTIFIER` globally or replace another task's installed
 runner and data. Inventory installed runners before choosing the task identifier.
 
+`PichiVoiceMobileUIAcceptance` is the Release UI-only scheme. Build it for testing
+with the single requested UI selector to produce the runner and `.xctestrun`
+without an embedded hosted-unit-test bundle or a testable production module.
+Keep the usual `PichiVoiceMobile` scheme for unit/integration tests. Verify the
+frozen AUT contains no `.xctest` before physical installation in either route.
+
 Configure the frozen `.xctestrun` UI test entry's `UITargetAppPath` and appropriate
 `DependentProductPaths` to use the exact ordinary signed Release AUT. Set the
 runner's environment variables below, without copying them into the AUT's launch
