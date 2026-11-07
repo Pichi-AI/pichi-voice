@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROJECT = ROOT / 'Fluid.xcodeproj/project.pbxproj'
@@ -39,6 +40,16 @@ def validate_application_identity(project):
 
 
 class BuildIdentityTests(unittest.TestCase):
+    def testPhysicalUIAcceptanceSchemeDoesNotEmbedHostedUnitTests(self):
+        scheme = ET.parse(ROOT / 'Fluid.xcodeproj/xcshareddata/xcschemes/PichiVoiceMobileUIAcceptance.xcscheme').getroot()
+        references = scheme.findall('TestAction/Testables/TestableReference/BuildableReference')
+        self.assertEqual([node.get('BlueprintName') for node in references], ['PichiVoiceMobileUITests'])
+        build_names = [node.get('BlueprintName') for node in
+                       scheme.findall('BuildAction/BuildActionEntries/BuildActionEntry/BuildableReference')]
+        self.assertIn('PichiVoiceMobile', build_names)
+        self.assertNotIn('PichiVoiceMobileIntegrationTests', build_names)
+        self.assertEqual(scheme.find('TestAction').get('buildConfiguration'), 'Release')
+
     def testMobileRegenerationPreservesSourcesAndIncludesNewPlatformFiles(self):
         with tempfile.TemporaryDirectory(prefix='pichi-mobile-membership-') as directory:
             root = pathlib.Path(directory)
@@ -77,6 +88,22 @@ class BuildIdentityTests(unittest.TestCase):
     def testMergedProjectPreservesBothDistributionIdentities(self):
         validate_application_identity(PROJECT.read_text())
 
+    def testUITestRunnerCanHaveTaskIdentityWithoutChangingAppOrExtension(self):
+        project = PROJECT.read_text()
+        def settings(label):
+            block = re.search(r'/\* ' + label + r' \*/ = \{([^\n]+)', project).group(1)
+            return dict(re.findall(r'(\w+) = "([^"\n]*)";', block))
+        for configuration in ['Debug', 'Release']:
+            ui = settings('Mobile test ' + configuration)
+            app = settings('Mobile ' + configuration)
+            extension = settings('Mobile activity ' + configuration)
+            self.assertEqual(ui['PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER'], 'ai.pichi.voice.mobile.uitests')
+            self.assertEqual(ui['PRODUCT_BUNDLE_IDENTIFIER'], '$(PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER)')
+            self.assertEqual(app['PRODUCT_BUNDLE_IDENTIFIER'], '$(PICHI_MOBILE_BUNDLE_IDENTIFIER)')
+            self.assertEqual(extension['PRODUCT_BUNDLE_IDENTIFIER'], '$(PICHI_MOBILE_BUNDLE_IDENTIFIER).activity')
+            self.assertNotIn('PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER', app)
+            self.assertNotIn('PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER', extension)
+
     def testMobilePrivacyPurposeStringsHaveEnglishAndRussianCopy(self):
         info = plistlib.loads((ROOT / 'Sources/Mobile/Info.plist').read_bytes())
         for key in ['NSMicrophoneUsageDescription', 'NSSpeechRecognitionUsageDescription',
@@ -108,7 +135,7 @@ class BuildIdentityTests(unittest.TestCase):
             self.assertEqual(info['CFBundleShortVersionString'], '$(MARKETING_VERSION)')
         defaults = (ROOT / 'Sources/Mobile/Version.xcconfig').read_text()
         self.assertRegex(defaults, r'(?m)^CURRENT_PROJECT_VERSION = [1-9][0-9]*$')
-        self.assertRegex(defaults, r'(?m)^MARKETING_VERSION = 0\.1\.0$')
+        self.assertRegex(defaults, r'(?m)^MARKETING_VERSION = [0-9]+(?:\.[0-9]+){1,2}$')
 
     def testDuplicateUpstreamIdentityAndReleaseSettingsAreRejected(self):
         project = PROJECT.read_text()

@@ -1982,6 +1982,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 if current.nativePrecision != .word, next.nativePrecision != .word,
                    current.speakerAttribution == nil, next.speakerAttribution == nil,
                    current.nativeTiming == nil, next.nativeTiming == nil,
+                   current.nativeWordTimingProvenance == nil, next.nativeWordTimingProvenance == nil,
                    current.nativeUnitID == nil, next.nativeUnitID == nil,
                    current.nativeSpeakerAssignment == nil, next.nativeSpeakerAssignment == nil,
                    nextKey == currentKey, gap <= maximumGapSeconds, combinedDuration <= maximumDurationSeconds {
