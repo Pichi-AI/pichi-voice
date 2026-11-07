@@ -67453,6 +67453,57 @@
           }
         }
       }
+    },
+    "Couldn't save this correction automatically.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't save this correction automatically."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось автоматически сохранить исправление."
+          }
+        }
+      }
+    },
+    "Word saved. Audio clip not saved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Word saved. Audio clip not saved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слово сохранено. Аудиофрагмент не сохранён."
+          }
+        }
+      }
+    },
+    "No new sample was added. Undo only dismisses this confirmation.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No new sample was added. Undo only dismisses this confirmation."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новый образец не добавлялся. Отмена закроет только это подтверждение."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

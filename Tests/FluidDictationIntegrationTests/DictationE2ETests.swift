@@ -5558,6 +5558,10 @@ extension DictationE2ETests {
         if receipts.count == 2 {
             XCTAssertFalse(receipts[0].wasAlreadyPresent)
             XCTAssertTrue(receipts[1].wasAlreadyPresent)
+            let duplicateRow = try XCTUnwrap(controller.presentedSessions.last)
+            duplicateRow.undoSavedCorrection()
+            XCTAssertTrue(duplicateRow.didUndoSavedCorrection)
+            XCTAssertEqual(controller.presentedSessions.count, 1, "Undo of a duplicate closes only its confirmation")
             let undone = try await worker.undoSavedCorrection(receipts[1])
             XCTAssertFalse(undone, "A repeated acknowledgement cannot delete the earlier reference")
         }
@@ -5781,52 +5785,202 @@ extension DictationE2ETests {
     }
 }
 
-
 extension DictationE2ETests {
-    func testCompactFallbackAddSavesThroughControllerAndOnlyRemovesChosenRow() throws {
-        let settings = SettingsStore.shared, previousEntries = SettingsStore.shared.customDictionaryEntries
-        defer { settings.customDictionaryEntries = previousEntries }
-        settings.customDictionaryEntries = []
-        let controller = DictionaryCorrectionOverlayController()
+    func testAutomaticWordOnlySaveShowsReceiptAndDoneKeepsWord() async throws {
+        let settings = SettingsStore.shared, previous = SettingsStore.shared.customDictionaryEntries
+        let enabled = settings.automaticDictionaryLearningEnabled
+        defer { settings.customDictionaryEntries = previous; settings.automaticDictionaryLearningEnabled = enabled }
+        settings.customDictionaryEntries = []; settings.automaticDictionaryLearningEnabled = true
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let worker = DictionaryAudioLearningService(store: store, canProcess: { false })
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "AutpWord", correctedText: "AutoWordOnlyE2E")
+        let receipt = try XCTUnwrap(worker.saveCorrectionWithoutAudio(candidate: candidate, evidenceID: candidate.id, isValid: { true }))
+        XCTAssertFalse(receipt.audioWasSaved)
+        XCTAssertTrue(receipt.createdEntry)
+        XCTAssertTrue(receipt.entry.triggers.isEmpty, "Missing audio must not authorize a permanent text rule")
+        XCTAssertTrue(settings.customDictionaryEntries.contains(receipt.entry))
+        let controller = DictionaryCorrectionOverlayController(audioLearning: worker)
         defer { controller.concealPrivatePresentation() }
-        let first = AutomaticDictionaryCorrectionCandidate(heardText: "ComapctAlhpa", correctedText: "CompactAlphaE2E")
-        let second = AutomaticDictionaryCorrectionCandidate(heardText: "ComapctBtea", correctedText: "CompactBetaE2E")
-        controller.show(candidate: first) { _ in }
-        controller.show(candidate: second) { _ in }
-        let deadline = controller.displayDeadline, generation = controller.progressGeneration
-        let firstSession = try XCTUnwrap(controller.presentedSessions.first)
-        XCTAssertFalse(firstSession.isSavedCorrection, "A fallback must not claim audio was already saved")
-        controller.add(id: first.id)
-        XCTAssertEqual(controller.presentedCandidateIDs, [second.id])
-        let entry = try XCTUnwrap(settings.customDictionaryEntries.first { $0.replacement == first.correctedText })
-        XCTAssertTrue(entry.triggers.contains(first.heardText))
-        XCTAssertEqual(controller.displayDeadline, deadline)
-        XCTAssertEqual(controller.progressGeneration, generation)
-        let entries = settings.customDictionaryEntries
-        controller.add(id: first.id)
-        XCTAssertEqual(settings.customDictionaryEntries, entries, "A retired row cannot re-save")
-        controller.add(id: second.id)
+        controller.showSavedCorrection(receipt)
+        let row = try XCTUnwrap(controller.presentedSessions.first)
+        XCTAssertEqual(row.screen, .success)
+        XCTAssertFalse(try XCTUnwrap(row.savedCorrection).audioWasSaved)
+        controller.confirm(id: row.candidate.id)
         XCTAssertTrue(controller.presentedCandidateIDs.isEmpty)
-        XCTAssertTrue(settings.customDictionaryEntries.contains { $0.replacement == second.correctedText })
+        XCTAssertTrue(settings.customDictionaryEntries.contains(receipt.entry))
+        let profiles = await store.allProfiles()
+        XCTAssertTrue(profiles.isEmpty)
+        await worker.prepareForPrivateProfileTransition()
     }
 
-    func testCompactFallbackAddKeepsFailedSaveVisibleForCorrection() throws {
-        let settings = SettingsStore.shared, previousEntries = SettingsStore.shared.customDictionaryEntries
-        defer { settings.customDictionaryEntries = previousEntries }
-        settings.customDictionaryEntries = []
-        let controller = DictionaryCorrectionOverlayController()
+    func testAutomaticWordOnlyUndoPreservesOtherEventsExistingWordsAndManualEdits() async throws {
+        let settings = SettingsStore.shared, previous = SettingsStore.shared.customDictionaryEntries
+        let enabled = settings.automaticDictionaryLearningEnabled
+        defer { settings.customDictionaryEntries = previous; settings.automaticDictionaryLearningEnabled = enabled }
+        settings.customDictionaryEntries = []; settings.automaticDictionaryLearningEnabled = true
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let worker = DictionaryAudioLearningService(store: store, canProcess: { false })
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Wrod", correctedText: "WordOnlyUndoE2E")
+        let first = try XCTUnwrap(worker.saveCorrectionWithoutAudio(candidate: candidate, evidenceID: UUID(), isValid: { true }))
+        let second = try XCTUnwrap(worker.saveCorrectionWithoutAudio(candidate: candidate, evidenceID: UUID(), isValid: { true }))
+        let firstUndone = try await worker.undoSavedCorrection(first)
+        XCTAssertTrue(firstUndone)
+        XCTAssertTrue(settings.customDictionaryEntries.contains(first.entry), "Another event still depends on this word")
+        let secondUndone = try await worker.undoSavedCorrection(second)
+        XCTAssertTrue(secondUndone)
+        XCTAssertFalse(settings.customDictionaryEntries.contains(first.entry))
+        let existing = SettingsStore.CustomDictionaryEntry(triggers: ["explicit spelling"], replacement: "ExistingWordE2E")
+        settings.customDictionaryEntries = [existing]
+        let existingReceipt = try XCTUnwrap(worker.saveCorrectionWithoutAudio(candidate: .init(heardText: "Exsting", correctedText: existing.replacement), evidenceID: UUID(), isValid: { true }))
+        XCTAssertFalse(existingReceipt.createdEntry)
+        _ = try await worker.undoSavedCorrection(existingReceipt)
+        XCTAssertEqual(settings.customDictionaryEntries, [existing])
+        let editedReceipt = try XCTUnwrap(worker.saveCorrectionWithoutAudio(candidate: candidate, evidenceID: UUID(), isValid: { true }))
+        let edited = SettingsStore.CustomDictionaryEntry(id: editedReceipt.entry.id, triggers: ["later manual change"], replacement: editedReceipt.entry.replacement)
+        settings.customDictionaryEntries = [existing, edited]
+        _ = try await worker.undoSavedCorrection(editedReceipt)
+        XCTAssertEqual(settings.customDictionaryEntries, [existing, edited])
+        XCTAssertNil(worker.saveCorrectionWithoutAudio(candidate: candidate, evidenceID: UUID(), isValid: { false }))
+        await worker.prepareForPrivateProfileTransition()
+    }
+
+    func testAudioPreparationFailureAutomaticallySavesWordAndSupportsPopupUndo() async throws {
+        let settings = SettingsStore.shared, previous = SettingsStore.shared.customDictionaryEntries
+        let enabled = settings.automaticDictionaryLearningEnabled
+        defer { settings.customDictionaryEntries = previous; settings.automaticDictionaryLearningEnabled = enabled }
+        settings.customDictionaryEntries = []; settings.automaticDictionaryLearningEnabled = true
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let worker = DictionaryAudioLearningService(store: store, extract: { _ in throw PronunciationDictionaryStoreError.inconsistentEnrollment }, canProcess: { true })
+        let controller = DictionaryCorrectionOverlayController(audioLearning: worker)
         defer { controller.concealPrivatePresentation() }
-        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "ComapctKnown", correctedText: "CompactKnownE2E")
-        controller.show(candidate: candidate) { _ in }
-        // Another editor/manual action already saved this spelling while the row was visible.
-        settings.customDictionaryEntries = CustomDictionaryTrainingMerge.mergedEntries(current: [],
-            replacement: candidate.correctedText, triggers: [candidate.heardText])
-        let entries = settings.customDictionaryEntries
-        controller.add(id: candidate.id)
-        XCTAssertEqual(controller.presentedCandidateIDs, [candidate.id])
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "AutpFailure", correctedText: "AutoFailureE2E")
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: candidate.heardText,
+            sourceWordRange: 0..<1, sourceSampleRange: 0..<2, focalSampleRange: 0..<1, samples: [0, 0])
+        let published = expectation(description: "Failure produces an automatic word-only receipt")
+        XCTAssertTrue(worker.learnCorrection(candidate: candidate, evidence: evidence, evidenceID: candidate.id, isValid: { true }, didSave: { _ in
+            XCTFail("Failed extraction cannot claim persisted audio")
+        }, didFail: {
+            if let receipt = worker.saveCorrectionWithoutAudio(candidate: candidate, evidenceID: candidate.id, isValid: { true }) {
+                controller.showSavedCorrection(receipt); published.fulfill()
+            }
+        }))
+        await fulfillment(of: [published], timeout: 3)
         let row = try XCTUnwrap(controller.presentedSessions.first)
-        XCTAssertTrue(row.hasError)
-        XCTAssertFalse(row.isSavedCorrection)
-        XCTAssertEqual(settings.customDictionaryEntries, entries)
+        let receipt = try XCTUnwrap(row.savedCorrection)
+        XCTAssertFalse(receipt.audioWasSaved)
+        let undone = expectation(description: "Actual row Undo removes the automatic word-only event")
+        let completion = row.onSuccess
+        row.onSuccess = { completion?(); undone.fulfill() }
+        row.undoSavedCorrection()
+        await fulfillment(of: [undone], timeout: 3)
+        XCTAssertTrue(controller.presentedCandidateIDs.isEmpty)
+        XCTAssertFalse(settings.customDictionaryEntries.contains(receipt.entry))
+        let profiles = await store.allProfiles()
+        XCTAssertTrue(profiles.isEmpty)
+        let expired = DictionaryAudioLearningService(store: store, lifetime: 0, canProcess: { false })
+        let expiredCandidate = AutomaticDictionaryCorrectionCandidate(heardText: "Expried", correctedText: "ExpiredAutomaticE2E")
+        var expiredReceipt: DictionaryAudioLearningService.SavedCorrection?
+        XCTAssertTrue(expired.learnCorrection(candidate: expiredCandidate, evidence: evidence, isValid: { true }, didFail: {
+            expiredReceipt = expired.saveCorrectionWithoutAudio(candidate: expiredCandidate, evidenceID: expiredCandidate.id, isValid: { true })
+        }))
+        XCTAssertFalse(try XCTUnwrap(expiredReceipt).audioWasSaved)
+        XCTAssertTrue(settings.customDictionaryEntries.contains { $0.replacement == expiredCandidate.correctedText })
+        await expired.prepareForPrivateProfileTransition()
+        await worker.prepareForPrivateProfileTransition()
+    }
+
+    func testAudioSuccessAutomaticallySavesBothWithoutFailureFallback() async throws {
+        let settings = SettingsStore.shared, previous = SettingsStore.shared.customDictionaryEntries
+        let enabled = settings.automaticDictionaryLearningEnabled
+        defer { settings.customDictionaryEntries = previous; settings.automaticDictionaryLearningEnabled = enabled }
+        settings.customDictionaryEntries = []; settings.automaticDictionaryLearningEnabled = true
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let worker = DictionaryAudioLearningService(store: store,
+            extract: { evidence in .init(values: [1, 0], sourceFrameCount: 1, modelKey: evidence.modelKey) }, canProcess: { true })
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "AutpAudio", correctedText: "AutoAudioE2E")
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: candidate.heardText,
+            sourceWordRange: 0..<1, sourceSampleRange: 0..<2, focalSampleRange: 0..<1, samples: [0, 0])
+        let saved = expectation(description: "Word and original audio committed automatically")
+        var receipt: DictionaryAudioLearningService.SavedCorrection?
+        XCTAssertTrue(worker.learnCorrection(candidate: candidate, evidence: evidence, isValid: { true }, didSave: {
+            receipt = $0; saved.fulfill()
+        }, didFail: { XCTFail("A successful audio save must not fall back") }))
+        await fulfillment(of: [saved], timeout: 3)
+        let committed = try XCTUnwrap(receipt)
+        XCTAssertTrue(committed.audioWasSaved)
+        XCTAssertTrue(settings.customDictionaryEntries.contains(committed.entry))
+        let storedProfiles = await store.allProfiles()
+        let profile = try XCTUnwrap(storedProfiles.first)
+        let capture = try XCTUnwrap(profile.enrollments.first)
+        let clip = try await store.originalAudioSamples(for: capture, entryID: committed.entry.id)
+        XCTAssertEqual(clip, [0])
+        await worker.prepareForPrivateProfileTransition()
+    }
+
+    func testRevokedAutomaticCorrectionCannotFallBackAfterDelayedPreparation() async throws {
+        let settings = SettingsStore.shared, previous = SettingsStore.shared.customDictionaryEntries
+        let enabled = settings.automaticDictionaryLearningEnabled
+        defer { settings.customDictionaryEntries = previous; settings.automaticDictionaryLearningEnabled = enabled }
+        settings.customDictionaryEntries = []; settings.automaticDictionaryLearningEnabled = true
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let worker = DictionaryAudioLearningService(store: store,
+            extract: { evidence in .init(values: [1, 0], sourceFrameCount: 1, modelKey: evidence.modelKey) }, canProcess: { true })
+        let evidence = DictionaryLearningAudioEvidence(recordingID: UUID(), modelKey: "parakeet-v3", observedText: "OldTypo",
+            sourceWordRange: 0..<1, sourceSampleRange: 0..<2, focalSampleRange: 0..<1, samples: [0, 0])
+        var valid = true
+        var release: CheckedContinuation<Void, Never>?
+        let started = expectation(description: "Preparing old edit"), returned = expectation(description: "Old preparation retired")
+        XCTAssertTrue(worker.learnCorrection(candidate: .init(heardText: "OldTypo", correctedText: "OldCorrectionE2E"), evidence: evidence,
+            isValid: { valid }, didSave: { _ in XCTFail("Stale edit saved") }, didFail: { XCTFail("Stale edit fell back") }, beforePreparation: {
+                await withCheckedContinuation { release = $0; started.fulfill() }
+                returned.fulfill()
+            }))
+        await fulfillment(of: [started], timeout: 3)
+        valid = false; release?.resume()
+        await fulfillment(of: [returned], timeout: 3)
+        await worker.pauseForForegroundAdmission()
+        XCTAssertTrue(settings.customDictionaryEntries.isEmpty)
+        let profiles = await store.allProfiles()
+        XCTAssertTrue(profiles.isEmpty)
+        worker.resumeAfterForegroundAdmission()
+        await worker.prepareForPrivateProfileTransition()
+    }
+}
+
+
+extension DictationE2ETests {
+    func testFreshWordOnlyEventKeepsUndoOwnershipAfterOriginalEventExpires() async throws {
+        let settings = SettingsStore.shared, previous = SettingsStore.shared.customDictionaryEntries
+        let enabled = settings.automaticDictionaryLearningEnabled
+        defer { settings.customDictionaryEntries = previous; settings.automaticDictionaryLearningEnabled = enabled }
+        settings.customDictionaryEntries = []; settings.automaticDictionaryLearningEnabled = true
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        var now = Date(timeIntervalSince1970: 1_000)
+        let worker = DictionaryAudioLearningService(store: store, ownershipNow: { now }, canProcess: { false })
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Ownrship", correctedText: "OwnershipRenewalE2E")
+        _ = try XCTUnwrap(worker.saveCorrectionWithoutAudio(candidate: candidate, evidenceID: UUID(), isValid: { true }))
+        now.addTimeInterval(599)
+        let fresh = try XCTUnwrap(worker.saveCorrectionWithoutAudio(candidate: candidate, evidenceID: UUID(), isValid: { true }))
+        XCTAssertTrue(fresh.createdEntry)
+        now.addTimeInterval(2)
+        let other = try XCTUnwrap(worker.saveCorrectionWithoutAudio(candidate: .init(heardText: "Othr", correctedText: "OtherOwnershipE2E"),
+            evidenceID: UUID(), isValid: { true }))
+        let undone = try await worker.undoSavedCorrection(fresh)
+        XCTAssertTrue(undone)
+        XCTAssertFalse(settings.customDictionaryEntries.contains(fresh.entry), "The currently visible event retains Undo ownership")
+        XCTAssertTrue(settings.customDictionaryEntries.contains(other.entry))
+        await worker.prepareForPrivateProfileTransition()
     }
 }
