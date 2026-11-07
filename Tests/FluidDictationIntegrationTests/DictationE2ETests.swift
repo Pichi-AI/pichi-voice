@@ -3477,6 +3477,83 @@ extension DictationE2ETests {
             now: now
         )) { XCTAssertEqual($0 as? DictionaryLearningAlignmentError, .invalidTiming) }
     }
+
+    func testDictionaryLearningRequiresWholeTimedCompound() throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        let text = "use white label today"
+        let recording = try XCTUnwrap(DictionaryLearningRecording(
+            alignment: .init(modelKey: "synthetic", words: [
+                .init(text: "use", start: 0, end: 0.4),
+                .init(text: "white label", start: 0.5, end: 1.5),
+                .init(text: "today", start: 1.6, end: 2)
+            ]), samples: [Float](repeating: 0, count: 48_000), now: now
+        ))
+        for partial in ["white", "label", "use white", "label today"] {
+            XCTAssertThrowsError(try DictionaryLearningAlignmentResolver.resolve(
+                recording: recording, deliveredTextBeforeEdit: text,
+                selectedUTF16Range: (text as NSString).range(of: partial), observedText: partial, now: now
+            ), "A partial lexical selection cannot borrow the whole compound's audio") {
+                XCTAssertEqual($0 as? DictionaryLearningAlignmentError, .invalidTiming)
+            }
+        }
+        let complete = try DictionaryLearningAlignmentResolver.resolve(
+            recording: recording, deliveredTextBeforeEdit: text,
+            selectedUTF16Range: (text as NSString).range(of: "white label"), observedText: "white label", now: now
+        )
+        XCTAssertEqual(complete.sourceWordRange, 1..<2)
+        XCTAssertEqual(complete.focalSampleRange, 8_000..<24_000)
+    }
+
+    func testDictionaryLearningRejectsOverlappingOrInvalidNeighbourTimings() throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        let text = "before target after"
+        let validBefore = ASRWordTiming(text: "before", start: 0.1, end: 0.8)
+        let validAfter = ASRWordTiming(text: "after", start: 1.6, end: 2)
+        let invalidNeighbours: [(ASRWordTiming, ASRWordTiming)] = [
+            (.init(text: "before", start: 0.1, end: 1.01), validAfter),
+            (validBefore, .init(text: "after", start: 1.49, end: 2)),
+            (.init(text: "before", start: .nan, end: 0.8), validAfter),
+            (validBefore, .init(text: "after", start: 1.6, end: .infinity)),
+            (.init(text: "before", start: 0.8, end: 0.1), validAfter),
+            (validBefore, .init(text: "after", start: 1.6, end: 4))
+        ]
+        for (before, after) in invalidNeighbours {
+            let recording = try XCTUnwrap(DictionaryLearningRecording(
+                alignment: .init(modelKey: "synthetic", words: [
+                    before, .init(text: "target", start: 1, end: 1.5), after
+                ]), samples: [Float](repeating: 0, count: 48_000), now: now
+            ))
+            XCTAssertThrowsError(try DictionaryLearningAlignmentResolver.resolve(
+                recording: recording, deliveredTextBeforeEdit: text,
+                selectedUTF16Range: (text as NSString).range(of: "target"), observedText: "target", now: now
+            )) { XCTAssertEqual($0 as? DictionaryLearningAlignmentError, .invalidTiming) }
+        }
+    }
+
+    func testDictionaryLearningKeepsExactFocalAudioWithTouchingOrSeparatedNeighbours() throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        let text = "before target after"
+        // These IDs prove only which samples are selected, not speech quality.
+        let samples = (0..<48_000).map { Float($0) }
+        for (previousEnd, nextStart) in [(1.0, 1.5), (0.8, 1.8)] {
+            let recording = try XCTUnwrap(DictionaryLearningRecording(
+                alignment: .init(modelKey: "synthetic", words: [
+                    .init(text: "before", start: 0, end: previousEnd),
+                    .init(text: "target", start: 1, end: 1.5),
+                    .init(text: "after", start: nextStart, end: 2)
+                ]), samples: samples, now: now
+            ))
+            let evidence = try DictionaryLearningAlignmentResolver.resolve(
+                recording: recording, deliveredTextBeforeEdit: text,
+                selectedUTF16Range: (text as NSString).range(of: "target"), observedText: "target", now: now
+            )
+            XCTAssertEqual(evidence.sourceWordRange, 1..<2)
+            let sourceStart = evidence.sourceSampleRange.lowerBound
+            XCTAssertEqual(sourceStart + evidence.focalSampleRange.lowerBound, 16_000)
+            XCTAssertEqual(sourceStart + evidence.focalSampleRange.upperBound, 24_000)
+            XCTAssertEqual(Array(evidence.samples[evidence.focalSampleRange]), Array(samples[16_000..<24_000]))
+        }
+    }
 }
 
 extension DictationE2ETests {
