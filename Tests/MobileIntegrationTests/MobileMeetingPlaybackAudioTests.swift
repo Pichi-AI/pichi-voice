@@ -143,7 +143,8 @@ final class MobileMeetingPlaybackAudioTests: XCTestCase {
 
     private func load(_ playback: MeetingSegmentPlayback, session: MeetingSession) async throws {
         let loaded = expectation(description: "Production transcript action resolves recorded audio")
-        let observation = playback.$isLoading.dropFirst().filter { !$0 }.prefix(1).sink { _ in loaded.fulfill() }
+        let observation = playback.$isLoading.drop(while: { !$0 }).filter { !$0 }.prefix(1)
+            .sink { _ in loaded.fulfill() }
         defer { observation.cancel() }
         playback.toggle(session: session, segmentIDs: session.transcriptSegments.map(\.id))
         await fulfillment(of: [loaded], timeout: 10)
