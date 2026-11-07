@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "id": "F0000000-0000-4000-8000-000000000121",
+  "title": "Synthetic playback acceptance",
+  "languageCode": "en",
+  "mode": "inRoom",
+  "selectedMicrophone": {
+    "captureDeviceID": "synthetic-navigation-microphone",
+    "displayName": "Synthetic microphone",
+    "role": "unknown"
+  },
+  "startedAt": "2026-10-13T12:00:00Z",
+  "endedAt": "2026-10-13T12:00:12Z",
+  "updatedAt": "2026-10-13T12:00:12Z",
+  "timebase": {
+    "startedHostTime": 0,
+    "machTimebaseNumerator": 1,
+    "machTimebaseDenominator": 1
+  },
+  "state": "completed",
+  "events": [],
+  "failures": [],
+  "audioStorageMode": "retainedFiles",
+  "audioTracks": [
+    {
+      "id": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "kind": "microphone",
+      "sourceIdentifier": "synthetic-navigation-microphone",
+      "sourceDisplayName": "Synthetic microphone",
+      "timebase": {
+        "startedHostTime": 0,
+        "machTimebaseNumerator": 1,
+        "machTimebaseDenominator": 1
+      },
+      "health": {
+        "status": "stopped",
+        "level": 0,
+        "droppedSampleCount": 0
+      },
+      "chunks": [
+        {
+          "id": "F0000000-0000-4000-8000-000000002121",
+          "sequence": 0,
+          "relativeFilePath": "tracks/SavedPlaybackTone.wav",
+          "presentationStart": {
+            "value": 0,
+            "timescale": 16000
+          },
+          "presentationEnd": {
+            "value": 192000,
+            "timescale": 16000
+          },
+          "discontinuities": [],
+          "sha256": "586fb8ef88e7777745f699b15fa3ffddc7f2aaf3a5c1f72dc7a0af77606fe0fa",
+          "byteCount": 384044,
+          "finalizationState": "finalized"
+        }
+      ]
+    }
+  ],
+  "speakers": [],
+  "transcriptSegments": [
+    {
+      "id": "F0000000-0000-4000-8000-000000001121",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 0,
+        "timescale": 16000
+      },
+      "end": {
+        "value": 192000,
+        "timescale": 16000
+      },
+      "text": "Synthetic playback acceptance clip.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete"
+    }
+  ],
+  "retention": {},
+  "processingAttempts": []
+}
