@@ -326,6 +326,25 @@ final class MeetingLiveBubbleComposerTests: XCTestCase {
         MeetingLiveUtterance(id: id, speaker: speaker, text: text, start: start, end: end)
     }
 
+    func testSourceHeadersAreLocalizedWithoutInventingParticipantIdentity() {
+        let unknown = MeetingSpeakerPresentation(identity: "unknown", label: .unknown)
+        let named = MeetingSpeakerPresentation(identity: "named",
+            label: .identified(.init(displayName: "Анна Ёлкина", isLocalUser: false)))
+        for (language, microphone, meeting) in [(PichiInterfaceLanguage.english, "Microphone", "Meeting audio"),
+                                               (.russian, "Микрофон", "Звук встречи")] {
+            for (source, label) in [(MeetingLiveSpeaker.you, microphone), (.them, meeting)] {
+                for participant in [nil, unknown, named] {
+                    let row = MeetingLiveBubbleComposer.Row(id: UUID(), speaker: source, text: "Original speech Ёё",
+                        isPartial: true, showsLabel: true, participant: participant, start: 7, readingTurnStart: 7)
+                    XCTAssertEqual(row.captionLabel(language: language), participant == named
+                        ? "00:07 Анна Ёлкина · \(label)" : label)
+                    XCTAssertEqual(row.text, "Original speech Ёё")
+                    XCTAssertEqual(row.participant, participant, "Source labels never supply participant evidence")
+                }
+            }
+        }
+    }
+
     func testFinalizedThenBottomPinnedPartialsOrderedByStart() {
         var snapshot = MeetingLiveTranscriptSnapshot.empty
         snapshot = snapshot.inserting(self.utterance(.you, "hello", start: 0, end: 1))
@@ -335,7 +354,7 @@ final class MeetingLiveBubbleComposerTests: XCTestCase {
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
         XCTAssertEqual(rows.map(\.text), ["hello", "you partial", "them partial"])
         XCTAssertEqual(rows.map(\.isPartial), [false, true, true])
-        XCTAssertEqual(rows.map(\.showsLabel), [false, false, false], "Capture sources do not invent participant headers")
+        XCTAssertEqual(rows.map(\.showsLabel), [true, false, true], "Source changes remain visible without participant identification")
     }
 
     func testShowsLabelIsFalseWhenSpeakerRepeatsAcrossPartial() {
@@ -344,7 +363,7 @@ final class MeetingLiveBubbleComposerTests: XCTestCase {
         snapshot = snapshot.settingPartial(MeetingLivePartial(id: UUID(), text: "still talking", start: 2), for: .you)
 
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
-        XCTAssertEqual(rows.map(\.showsLabel), [false, false], "Unidentified captions remain readable without pseudo-speaker labels")
+        XCTAssertEqual(rows.map(\.showsLabel), [true, false], "A growing turn keeps its source header without repeating it")
     }
 
     func testSolidifyKeepsRowIdentityStable() {
