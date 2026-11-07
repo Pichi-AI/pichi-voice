@@ -453,4 +453,32 @@ final class MeetingRecordingClockCoreTests: XCTestCase {
         let first = try resumed.convert(input, presentationTime: CMTime(seconds: 1_002.5, preferredTimescale: 48_000), clockPacket: afterGap)
         if let first { XCTAssertTrue(try XCTUnwrap(MeetingCaptureClockMetadata.read(from: first)).mapping.spans[0].discontinuityBefore) }
     }
+
+    func testFractionalResamplingConsumesTheBoundaryMarkerExactlyOnceAcrossConsecutiveOutputs() throws {
+        let converter = try MeetingCapturePCMConverter()
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: 1_000, recordingTimePolicy: .hostMonotonicV1)
+        let input = try pcm(rate: 48_000, frames: 256)
+        var frames = 0, outputCount = 0, boundaryCount = 0
+        func consume(_ sample: CMSampleBuffer?) throws {
+            guard let sample else { return }
+            let packet = try XCTUnwrap(MeetingCaptureClockMetadata.read(from: sample))
+            boundaryCount += packet.mapping.spans.filter(\.discontinuityBefore).count
+            let discontinuous = try timeline.record(sourceStartSample: frames,
+                frameCount: CMSampleBufferGetNumSamples(sample),
+                presentationTime: CMSampleBufferGetPresentationTimeStamp(sample).seconds, clockMapping: packet.mapping)
+            XCTAssertFalse(discontinuous, "A retained fraction of the first source span is still the same continuous epoch")
+            frames += CMSampleBufferGetNumSamples(sample); outputCount += 1
+        }
+        for index in 0..<20 {
+            let start = 1_000 + Double(index * 256) / 48_000
+            let end = 1_000 + Double((index + 1) * 256) / 48_000
+            try consume(converter.convert(input, presentationTime: CMTime(seconds: start, preferredTimescale: 1_000_000_000),
+                clockPacket: packet(mapping(frames: 256, start: start, end: end, boundary: index == 0))))
+        }
+        try consume(converter.finish())
+        XCTAssertGreaterThan(outputCount, 2)
+        XCTAssertEqual(boundaryCount, 1)
+        XCTAssertEqual(frames, 20 * 256 / 3)
+        XCTAssertFalse(timeline.hasGaps)
+    }
 }
