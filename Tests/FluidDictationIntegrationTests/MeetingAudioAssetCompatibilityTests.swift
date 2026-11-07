@@ -54,6 +54,18 @@ final class MeetingAudioAssetCompatibilityTests: XCTestCase {
         XCTAssertEqual(session.duration, 3)
     }
 
+    func testHostOriginKeepsNanosecondPrecisionAcrossSavedAndLiveConsumers() throws {
+        let configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic clock",
+            microphone: .init(captureDeviceID: "mic", displayName: "Mic"))
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 1_000_123_456_789,
+            machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil,
+            recordingTimePolicy: .hostMonotonicV1)
+        let session = MeetingSession(configuration: configuration, timebase: timebase)
+        let live = try MeetingRecordingClock(timebase: timebase)
+        XCTAssertEqual(try XCTUnwrap(session.transcriptPresentationOrigin).timescale, 1_000_000_000)
+        XCTAssertEqual(MeetingAnalysisManifest.presentationOrigin(of: session), live.origin.seconds, accuracy: 1e-9)
+    }
+
     func testLegacyChunkOmitsAllP0aKeysAndRoundTripsFullSession() throws {
         let chunk = MeetingAudioChunk(
             id: UUID(),

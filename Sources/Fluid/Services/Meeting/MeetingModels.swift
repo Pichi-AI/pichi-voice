@@ -1365,8 +1365,9 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
            timebase.machTimebaseDenominator > 0 {
             let seconds = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
                 / Double(timebase.machTimebaseDenominator) / 1_000_000_000
-            if seconds.isFinite, seconds >= 0, seconds < Double(Int64.max) / 1_000_000 {
-                self.transcriptPresentationOrigin = .init(value: Int64((seconds * 1_000_000).rounded()), timescale: 1_000_000)
+            let scale: Int32 = timebase.recordingTimePolicy == .hostMonotonicV1 ? 1_000_000_000 : 1_000_000
+            if seconds.isFinite, seconds >= 0, seconds < Double(Int64.max) / Double(scale) {
+                self.transcriptPresentationOrigin = .init(value: Int64((seconds * Double(scale)).rounded()), timescale: scale)
                 self.transcriptTimeDomain = .meetingRelative
             }
         }
