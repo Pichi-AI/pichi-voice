@@ -1006,7 +1006,11 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
         await gate.stop()
         let track = await fixture.writer.stop()
         XCTAssertEqual(fixture.observations.writerFailures, 0)
+        XCTAssertFalse(track.chunks.isEmpty)
+        XCTAssertTrue(track.chunks.allSatisfy { $0.finalizationState == .finalized })
         XCTAssertTrue(track.chunks.allSatisfy { $0.discontinuities.isEmpty }, "Allowed PCM cannot acquire artificial source gaps")
+        let storedFrames = try track.chunks.map { try XCTUnwrap($0.captureAnalysisAsset?.frameCount) }.reduce(0, +)
+        XCTAssertEqual(storedFrames, Int64(count * 4_800), "The finalized CAF packet counts must include every admitted frame")
         let samples = try self.readSamples(track, in: fixture.directory)
         XCTAssertEqual(samples.count, count * 4_800, "The real writer must receive every sample, not compress scattered islands")
         XCTAssertTrue(samples.allSatisfy { abs($0 - 0.25) < 0.001 })
@@ -1049,9 +1053,25 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
         for chunk in track.chunks {
             let file = try AVAudioFile(forReading: directory.appendingPathComponent(chunk.relativeFilePath),
                 commonFormat: .pcmFormatFloat32, interleaved: false)
-            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
-            try file.read(into: buffer)
-            samples.append(contentsOf: UnsafeBufferPointer(start: try XCTUnwrap(buffer.floatChannelData?[0]), count: Int(buffer.frameLength)))
+            let expectedFrames = try XCTUnwrap(chunk.captureAnalysisAsset?.frameCount)
+            XCTAssertEqual(file.length, expectedFrames, "The native reader's length must match the sink's verified CAF packet count")
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 16_384))
+            var decodedFrames: Int64 = 0
+            // AVAudioFile attempts to fill a buffer; frameLength is the actual read receipt.
+            // A successful short read is not EOF. Read the remaining declared frames as well.
+            while file.framePosition < file.length {
+                let before = file.framePosition
+                let requested = AVAudioFrameCount(min(Int64(buffer.frameCapacity), file.length - before))
+                try file.read(into: buffer, frameCount: requested)
+                guard buffer.frameLength > 0 else {
+                    throw NSError(domain: "MeetingWriterPrivacyTests", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "CAF ended before its declared frame count"])
+                }
+                XCTAssertEqual(file.framePosition - before, Int64(buffer.frameLength))
+                decodedFrames += Int64(buffer.frameLength)
+                samples.append(contentsOf: UnsafeBufferPointer(start: try XCTUnwrap(buffer.floatChannelData?[0]), count: Int(buffer.frameLength)))
+            }
+            XCTAssertEqual(decodedFrames, expectedFrames, "Every stored PCM frame must be decoded and checked")
         }
         return samples
     }
