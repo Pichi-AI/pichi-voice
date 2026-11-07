@@ -23173,15 +23173,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "GPU preferred; CPU fallback"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "CPU for background recording"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "CPU for background recording"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "GPU preferred; CPU fallback"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Приоритет GPU; резервный CPU"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "CPU для записи в фоне"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "CPU для записи в фоне"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Приоритет GPU; резервный CPU"
+                }
+              }
+            }
           }
         }
       }
@@ -52759,15 +52795,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The published GigaAM v3 Core ML export runs on GPU by default. CPU is used only if GPU execution is unavailable or fails. Library percentages are relative product ratings, not measured accuracy."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "On iPhone and iPad, the published GigaAM v3 Core ML export uses CPU so recording can continue in the background. Library percentages are relative product ratings, not measured accuracy."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "On iPhone and iPad, the published GigaAM v3 Core ML export uses CPU so recording can continue in the background. Library percentages are relative product ratings, not measured accuracy."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The published GigaAM v3 Core ML export runs on GPU by default. CPU is used only if GPU execution is unavailable or fails. Library percentages are relative product ratings, not measured accuracy."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Опубликованный экспорт GigaAM v3 для Core ML по умолчанию использует GPU. CPU включается только при недоступности или ошибке выполнения на GPU. Проценты в библиотеке являются относительными оценками, а не измеренной точностью."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "На iPhone и iPad опубликованный экспорт GigaAM v3 для Core ML использует CPU, чтобы запись могла продолжаться в фоне. Проценты в библиотеке являются относительными оценками, а не измеренной точностью."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "На iPhone и iPad опубликованный экспорт GigaAM v3 для Core ML использует CPU, чтобы запись могла продолжаться в фоне. Проценты в библиотеке являются относительными оценками, а не измеренной точностью."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Опубликованный экспорт GigaAM v3 для Core ML по умолчанию использует GPU. CPU включается только при недоступности или ошибке выполнения на GPU. Проценты в библиотеке являются относительными оценками, а не измеренной точностью."
+                }
+              }
+            }
           }
         }
       }
@@ -52776,15 +52848,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The published quantized GigaAM model uses the same file on every device. GPU is preferred; CPU is used when GPU execution is unavailable, fails or cannot fit the available memory budget. Library percentages are relative product ratings, not measured accuracy."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The published quantized GigaAM model uses the same file on every device. iPhone and iPad use CPU so recording can continue in the background. Library percentages are relative product ratings, not measured accuracy."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The published quantized GigaAM model uses the same file on every device. iPhone and iPad use CPU so recording can continue in the background. Library percentages are relative product ratings, not measured accuracy."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The published quantized GigaAM model uses the same file on every device. GPU is preferred; CPU is used when GPU execution is unavailable, fails or cannot fit the available memory budget. Library percentages are relative product ratings, not measured accuracy."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Опубликованная квантизированная модель GigaAM использует один файл на всех устройствах. GPU используется по умолчанию; CPU используется, если GPU недоступен, произошла ошибка запуска или не хватает доступной памяти. Проценты в библиотеке являются относительными оценками, а не измеренной точностью."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Опубликованная квантизированная модель GigaAM использует один файл на всех устройствах. На iPhone и iPad используется CPU, чтобы запись могла продолжаться в фоне. Проценты в библиотеке являются относительными оценками, а не измеренной точностью."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Опубликованная квантизированная модель GigaAM использует один файл на всех устройствах. На iPhone и iPad используется CPU, чтобы запись могла продолжаться в фоне. Проценты в библиотеке являются относительными оценками, а не измеренной точностью."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Опубликованная квантизированная модель GigaAM использует один файл на всех устройствах. GPU используется по умолчанию; CPU используется, если GPU недоступен, произошла ошибка запуска или не хватает доступной памяти. Проценты в библиотеке являются относительными оценками, а не измеренной точностью."
+                }
+              }
+            }
           }
         }
       }

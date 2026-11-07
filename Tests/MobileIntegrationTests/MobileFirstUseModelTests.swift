@@ -206,6 +206,28 @@ final class MobileFirstUseModelTests: XCTestCase {
         XCTAssertEqual(policy.preferredDownload.fingerprint, GigaAMModelCatalog.downloadableModel.fingerprint)
     }
 
+    func testGigaAMLibraryMetadataUsesMobileCPUCopyInBothLanguages() {
+        let descriptions = [GigaAMModelCatalog.downloadableModel.libraryMetadata,
+                            GigaAMModelCatalog.coreMLModel.libraryMetadata]
+        for (language, processor, background, ratings) in [
+            (PichiInterfaceLanguage.english, "CPU for background recording", "in the background", "not measured accuracy"),
+            (.russian, "CPU для записи в фоне", "в фоне", "не измеренной точностью")
+        ] {
+            for metadata in descriptions {
+                XCTAssertEqual(PichiLocalization.text(metadata.processor, language: language, bundle: .main), processor)
+                let explanation = PichiLocalization.text(
+                    metadata.performanceExplanation,
+                    language: language,
+                    bundle: .main
+                )
+                XCTAssertTrue(explanation.contains("CPU"))
+                XCTAssertTrue(explanation.contains(background))
+                XCTAssertTrue(explanation.contains(ratings), "Library scores must not become measured accuracy claims")
+                XCTAssertFalse(explanation.contains("GPU"), "Mobile metadata must not promise accelerator execution")
+            }
+        }
+    }
+
     func testNativeGigaAMProviderKeepsCPUThroughRepeatedAdmittedPCM() async throws {
         guard let path = ProcessInfo.processInfo.environment["PICHI_GIGAAM_Q8_MODEL_DIR"] else {
             throw XCTSkip("Set a verified local Q8 GGUF path for native mobile provider execution.")
