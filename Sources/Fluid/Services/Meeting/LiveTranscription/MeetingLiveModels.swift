@@ -264,12 +264,25 @@ nonisolated enum MeetingLiveTimeConversion {
 final nonisolated class MeetingLiveOriginBox: @unchecked Sendable {
     private let lock = NSLock()
     private var origin: CMTime?
+    private var frozen = false
+
+    /// A recording's master origin never follows a later packet or a restarted producer.
+    @discardableResult
+    func freeze(_ pts: CMTime) -> CMTime {
+        self.lock.withLock {
+            if self.frozen, let origin { return origin }
+            self.origin = pts
+            self.frozen = true
+            return pts
+        }
+    }
 
     @discardableResult
     func establish(_ pts: CMTime) -> CMTime {
         self.lock.lock()
         defer { self.lock.unlock() }
         if let existing = self.origin {
+            if self.frozen { return existing }
             let earliest = min(pts, existing)
             self.origin = earliest
             return earliest
@@ -282,6 +295,203 @@ final nonisolated class MeetingLiveOriginBox: @unchecked Sendable {
         self.lock.lock()
         defer { self.lock.unlock() }
         return self.origin
+    }
+}
+
+/// One immutable host-clock axis and ownership scope for a capture attempt. Frame positions
+/// remain media coordinates; only measured host intervals determine recording time.
+final nonisolated class MeetingRecordingClock: @unchecked Sendable {
+    enum Failure: Error { case invalidTimebase, invalidPacket, retiredProducer, unprovenClock }
+    let id: UUID
+    let origin: CMTime
+    private let lock = NSLock()
+    private var epochs: [MeetingAudioTrackID: UInt64] = [:]
+
+    init(timebase: MeetingTimebaseMetadata, id: UUID = UUID()) throws {
+        guard timebase.machTimebaseNumerator > 0, timebase.machTimebaseDenominator > 0 else {
+            throw Failure.invalidTimebase
+        }
+        let seconds = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
+            / Double(timebase.machTimebaseDenominator) / 1_000_000_000
+        guard seconds.isFinite, seconds >= 0 else { throw Failure.invalidTimebase }
+        self.id = id
+        self.origin = CMTime(seconds: seconds, preferredTimescale: 1_000_000_000)
+    }
+
+    func source(_ sourceID: MeetingAudioTrackID) -> MeetingRecordingClockContext {
+        MeetingRecordingClockContext(clock: self, sourceID: sourceID)
+    }
+
+    fileprivate func reserveEpoch(sourceID: MeetingAudioTrackID) -> UInt64 {
+        self.lock.withLock {
+            let next = (self.epochs[sourceID] ?? 0) + 1
+            self.epochs[sourceID] = next
+            return next
+        }
+    }
+}
+
+nonisolated struct MeetingRecordingClockContext: Sendable {
+    let clock: MeetingRecordingClock
+    let sourceID: MeetingAudioTrackID
+    var clockID: UUID { self.clock.id }
+    var origin: CMTime { self.clock.origin }
+
+    func reserveEpoch() -> UInt64 { self.clock.reserveEpoch(sourceID: self.sourceID) }
+
+    func accepts(_ packet: MeetingCaptureClockMetadata.Packet) -> Bool {
+        packet.clockID == self.clockID && packet.sourceID == self.sourceID
+    }
+
+    func mapping(frameCount: Int, start: CMTime, end: CMTime,
+                 discontinuityBefore: Bool) throws -> MeetingAudioClockMapping {
+        guard frameCount > 0, frameCount <= 65_536,
+              start.isNumeric, end.isNumeric, end > start,
+              start >= self.origin else { throw MeetingRecordingClock.Failure.invalidPacket }
+        return try MeetingAudioClockMapping(frameCount: Int64(frameCount), spans: [
+            MeetingAudioClockSpan(frameStart: 0, frameEnd: Double(frameCount),
+                hostStart: .init(value: start.convertScale(1_000_000_000, method: .default).value,
+                                 timescale: 1_000_000_000),
+                hostEnd: .init(value: end.convertScale(1_000_000_000, method: .default).value,
+                               timescale: 1_000_000_000),
+                discontinuityBefore: discontinuityBefore)
+        ]).validated(expectedFrameCount: Int64(frameCount))
+    }
+
+    /// Copies only the bounded audio block. It never retains an arbitrary native backing store.
+    static func ownedCopy(_ sample: CMSampleBuffer) throws -> CMSampleBuffer {
+        let frames = CMSampleBufferGetNumSamples(sample)
+        guard frames > 0, frames <= 65_536, CMSampleBufferDataIsReady(sample),
+              let format = CMSampleBufferGetFormatDescription(sample),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
+              asbd.mFormatID == kAudioFormatLinearPCM, asbd.mBitsPerChannel == 32,
+              asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0,
+              asbd.mSampleRate.isFinite, (8_000...192_000).contains(asbd.mSampleRate),
+              (1...8).contains(asbd.mChannelsPerFrame),
+              let block = CMSampleBufferGetDataBuffer(sample) else {
+            throw MeetingRecordingClock.Failure.invalidPacket
+        }
+        let bytes = CMBlockBufferGetDataLength(block)
+        guard bytes > 0, bytes <= 2 * 1024 * 1024 else { throw MeetingRecordingClock.Failure.invalidPacket }
+        var copied: CMBlockBuffer?
+        guard CMBlockBufferCreateContiguous(allocator: kCFAllocatorDefault, sourceBuffer: block,
+            blockAllocator: kCFAllocatorDefault, customBlockSource: nil, offsetToData: 0,
+            dataLength: bytes, flags: kCMBlockBufferAlwaysCopyDataFlag, blockBufferOut: &copied) == noErr,
+              let copied else { throw MeetingRecordingClock.Failure.invalidPacket }
+        var timing = CMSampleTimingInfo()
+        guard CMSampleBufferGetSampleTimingInfo(sample, at: 0, timingInfoOut: &timing) == noErr else {
+            throw MeetingRecordingClock.Failure.invalidPacket
+        }
+        var result: CMSampleBuffer?
+        guard CMSampleBufferCreateReady(allocator: kCFAllocatorDefault, dataBuffer: copied,
+            formatDescription: format, sampleCount: frames, sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing, sampleSizeEntryCount: 0, sampleSizeArray: nil,
+            sampleBufferOut: &result) == noErr, let result else { throw MeetingRecordingClock.Failure.invalidPacket }
+        return result
+    }
+
+    func timedCopy(_ sample: CMSampleBuffer, mapping: MeetingAudioClockMapping,
+                   producerEpoch: UInt64) throws -> CMSampleBuffer {
+        let frames = CMSampleBufferGetNumSamples(sample)
+        let mapping = try mapping.validated(expectedFrameCount: Int64(frames))
+        guard let first = mapping.spans.first, let last = mapping.spans.last else {
+            throw MeetingRecordingClock.Failure.invalidPacket
+        }
+        let start = CMTime(value: first.hostStart.value, timescale: first.hostStart.timescale)
+        let end = CMTime(value: last.hostEnd.value, timescale: last.hostEnd.timescale)
+        var timing = CMSampleTimingInfo(duration: CMTimeMultiplyByRatio(end - start, multiplier: 1,
+            divisor: Int32(frames)), presentationTimeStamp: start, decodeTimeStamp: .invalid)
+        var result: CMSampleBuffer?
+        guard CMSampleBufferCreateCopyWithNewTiming(allocator: kCFAllocatorDefault,
+            sampleBuffer: sample, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+            sampleBufferOut: &result) == noErr, let result else { throw MeetingRecordingClock.Failure.invalidPacket }
+        try MeetingCaptureClockMetadata.attach(mapping: mapping, clockID: self.clockID,
+            sourceID: self.sourceID, producerEpoch: producerEpoch, to: result)
+        return result
+    }
+}
+
+/// Finalizes one pending packet using the next measured acquisition anchor. Callback arrival
+/// time is never an anchor. A real source gap closes the previous interval without filling it.
+final nonisolated class MeetingCaptureSourceClock: @unchecked Sendable {
+    private struct Pending {
+        let sample: CMSampleBuffer
+        let nativeStart: CMTime
+        let nativeEnd: CMTime
+        let hostStart: CMTime
+        let projectedHostEnd: CMTime
+        let rate: Double
+        let frames: Int
+        let sourceFrameStart: Int64?
+        let epoch: UInt64
+        let discontinuity: Bool
+    }
+    let context: MeetingRecordingClockContext
+    private let lock = NSLock()
+    private var pending: Pending?
+    private var generation: UInt64?
+    private var epoch: UInt64 = 0
+    private var format: CMFormatDescription?
+
+    init(context: MeetingRecordingClockContext) { self.context = context }
+
+    func offer(_ input: CMSampleBuffer, producerGeneration: UInt64,
+               sourceClock: CMClockOrTimebase? = nil, acquisitionStart: CMTime? = nil,
+               sourceFrameStart: Int64? = nil) throws -> [CMSampleBuffer] {
+        try self.lock.withLock {
+            let sample = try MeetingRecordingClockContext.ownedCopy(input)
+            guard let description = CMSampleBufferGetFormatDescription(sample),
+                  let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee else {
+                throw MeetingRecordingClock.Failure.invalidPacket
+            }
+            if let generation, producerGeneration < generation { throw MeetingRecordingClock.Failure.retiredProducer }
+            let frames = CMSampleBufferGetNumSamples(sample), rate = asbd.mSampleRate
+            let nativeStart = CMSampleBufferGetPresentationTimeStamp(sample)
+            let nativeEnd = nativeStart + CMTime(seconds: Double(frames) / rate, preferredTimescale: 1_000_000_000)
+            let hostStart = acquisitionStart ?? sourceClock.map {
+                CMSyncConvertTime(nativeStart, from: $0, to: CMClockGetHostTimeClock())
+            } ?? nativeStart
+            let hostEnd = sourceClock.map {
+                CMSyncConvertTime(nativeEnd, from: $0, to: CMClockGetHostTimeClock())
+            } ?? (hostStart + CMTime(seconds: Double(frames) / rate, preferredTimescale: 1_000_000_000))
+            guard hostStart.isNumeric, hostEnd.isNumeric, hostStart >= self.context.origin, hostEnd > hostStart else {
+                throw MeetingRecordingClock.Failure.unprovenClock
+            }
+            let formatChanged = self.format.map { !CMFormatDescriptionEqual($0, otherFormatDescription: description) } ?? false
+            let changed = self.generation.map { $0 != producerGeneration } ?? true
+            var continuous = !changed && !formatChanged
+            if let prior = self.pending {
+                if let a = prior.sourceFrameStart, let b = sourceFrameStart {
+                    continuous = continuous && b == a + Int64(prior.frames)
+                } else {
+                    continuous = continuous && abs((nativeStart - prior.nativeEnd).seconds) <= 1.0 / rate + 1e-9
+                }
+                guard hostStart > prior.hostStart else { throw MeetingRecordingClock.Failure.unprovenClock }
+            }
+            var output: [CMSampleBuffer] = []
+            if let prior = self.pending {
+                let end = continuous ? hostStart : prior.projectedHostEnd
+                let mapping = try self.context.mapping(frameCount: prior.frames, start: prior.hostStart,
+                    end: end, discontinuityBefore: prior.discontinuity)
+                output.append(try self.context.timedCopy(prior.sample, mapping: mapping, producerEpoch: prior.epoch))
+            }
+            if changed || formatChanged { self.epoch = self.context.reserveEpoch() }
+            self.generation = producerGeneration; self.format = description
+            self.pending = Pending(sample: sample, nativeStart: nativeStart, nativeEnd: nativeEnd,
+                hostStart: hostStart, projectedHostEnd: hostEnd, rate: rate, frames: frames,
+                sourceFrameStart: sourceFrameStart, epoch: self.epoch, discontinuity: !continuous)
+            return output
+        }
+    }
+
+    func finish() throws -> [CMSampleBuffer] {
+        try self.lock.withLock {
+            guard let prior = self.pending else { return [] }
+            self.pending = nil
+            let mapping = try self.context.mapping(frameCount: prior.frames, start: prior.hostStart,
+                end: prior.projectedHostEnd, discontinuityBefore: prior.discontinuity)
+            return [try self.context.timedCopy(prior.sample, mapping: mapping, producerEpoch: prior.epoch)]
+        }
     }
 }
 

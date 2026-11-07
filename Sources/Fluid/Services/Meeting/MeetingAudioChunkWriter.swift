@@ -5,6 +5,7 @@ import CryptoKit
 import Foundation
 
 final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
+    let clockContext: MeetingRecordingClockContext?
     typealias EventHandler = @Sendable (MeetingCaptureEvent) -> Void
 
     private final class SampleBox: @unchecked Sendable {
@@ -112,8 +113,10 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         // cadence while the filesystem drains a burst.
         pendingSlotLimit: Int = 128,
         diagnosticSampleObserver: (@Sendable (CMSampleBuffer, UInt64) -> Void)? = nil,
-        sampleAdmission: (@Sendable (CMSampleBuffer) -> Bool)? = nil
+        sampleAdmission: (@Sendable (CMSampleBuffer) -> Bool)? = nil,
+        clockContext: MeetingRecordingClockContext? = nil
     ) throws {
+        self.clockContext = clockContext
         self.trackID = track.id
         self.track = track
         self.sessionDirectory = sessionDirectory
