@@ -3,6 +3,24 @@ import Foundation
 import XCTest
 
 final class MeetingAudioAssetCompatibilityTests: XCTestCase {
+    func testRecordingClockMetadataIsAdditiveAndPreservesLegacyDefaults() throws {
+        let legacy = Data(#"{"startedHostTime":12,"machTimebaseNumerator":1,"machTimebaseDenominator":1}"#.utf8)
+        var timebase = try JSONDecoder().decode(MeetingTimebaseMetadata.self, from: legacy)
+        XCTAssertNil(timebase.recordingTimePolicy)
+        let oldJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(timebase)) as? [String: Any])
+        XCTAssertNil(oldJSON["recordingTimePolicy"])
+        timebase.recordingTimePolicy = .hostMonotonicV1
+        XCTAssertEqual(try JSONDecoder().decode(MeetingTimebaseMetadata.self, from: JSONEncoder().encode(timebase)), timebase)
+        let mapping = MeetingAudioClockMapping(frameCount: 480, spans: [
+            .init(frameStart: 0, frameEnd: 480, hostStart: .init(value: 1_000, timescale: 1),
+                  hostEnd: .init(value: 1_000_010, timescale: 1_000))])
+        XCTAssertEqual(try JSONDecoder().decode(MeetingAudioClockMapping.self, from: JSONEncoder().encode(mapping)), mapping)
+        let missingDefaults = Data(#"{"frameCount":1,"spans":[{"frameStart":0,"frameEnd":1,"hostStart":{"value":1,"timescale":1},"hostEnd":{"value":2,"timescale":1}}]}"#.utf8)
+        let decoded = try JSONDecoder().decode(MeetingAudioClockMapping.self, from: missingDefaults)
+        XCTAssertEqual(decoded.version, 1)
+        XCTAssertFalse(try XCTUnwrap(decoded.spans.first).discontinuityBefore)
+    }
+
     func testLegacyChunkOmitsAllP0aKeysAndRoundTripsFullSession() throws {
         let chunk = MeetingAudioChunk(
             id: UUID(),
