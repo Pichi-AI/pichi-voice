@@ -157,6 +157,21 @@ final nonisolated class MeetingCapturePCMConverter {
         if let sourceFormat, sourceFormat != buffer.format {
             throw MeetingCapturePCMError.timelineDiscontinuity
         }
+        // Matching mono PCM already has the required frame contract. Avoid a rate converter's
+        // priming delay and finite short-epoch loss when no resampling is needed.
+        if let packet = clockPacket, buffer.format == self.targetFormat {
+            self.sourceFormat = buffer.format
+            try self.appendClockPacket(packet, frames: Int64(buffer.frameLength))
+            self.clockMode = true
+            let mapping = try self.outputClockMapping(frames: Int64(buffer.frameLength), nativeFramesPerOutput: 1)
+            guard let start = mapping.hostTime(atFrame: 0) else { throw MeetingCapturePCMError.invalidPresentationTime }
+            let sample = try Self.sampleBuffer(buffer: buffer,
+                presentationTime: CMTime(value: start.value, timescale: start.timescale), sampleRate: self.targetSampleRate)
+            try MeetingCaptureClockMetadata.attach(mapping: mapping, clockID: packet.clockID,
+                sourceID: packet.sourceID, producerEpoch: packet.producerEpoch, to: sample)
+            self.producedFrames += Int64(buffer.frameLength)
+            return sample
+        }
         if self.converter == nil {
             guard let converter = AVAudioConverter(from: buffer.format, to: self.targetFormat) else {
                 throw MeetingCapturePCMError.conversionFailed(PichiLocalization.text("Unsupported source format."))
@@ -275,6 +290,7 @@ final nonisolated class MeetingCapturePCMConverter {
             self.clockSpans[0].hostStart = MeetingAudioClockMapping.mediaTime(first.hostStart.seconds
                 + fraction * (first.hostEnd.seconds - first.hostStart.seconds))
             self.clockSpans[0].frameStart = upper
+            self.clockSpans[0].discontinuityBefore = false
         }
         return mapping
     }

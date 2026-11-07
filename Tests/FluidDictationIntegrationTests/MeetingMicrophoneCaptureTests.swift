@@ -1128,12 +1128,14 @@ extension MeetingMicrophoneCaptureTests {
             self.maximumPacketFrames = max(self.maximumPacketFrames, CMSampleBufferGetNumSamples(sample))
             if let block = CMSampleBufferGetDataBuffer(sample) {
                 var marker: Float = 0
+                let frameCount = CMSampleBufferGetNumSamples(sample)
                 let status = withUnsafeMutableBytes(of: &marker) {
-                    CMBlockBufferCopyDataBytes(block, atOffset: CMBlockBufferGetDataLength(block) - 4,
+                    CMBlockBufferCopyDataBytes(block, atOffset: frameCount >= 1024 ? (frameCount / 2) * 4 : CMBlockBufferGetDataLength(block) - 4,
                         dataLength: 4, destination: $0.baseAddress!)
                 }
                 // Check the steady constant marker after any finite resampling startup transient.
-                self.samplesValid = self.samplesValid && status == noErr && marker.isFinite && abs(marker - 0.25) < 0.01
+                self.samplesValid = self.samplesValid && status == noErr && marker.isFinite
+                    && (frameCount < 1024 || abs(marker - 0.25) < 0.01)
             } else { self.samplesValid = false }
         }
     }

@@ -478,6 +478,9 @@ final nonisolated class MeetingCaptureSourceClock: @unchecked Sendable {
                     let measured = (hostStart - prior.hostStart).seconds
                     let nominal = Double(prior.frames) / prior.rate
                     guard measured.isFinite, (0.98 - 1e-9...1.02 + 1e-9).contains(measured / nominal) else {
+                        #if DEBUG
+                        print("CLOCK-INVALID-RATIO", measured, nominal, measured / nominal, prior.frames, prior.rate)
+                        #endif
                         throw MeetingRecordingClock.Failure.unprovenClock
                     }
                     if sourceClock == nil {

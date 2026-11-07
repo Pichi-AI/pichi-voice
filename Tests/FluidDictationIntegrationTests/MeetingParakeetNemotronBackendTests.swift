@@ -3361,6 +3361,7 @@ extension MeetingParakeetNemotronBackendTests {
             let gap = packet >= 20 ? (source == 0 ? 0.1 : 2.4) : 0
             return clock.origin.seconds + delay + Double(packet) * 0.5 * rate + gap
         }
+        let timelines = try tracks.map { try XCTUnwrap(fixture.attempt.sourceTimelines[$0.id]) }
         for index in 0..<32 {
             // Stay inside the existing 20-second source budget while the main actor owns the fixture.
             // Reverse source delivery order on alternating packets. Arrival order cannot move the origin.
@@ -3395,7 +3396,7 @@ extension MeetingParakeetNemotronBackendTests {
             let gapStart = host(source, 19) - clock.origin.seconds + 0.5 * (source == 0 ? 1.0003 : 0.9997)
             let gapEnd = host(source, 20) - clock.origin.seconds
             XCTAssertTrue(words.allSatisfy { $0.end.seconds <= gapStart + 1e-6 || $0.start.seconds >= gapEnd - 1e-6 })
-            XCTAssertTrue(fixture.attempt.sourceTimelines[track.id]?.hasGaps == true)
+            XCTAssertTrue(timelines[source].hasGaps)
         }
         XCTAssertEqual(runtime.evidence.count("replay"), 0)
     }
