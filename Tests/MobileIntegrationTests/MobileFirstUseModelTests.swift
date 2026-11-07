@@ -216,7 +216,7 @@ final class MobileFirstUseModelTests: XCTestCase {
         let lease = UUID()
         try provider.beginAdmittedTranscription(leaseID: lease)
         addTeardownBlock { @MainActor in
-            provider.endAdmittedTranscription(leaseID: lease)
+            await provider.endAdmittedTranscription(leaseID: lease)
             await provider.unloadModel()
         }
         try await provider.prepare()
