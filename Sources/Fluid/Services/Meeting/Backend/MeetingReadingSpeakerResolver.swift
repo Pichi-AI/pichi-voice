@@ -298,7 +298,8 @@ nonisolated enum MeetingReadingSpeakerResolver {
                     if chosen == nil, policy.enableIncomingGapReading,
                        source.nativePrecision != .utterance,
                        source.nativeSpeakerAssignment == nil || source.nativeSpeakerAssignment == .unassigned,
-                       source.speakerAttribution?.relation == nil || source.speakerAttribution?.relation == .none,
+                       source.speakerAttribution?.relation == nil
+                        || source.speakerAttribution?.relation == MeetingSpeakerAttributionRelation.none,
                        let left, let right, left.id != right.id,
                        time.start > left.end + policy.comparisonTolerance,
                        right.start > time.end + policy.comparisonTolerance {
