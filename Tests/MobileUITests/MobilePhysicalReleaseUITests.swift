@@ -5,6 +5,122 @@ import UIKit
 /// Opt-in tests of the installed app through its public UI. Audible fixtures belong
 /// to the runner; silent input uses only the app's explicit DEBUG capture adapter.
 final class MobilePhysicalReleaseUITests: XCTestCase {
+    /// Opt-in regression against an already installed ordinary app. The parent
+    /// preserves its data, owns the phone/audio lease and selects destination artifacts.
+    @MainActor
+    func testPhysicalGigaAMRecordingSurvivesSystemTransitions() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires the explicitly owned physical iPhone and microphone")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_GIGAAM_BACKGROUND_UI"] == "1" else {
+            throw XCTSkip("Physical background recording requires explicit opt-in")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let priorModel = try XCTUnwrap(environment["PICHI_PHYSICAL_PRIOR_MODEL"])
+        let support = try FileManager.default.url(for: .applicationSupportDirectory,
+            in: .userDomainMask, appropriateFor: nil, create: false)
+        let player = try AVAudioPlayer(contentsOf: support.appendingPathComponent("BackgroundRecordingUI/speech.wav"))
+        player.numberOfLoops = -1
+        player.volume = 0.15
+        try require(player.prepareToPlay(), "Prepare approved synthetic speech in the phone runner")
+        let audio = AVAudioSession.sharedInstance()
+        let category = audio.category, mode = audio.mode, options = audio.categoryOptions
+        defer {
+            player.stop()
+            try? audio.setActive(false, options: .notifyOthersOnDeactivation)
+            try? audio.setCategory(category, mode: mode, options: options)
+        }
+        let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice")
+        var ownsRecording = false
+        func selectModel(_ model: String) throws {
+            try self.openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
+            try self.tap(app.buttons["settings.models"], "Open model settings")
+            let selected = app.descendants(matching: .any)["model.selected.\(model)"].firstMatch
+            if !selected.exists {
+                let activate = app.buttons["model.activate.\(model)"]
+                try self.reveal(activate, in: app, revision: revision)
+                try self.tap(activate, "Activate the already installed model")
+            }
+            try self.require(selected.waitForExistence(timeout: 45), "The requested installed model must become selected")
+        }
+        do {
+            app.activate()
+            try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
+            try require(!app.buttons["meeting.stop"].exists
+                && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                "Preserve every existing recording and processing attempt")
+            try selectModel("gigaam-v3-eou")
+            capture("background-01-gigaam", revision: revision)
+            let runner = XCUIApplication(bundleIdentifier: try XCTUnwrap(Bundle.main.bundleIdentifier))
+            runner.activate()
+            try audio.setCategory(.playback, mode: .default, options: .mixWithOthers)
+            try audio.setActive(true)
+            try require(player.play(), "Start the owned phone speaker fixture")
+            app.activate()
+            try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
+            try tap(app.buttons["meeting.start"], "Start normal microphone recording")
+            ownsRecording = true
+            try await waitForVisibleRecording(in: app, timeout: 90)
+            try await observeVisibleRecording(in: app, player: player, seconds: 6)
+            capture("background-02-recording", revision: revision)
+            var timer = try visibleTimerSeconds(in: app)
+
+            // Pull down Notification Center from the top edge, then dismiss it.
+            let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.01))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)))
+            try await Task.sleep(nanoseconds: 6_000_000_000)
+            capture("background-03-notification-center", revision: revision)
+            springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
+                .press(forDuration: 0.05, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)))
+            app.activate()
+            try verifyVisibleRecording(in: app)
+            try require(visibleTimerSeconds(in: app) > timer, "Recording must survive Notification Center")
+            capture("background-04-after-notifications", revision: revision)
+            timer = try visibleTimerSeconds(in: app)
+
+            XCUIDevice.shared.press(.home)
+            try require(app.state == .runningBackground, "The actual app must enter background on Home")
+            try await Task.sleep(nanoseconds: 8_000_000_000)
+            try require(app.state == .runningBackground && player.isPlaying, "Microphone app and fixture must remain alive on Home")
+            capture("background-05-home", revision: revision)
+            app.activate()
+            try verifyVisibleRecording(in: app)
+            try require(visibleTimerSeconds(in: app) > timer, "Recording must survive Home")
+            timer = try visibleTimerSeconds(in: app)
+
+            let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
+            settings.activate()
+            try require(settings.state == .runningForeground && app.state == .runningBackground,
+                "Settings must really replace the recording UI")
+            try await Task.sleep(nanoseconds: 8_000_000_000)
+            capture("background-06-other-app", revision: revision)
+            app.activate()
+            try verifyVisibleRecording(in: app)
+            try require(visibleTimerSeconds(in: app) > timer, "Recording must survive another app")
+            try require(liveTextCharacterCount(in: app) > 0, "Physical synthetic speech must produce visible captions")
+            capture("background-07-returned", revision: revision)
+            player.stop()
+            try tap(app.buttons["meeting.stop"], "Stop only this test's recording")
+            try await waitForCompletedTranscript(in: app, timeout: 180)
+            ownsRecording = false
+            capture("background-08-completed", revision: revision)
+            try selectModel(priorModel)
+        } catch {
+            player.stop()
+            app.activate()
+            if ownsRecording, app.buttons["meeting.stop"].exists {
+                app.buttons["meeting.stop"].tap()
+                try? await waitForCompletedTranscript(in: app, timeout: 120)
+            }
+            capture("background-failure", revision: revision)
+            if !app.buttons["meeting.stop"].exists { try? selectModel(priorModel) }
+            throw error
+        }
+        #endif
+    }
+
     /// Observes an already running frozen Release after the parent preserves its data.
     /// The parent owns normal launch, reboot, unlock and continuous native capture.
     @MainActor
