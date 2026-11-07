@@ -29,9 +29,9 @@ final class MeetingNemotronModelLocatorTests: XCTestCase {
         XCTAssertEqual(decoded.map(\.bitPattern), expected)
     }
 
-    func testSilenceEmbeddingDecoderRejectsTruncatedAndOversizedStorage() {
+    func testSilenceEmbeddingDecoderRejectsTruncatedAndOversizedStorage() throws {
         let bytes = [UInt8](repeating: 0, count: 2_049)
-        bytes.withUnsafeBytes { storage in
+        try bytes.withUnsafeBytes { storage in
             for count in [0, 3, 2_047, 2_049] {
                 let payload = UnsafeRawBufferPointer(rebasing: storage[..<count])
                 XCTAssertThrowsError(try MeetingModelInstaller.decodeSilenceEmbedding(payload)) { error in
