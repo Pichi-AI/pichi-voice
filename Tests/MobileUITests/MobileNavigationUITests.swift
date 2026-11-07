@@ -1203,7 +1203,8 @@ final class MobileNavigationUITests: XCTestCase {
 
     /// Prefixes only locate the body within its stable paragraph container. Passing still
     /// requires the complete label, preserving every non-whitespace character and word.
-    private func assertSavedParagraphs(_ expected: [String], identifiers: [String]?, step: String) throws {
+    private func assertSavedParagraphs(_ expected: [String], identifiers: [String]?, step: String,
+                                      speakerLabels: [String]? = nil) throws {
         let checked = try XCTUnwrap(expected.count >= 3 ? Array(expected.prefix(3)) : nil,
                                    "The saved-session review checks three complete original paragraphs")
         for (index, text) in checked.enumerated() {
@@ -1225,6 +1226,12 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertTrue(body.exists, "The expected body must exist inside the original saved paragraph")
             XCTAssertEqual(normalizedParagraphText(body.label), normalizedParagraphText(text),
                            "The complete saved paragraph must match the protected replay; a matching prefix is insufficient")
+            if let speakerLabels {
+                let id = try XCTUnwrap(identifiers?[index])
+                let caption = app.buttons["transcript.reassign.\(id)"]
+                XCTAssertTrue(caption.exists, "Each reviewed paragraph must retain its participant action")
+                XCTAssertEqual(caption.label, speakerLabels[index], "The visible participant must match the reviewed source mapping")
+            }
             capture("\(step)-\(index)-visible")
         }
     }
@@ -1946,7 +1953,13 @@ final class MobileNavigationUITests: XCTestCase {
         capture("private-saved-transcript")
         let scroll = app.scrollViews.matching(identifier: "meeting.transcript").firstMatch
         XCTAssertTrue(scroll.waitForExistence(timeout: 5))
-        try assertSavedParagraphs(expected, identifiers: identifiers, step: "private-saved")
+        var speakerLabels: [String]?
+        if let encoded = environment["PICHI_PRIVATE_SAVED_EXPECTED_SPEAKER_LABELS"] {
+            speakerLabels = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String])
+            XCTAssertEqual(speakerLabels?.count, expected.count)
+            XCTAssertNotNil(identifiers, "Speaker review requires stable paragraph identifiers")
+        }
+        try assertSavedParagraphs(expected, identifiers: identifiers, step: "private-saved", speakerLabels: speakerLabels)
         #endif
     }
 
