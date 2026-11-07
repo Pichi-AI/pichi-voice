@@ -169,6 +169,26 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertNil(session.transcriptSegments[1].speakerID)
     }
 
+    func testArchiveNeighborAgreementCannotBeOutvotedByALaterLongTurn() throws {
+        var (session, _) = self.readingFixture([(0, 1, 0), (1.1, 1.2, nil), (1.3, 2.3, 0), (2.4, 12.4, 1)])
+        session.transcriptIsComplete = true
+        session.processingAttempts = [.init(id: UUID(), startedAt: session.startedAt, completedAt: session.endedAt,
+            stage: .completed, pipelineVersion: 13, asrProvider: nil, asrModel: nil, languageCode: "en",
+            diarizationModel: nil, lastCompletedTrackID: nil, errorCode: nil)]
+        for index in session.transcriptSegments.indices {
+            session.transcriptSegments[index].nativePrecision = nil
+            session.transcriptSegments[index].nativeUnitID = nil
+            session.transcriptSegments[index].nativeSpeakerAssignment = nil
+            session.transcriptSegments[index].nativeTiming = nil
+        }
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: session.transcriptSegments, in: session)
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs.first?.segments, Array(session.transcriptSegments.prefix(3)))
+        XCTAssertEqual(MeetingTranscriptExporter.speakerPresentations(in: session)[session.transcriptSegments[1].id]?.participantID,
+            session.speakers[0].id)
+        XCTAssertNil(session.transcriptSegments[1].speakerID)
+    }
+
     func testReadingScopePreservesBothOnlineTracksAndEpochReset() throws {
         var (session, epoch) = self.readingFixture([(0, 10, 0), (12, 12.1, nil), (13, 14, 1)])
         let nextEpoch = MeetingAnalysisEpochID(trackID: epoch.trackID, ordinal: 1, generation: 1)
