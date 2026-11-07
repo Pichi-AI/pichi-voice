@@ -6,6 +6,24 @@ import Foundation
 /// bounds the response to observed mute state; visual polling is not an audio-source attestation.
 /// One owner must call `stop()` before retiring the capture attempt or its delivery queues.
 final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
+    /// The native tap proves acquisition time against its sample-count timeline before intake.
+    /// Keep this bound shared with that proof; it is not a future-time allowance for other PCM.
+    static let maximumAcquisitionDivergenceSeconds: Double = 0.020
+    private static let acquisitionAttachmentKey = "ai.pichi.voice.microphoneAcquisitionInterval" as CFString
+
+    private final class AcquisitionInterval: NSObject {
+        let owner: UUID
+        let canonicalStart: UInt64
+        let canonicalEnd: UInt64
+        let acquisitionStart: UInt64
+        init(owner: UUID, metadata: SampleMetadata) {
+            self.owner = owner
+            self.canonicalStart = metadata.canonicalStart
+            self.canonicalEnd = metadata.canonicalEnd
+            self.acquisitionStart = metadata.start
+        }
+    }
+
     struct Configuration: Sendable {
         enum AdmissionPolicy: Equatable, Sendable {
             case freshObservations
@@ -33,6 +51,9 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
     private struct SampleMetadata {
         let start: UInt64
         let end: UInt64
+        let canonicalStart: UInt64
+        let canonicalEnd: UInt64
+        let hasAcquisitionProof: Bool
         let bytes: Int
         let frames: Int
         let format: CMFormatDescription
@@ -56,6 +77,9 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
     }
 
     private let lock = NSLock()
+    private let owner = UUID()
+    private let acquisitionDivergenceTicks = MeetingMicrophonePrivacyGate.ticks(MeetingMicrophonePrivacyGate.maximumAcquisitionDivergenceSeconds)
+    private var usesAcquisitionClock = false
     private let configuration: Configuration
     private let hostTime: @Sendable () -> UInt64
     private let createdAt: UInt64
@@ -165,20 +189,22 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
     /// Call from the adapter's existing non-real-time sample queue. The small PCM block is copied
     /// only after a bounded reservation; retaining an arbitrary system backing allocation is avoided.
     /// False is an intentional privacy rejection, not writer backpressure or permission to fall back.
+    /// The native tap supplies its independently validated acquisition host time. PCM without that
+    /// evidence keeps the strict canonical-clock admission path; its timestamps are never relaxed.
     @discardableResult
-    func submit(_ sampleBuffer: CMSampleBuffer, deliveryQueue: DispatchQueue,
-                delivery: @escaping @Sendable (CMSampleBuffer) -> Void) -> Bool {
+    func submit(_ sampleBuffer: CMSampleBuffer, acquisitionHostTime: UInt64? = nil,
+                deliveryQueue: DispatchQueue, delivery: @escaping @Sendable (CMSampleBuffer) -> Void) -> Bool {
         let now = self.hostTime()
-        guard let metadata = self.metadata(sampleBuffer) else {
+        guard let metadata = self.metadata(sampleBuffer, acquisitionHostTime: acquisitionHostTime) else {
             self.lock.withLock { self.rejectedBuffers += 1 }
             return false
         }
         let item: Item? = self.lock.withLock {
             guard self.freshLocked(now: now), let epochStart = self.epochStart,
-                  metadata.start >= epochStart, metadata.end <= now,
+                  self.startsInEpochLocked(metadata, epochStart: epochStart), metadata.end <= now,
                   // Independent CoreMedia scale conversions can differ by one native host tick
                   // at a contiguous 44.1 kHz boundary. This is rounding, not a reordered buffer.
-                  self.lastSubmittedEnd.map({ metadata.start >= $0 || $0 - metadata.start <= 1 }) ?? true else {
+                  self.lastSubmittedEnd.map({ metadata.canonicalStart >= $0 || $0 - metadata.canonicalStart <= 1 }) ?? true else {
                 self.rejectedBuffers += 1; return nil
             }
             guard metadata.bytes <= self.configuration.maximumQueuedBytes - self.retainedBytes,
@@ -189,7 +215,8 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
                 return nil
             }
             let item = Item(metadata: metadata, generation: self.generation, queue: deliveryQueue, delivery: delivery)
-            self.lastSubmittedEnd = metadata.end
+            self.lastSubmittedEnd = metadata.canonicalEnd
+            self.usesAcquisitionClock = self.usesAcquisitionClock || metadata.hasAcquisitionProof
             self.retainedBytes += metadata.bytes
             self.retainedBuffers += 1
             self.work.enter()
@@ -197,7 +224,7 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
             return item
         }
         guard let item else { return false }
-        var ownedSample = Self.ownedCopy(sampleBuffer, metadata: metadata)
+        var ownedSample = self.ownedCopy(sampleBuffer, metadata: metadata)
         return self.lock.withLock {
             let current = item.generation == self.generation && self.freshLocked(now: self.hostTime())
             let closedPrefix = item.approvedClosedPrefix && self.isApprovedLocked(item.metadata)
@@ -242,7 +269,7 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
             self.pending.removeAll(keepingCapacity: true)
             for item in items {
                 let inCurrentEpoch = !self.stopped && self.admitted
-                    && self.epochStart.map({ item.metadata.start >= $0 }) == true
+                    && self.epochStart.map({ self.startsInEpochLocked(item.metadata, epochStart: $0) }) == true
                     && item.generation == self.generation
                 if inCurrentEpoch || self.isApprovedLocked(item.metadata) {
                     self.pending.append(item)
@@ -325,16 +352,35 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
     }
 
     private func permitsLocked(_ metadata: SampleMetadata, now: UInt64) -> Bool {
-        guard metadata.end <= now, now - metadata.end >= self.quarantineTicks else { return false }
+        // Converted output loses attachments and is checked again on its canonical timeline.
+        // Mature the original against both clocks, including that conservative downstream margin,
+        // so the second check cannot discard a just-released valid block without a retry.
+        let maturityEnd = max(metadata.end, metadata.canonicalEnd)
+        let maturityMargin = self.usesAcquisitionClock ? self.acquisitionDivergenceTicks : 0
+        guard maturityEnd <= now, now - maturityEnd >= self.quarantineTicks + maturityMargin else { return false }
         if self.isApprovedLocked(metadata) { return true }
-        return self.freshLocked(now: now) && self.epochStart.map({ metadata.start >= $0 }) == true
-            && metadata.end <= now && now - metadata.end >= self.quarantineTicks
+        return self.freshLocked(now: now)
+            && self.epochStart.map({ self.startsInEpochLocked(metadata, epochStart: $0) }) == true
             && (self.configuration.admissionPolicy == .latchedTransitions
                 || self.latestObservation.map({ $0 >= metadata.end }) == true)
     }
 
+    private func acquisitionMarginLocked(_ metadata: SampleMetadata) -> UInt64 {
+        // Resampling can construct a new buffer without the gate-owned attachment. Such output
+        // keeps its canonical clock, with conservative edges instead of inventing acquisition proof.
+        self.usesAcquisitionClock && !metadata.hasAcquisitionProof ? self.acquisitionDivergenceTicks : 0
+    }
+
+    private func startsInEpochLocked(_ metadata: SampleMetadata, epochStart: UInt64) -> Bool {
+        metadata.start >= epochStart && metadata.start - epochStart >= self.acquisitionMarginLocked(metadata)
+    }
+
     private func isApprovedLocked(_ metadata: SampleMetadata) -> Bool {
-        self.approvedIntervals.contains { metadata.start >= $0.start && metadata.end <= $0.end }
+        let margin = self.acquisitionMarginLocked(metadata)
+        return self.approvedIntervals.contains {
+            metadata.start >= $0.start && metadata.start - $0.start >= margin
+                && metadata.end <= $0.end && $0.end - metadata.end >= margin
+        }
     }
 
     private func closeEpochLocked(at now: UInt64, unsafeStart: UInt64? = nil, preserveConfirmedPrefix: Bool = true) {
@@ -404,7 +450,7 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
         self.work.leave()
     }
 
-    private func metadata(_ sample: CMSampleBuffer) -> SampleMetadata? {
+    private func metadata(_ sample: CMSampleBuffer, acquisitionHostTime: UInt64? = nil) -> SampleMetadata? {
         guard CMSampleBufferDataIsReady(sample),
               let format = CMSampleBufferGetFormatDescription(sample),
               let stream = CMAudioFormatDescriptionGetStreamBasicDescription(format),
@@ -427,14 +473,32 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
         guard CMSampleBufferGetSampleTimingInfo(sample, at: 0, timingInfoOut: &timing) == noErr,
               timing.presentationTimeStamp.isNumeric, timing.presentationTimeStamp.epoch == 0,
               timing.presentationTimeStamp > .zero else { return nil }
-        let start = CMClockConvertHostTimeToSystemUnits(timing.presentationTimeStamp)
+        let canonicalStart = CMClockConvertHostTimeToSystemUnits(timing.presentationTimeStamp)
         let duration = Self.ticks(Double(frames) / asbd.mSampleRate)
-        guard start > 0, duration > 0, start <= UInt64.max - duration else { return nil }
-        return SampleMetadata(start: start, end: start + duration, bytes: bytes, frames: frames,
+        guard canonicalStart > 0, duration > 0, canonicalStart <= UInt64.max - duration else { return nil }
+        let canonicalEnd = canonicalStart + duration
+        let attached = CMGetAttachment(sample, key: Self.acquisitionAttachmentKey, attachmentModeOut: nil) as? AcquisitionInterval
+        let provenStart: UInt64?
+        if let acquisitionHostTime {
+            let distance = canonicalStart > acquisitionHostTime
+                ? canonicalStart - acquisitionHostTime : acquisitionHostTime - canonicalStart
+            guard acquisitionHostTime > 0, distance <= self.acquisitionDivergenceTicks else { return nil }
+            provenStart = acquisitionHostTime
+        } else if let attached, attached.owner == self.owner,
+                  attached.canonicalStart == canonicalStart, attached.canonicalEnd == canonicalEnd {
+            provenStart = attached.acquisitionStart
+        } else {
+            provenStart = nil
+        }
+        let start = provenStart ?? canonicalStart
+        guard start <= UInt64.max - duration else { return nil }
+        return SampleMetadata(start: start, end: start + duration,
+                              canonicalStart: canonicalStart, canonicalEnd: canonicalEnd,
+                              hasAcquisitionProof: provenStart != nil, bytes: bytes, frames: frames,
                               format: format, timing: timing)
     }
 
-    private static func ownedCopy(_ sample: CMSampleBuffer, metadata: SampleMetadata) -> CMSampleBuffer? {
+    private func ownedCopy(_ sample: CMSampleBuffer, metadata: SampleMetadata) -> CMSampleBuffer? {
         guard let source = CMSampleBufferGetDataBuffer(sample) else { return nil }
         var copied: CMBlockBuffer?
         guard CMBlockBufferCreateContiguous(allocator: kCFAllocatorDefault, sourceBuffer: source,
@@ -446,7 +510,13 @@ final nonisolated class MeetingMicrophonePrivacyGate: @unchecked Sendable {
         guard CMSampleBufferCreateReady(allocator: kCFAllocatorDefault, dataBuffer: copied,
             formatDescription: metadata.format, sampleCount: metadata.frames,
             sampleTimingEntryCount: 1, sampleTimingArray: &timing,
-            sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &result) == noErr else { return nil }
+            sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &result) == noErr,
+              let result else { return nil }
+        if metadata.hasAcquisitionProof {
+            CMSetAttachment(result, key: Self.acquisitionAttachmentKey,
+                value: AcquisitionInterval(owner: self.owner, metadata: metadata),
+                attachmentMode: kCMAttachmentMode_ShouldPropagate)
+        }
         return result
     }
 
