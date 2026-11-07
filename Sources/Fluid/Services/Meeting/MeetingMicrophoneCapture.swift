@@ -161,7 +161,7 @@ nonisolated struct MeetingMicrophonePTSClock {
 /// Privacy admission needs acquisition evidence, independently of the writer's intentionally
 /// sample-count-based timeline. A host-clock gap must never turn fresh private PCM into old PCM.
 nonisolated enum MeetingMicrophonePrivacyTiming {
-    static let maximumDivergenceSeconds: Double = 0.020
+    static let maximumDivergenceSeconds = MeetingMicrophonePrivacyGate.maximumAcquisitionDivergenceSeconds
 
     static func acceptsTap(hostTime: UInt64?, windowHostTime: UInt64?, accumulatedFrameCount: Int) -> Bool {
         guard let hostTime, accumulatedFrameCount >= 0 else { return false }
@@ -611,8 +611,10 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
         let buffer: CMSampleBuffer
         let synthesized: Bool
         let resynced: Bool
-        init(_ buffer: CMSampleBuffer, synthesized: Bool, resynced: Bool) {
+        let acquisitionHostTime: UInt64
+        init(_ buffer: CMSampleBuffer, synthesized: Bool, resynced: Bool, acquisitionHostTime: UInt64) {
             self.buffer = buffer; self.synthesized = synthesized; self.resynced = resynced
+            self.acquisitionHostTime = acquisitionHostTime
         }
     }
 
@@ -728,7 +730,9 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
             stats.lastValidHostSeconds = clock.lastValidHostSeconds
         }
         if let privacyGate = self.privacyGate {
-            self.enqueuePrivacySample(sampleBuffer, synthesized: synthesized, resynced: resynced, gate: privacyGate)
+            guard let acquisitionHostTime else { return }
+            self.enqueuePrivacySample(sampleBuffer, synthesized: synthesized, resynced: resynced,
+                                      acquisitionHostTime: acquisitionHostTime, gate: privacyGate)
         } else {
             self.onSampleMetadata(sampleBuffer, synthesized, resynced)
             self.onSample(sampleBuffer)
@@ -736,7 +740,7 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
     }
 
     private func enqueuePrivacySample(_ sampleBuffer: CMSampleBuffer, synthesized: Bool, resynced: Bool,
-        gate: MeetingMicrophonePrivacyGate) {
+        acquisitionHostTime: UInt64, gate: MeetingMicrophonePrivacyGate) {
         // A malformed or unexpectedly large block must not defeat the eight-slot handoff bound.
         guard let block = CMSampleBufferGetDataBuffer(sampleBuffer),
               CMBlockBufferGetDataLength(block) <= 131_072 else { return }
@@ -745,13 +749,14 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
             self.privacyStateLock.unlock(); return
         }
         self.privacyHandoffGroup.enter()
-        let sample = PrivacySample(sampleBuffer, synthesized: synthesized, resynced: resynced)
+        let sample = PrivacySample(sampleBuffer, synthesized: synthesized, resynced: resynced,
+                                   acquisitionHostTime: acquisitionHostTime)
         self.privacyQueue.async { [self, sample] in
             defer { self.privacySlots.signal(); self.privacyHandoffGroup.leave() }
             guard self.privacyStateLock.withLock({ !self.privacyDeliveryStopped }) else { return }
             let synthesized = sample.synthesized
             let resynced = sample.resynced
-            gate.submit(sample.buffer, deliveryQueue: self.privacyQueue) { [weak self] approved in
+            gate.submit(sample.buffer, acquisitionHostTime: sample.acquisitionHostTime, deliveryQueue: self.privacyQueue) { [weak self] approved in
                 guard let self, self.privacyStateLock.withLock({ !self.privacyDeliveryStopped }) else { return }
                 self.onSampleMetadata(approved, synthesized, resynced)
                 self.onSample(approved)

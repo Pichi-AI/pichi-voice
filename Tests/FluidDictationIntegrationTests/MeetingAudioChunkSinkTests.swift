@@ -975,7 +975,46 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
         XCTAssertEqual(gate.statistics.retainedBuffers, 0)
     }
 
-    private func sample(marker: Float, at seconds: Double) throws -> CMSampleBuffer {
+    func testDriftingAcquisitionKeepsRealWriterPCMContiguousAfterThirtyThreeMinutes() async throws {
+        let fixture = try Fixture(admissionPolicy: .latchedTransitions)
+        defer { fixture.gate.close(); fixture.removeDirectory() }
+        let host = fixture.clock, gate = fixture.gate
+        gate.setAdmitted(true, observedAtHostTime: host.now())
+        var clock = MeetingMicrophonePTSClock()
+        for index in 0..<20_000 {
+            _ = clock.stamp(hostTime: Clock.ticks(1_000 + Double(index) * 0.1 * (1 - 5e-6)), frameCount: 4_800)
+        }
+        let count = 1_200
+        for index in 20_000..<(20_000 + count) {
+            let acquisition = 1_000 + Double(index) * 0.1 * (1 - 5e-6)
+            let acquiredAt = Clock.ticks(acquisition)
+            guard case let .emitted(pts, _, _, _) = clock.stamp(hostTime: acquiredAt, frameCount: 4_800) else {
+                return XCTFail("A valid microphone clock unexpectedly stopped")
+            }
+            host.set(acquisition + 0.102 + Double(index % 7) * 0.0005)
+            let sample = try self.sample(marker: 0.25, at: pts.seconds, frames: 4_800)
+            XCTAssertTrue(gate.submit(sample, acquisitionHostTime: acquiredAt, deliveryQueue: fixture.deliveryQueue) {
+                fixture.writer.enqueue($0)
+            })
+            gate.checkFreshnessAndDrain()
+            if index % 10 == 0 {
+                fixture.deliveryQueue.sync {}
+                _ = await fixture.writer.snapshot()
+            }
+        }
+        host.set(3_122); gate.checkFreshnessAndDrain(); fixture.deliveryQueue.sync {}
+        await gate.stop()
+        let track = await fixture.writer.stop()
+        XCTAssertEqual(fixture.observations.writerFailures, 0)
+        XCTAssertTrue(track.chunks.allSatisfy { $0.discontinuities.isEmpty }, "Allowed PCM cannot acquire artificial source gaps")
+        let samples = try self.readSamples(track, in: fixture.directory)
+        XCTAssertEqual(samples.count, count * 4_800, "The real writer must receive every sample, not compress scattered islands")
+        XCTAssertTrue(samples.allSatisfy { abs($0 - 0.25) < 0.001 })
+        XCTAssertEqual(gate.statistics.rejectedBuffers, 0)
+        XCTAssertEqual(gate.statistics.retainedBuffers, 0)
+    }
+
+    private func sample(marker: Float, at seconds: Double, frames: Int = 480) throws -> CMSampleBuffer {
         var asbd = AudioStreamBasicDescription(mSampleRate: 48_000, mFormatID: kAudioFormatLinearPCM,
             mFormatFlags: kAudioFormatFlagsNativeFloatPacked, mBytesPerPacket: 4, mFramesPerPacket: 1,
             mBytesPerFrame: 4, mChannelsPerFrame: 1, mBitsPerChannel: 32, mReserved: 0)
@@ -983,7 +1022,7 @@ final class MeetingMicrophoneWriterPrivacyTests: XCTestCase {
         XCTAssertEqual(CMAudioFormatDescriptionCreate(allocator: kCFAllocatorDefault, asbd: &asbd,
             layoutSize: 0, layout: nil, magicCookieSize: 0, magicCookie: nil, extensions: nil,
             formatDescriptionOut: &format), noErr)
-        let values = [Float](repeating: marker, count: 480)
+        let values = [Float](repeating: marker, count: frames)
         var block: CMBlockBuffer?
         XCTAssertEqual(CMBlockBufferCreateWithMemoryBlock(allocator: kCFAllocatorDefault, memoryBlock: nil,
             blockLength: values.count * 4, blockAllocator: kCFAllocatorDefault, customBlockSource: nil,
