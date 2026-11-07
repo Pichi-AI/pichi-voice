@@ -192,7 +192,9 @@ extension CustomDictionaryManualEntryTests {
         XCTAssertEqual(worker.pendingCount, 3, "Deferred occurrences are resolved before deciding whether they were removed")
         let empty = await store.allProfiles()
         XCTAssertTrue(empty.isEmpty)
-        let fresh = self.sampleEvidence()
+        // A later deliberate re-approval of the exact occurrence is new work,
+        // unlike the duplicate approval admitted before the deletion.
+        let fresh = evidence
         XCTAssertTrue(worker.enqueue(entry: entry, evidenceID: UUID(), isValid: { true }, didPersist: { _ in persisted.fulfill() }, prepare: { fresh }))
         idle = true
         worker.activityDidEnd()
