@@ -17,7 +17,7 @@ bundle. Do not rebuild, replace or re-sign either running product during the tes
 
 For a task-owned physical runner, set `PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER` to
 a unique test bundle identifier before building. Its default remains
-`ai.pichi.voice.mobile.uitests`. This override affects only the UI test target;
+`ai.pichi.voice.uitests`. This override affects only the UI test target;
 the application and Live Activity retain `PICHI_MOBILE_BUNDLE_IDENTIFIER`. Do not
 override `PRODUCT_BUNDLE_IDENTIFIER` globally or replace another task's installed
 runner and data. Inventory installed runners before choosing the task identifier.
