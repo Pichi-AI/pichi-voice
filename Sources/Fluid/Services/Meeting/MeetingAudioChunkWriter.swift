@@ -418,10 +418,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         }
         self.diagnosticSampleObserver?(sourceSampleBuffer, producerEpoch)
 
-        let duration = hostMapping.map {
-            CMTime(seconds: ($0.spans.last?.hostEnd.seconds ?? 0) - ($0.spans.first?.hostStart.seconds ?? 0),
-                   preferredTimescale: 1_000_000_000)
-        } ?? Self.sampleDuration(sourceSampleBuffer)
+        let mappedEnd = hostMapping?.spans.last.map { CMTime(value: $0.hostEnd.value, timescale: $0.hostEnd.timescale) }
+        let duration = mappedEnd.map { $0 - sourcePresentationTime } ?? Self.sampleDuration(sourceSampleBuffer)
         let previousEnd = self.activeChunk?.end ?? self.lastFinalizedEnd
         // The same measured gap represents excluded input, not clock drift. It must remain
         // a boundary even when it is shorter than the legacy half-second chunk threshold.
@@ -538,7 +536,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 throw MeetingCaptureError.writerFailed("PCM sink reported a short write.")
             }
 
-            activeChunk.end = presentationTime + duration
+            activeChunk.end = mappedEnd ?? (presentationTime + duration)
             activeChunk.framesWritten += receipt.framesWritten
             if activeChunk.framesWritten - activeChunk.lastCheckpointFrames >= Int64((activeChunk.format.sampleRate).rounded()) {
                 try self.writeCheckpoint(for: &activeChunk)

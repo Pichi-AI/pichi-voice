@@ -438,7 +438,7 @@ final nonisolated class MeetingCaptureSourceClock: @unchecked Sendable {
     private var pending: Pending?
     private var generation: UInt64?
     private var epoch: UInt64 = 0
-    private var format: CMFormatDescription?
+    private var format: MeetingPCMFormatContract?
 
     init(context: MeetingRecordingClockContext) { self.context = context }
 
@@ -464,7 +464,8 @@ final nonisolated class MeetingCaptureSourceClock: @unchecked Sendable {
             guard hostStart.isNumeric, hostEnd.isNumeric, hostStart >= self.context.origin, hostEnd > hostStart else {
                 throw MeetingRecordingClock.Failure.unprovenClock
             }
-            let formatChanged = self.format.map { !CMFormatDescriptionEqual($0, otherFormatDescription: description) } ?? false
+            let signalFormat = try MeetingPCMFormatContract(formatDescription: description)
+            let formatChanged = self.format.map { $0 != signalFormat } ?? false
             let changed = self.generation.map { $0 != producerGeneration } ?? true
             var continuous = self.pending != nil && !changed && !formatChanged
             if let prior = self.pending {
@@ -499,7 +500,7 @@ final nonisolated class MeetingCaptureSourceClock: @unchecked Sendable {
                 output.append(try self.context.timedCopy(prior.sample, mapping: mapping, producerEpoch: prior.epoch))
             }
             if changed || formatChanged { self.epoch = self.context.reserveEpoch() }
-            self.generation = producerGeneration; self.format = description
+            self.generation = producerGeneration; self.format = signalFormat
             self.pending = Pending(sample: sample, nativeStart: nativeStart, nativeEnd: nativeEnd,
                 hostStart: hostStart, projectedHostEnd: hostEnd, rate: rate, frames: frames,
                 sourceFrameStart: sourceFrameStart, epoch: self.epoch, discontinuity: !continuous)

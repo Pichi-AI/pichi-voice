@@ -290,7 +290,10 @@ extension MeetingAudioClockMapping {
 /// An immutable, frame-bound timing attachment. It carries acquisition correspondence only;
 /// microphone permission always remains with the session's existing admission owner.
 nonisolated enum MeetingCaptureClockMetadata {
-    enum Failure: Error, Equatable { case invalidBuffer, contextMismatch }
+    enum Failure: LocalizedError, Equatable {
+        case invalidBuffer, contextMismatch
+        var errorDescription: String? { PichiLocalization.text("Audio timing could not be verified.") }
+    }
     struct Packet: Codable, Sendable, Equatable {
         let mapping: MeetingAudioClockMapping
         let clockID: UUID
