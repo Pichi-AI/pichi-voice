@@ -59,6 +59,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(player.play(), "Start the owned phone speaker fixture")
             app.activate()
             try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
+            try reveal(app.buttons["meeting.start"], in: app, revision: revision)
             try tap(app.buttons["meeting.start"], "Start normal microphone recording")
             ownsRecording = true
             try await waitForVisibleRecording(in: app, timeout: 90)
