@@ -10,15 +10,33 @@ nonisolated struct MeetingAECClockAttestor: Equatable, Sendable {
     mutating func observe(
         grid: Int64,
         renderPresentationTime: CMTime,
-        capturePresentationTime: CMTime
+        capturePresentationTime: CMTime,
+        renderClockPacket: MeetingCaptureClockMetadata.Packet? = nil,
+        captureClockPacket: MeetingCaptureClockMetadata.Packet? = nil
     ) -> Bool {
         if let nextExpectedGrid, grid != nextExpectedGrid { return false }
-        let residual = CMTimeSubtract(renderPresentationTime, capturePresentationTime)
-        guard residual.isValid, residual.isNumeric else { return false }
-        let residualSamples = abs(CMTimeGetSeconds(residual) * Double(MeetingAECConstants.sampleRateHz))
-        guard residualSamples.isFinite,
-              residualSamples <= Double(MeetingAECConstants.maximumClockResidualSamples) + 1e-9
-        else { return false }
+        if let render = renderClockPacket, let capture = captureClockPacket {
+            guard render.clockID == capture.clockID, render.sourceID != capture.sourceID,
+                  (try? render.mapping.validated(expectedFrameCount: 480)) != nil,
+                  (try? capture.mapping.validated(expectedFrameCount: 480)) != nil,
+                  !render.mapping.spans.dropFirst().contains(where: { $0.discontinuityBefore }),
+                  !capture.mapping.spans.dropFirst().contains(where: { $0.discontinuityBefore }),
+                  let renderStart = render.mapping.hostTime(atFrame: 0),
+                  let captureStart = capture.mapping.hostTime(atFrame: 0),
+                  let renderEnd = render.mapping.hostTime(atFrame: 480, side: .end),
+                  let captureEnd = capture.mapping.hostTime(atFrame: 480, side: .end) else { return false }
+            let tolerance = Double(MeetingAECConstants.maximumClockResidualSamples) / 48_000 + 2e-9
+            guard abs(renderStart.seconds - captureStart.seconds) <= tolerance,
+                  abs(renderEnd.seconds - captureEnd.seconds) <= tolerance else { return false }
+        } else {
+            guard renderClockPacket == nil, captureClockPacket == nil else { return false }
+            let residual = CMTimeSubtract(renderPresentationTime, capturePresentationTime)
+            guard residual.isValid, residual.isNumeric else { return false }
+            let residualSamples = abs(CMTimeGetSeconds(residual) * Double(MeetingAECConstants.sampleRateHz))
+            guard residualSamples.isFinite,
+                  residualSamples <= Double(MeetingAECConstants.maximumClockResidualSamples) + 1e-9
+            else { return false }
+        }
 
         if self.startGrid == nil { self.startGrid = grid }
         self.pairedFrameCount += 1
@@ -146,6 +164,15 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
             guard previous.clockID == packet.clockID, previous.sourceID == packet.sourceID,
                   previous.producerEpoch == packet.producerEpoch else { return .failure(.streamChanged) }
             if packet.mapping.spans.first?.discontinuityBefore == true { return .failure(.timestampGap) }
+            guard let previousEnd = previous.mapping.spans.last?.hostEnd,
+                  let start = packet.mapping.spans.first?.hostStart,
+                  abs(start.seconds - previousEnd.seconds) <= 2e-9 else { return .failure(.timestampGap) }
+        }
+        if let packet = block.clockPacket {
+            guard (try? packet.mapping.validated(expectedFrameCount: Int64(block.samples.count))) != nil,
+                  !packet.mapping.spans.dropFirst().contains(where: { $0.discontinuityBefore }),
+                  let start = packet.mapping.spans.first?.hostStart,
+                  abs(start.seconds - block.presentationTime.seconds) <= 2e-9 else { return .failure(.invalidTimestamp) }
         }
         track.clockMode = block.clockPacket != nil
         track.clockPacket = block.clockPacket
@@ -163,23 +190,16 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
             if let previousPTS = track.previousPresentationTime, block.presentationTime <= previousPTS {
                 return .failure(.timestampMovedBackward)
             }
-            let expectedPTS = CMTimeAdd(
-                anchorPTS,
-                CMTime(value: CMTimeValue(track.cumulativeSamples), timescale: 48_000)
-            )
-            let residualTime = CMTimeSubtract(block.presentationTime, expectedPTS)
-            guard residualTime.isValid, residualTime.isNumeric else {
-                return .failure(.invalidTimestamp)
-            }
-            let residualSamples = CMTimeGetSeconds(residualTime)
-                * Double(MeetingAECConstants.sampleRateHz)
-            guard residualSamples.isFinite else { return .failure(.invalidTimestamp) }
-            let tolerance = Double(MeetingAECConstants.maximumClockResidualSamples) + 1e-9
-            if residualSamples > tolerance {
-                return .failure(.timestampGap)
-            }
-            if residualSamples < -tolerance {
-                return .failure(.timestampOverlap)
+            if block.clockPacket == nil {
+                let expectedPTS = CMTimeAdd(anchorPTS,
+                    CMTime(value: CMTimeValue(track.cumulativeSamples), timescale: 48_000))
+                let residualTime = CMTimeSubtract(block.presentationTime, expectedPTS)
+                guard residualTime.isValid, residualTime.isNumeric else { return .failure(.invalidTimestamp) }
+                let residualSamples = CMTimeGetSeconds(residualTime) * Double(MeetingAECConstants.sampleRateHz)
+                guard residualSamples.isFinite else { return .failure(.invalidTimestamp) }
+                let tolerance = Double(MeetingAECConstants.maximumClockResidualSamples) + 1e-9
+                if residualSamples > tolerance { return .failure(.timestampGap) }
+                if residualSamples < -tolerance { return .failure(.timestampOverlap) }
             }
             startGrid = anchorGrid + track.cumulativeSamples
         } else {
@@ -229,12 +249,13 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
             guard self.attestor.observe(
                 grid: grid,
                 renderPresentationTime: renderSlice.presentationTime,
-                capturePresentationTime: captureSlice.presentationTime
+                capturePresentationTime: captureSlice.presentationTime,
+                renderClockPacket: renderSlice.clockPacket, captureClockPacket: captureSlice.clockPacket
             ) else {
                 emissions.append(.bypass(
                     MeetingAECBypassSlice(
                         presentationTime: captureSlice.presentationTime,
-                        samples: captureSlice.samples
+                        samples: captureSlice.samples, clockPacket: captureSlice.clockPacket
                     ),
                     .clockResidualExceeded
                 ))
@@ -274,7 +295,7 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
                     emissions.append(.bypass(
                         MeetingAECBypassSlice(
                             presentationTime: bypass.presentationTime,
-                            samples: bypass.samples
+                            samples: bypass.samples, clockPacket: bypass.clockPacket
                         ),
                         .renderLate
                     ))
@@ -292,7 +313,7 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
                 emissions.append(.bypass(
                     MeetingAECBypassSlice(
                         presentationTime: bypass.presentationTime,
-                        samples: bypass.samples
+                        samples: bypass.samples, clockPacket: bypass.clockPacket
                     ),
                     .renderLate
                 ))

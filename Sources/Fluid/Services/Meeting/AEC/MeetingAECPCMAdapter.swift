@@ -52,8 +52,9 @@ nonisolated enum MeetingAECPCMAdapter {
         }
         let nominalDuration = Double(frameCount) / Double(MeetingAECConstants.sampleRateHz)
         let actualDuration = CMTimeGetSeconds(duration)
+        let clockPacket = MeetingCaptureClockMetadata.read(from: sampleBuffer)
         guard actualDuration.isFinite,
-              abs(actualDuration - nominalDuration) <= 1.5 / Double(MeetingAECConstants.sampleRateHz)
+              clockPacket != nil || abs(actualDuration - nominalDuration) <= 1.5 / Double(MeetingAECConstants.sampleRateHz)
         else { return .failure(.invalidDuration) }
 
         var requiredSize = 0
@@ -128,7 +129,7 @@ nonisolated enum MeetingAECPCMAdapter {
             sourceFormat: MeetingAECPCMFormat(
                 channelCount: channels,
                 interleaved: !nonInterleaved
-            ), clockPacket: MeetingCaptureClockMetadata.read(from: sampleBuffer)
+            ), clockPacket: clockPacket
         ))
     }
 

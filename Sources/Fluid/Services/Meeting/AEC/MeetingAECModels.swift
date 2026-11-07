@@ -76,7 +76,10 @@ nonisolated struct MeetingAECPCMBlock: Equatable, Sendable {
     }
 
     var endTime: CMTime {
-        CMTimeAdd(self.presentationTime, CMTime(value: CMTimeValue(self.samples.count), timescale: 48_000))
+        if let time = self.clockPacket?.mapping.spans.last?.hostEnd {
+            return CMTime(value: time.value, timescale: time.timescale)
+        }
+        return CMTimeAdd(self.presentationTime, CMTime(value: CMTimeValue(self.samples.count), timescale: 48_000))
     }
 }
 
