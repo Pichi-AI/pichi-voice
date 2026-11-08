@@ -567,3 +567,45 @@ task. They do not replace the native resource journey.
 The final account checkpoint is the last capture. After its ACK and test return,
 the owner ends native capture before any human credential entry. This test neither
 handles credentials nor claims guest setup or sign-in completed.
+
+## iPad guest completion and first microphone request
+
+`testPhysicalIPadFinalAccountContinueAsGuestToEmptyRecordings` starts only at the
+attested signed-out final account page, with unique empty/unfocused credential
+fields and completed local preparation. It uses `account.continueAsGuest`, whose
+production action joins account retirement and calls normal final setup Next.
+It stops at empty Recordings with an enabled/hittable Start; it does not record.
+Only nil/empty credential values are admitted, without logging them. Unknown or
+nonempty values, including a placeholder projected as a value, fail safely.
+
+Use the same runtime AUT34/source1a and private iPad destination environment as the
+setup continuation, with a fresh UUID, `PICHI_PHYSICAL_SETUP_GUEST_COMPLETION=1`,
+all other physical gates disabled, operation `final-account-to-guest-recordings`
+and fromStage `final-account`. Stage the regular bounded receipt at
+`Library/Application Support/PhysicalReleaseUI/setup-guest/<UPPERCASE_RUN_UUID>.json`.
+Its common fields are version=1, authorization { revision, runID, deviceID, operation,
+fromStage }, current ISO-8601 issuedAt, build="34", bundleID="ai.pichi.voice" and
+legacyBundleID="ai.pichi.voice.mobile". Require true: newNamespaceEmpty,
+legacyNamespacePreserved, destinationVerified, foregroundFinalAccountAttested,
+localPreparationReady, signedOutAttested and credentialsEmptyAttested. Freshness
+and the exclusive sibling `.consumed` claim match the existing fifteen-minute,
+one-use receipt contract. Old setup/Welcome receipts cannot authorize completion.
+
+Setup completion does not request microphone permission. The iOS capture adapter
+requests it only at actual recording preflight. For the existing
+`testReleaseVisibleOneMinuteRecordingWithParentCheckpoints` only, explicitly set
+`PICHI_PHYSICAL_ALLOW_MICROPHONE_PROMPT=1` and
+`PICHI_PHYSICAL_MICROPHONE_AUT_REVISION=1a245d0447b08e3fc681d439ea4ef3b392e034c2`
+after fresh iPad/source verification. The handler runs only after that case's owned
+Start, within its existing 90-second recording-start bound. It requires the exact
+supported Pichi Voice microphone title, the app's exact English/Russian microphone
+usage text, and exactly one known Allow/OK plus one deny choice. It handles at most
+one such prompt. Every other app, purpose, unknown/duplicate button or additional
+prompt fails; password, Touch ID and unrelated OS prompts are never accepted.
+Without the opt-in, existing permission preflight behavior is unchanged. The normal
+parent checkpoints still observe actual recording before external synthetic speech.
+
+Three new synchronous pure cases cover guest admission/credential exclusion and
+microphone prompt selection. The six prior setup diagnostics are unchanged; their
+incomplete iPad XCTest batch is not a passing result. The native local setup journey
+and future guest/recording acceptance remain separate evidence.

@@ -292,6 +292,78 @@ private nonisolated struct PhysicalSetupContinuationAuthorization: Codable, Equa
     }
 }
 
+private extension PhysicalSetupContinuationAuthorization {
+    static func selectGuest(_ environment: [String: String], revision: String) throws -> Self {
+        guard revision == PhysicalOwnedPlaybackAuthorization.frozenRevision,
+              environment["PICHI_PHYSICAL_SETUP_GUEST_COMPLETION"] == "1",
+              environment["PICHI_PHYSICAL_SETUP_CONTINUATION"] != "1",
+              environment["PICHI_PHYSICAL_FIRST_USE_WELCOME_TO_TINY"] != "1",
+              environment["PICHI_PHYSICAL_SETUP_AUT_REVISION"] == revision,
+              environment["PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT"] == "1",
+              environment["PICHI_PHYSICAL_SETUP_OPERATION"] == "final-account-to-guest-recordings",
+              environment["PICHI_PHYSICAL_SETUP_FROM_STAGE"] == "final-account",
+              let run = environment["PICHI_PHYSICAL_SETUP_RUN_ID"], let runID = UUID(uuidString: run),
+              let deviceID = environment["PICHI_PHYSICAL_SETUP_DEVICE_ID"], deviceID.count == 40,
+              deviceID.allSatisfy({ "0123456789abcdef".contains($0) }) else { throw Unverified() }
+        return Self(revision: revision, runID: runID, deviceID: deviceID,
+                    operation: "final-account-to-guest-recordings", fromStage: "final-account")
+    }
+}
+
+private nonisolated struct PhysicalGuestCompletionReceipt: Codable {
+    let version: Int
+    let authorization: PhysicalSetupContinuationAuthorization
+    let issuedAt: Date
+    let build: String
+    let bundleID: String
+    let legacyBundleID: String
+    let newNamespaceEmpty: Bool
+    let legacyNamespacePreserved: Bool
+    let destinationVerified: Bool
+    let foregroundFinalAccountAttested: Bool
+    let localPreparationReady: Bool
+    let signedOutAttested: Bool
+    let credentialsEmptyAttested: Bool
+
+    func validate(_ expected: PhysicalSetupContinuationAuthorization, now: Date, consumed: Bool) throws {
+        let age = now.timeIntervalSince(issuedAt)
+        guard version == 1, authorization == expected, build == "34", bundleID == "ai.pichi.voice",
+              legacyBundleID == "ai.pichi.voice.mobile", newNamespaceEmpty, legacyNamespacePreserved,
+              destinationVerified, foregroundFinalAccountAttested, localPreparationReady, signedOutAttested,
+              credentialsEmptyAttested, !consumed, age.isFinite, age >= 0, age <= 900 else {
+            throw PhysicalSetupContinuationAuthorization.Unverified()
+        }
+    }
+}
+
+private nonisolated enum PhysicalGuestCredentialFields {
+    static func isEmpty(value: String?) -> Bool { value == nil || value == "" }
+}
+
+private nonisolated enum PhysicalMicrophonePrompt {
+    struct Unverified: Error {}
+    static let titles = ["“Pichi Voice” Would Like to Access the Microphone", "\"Pichi Voice\" Would Like to Access the Microphone",
+                         "«Pichi Voice» запрашивает доступ к микрофону", "«Pichi Voice» запрашивает доступ к микрофону.",
+                         "Приложение «Pichi Voice» запрашивает доступ к микрофону."]
+    static let usage = ["Record audio and transcribe speech on this device.", "Записывать звук и распознавать речь на этом устройстве."]
+    static let grantLabels = ["OK", "ОК", "Allow", "Разрешить"]
+    static let denyLabels = ["Don't Allow", "Don’t Allow", "Не разрешать"]
+
+    static func enabled(_ environment: [String: String], revision: String, isPad: Bool) throws -> Bool {
+        guard environment["PICHI_PHYSICAL_ALLOW_MICROPHONE_PROMPT"] == "1" else { return false }
+        guard isPad, revision == PhysicalOwnedPlaybackAuthorization.frozenRevision,
+              environment["PICHI_PHYSICAL_MICROPHONE_AUT_REVISION"] == revision else { throw Unverified() }
+        return true
+    }
+
+    static func grantIndex(texts: [String], buttons: [String]) -> Int? {
+        guard texts.contains(where: { titles.contains($0) }), texts.contains(where: { usage.contains($0) }), buttons.count == 2,
+              buttons.filter({ denyLabels.contains($0) }).count == 1 else { return nil }
+        let matches = buttons.indices.filter { grantLabels.contains(buttons[$0]) }
+        return matches.count == 1 ? matches.first : nil
+    }
+}
+
 private nonisolated struct PhysicalSetupContinuationReceipt: Codable {
     let version: Int
     let authorization: PhysicalSetupContinuationAuthorization
@@ -1033,6 +1105,97 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         releaseCleanup?.resume()
         try await operation.value
         XCTAssertTrue(returned)
+    }
+
+    private var guestCompletionTestEnvironment: [String: String] {
+        ["PICHI_PHYSICAL_SETUP_GUEST_COMPLETION": "1",
+         "PICHI_PHYSICAL_SETUP_AUT_REVISION": PhysicalOwnedPlaybackAuthorization.frozenRevision,
+         "PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT": "1",
+         "PICHI_PHYSICAL_SETUP_OPERATION": "final-account-to-guest-recordings",
+         "PICHI_PHYSICAL_SETUP_FROM_STAGE": "final-account",
+         "PICHI_PHYSICAL_SETUP_RUN_ID": "00000000-0000-0000-0000-000000000003",
+         "PICHI_PHYSICAL_SETUP_DEVICE_ID": String(repeating: "a", count: 40)]
+    }
+
+    private func guestCompletionTestReceipt() throws -> PhysicalGuestCompletionReceipt {
+        PhysicalGuestCompletionReceipt(version: 1,
+            authorization: try PhysicalSetupContinuationAuthorization.selectGuest(guestCompletionTestEnvironment,
+                revision: PhysicalOwnedPlaybackAuthorization.frozenRevision), issuedAt: Date(timeIntervalSince1970: 1000),
+            build: "34", bundleID: "ai.pichi.voice", legacyBundleID: "ai.pichi.voice.mobile", newNamespaceEmpty: true,
+            legacyNamespacePreserved: true, destinationVerified: true, foregroundFinalAccountAttested: true,
+            localPreparationReady: true, signedOutAttested: true, credentialsEmptyAttested: true)
+    }
+
+    func testPhysicalGuestCompletionAdmitsOnlyFreshExactPreparedSignedOutFinalPage() throws {
+        let receipt = try guestCompletionTestReceipt()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        try decoder.decode(PhysicalGuestCompletionReceipt.self, from: encoder.encode(receipt)).validate(
+            receipt.authorization, now: Date(timeIntervalSince1970: 1001), consumed: false)
+        for key in guestCompletionTestEnvironment.keys {
+            var changed = guestCompletionTestEnvironment
+            changed.removeValue(forKey: key)
+            XCTAssertThrowsError(try PhysicalSetupContinuationAuthorization.selectGuest(changed, revision: receipt.authorization.revision))
+            changed[key] = "invalid"
+            XCTAssertThrowsError(try PhysicalSetupContinuationAuthorization.selectGuest(changed, revision: receipt.authorization.revision))
+        }
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(receipt)) as? [String: Any])
+        for key in ["newNamespaceEmpty", "legacyNamespacePreserved", "destinationVerified", "foregroundFinalAccountAttested",
+                    "localPreparationReady", "signedOutAttested", "credentialsEmptyAttested"] {
+            var changed = json
+            changed[key] = false
+            let unsafe = try JSONDecoder().decode(PhysicalGuestCompletionReceipt.self, from: JSONSerialization.data(withJSONObject: changed))
+            XCTAssertThrowsError(try unsafe.validate(receipt.authorization, now: receipt.issuedAt, consumed: false))
+        }
+        for (key, invalid) in [("version", 2 as Any), ("build", "23"), ("bundleID", "other"), ("legacyBundleID", "other")] {
+            var changed = json
+            changed[key] = invalid
+            let unsafe = try JSONDecoder().decode(PhysicalGuestCompletionReceipt.self, from: JSONSerialization.data(withJSONObject: changed))
+            XCTAssertThrowsError(try unsafe.validate(receipt.authorization, now: receipt.issuedAt, consumed: false))
+        }
+        var foreign = guestCompletionTestEnvironment
+        foreign["PICHI_PHYSICAL_SETUP_DEVICE_ID"] = String(repeating: "b", count: 40)
+        XCTAssertThrowsError(try receipt.validate(PhysicalSetupContinuationAuthorization.selectGuest(foreign, revision: receipt.authorization.revision),
+            now: receipt.issuedAt, consumed: false))
+        for time in [999.0, 1901.0] {
+            XCTAssertThrowsError(try receipt.validate(receipt.authorization, now: Date(timeIntervalSince1970: time), consumed: false))
+        }
+        XCTAssertThrowsError(try receipt.validate(receipt.authorization, now: receipt.issuedAt, consumed: true))
+        XCTAssertThrowsError(try JSONDecoder().decode(PhysicalGuestCompletionReceipt.self, from: JSONEncoder().encode(setupContinuationTestReceipt())))
+    }
+
+    func testPhysicalGuestCredentialAdmissionRejectsEnteredOrUnknownValuesWithoutExposingThem() {
+        XCTAssertTrue(PhysicalGuestCredentialFields.isEmpty(value: nil))
+        XCTAssertTrue(PhysicalGuestCredentialFields.isEmpty(value: ""))
+        XCTAssertFalse(PhysicalGuestCredentialFields.isEmpty(value: "Email"))
+        for value in ["synthetic@example.test", "••••", "unknown"] {
+            XCTAssertFalse(PhysicalGuestCredentialFields.isEmpty(value: value))
+        }
+    }
+
+    func testPhysicalMicrophonePromptRequiresPadRevisionExactAppPurposeAndUniqueGrant() throws {
+        let revision = PhysicalOwnedPlaybackAuthorization.frozenRevision
+        let environment = ["PICHI_PHYSICAL_ALLOW_MICROPHONE_PROMPT": "1", "PICHI_PHYSICAL_MICROPHONE_AUT_REVISION": revision]
+        XCTAssertTrue(try PhysicalMicrophonePrompt.enabled(environment, revision: revision, isPad: true))
+        XCTAssertFalse(try PhysicalMicrophonePrompt.enabled([:], revision: revision, isPad: true))
+        XCTAssertThrowsError(try PhysicalMicrophonePrompt.enabled(environment, revision: revision, isPad: false))
+        XCTAssertThrowsError(try PhysicalMicrophonePrompt.enabled(environment, revision: String(repeating: "b", count: 40), isPad: true))
+        for title in PhysicalMicrophonePrompt.titles {
+            for usage in PhysicalMicrophonePrompt.usage {
+                for grant in PhysicalMicrophonePrompt.grantLabels {
+                    XCTAssertEqual(PhysicalMicrophonePrompt.grantIndex(texts: [title, usage], buttons: ["Don't Allow", grant]), 1)
+                }
+            }
+        }
+        let good = [PhysicalMicrophonePrompt.titles[0], PhysicalMicrophonePrompt.usage[0]]
+        XCTAssertNil(PhysicalMicrophonePrompt.grantIndex(texts: ["Other app", PhysicalMicrophonePrompt.usage[0]], buttons: ["OK"]))
+        XCTAssertNil(PhysicalMicrophonePrompt.grantIndex(texts: [PhysicalMicrophonePrompt.titles[0], "Location or Touch ID"], buttons: ["OK"]))
+        XCTAssertNil(PhysicalMicrophonePrompt.grantIndex(texts: good, buttons: ["Don't Allow", "Cancel"]))
+        XCTAssertNil(PhysicalMicrophonePrompt.grantIndex(texts: good, buttons: ["OK", "Allow"]))
+        XCTAssertNil(PhysicalMicrophonePrompt.grantIndex(texts: good, buttons: ["Touch ID", "OK"]))
+        XCTAssertNil(PhysicalMicrophonePrompt.grantIndex(texts: good, buttons: ["Don't Allow", "OK", "Password"]))
     }
 
     func testPhysicalSpeakerPreflightAcceptsVerifiedCurrentSettingsAndSession() throws {
@@ -2656,6 +2819,79 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         #endif
     }
 
+    @MainActor
+    func testPhysicalIPadFinalAccountContinueAsGuestToEmptyRecordings() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires the attested empty unified iPad at the signed-out final account page")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_SETUP_GUEST_COMPLETION"] == "1" else { throw XCTSkip("Enable only the owned iPad guest completion") }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let selected = try PhysicalSetupContinuationAuthorization.selectGuest(environment, revision: revision)
+        try require(UIDevice.current.userInterfaceIdiom == .pad, "Guest completion never admits a phone")
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+        let directory = support.appendingPathComponent("PhysicalReleaseUI/setup-guest", isDirectory: true)
+        let receiptURL = directory.appendingPathComponent("\(selected.runID.uuidString).json")
+        let consumedURL = directory.appendingPathComponent("\(selected.runID.uuidString).consumed")
+        let values = try receiptURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        try require(values.isRegularFile == true && values.isSymbolicLink != true && (values.fileSize ?? Int.max) <= 8192,
+                    "Guest completion requires a bounded regular fresh parent receipt")
+        let data = try Data(contentsOf: receiptURL)
+        try require(data.count <= 8192, "Guest receipt exceeded its bound")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        try decoder.decode(PhysicalGuestCompletionReceipt.self, from: data).validate(selected, now: Date(),
+            consumed: FileManager.default.fileExists(atPath: consumedURL.path))
+        let running = XCUIApplication(bundleIdentifier: "ai.pichi.voice")
+        try require(running.state == .runningForeground, "Never launch or activate a guest-completion app")
+        let app = try attachReadOnlyPhysicalApp(revision: revision)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        func idle() -> Bool {
+            app.state == .runningForeground && app.alerts.count == 0 && springboard.alerts.count == 0
+                && app.sheets.count == 0 && app.keyboards.count == 0 && !app.buttons["meeting.stop"].exists
+                && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+                && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists
+                && !app.buttons["ownerVoice.stop"].exists && !app.buttons["account.signOut"].exists
+                && !app.descendants(matching: .any)["account.signingIn"].firstMatch.exists
+                && !app.descendants(matching: .any)["onboarding.error"].firstMatch.exists
+                && !app.descendants(matching: .any)["account.error"].firstMatch.exists
+        }
+        func emptyCredential(_ field: XCUIElement) -> Bool {
+            guard field.exists, !field.hasFocus, field.value == nil || field.value is String else { return false }
+            return PhysicalGuestCredentialFields.isEmpty(value: field.value as? String)
+        }
+        try require(app.textFields.matching(identifier: "account.legacy.email").count == 1
+                    && app.secureTextFields.matching(identifier: "account.legacy.password").count == 1, "Credential controls must be unique")
+        try require(idle() && app.descendants(matching: .any)["onboarding.step.6"].firstMatch.exists
+                    && app.descendants(matching: .any)["onboarding.account"].firstMatch.exists
+                    && !app.buttons["onboarding.cancel"].exists
+                    && emptyCredential(app.textFields["account.legacy.email"])
+                    && emptyCredential(app.secureTextFields["account.legacy.password"]),
+                    "Guest admission requires the exact idle final page with empty, unfocused credential fields")
+        let guest = app.buttons["account.continueAsGuest"]
+        try reveal(guest, in: app, revision: revision, container: app.scrollViews.firstMatch)
+        try require(idle() && emptyCredential(app.textFields["account.legacy.email"])
+                    && emptyCredential(app.secureTextFields["account.legacy.password"]), "Never discard entered credential state")
+        try Data("claimed".utf8).write(to: consumedURL, options: .withoutOverwriting)
+        capture("guest-completion-01-empty-account-page", revision: revision)
+        try require(emptyCredential(app.textFields["account.legacy.email"]) && emptyCredential(app.secureTextFields["account.legacy.password"]),
+                    "Credentials must still be empty immediately before the guest action")
+        try tap(guest, "Use the ordinary Continue as guest action and its joined local setup service flow")
+        let deadline = ProcessInfo.processInfo.systemUptime + 120
+        while true {
+            try Task.checkCancellation()
+            try require(idle(), "Guest completion must remain signed out without prompts, errors or recording")
+            if app.buttons["meeting.start"].exists && app.buttons["meeting.start"].isEnabled
+                && app.buttons["meeting.start"].isHittable && !app.descendants(matching: .any)["onboarding.step.6"].firstMatch.exists { break }
+            try require(ProcessInfo.processInfo.systemUptime < deadline, "Normal guest completion did not reach Recordings within 120 seconds")
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+        try require(historyIDs(in: app).isEmpty, "The new guest Recordings namespace must remain empty")
+        capture("guest-completion-02-empty-recordings-ready", revision: revision)
+        print("[PHYSICAL_GUEST_COMPLETION] guestReady=true recordingStarted=false authAttempted=false")
+        #endif
+    }
+
     /// Destructive only for the exact freshly attested, independently backed-up synthetic fixture.
     @MainActor
     func testPhysicalOwnedCompletedSyntheticPlaybackPauseStopAndDelete() async throws {
@@ -3112,6 +3348,8 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         }
         let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
         try require(!revision.isEmpty && revision != "working-tree", "A concrete frozen AUT revision is required")
+        let allowMicrophonePrompt = try PhysicalMicrophonePrompt.enabled(environment, revision: revision,
+            isPad: UIDevice.current.userInterfaceIdiom == .pad)
         let expectedExternalLiveText = environment["PICHI_PHYSICAL_EXPECTED_LIVE_TEXT"]
             .map(normalizedVisibleSpeech).flatMap { $0.isEmpty ? nil : $0 }
         let runnerID = try XCTUnwrap(Bundle.main.bundleIdentifier)
@@ -3182,7 +3420,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
 
             try tap(app.buttons["meeting.start"], "Tap the actual Release Start action before any speech playback")
             ownsRecording = true
-            try await waitForVisibleRecording(in: app, timeout: 90)
+            try await waitForVisibleRecording(in: app, timeout: 90, microphonePromptRevision: allowMicrophonePrompt ? revision : nil)
             let beforeSpeechTimer = try visibleTimerSeconds(in: app)
             try await visibleCheckpoint("04-recording-before-speech", app: app, revision: revision, directory: checkpoints)
             try verifyVisibleRecording(in: app)
@@ -3476,9 +3714,35 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         return components.reduce(0) { $0 * 60 + $1! }
     }
 
-    @MainActor private func waitForVisibleRecording(in app: XCUIApplication, timeout: TimeInterval) async throws {
+    @MainActor private func waitForVisibleRecording(in app: XCUIApplication, timeout: TimeInterval,
+                                                    microphonePromptRevision: String? = nil) async throws {
         let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        var grantedPrompt = false
         while ProcessInfo.processInfo.systemUptime < deadline {
+            if let revision = microphonePromptRevision {
+                let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+                let alerts = springboard.alerts.count > 0 ? springboard.alerts : app.alerts
+                if alerts.count > 0 {
+                    try require(!grantedPrompt && alerts.count == 1 && revision == PhysicalOwnedPlaybackAuthorization.frozenRevision,
+                                "Only one explicitly authorized microphone permission prompt may be handled")
+                    let alert = alerts.firstMatch
+                    if springboard.alerts.count > 0 && app.alerts.count > 0 {
+                        let other = app.alerts.firstMatch
+                        try require(app.alerts.count == 1 && PhysicalMicrophonePrompt.grantIndex(
+                            texts: [other.label] + other.staticTexts.allElementsBoundByIndex.map(\.label),
+                            buttons: other.buttons.allElementsBoundByIndex.map(\.label)) != nil,
+                            "Any additional or different application prompt denies microphone handling")
+                    }
+                    let texts = [alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label)
+                    let buttons = alert.buttons.allElementsBoundByIndex
+                    let index = try XCTUnwrap(PhysicalMicrophonePrompt.grantIndex(texts: texts, buttons: buttons.map(\.label)),
+                                             "Reject every prompt except the exact Pichi Voice microphone purpose and unique grant action")
+                    try tap(buttons[index], "Grant only the explicitly authorized Pichi Voice microphone permission after owned Start")
+                    try require(alert.waitForNonExistence(timeout: 5), "The owned microphone prompt must close normally")
+                    grantedPrompt = true
+                    print("[PHYSICAL_MICROPHONE_PROMPT] exactOwnedPromptGranted=true revision=\(revision)")
+                }
+            }
             if app.buttons["meeting.stop"].exists && app.buttons["meeting.stop"].isEnabled {
                 try verifyVisibleRecording(in: app)
                 return
