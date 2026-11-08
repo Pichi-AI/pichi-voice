@@ -60,8 +60,8 @@ foreground, then switches to the AUT. Its playback session uses the public
 microphone capture. The final app's audio-off policy concerns its captured audio,
 not the approved input fixture staged in a separate test runner.
 
-Call `prepareToPlay()` only after bringing the runner to the foreground and
-activating its `.playback` audio session. Preparation can itself activate audio;
+Construct the player and call `prepareToPlay()` only after bringing the runner
+to the foreground and activating its `.playback` audio session. Preparation can itself activate audio;
 calling it earlier can fail with an iOS background activation error before the
 AUT is touched. Keep preparation inside the existing owned playback cleanup.
 

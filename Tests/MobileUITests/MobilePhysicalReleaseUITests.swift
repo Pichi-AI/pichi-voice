@@ -20,13 +20,12 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         let priorModel = try XCTUnwrap(environment["PICHI_PHYSICAL_PRIOR_MODEL"])
         let support = try FileManager.default.url(for: .applicationSupportDirectory,
             in: .userDomainMask, appropriateFor: nil, create: false)
-        let player = try AVAudioPlayer(contentsOf: support.appendingPathComponent("BackgroundRecordingUI/speech.wav"))
-        player.numberOfLoops = -1
-        player.volume = 0.15
+        let fixture = support.appendingPathComponent("BackgroundRecordingUI/speech.wav")
+        var ownedPlayer: AVAudioPlayer?
         let audio = AVAudioSession.sharedInstance()
         let category = audio.category, mode = audio.mode, options = audio.categoryOptions
         defer {
-            player.stop()
+            ownedPlayer?.stop()
             try? audio.setActive(false, options: .notifyOthersOnDeactivation)
             try? audio.setCategory(category, mode: mode, options: options)
         }
@@ -58,6 +57,10 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try audio.setActive(true)
             // prepareToPlay can activate the session; it follows foreground admission
             // and the explicit playback configuration, just like play itself.
+            let player = try AVAudioPlayer(contentsOf: fixture)
+            ownedPlayer = player
+            player.numberOfLoops = -1
+            player.volume = 0.15
             try require(player.prepareToPlay(), "Prepare approved synthetic speech in the phone runner")
             try require(player.play(), "Start the owned phone speaker fixture")
             app.activate()
@@ -112,7 +115,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             capture("background-08-completed", revision: revision)
             try selectModel(priorModel)
         } catch {
-            player.stop()
+            ownedPlayer?.stop()
             app.activate()
             if ownsRecording, app.buttons["meeting.stop"].exists {
                 app.buttons["meeting.stop"].tap()
@@ -517,10 +520,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                                                 appropriateFor: nil, create: false)
         let fixture = assets.appendingPathComponent("PhysicalReleaseUI/audio/owner-enrollment.wav")
         try require(FileManager.default.fileExists(atPath: fixture.path), "Stage the approved synthetic owner voice WAV in the runner")
-        let player = try AVAudioPlayer(contentsOf: fixture)
-        try require(player.duration.isFinite && player.duration >= 15, "Owner checking requires a valid single-voice speech fixture")
-        player.numberOfLoops = -1
-        player.volume = 0.8
+        var ownedPlayer: AVAudioPlayer?
 
         let app = XCUIApplication()
         app.launchArguments = []
@@ -561,7 +561,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         var ownsEnrollment = false
         var savedSyntheticProfile = false
         defer {
-            player.stop()
+            ownedPlayer?.stop()
             if ownsPlaybackSession { try? audioSession.setActive(false, options: .notifyOthersOnDeactivation) }
             if changedPlaybackCategory {
                 try? audioSession.setCategory(originalCategory, mode: originalMode, options: originalOptions)
@@ -575,6 +575,11 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             changedPlaybackCategory = true
             try audioSession.setActive(true)
             ownsPlaybackSession = true
+            let player = try AVAudioPlayer(contentsOf: fixture)
+            ownedPlayer = player
+            try require(player.duration.isFinite && player.duration >= 15, "Owner checking requires a valid single-voice speech fixture")
+            player.numberOfLoops = -1
+            player.volume = 0.8
             try require(player.prepareToPlay(), "The runner must prepare actual synthetic speech playback")
             try require(player.play(), "The runner must start synthetic owner speech")
             app.activate()
@@ -627,7 +632,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                         "Navigation must remain responsive and the deleted profile must not return")
             capture("owner-06-clean-settings-reopened", revision: revision)
         } catch {
-            player.stop()
+            ownedPlayer?.stop()
             // The precondition proved no human profile existed, so a saved one is the synthetic sample.
             if savedSyntheticProfile || (app.buttons["ownerVoice.delete"].exists && ownsEnrollment) {
                 app.activate()
@@ -684,10 +689,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                                                 appropriateFor: nil, create: false)
         let fixture = assets.appendingPathComponent("PhysicalReleaseUI/audio/ru.wav")
         try require(FileManager.default.fileExists(atPath: fixture.path), "Stage the approved public Russian WAV in the runner")
-        let player = try AVAudioPlayer(contentsOf: fixture)
-        try require(player.duration.isFinite && player.duration >= 1, "The staged speech fixture must be valid")
-        player.numberOfLoops = -1
-        player.volume = 0.8
+        var ownedPlayer: AVAudioPlayer?
 
         let app = XCUIApplication()
         // Preserve the user's actual language, theme, model and privacy choices.
@@ -741,7 +743,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         var changedPlaybackCategory = false
         var ownsPlaybackSession = false
         defer {
-            player.stop()
+            ownedPlayer?.stop()
             if ownsPlaybackSession {
                 try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
             }
@@ -759,6 +761,11 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             changedPlaybackCategory = true
             try audioSession.setActive(true)
             ownsPlaybackSession = true
+            let player = try AVAudioPlayer(contentsOf: fixture)
+            ownedPlayer = player
+            try require(player.duration.isFinite && player.duration >= 1, "The staged speech fixture must be valid")
+            player.numberOfLoops = -1
+            player.volume = 0.8
             try require(player.prepareToPlay(), "The runner must prepare real fixture playback")
             try require(player.play(), "The runner must start synthetic speech")
             app.activate()
@@ -856,7 +863,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(!app.buttons["meeting.stop"].exists, "Relaunch must not restore active capture")
             capture("21-persisted-transcript-reopened", revision: revision)
         } catch {
-            player.stop()
+            ownedPlayer?.stop()
             if ownsRecording {
                 // Request the same normal stop/join path as the user. Never stop someone
                 // else's pre-existing recording or delete checkpoints after a failure.
