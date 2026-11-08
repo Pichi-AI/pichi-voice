@@ -799,6 +799,14 @@ final class MobileNavigationUITests: XCTestCase {
             waitForOrientation(portrait: true)
             XCTAssertTrue(start.isHittable)
             XCTAssertFalse(app.buttons["meeting.settings"].exists)
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                let separated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                    let gap = self.app.tabBars.firstMatch.frame.minY - start.frame.maxY
+                    return gap >= 12 && gap <= 20
+                }, object: nil)
+                XCTAssertEqual(XCTWaiter.wait(for: [separated], timeout: 5), .completed,
+                    "The portrait recording action has a modest gap above native navigation")
+            }
             capture("tabrow-\(language)-\(appearance)-portrait")
         }
         #endif

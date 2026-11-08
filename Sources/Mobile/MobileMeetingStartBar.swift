@@ -8,6 +8,12 @@ struct MobileMeetingStartBar: View {
     let startDisabled: Bool
     let start: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    static func needsDockedNavigationGap(idiom: UIUserInterfaceIdiom,
+                                        verticalSizeClass: UserInterfaceSizeClass?) -> Bool {
+        idiom == .phone && verticalSizeClass == .regular
+    }
 
     static func usesFloatingLayout(idiom: UIUserInterfaceIdiom, verticalSizeClass: UserInterfaceSizeClass?,
                                    dynamicTypeSize: DynamicTypeSize) -> Bool {
@@ -29,6 +35,8 @@ struct MobileMeetingStartBar: View {
             } else {
                 startButton
                     .padding(.horizontal, 24).padding(.top, 12)
+                    .padding(.bottom, Self.needsDockedNavigationGap(idiom: UIDevice.current.userInterfaceIdiom,
+                        verticalSizeClass: verticalSizeClass) ? theme.metrics.spacing.md : 0)
                     .frame(maxWidth: 560).frame(maxWidth: .infinity)
                     .background(theme.palette.toolbarBackground)
             }
