@@ -2,9 +2,896 @@ import XCTest
 import UIKit
 @preconcurrency import AVFoundation
 
+private nonisolated enum PhysicalSpeakerLabelsPreflight {
+    struct Unverified: Error {}
+
+    static func validate(_ environment: [String: String], revision: String) throws {
+        guard revision.count == 40 && revision.allSatisfy({ "0123456789abcdef".contains($0) }),
+              environment["PICHI_PHYSICAL_SPEAKER_LABELS_PREFLIGHT"] == "1",
+              environment["PICHI_PHYSICAL_SPEAKER_PREFLIGHT_REVISION"] == revision,
+              environment["PICHI_PHYSICAL_SPEAKER_SESSION_MODE"] == "streaming",
+              let sessionID = environment["PICHI_PHYSICAL_SPEAKER_SESSION_ID"],
+              UUID(uuidString: sessionID) != nil else { throw Unverified() }
+    }
+}
+
+@MainActor private enum PhysicalControlReveal {
+    struct NotVisible: Error {}
+
+    static func run(ready: () -> Bool, scroll: (Bool, Int) throws -> Void) throws {
+        // The reverse leg first covers the outbound travel, then searches above
+        // the original position even when the first leg never reached an edge.
+        for (upward, limit) in [(true, 5), (false, 10)] {
+            for step in 0..<limit {
+                if ready() { return }
+                try scroll(upward, step)
+            }
+        }
+        guard ready() else { throw NotVisible() }
+    }
+}
+
+@MainActor private enum PhysicalUITransitionWait {
+    struct TimedOut: Error {}
+    enum OwnedRecordingAction: Equatable { case requestStop, join }
+
+    static func ownedRecordingAction(stopReady: Bool, processing: Bool, completed: Bool) -> OwnedRecordingAction? {
+        if processing || completed { return .join }
+        return stopReady ? .requestStop : nil
+    }
+
+    static func until(timeout: TimeInterval, condition: () -> Bool,
+                      now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+                      pause: () async throws -> Void = { try await Task.sleep(nanoseconds: 250_000_000) }) async throws {
+        let deadline = now() + timeout
+        while true {
+            try Task.checkCancellation()
+            if condition() { return }
+            guard now() < deadline else { throw TimedOut() }
+            try await pause()
+        }
+    }
+}
+
+private nonisolated enum PhysicalCaptionGeometry {
+    struct Sample: Equatable {
+        let identifier: String
+        let paragraph: CGRect
+        let viewport: CGRect
+
+        var tailIsVisible: Bool {
+            guard !identifier.isEmpty, Self.valid(paragraph), Self.valid(viewport) else { return false }
+            // An intersecting tall row can still have its tail below the viewport.
+            return paragraph.maxY > viewport.minY && paragraph.maxY <= viewport.maxY
+                && paragraph.intersection(viewport).width > 0
+        }
+
+        private static func valid(_ rect: CGRect) -> Bool {
+            [rect.minX, rect.minY, rect.width, rect.height, rect.maxX, rect.maxY].allSatisfy(\.isFinite)
+                && rect.size.width > 0 && rect.size.height > 0 && !rect.isNull && !rect.isInfinite
+        }
+    }
+
+    struct Settling {
+        private var previous: Sample?
+
+        mutating func observe(_ sample: Sample) -> Bool {
+            defer { previous = sample.tailIsVisible ? sample : nil }
+            return sample.tailIsVisible && previous == sample
+        }
+    }
+}
+
+private nonisolated struct PhysicalPostSoakAuthorization: Codable, Equatable {
+    struct Unverified: Error {}
+    let revision: String
+    let runID: UUID
+    let sessionID: UUID
+    let title: String
+
+    static func select(_ environment: [String: String], revision: String) throws -> Self {
+        guard revision.count == 40 && revision.allSatisfy({ "0123456789abcdef".contains($0) }),
+              environment["PICHI_PHYSICAL_POST_SOAK_CONTINUATION"] == "1",
+              environment["PICHI_PHYSICAL_POST_SOAK_AUT_REVISION"] == revision,
+              environment["PICHI_PHYSICAL_POST_SOAK_OWNED_IDLE_PREFLIGHT"] == "1",
+              environment["PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT"] == "1",
+              let run = environment["PICHI_PHYSICAL_POST_SOAK_RUN_ID"], let runID = UUID(uuidString: run),
+              let session = environment["PICHI_PHYSICAL_POST_SOAK_SESSION_ID"], let sessionID = UUID(uuidString: session),
+              let title = environment["PICHI_PHYSICAL_POST_SOAK_SESSION_TITLE"],
+              !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.count <= 1024 else {
+            throw Unverified()
+        }
+        return Self(revision: revision, runID: runID, sessionID: sessionID, title: title)
+    }
+}
+
+private nonisolated struct PhysicalPostSoakReceipt: Codable {
+    var version: Int
+    var authorization: PhysicalPostSoakAuthorization
+    var state: String
+    var audioStorageMode: String
+    var piiRedactionEnabled: Bool
+    var exclusiveIdleAttested: Bool
+
+    func validate(_ expected: PhysicalPostSoakAuthorization) throws {
+        guard version == 1, authorization == expected, state == "completed", audioStorageMode == "memoryOnly",
+              piiRedactionEnabled, exclusiveIdleAttested else { throw PhysicalPostSoakAuthorization.Unverified() }
+    }
+}
+
+@MainActor private enum PhysicalOwnedRecordingCleanup {
+    struct StopAndJoinFailure: Error {
+        let stopError: Error
+        let joinError: Error
+    }
+
+    static func run(observe: () -> PhysicalUITransitionWait.OwnedRecordingAction?,
+                    stop: () async throws -> Void, join: () async throws -> Void,
+                    now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+                    pause: () async throws -> Void = { try await Task.sleep(nanoseconds: 250_000_000) }) async throws {
+        var action: PhysicalUITransitionWait.OwnedRecordingAction?
+        try await PhysicalUITransitionWait.until(timeout: 30, condition: {
+            action = observe()
+            return action != nil
+        }, now: now, pause: pause)
+        var stopError: Error?
+        if action == .requestStop {
+            do { try await stop() }
+            catch {
+                stopError = error
+                let failure = error as NSError
+                print("[PHYSICAL_RECORDING_UI] stop_failed_before_join domain=\(failure.domain) code=\(failure.code)")
+            }
+        }
+        do { try await join() }
+        catch {
+            let failure = error as NSError
+            print("[PHYSICAL_RECORDING_UI] join_failed domain=\(failure.domain) code=\(failure.code)")
+            if let stopError { throw StopAndJoinFailure(stopError: stopError, joinError: error) }
+            throw error
+        }
+        if let stopError { throw stopError }
+    }
+}
+
+private nonisolated struct PhysicalTinySettingsProfile: Codable, Equatable, Sendable {
+    var model: String
+    var saveAudio: Bool
+    var pii: Bool
+    static let original = Self(model: "gigaam-v3-eou", saveAudio: true, pii: false)
+    static let strict = Self(model: "whisper-tiny", saveAudio: false, pii: true)
+}
+
+private nonisolated struct PhysicalTinySettingsReceipt: Codable {
+    enum Phase: String, Codable { case changing, prepared, restored, restorationRequired }
+    var version: Int
+    var revision: String
+    var runID: String
+    var original: PhysicalTinySettingsProfile
+    var phase: Phase
+
+    func validate(revision: String, runID: String) throws {
+        guard version == 1, self.revision == revision, self.runID == runID,
+              original == .original else {
+            throw NSError(domain: "PhysicalTinySettingsReceipt", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Receipt ownership, frozen revision or original profile differs"])
+        }
+    }
+
+    func save(to url: URL) throws {
+        try JSONEncoder().encode(self).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+}
+
+@MainActor private enum PhysicalTinySettingsTransaction {
+    enum Key: Equatable { case model, saveAudio, pii }
+    struct RestorationRequired: Error {}
+    typealias Change = @MainActor (Key, PhysicalTinySettingsProfile) async throws -> Void
+    typealias Verify = @MainActor (PhysicalTinySettingsProfile) throws -> Void
+
+    static func prepare(change: @escaping Change, verify: @escaping Verify,
+                        commit: () throws -> Void) async throws {
+        do {
+            for key: Key in [.saveAudio, .pii, .model] {
+                try Task.checkCancellation()
+                try await change(key, .strict)
+            }
+            try Task.checkCancellation()
+            try verify(.strict)
+            try commit()
+        } catch {
+            let preparationError = error
+            do { try await restore(change: change, verify: verify) }
+            catch { throw RestorationRequired() }
+            throw preparationError
+        }
+    }
+
+    static func restore(change: @escaping Change, verify: @escaping Verify) async throws {
+        // Mandatory rollback owns its task and joins even when preparation was cancelled.
+        let cleanup = Task { @MainActor in
+            for key: Key in [.model, .pii, .saveAudio] { try await change(key, .original) }
+            try verify(.original)
+        }
+        try await cleanup.value
+    }
+}
+
+@MainActor private final class PhysicalTinySettingsFake {
+    enum Failure: Error { case injected }
+    var profile = PhysicalTinySettingsProfile.original
+    var restoreKeys: [PhysicalTinySettingsTransaction.Key] = []
+    let failingPrepareStep: Int?
+    let cancelPrepareStep: Int?
+    let failRestoration: Bool
+    private var prepareSteps = 0
+
+    init(failingPrepareStep: Int? = nil, cancelPrepareStep: Int? = nil, failRestoration: Bool = false) {
+        self.failingPrepareStep = failingPrepareStep
+        self.cancelPrepareStep = cancelPrepareStep
+        self.failRestoration = failRestoration
+    }
+
+    func change(_ key: PhysicalTinySettingsTransaction.Key, _ target: PhysicalTinySettingsProfile) async throws {
+        if target == .original {
+            restoreKeys.append(key)
+            if failRestoration { throw Failure.injected }
+        }
+        switch key {
+        case .model: profile.model = target.model
+        case .saveAudio: profile.saveAudio = target.saveAudio
+        case .pii: profile.pii = target.pii
+        }
+        if target == .strict {
+            prepareSteps += 1
+            if cancelPrepareStep == prepareSteps { withUnsafeCurrentTask { $0?.cancel() } }
+            if failingPrepareStep == prepareSteps { throw Failure.injected }
+        }
+    }
+
+    func verify(_ expected: PhysicalTinySettingsProfile) throws {
+        if profile != expected { throw Failure.injected }
+    }
+}
+
 /// Opt-in tests of the installed app through its public UI. Audible fixtures belong
 /// to the runner; silent input uses only the app's explicit DEBUG capture adapter.
 final class MobilePhysicalReleaseUITests: XCTestCase {
+    func testPhysicalCaptionGeometryAcceptsVisibleFullAndTallRowTails() {
+        let viewport = CGRect(x: 10, y: 100, width: 300, height: 400)
+        for row in [CGRect(x: 10, y: 120, width: 300, height: 80),
+                    CGRect(x: 10, y: -700, width: 300, height: 1200)] {
+            XCTAssertTrue(PhysicalCaptionGeometry.Sample(identifier: "tail", paragraph: row, viewport: viewport).tailIsVisible)
+        }
+    }
+
+    func testPhysicalCaptionGeometryRejectsIntersectionWithoutVisibleTailAndInvalidFrames() {
+        let viewport = CGRect(x: 10, y: 100, width: 300, height: 400)
+        for row in [CGRect(x: 10, y: 120, width: 300, height: 500),
+                    CGRect(x: 10, y: -100, width: 300, height: 200),
+                    CGRect(x: 400, y: 200, width: 300, height: 40), .zero, .null, .infinite,
+                    CGRect(x: CGFloat.nan, y: 200, width: 300, height: 40),
+                    CGRect(x: 10, y: 200, width: -30, height: 40)] {
+            XCTAssertFalse(PhysicalCaptionGeometry.Sample(identifier: "tail", paragraph: row, viewport: viewport).tailIsVisible)
+        }
+        for invalidViewport in [CGRect.zero, .null, .infinite] {
+            XCTAssertFalse(PhysicalCaptionGeometry.Sample(identifier: "tail", paragraph: viewport,
+                                                         viewport: invalidViewport).tailIsVisible)
+        }
+        XCTAssertFalse(PhysicalCaptionGeometry.Sample(identifier: "", paragraph: viewport, viewport: viewport).tailIsVisible)
+    }
+
+    func testPhysicalCaptionGeometryRequiresStableIdentityAndLayoutAfterInvalidObservation() {
+        let viewport = CGRect(x: 0, y: 100, width: 300, height: 400)
+        let tail = PhysicalCaptionGeometry.Sample(identifier: "tail", paragraph: viewport, viewport: viewport)
+        let moved = PhysicalCaptionGeometry.Sample(identifier: "tail", paragraph: viewport.offsetBy(dx: 0, dy: -1), viewport: viewport)
+        let replacement = PhysicalCaptionGeometry.Sample(identifier: "replacement", paragraph: moved.paragraph, viewport: viewport)
+        var settling = PhysicalCaptionGeometry.Settling()
+        XCTAssertFalse(settling.observe(tail))
+        XCTAssertFalse(settling.observe(moved))
+        XCTAssertFalse(settling.observe(replacement))
+        XCTAssertTrue(settling.observe(replacement))
+        XCTAssertFalse(settling.observe(.init(identifier: "tail", paragraph: .zero, viewport: viewport)))
+        XCTAssertFalse(settling.observe(replacement))
+        XCTAssertTrue(settling.observe(replacement))
+    }
+
+    private var postSoakTestEnvironment: [String: String] {
+        ["PICHI_PHYSICAL_POST_SOAK_CONTINUATION": "1",
+         "PICHI_PHYSICAL_POST_SOAK_AUT_REVISION": String(repeating: "a", count: 40),
+         "PICHI_PHYSICAL_POST_SOAK_OWNED_IDLE_PREFLIGHT": "1",
+         "PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT": "1",
+         "PICHI_PHYSICAL_POST_SOAK_RUN_ID": "00000000-0000-0000-0000-000000000001",
+         "PICHI_PHYSICAL_POST_SOAK_SESSION_ID": "00000000-0000-0000-0000-000000000002",
+         "PICHI_PHYSICAL_POST_SOAK_SESSION_TITLE": "Synthetic completed session"]
+    }
+
+    func testPhysicalPostSoakAuthorizationSelectsExactCompletedReceipt() throws {
+        let selected = try PhysicalPostSoakAuthorization.select(postSoakTestEnvironment, revision: String(repeating: "a", count: 40))
+        XCTAssertEqual(selected.sessionID.uuidString, postSoakTestEnvironment["PICHI_PHYSICAL_POST_SOAK_SESSION_ID"])
+        let receipt = PhysicalPostSoakReceipt(version: 1, authorization: selected, state: "completed",
+                                             audioStorageMode: "memoryOnly", piiRedactionEnabled: true, exclusiveIdleAttested: true)
+        try JSONDecoder().decode(PhysicalPostSoakReceipt.self, from: JSONEncoder().encode(receipt)).validate(selected)
+    }
+
+    func testPhysicalPostSoakAuthorizationRejectsMissingStaleOrMalformedSelection() {
+        let revision = String(repeating: "a", count: 40)
+        for (key, invalid) in [("PICHI_PHYSICAL_POST_SOAK_CONTINUATION", "0"),
+                               ("PICHI_PHYSICAL_POST_SOAK_AUT_REVISION", String(repeating: "b", count: 40)),
+                               ("PICHI_PHYSICAL_POST_SOAK_OWNED_IDLE_PREFLIGHT", "0"),
+                               ("PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT", "0"),
+                               ("PICHI_PHYSICAL_POST_SOAK_RUN_ID", "invalid"),
+                               ("PICHI_PHYSICAL_POST_SOAK_SESSION_ID", "invalid"),
+                               ("PICHI_PHYSICAL_POST_SOAK_SESSION_TITLE", " ")] {
+            var changed = postSoakTestEnvironment
+            changed[key] = invalid
+            XCTAssertThrowsError(try PhysicalPostSoakAuthorization.select(changed, revision: revision))
+            changed.removeValue(forKey: key)
+            XCTAssertThrowsError(try PhysicalPostSoakAuthorization.select(changed, revision: revision))
+        }
+        for invalidRevision in ["working-tree", String(repeating: "z", count: 40)] {
+            XCTAssertThrowsError(try PhysicalPostSoakAuthorization.select(postSoakTestEnvironment, revision: invalidRevision))
+        }
+    }
+
+    func testPhysicalPostSoakReceiptRejectsForeignSessionRunRevisionAndUnsafeState() throws {
+        let selected = try PhysicalPostSoakAuthorization.select(postSoakTestEnvironment, revision: String(repeating: "a", count: 40))
+        let receipt = PhysicalPostSoakReceipt(version: 1, authorization: selected, state: "completed",
+                                             audioStorageMode: "memoryOnly", piiRedactionEnabled: true, exclusiveIdleAttested: true)
+        for key in ["PICHI_PHYSICAL_POST_SOAK_SESSION_ID", "PICHI_PHYSICAL_POST_SOAK_RUN_ID", "PICHI_PHYSICAL_POST_SOAK_SESSION_TITLE"] {
+            var changed = postSoakTestEnvironment
+            changed[key] = key.hasSuffix("TITLE") ? "Another session" : "00000000-0000-0000-0000-000000000003"
+            let foreign = try PhysicalPostSoakAuthorization.select(changed, revision: selected.revision)
+            XCTAssertThrowsError(try receipt.validate(foreign))
+        }
+        var stale = postSoakTestEnvironment
+        stale["PICHI_PHYSICAL_POST_SOAK_AUT_REVISION"] = String(repeating: "b", count: 40)
+        XCTAssertThrowsError(try receipt.validate(PhysicalPostSoakAuthorization.select(stale, revision: String(repeating: "b", count: 40))))
+        let mutations: [(inout PhysicalPostSoakReceipt) -> Void] = [
+            { $0.version = 2 }, { $0.state = "recording" }, { $0.audioStorageMode = "saved" },
+            { $0.piiRedactionEnabled = false }, { $0.exclusiveIdleAttested = false }
+        ]
+        for mutate in mutations {
+            var changed = receipt
+            mutate(&changed)
+            XCTAssertThrowsError(try changed.validate(selected))
+        }
+    }
+
+    func testPhysicalSpeakerPreflightAcceptsVerifiedCurrentSettingsAndSession() throws {
+        let revision = String(repeating: "a", count: 40)
+        try PhysicalSpeakerLabelsPreflight.validate([
+            "PICHI_PHYSICAL_SPEAKER_LABELS_PREFLIGHT": "1",
+            "PICHI_PHYSICAL_SPEAKER_PREFLIGHT_REVISION": revision,
+            "PICHI_PHYSICAL_SPEAKER_SESSION_MODE": "streaming",
+            "PICHI_PHYSICAL_SPEAKER_SESSION_ID": "00000000-0000-0000-0000-000000000001"
+        ], revision: revision)
+    }
+
+    func testPhysicalSpeakerPreflightRejectsMissingDisabledOrStaleEvidence() throws {
+        let revision = String(repeating: "a", count: 40)
+        let verified = [
+            "PICHI_PHYSICAL_SPEAKER_LABELS_PREFLIGHT": "1",
+            "PICHI_PHYSICAL_SPEAKER_PREFLIGHT_REVISION": revision,
+            "PICHI_PHYSICAL_SPEAKER_SESSION_MODE": "streaming",
+            "PICHI_PHYSICAL_SPEAKER_SESSION_ID": "00000000-0000-0000-0000-000000000001"
+        ]
+        for (key, invalid) in [("PICHI_PHYSICAL_SPEAKER_LABELS_PREFLIGHT", "0"),
+                               ("PICHI_PHYSICAL_SPEAKER_PREFLIGHT_REVISION", String(repeating: "b", count: 40)),
+                               ("PICHI_PHYSICAL_SPEAKER_SESSION_MODE", "afterRecording"),
+                               ("PICHI_PHYSICAL_SPEAKER_SESSION_ID", "invalid")] {
+            var changed = verified
+            changed[key] = invalid
+            XCTAssertThrowsError(try PhysicalSpeakerLabelsPreflight.validate(changed, revision: revision))
+            changed.removeValue(forKey: key)
+            XCTAssertThrowsError(try PhysicalSpeakerLabelsPreflight.validate(changed, revision: revision))
+        }
+    }
+
+    @MainActor
+    func testPhysicalControlRevealFindsTargetsInEitherDirection() throws {
+        for target in [-2, 0, 2] {
+            var position = 0
+            var gestures = 0
+            try PhysicalControlReveal.run(ready: { position == target }, scroll: { upward, _ in
+                position += upward ? 1 : -1
+                gestures += 1
+            })
+            XCTAssertEqual(position, target)
+            XCTAssertLessThanOrEqual(gestures, 15)
+            if target == 0 { XCTAssertEqual(gestures, 0) }
+        }
+    }
+
+    @MainActor
+    func testPhysicalControlRevealRejectsMissingControlAndPreservesGestureFailure() throws {
+        enum Failure: Error { case gesture }
+        var gestures = 0
+        XCTAssertThrowsError(try PhysicalControlReveal.run(ready: { false }, scroll: { _, _ in
+            gestures += 1
+        })) { XCTAssertTrue($0 is PhysicalControlReveal.NotVisible) }
+        XCTAssertEqual(gestures, 15)
+        XCTAssertThrowsError(try PhysicalControlReveal.run(ready: { false }, scroll: { _, _ in
+            throw Failure.gesture
+        })) { XCTAssertTrue($0 is Failure) }
+    }
+
+    @MainActor
+    func testPhysicalSettingsNavigationRevealsLandscapeRows() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires the explicitly owned idle physical app")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_SETTINGS_NAVIGATION"] == "1" else {
+            throw XCTSkip("Explicitly enable read-only physical settings navigation")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let app = try attachReadOnlyPhysicalApp(revision: revision)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: { app.frame.width > app.frame.height })
+        let original = try tinySettingsRead(app, revision: revision)
+        for page in ["models", "privacy", "recording", "participants", "models"] {
+            try openPhysicalSettingsPage("settings.\(page)", app: app, revision: revision)
+            let detail = app.descendants(matching: .any)["settings.\(page).detail"].firstMatch
+            try require(detail.waitForExistence(timeout: 10), "The selected Settings page must open")
+            if page == "participants" {
+                try verifyAutomaticParticipantResources(in: app, revision: revision, requireReady: false)
+            }
+            capture("settings-navigation-\(page)", revision: revision)
+            // Switching sections preserves the pushed Settings page; the next call
+            // must also exercise the app's explicit Settings reselect-to-root contract.
+            try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
+        }
+        XCTAssertEqual(try tinySettingsRead(app, revision: revision), original)
+        try tinySettingsIdle(app, revision: revision)
+        #endif
+    }
+
+    @MainActor
+    func testOwnedRecordingCleanupWaitsForReadyStopAndJoinsBeforeReturning() async throws {
+        try await verifyOwnedRecordingCleanupJoin(initiallyProcessing: false)
+    }
+
+    @MainActor
+    func testOwnedRecordingCleanupJoinsProcessingWithoutAnotherStop() async throws {
+        try await verifyOwnedRecordingCleanupJoin(initiallyProcessing: true)
+    }
+
+    @MainActor
+    func testOwnedRecordingCleanupPropagatesJoinFailure() async throws {
+        enum Failure: Error { case join }
+        var stopCalls = 0
+        do {
+            try await PhysicalOwnedRecordingCleanup.run(observe: { .join },
+                stop: { stopCalls += 1 }, join: { throw Failure.join })
+            XCTFail("Failed completion must remain an unresolved cleanup")
+        } catch Failure.join {
+            XCTAssertEqual(stopCalls, 0)
+        }
+    }
+
+    @MainActor
+    func testOwnedRecordingCleanupJoinsAfterStopFailure() async throws {
+        try await verifyOwnedRecordingCleanupJoin(initiallyProcessing: false, stopFails: true)
+    }
+
+    @MainActor
+    func testOwnedRecordingCleanupRetainsStopAndJoinFailures() async throws {
+        try await verifyOwnedRecordingCleanupJoin(initiallyProcessing: false, stopFails: true, joinFails: true)
+    }
+
+    @MainActor private func verifyOwnedRecordingCleanupJoin(initiallyProcessing: Bool,
+                                                           stopFails: Bool = false, joinFails: Bool = false) async throws {
+        enum Failure: Error, Equatable { case stop, join }
+        var time: TimeInterval = 0
+        var calls: [String] = []
+        var returned = false
+        var releaseJoin: CheckedContinuation<Void, Never>?
+        var joinReleased = false
+        let enteredJoin = expectation(description: "Cleanup entered the real join operation")
+        let cleanup = Task { @MainActor in
+            try await PhysicalOwnedRecordingCleanup.run(observe: {
+                PhysicalUITransitionWait.ownedRecordingAction(stopReady: time >= 2,
+                    processing: initiallyProcessing, completed: false)
+            }, stop: {
+                calls.append("stop")
+                if stopFails { throw Failure.stop }
+            }, join: {
+                calls.append("join")
+                await withCheckedContinuation { continuation in
+                    if joinReleased { continuation.resume() }
+                    else { releaseJoin = continuation }
+                    enteredJoin.fulfill()
+                }
+                if joinFails { throw Failure.join }
+            }, now: { time }, pause: { time += 1 })
+            returned = true
+        }
+        let entered = await XCTWaiter.fulfillment(of: [enteredJoin], timeout: 2)
+        XCTAssertEqual(entered, .completed)
+        XCTAssertFalse(returned, "Returning before join releases would abandon owned capture")
+        XCTAssertEqual(calls, initiallyProcessing ? ["join"] : ["stop", "join"])
+        XCTAssertEqual(time, initiallyProcessing ? 0 : 2)
+        joinReleased = true
+        releaseJoin?.resume()
+        releaseJoin = nil
+        if entered != .completed { cleanup.cancel() }
+        do {
+            try await cleanup.value
+            XCTAssertFalse(stopFails || joinFails, "A failed Stop or join must not become cleanup success")
+            XCTAssertTrue(returned)
+        } catch {
+            XCTAssertFalse(returned)
+            if stopFails && joinFails {
+                let failures = try XCTUnwrap(error as? PhysicalOwnedRecordingCleanup.StopAndJoinFailure)
+                XCTAssertEqual(failures.stopError as? Failure, .stop)
+                XCTAssertEqual(failures.joinError as? Failure, .join)
+            } else {
+                guard stopFails, case Failure.stop = error else { throw error }
+            }
+        }
+    }
+
+    @MainActor
+    func testPhysicalTransitionWaitObservesDelayedState() async throws {
+        var time: TimeInterval = 0
+        var observations = 0
+        try await PhysicalUITransitionWait.until(timeout: 3, condition: {
+            observations += 1
+            return time == 2
+        }, now: { time }, pause: { time += 1 })
+        XCTAssertEqual(time, 2)
+        XCTAssertEqual(observations, 3)
+    }
+
+    @MainActor
+    func testPhysicalTransitionWaitRejectsMissingStateAtDeadline() async throws {
+        var time: TimeInterval = 0
+        do {
+            try await PhysicalUITransitionWait.until(timeout: 2, condition: { false },
+                                                    now: { time }, pause: { time += 1 })
+            XCTFail("A missing background or Stop transition must fail")
+        } catch is PhysicalUITransitionWait.TimedOut {
+            XCTAssertEqual(time, 2)
+        }
+    }
+
+    @MainActor
+    func testPhysicalTransitionWaitPreservesCancellation() async throws {
+        let work = Task { @MainActor in
+            do {
+                try await PhysicalUITransitionWait.until(timeout: 10, condition: { false },
+                    pause: { withUnsafeCurrentTask { $0?.cancel() } })
+                return false
+            } catch is CancellationError { return true }
+            catch { return false }
+        }
+        let cancelled = await work.value
+        XCTAssertTrue(cancelled)
+    }
+
+    @MainActor
+    func testPhysicalCleanupWaitsForTemporarilyDisabledStop() async throws {
+        var time: TimeInterval = 0
+        var decision: PhysicalUITransitionWait.OwnedRecordingAction?
+        try await PhysicalUITransitionWait.until(timeout: 3, condition: {
+            decision = PhysicalUITransitionWait.ownedRecordingAction(
+                stopReady: time >= 2, processing: false, completed: false)
+            return decision != nil
+        }, now: { time }, pause: { time += 1 })
+        XCTAssertEqual(time, 2)
+        XCTAssertEqual(decision, .requestStop)
+    }
+
+    @MainActor
+    func testPhysicalCleanupJoinsAlreadyProcessingOrCompleted() async throws {
+        for processing in [true, false] {
+            var pauses = 0
+            var decision: PhysicalUITransitionWait.OwnedRecordingAction?
+            try await PhysicalUITransitionWait.until(timeout: 3, condition: {
+                decision = PhysicalUITransitionWait.ownedRecordingAction(
+                    stopReady: false, processing: processing, completed: !processing)
+                return decision != nil
+            }, pause: { pauses += 1 })
+            XCTAssertEqual(decision, .join)
+            XCTAssertEqual(pauses, 0)
+        }
+    }
+
+    @MainActor
+    func testPhysicalPrepareTinyStrictSettings() async throws {
+        try await physicalTinySettings(restore: false)
+    }
+
+    @MainActor
+    func testPhysicalRestoreTinyOriginalSettings() async throws {
+        try await physicalTinySettings(restore: true)
+    }
+
+    @MainActor private func physicalTinySettings(restore: Bool) async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Settings preparation requires the explicitly owned physical device")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_TINY_SETTINGS_OPERATION"] == (restore ? "restore" : "prepare") else {
+            throw XCTSkip("Enable exactly the requested physical settings operation")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let runID = try XCTUnwrap(environment["PICHI_PHYSICAL_TINY_SETTINGS_RUN_ID"])
+        try require(revision.count == 40 && revision.allSatisfy { "0123456789abcdef".contains($0) }
+            && UUID(uuidString: runID) != nil
+            && environment["PICHI_PHYSICAL_TINY_SETTINGS_IDLE_PREFLIGHT"] == "1",
+            "The parent must verify the frozen AUT, current backup, idle state and exclusive ownership")
+        if !restore { try PhysicalSpeakerLabelsPreflight.validate(environment, revision: revision) }
+        try Task.checkCancellation()
+        let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice")
+        app.launchArguments = []
+        app.launchEnvironment = [:]
+        try require(app.state == .runningForeground || app.state == .runningBackground,
+                    "Settings preparation never launches or resumes an unknown AUT")
+        app.activate()
+        try tinySettingsIdle(app, revision: revision)
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                 appropriateFor: nil, create: true)
+        let directory = support.appendingPathComponent("PhysicalReleaseUI/tiny-settings", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let url = directory.appendingPathComponent(runID + ".json")
+        let change: PhysicalTinySettingsTransaction.Change = { key, target in
+            try self.tinySettingsIdle(app, revision: revision)
+            switch key {
+            case .model: try self.tinySettingsSelectModel(target.model, app: app, revision: revision)
+            case .saveAudio, .pii:
+                try self.openPhysicalSettingsPage("settings.privacy", app: app, revision: revision)
+                let identifier = key == .saveAudio ? "privacy.saveAudio" : "privacy.pii"
+                let value = key == .saveAudio ? target.saveAudio : target.pii
+                let control = app.switches[identifier]
+                try self.tinySettingsReveal(control, app: app, revision: revision)
+                let before = try XCTUnwrap(control.value as? String)
+                try self.require(before == "0" || before == "1", "Read an exact native switch value before changing it")
+                if before != (value ? "1" : "0") {
+                    try self.require(control.isEnabled && control.isHittable && app.alerts.count == 0,
+                                     "Change only the observed enabled privacy switch")
+                    control.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+                }
+                let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value ? "1" : "0"), object: control)
+                let changeResult = await XCTWaiter.fulfillment(of: [changed], timeout: 10)
+                try self.require(changeResult == .completed, "Verify the requested native switch value")
+                if key == .pii {
+                    let active = app.descendants(matching: .any)["privacy.pii.active"].firstMatch
+                    if value {
+                        try self.require(active.waitForExistence(timeout: 180), "Requested PII must actually finish preparation")
+                    } else {
+                        let progress = app.descendants(matching: .any)["privacy.pii.progress"].firstMatch
+                        try self.require(active.waitForNonExistence(timeout: 30)
+                            && progress.waitForNonExistence(timeout: 30), "PII restoration must finish cancellation")
+                    }
+                }
+            }
+            try self.require(app.alerts.count == 0, "Never approve an operating-system or application prompt")
+        }
+        let verify: PhysicalTinySettingsTransaction.Verify = { expected in
+            try self.require(self.tinySettingsRead(app, revision: revision) == expected,
+                             "The public UI must show the complete expected settings profile")
+        }
+        if restore || FileManager.default.fileExists(atPath: url.path) {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            try require(values.isRegularFile == true && values.isSymbolicLink != true
+                && (values.fileSize ?? Int.max) <= 4096, "Only a bounded regular runner-owned receipt can authorize restoration")
+            var receipt = try JSONDecoder().decode(PhysicalTinySettingsReceipt.self, from: Data(contentsOf: url))
+            try receipt.validate(revision: revision, runID: runID)
+            if !restore {
+                try require(receipt.phase == .prepared, "Restore an interrupted preparation before reusing its run ID")
+                try verify(.strict)
+                return
+            }
+            if receipt.phase == .restored { try verify(.original); return }
+            do {
+                try await PhysicalTinySettingsTransaction.restore(change: change, verify: verify)
+                receipt.phase = .restored
+                try receipt.save(to: url)
+                capture("tiny-settings-restored", revision: revision)
+            } catch {
+                receipt.phase = .restorationRequired
+                try? receipt.save(to: url)
+                throw error
+            }
+        } else {
+            // The concrete original profile comes from the parent's verified backup.
+            // Reject a disagreement before the first mutation, never adopt it as a baseline.
+            try verify(.original)
+            try openPhysicalSettingsPage("settings.participants", app: app, revision: revision)
+            try verifyAutomaticParticipantResources(in: app, revision: revision)
+            try openPhysicalSettingsPage("settings.models", app: app, revision: revision)
+            try tinySettingsReveal(app.buttons["model.activate.whisper-tiny"], app: app, revision: revision)
+            try require(app.buttons["model.activate.whisper-tiny"].isEnabled,
+                        "Tiny must already be installed; downloading or deleting a model is outside this driver")
+            var receipt = PhysicalTinySettingsReceipt(version: 1, revision: revision, runID: runID,
+                                                      original: .original, phase: .changing)
+            try receipt.save(to: url)
+            do {
+                try await PhysicalTinySettingsTransaction.prepare(change: change, verify: verify) {
+                    receipt.phase = .prepared
+                    try receipt.save(to: url)
+                }
+                capture("tiny-settings-prepared", revision: revision)
+            } catch {
+                receipt.phase = error is PhysicalTinySettingsTransaction.RestorationRequired ? .restorationRequired : .restored
+                try? receipt.save(to: url)
+                throw error
+            }
+        }
+        try tinySettingsIdle(app, revision: revision)
+        print("[PHYSICAL_TINY_SETTINGS] operation=\(restore ? "restore" : "prepare") runID=\(runID) verified=true")
+        #endif
+    }
+
+    @MainActor private func tinySettingsIdle(_ app: XCUIApplication, revision: String) throws {
+        try require(app.state == .runningForeground && app.alerts.count == 0, "Preserve any foreground interruption or prompt")
+        try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
+        try require(!app.buttons["meeting.stop"].exists
+            && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+            && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+            "This driver owns no recording and must never stop or alter an active attempt")
+    }
+
+    @MainActor private func openPhysicalSettingsPage(_ identifier: String, app: XCUIApplication, revision: String) throws {
+        try require(app.state == .runningForeground && app.alerts.count == 0, "Settings navigation cannot dismiss a prompt")
+        try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
+        let root = app.descendants(matching: .any)["settings.root"].firstMatch
+        if !root.waitForExistence(timeout: 2) || !root.isHittable {
+            // A section switch preserves its pushed page; reselecting Settings pops to root.
+            try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
+        }
+        try require(root.waitForExistence(timeout: 5) && root.isHittable && app.alerts.count == 0,
+                    "Reveal controls only in the ordinary Settings root")
+        let control = app.buttons[identifier]
+        try reveal(control, in: app, revision: revision, container: root)
+        try tap(control, "Open only the requested public Settings page")
+    }
+
+    @MainActor private func tinySettingsReveal(_ element: XCUIElement, app: XCUIApplication, revision: String) throws {
+        try reveal(element, in: app, revision: revision)
+    }
+
+    @MainActor private func verifyAutomaticParticipantResources(in app: XCUIApplication, revision: String,
+                                                               requireReady: Bool = true) throws {
+        try require(app.descendants(matching: .any)["settings.participants.detail"].firstMatch.exists,
+                    "Inspect automatic participant resources only on their ordinary Settings page")
+        let resources = app.descendants(matching: .any)["recording.requiredResources"].firstMatch
+        try require(resources.waitForExistence(timeout: 10), "Automatic participant resources must be present")
+        try reveal(resources, in: app, revision: revision)
+        for identifier in ["recording.diarization", "recording.streamingDiarization"] {
+            try require(!app.switches[identifier].exists, "Participant labels are automatic, not legacy UI switches")
+        }
+        if requireReady {
+            let ready = app.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", [
+                "Speech detection and speaker labels are ready", "Определение речи и участников готово"
+            ])).firstMatch
+            try require(ready.waitForExistence(timeout: 180) && app.alerts.count == 0,
+                        "Automatic speech detection and participant resources must be ready")
+        }
+    }
+
+    @MainActor private func tinySettingsSelectedModel(_ app: XCUIApplication, revision: String) throws -> String {
+        let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+        for direction in 0..<2 {
+            for _ in 0..<6 {
+                let selected = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "model.selected.")).allElementsBoundByIndex
+                let identifiers = Set(selected.map(\.identifier))
+                if identifiers.count == 1, let identifier = identifiers.first {
+                    let model = String(identifier.dropFirst("model.selected.".count))
+                    try require(model == "gigaam-v3-eou" || model == "whisper-tiny", "Do not overwrite an unrelated model selection")
+                    return model
+                }
+                try require(identifiers.isEmpty && scroll.exists && app.alerts.count == 0, "Model selection must be unambiguous")
+                if direction == 0 { scroll.swipeDown() } else { scroll.swipeUp() }
+            }
+        }
+        throw verificationFailure("The public UI did not expose one installed selected model")
+    }
+
+    @MainActor private func tinySettingsSelectModel(_ model: String, app: XCUIApplication, revision: String) throws {
+        try openPhysicalSettingsPage("settings.models", app: app, revision: revision)
+        if try tinySettingsSelectedModel(app, revision: revision) == model { return }
+        let activate = app.buttons["model.activate.\(model)"]
+        try tinySettingsReveal(activate, app: app, revision: revision)
+        try tap(activate, "Activate only an already installed owned model")
+        try require(app.descendants(matching: .any)["model.selected.\(model)"].firstMatch.waitForExistence(timeout: 45),
+                    "The model must finish its public activation transaction")
+    }
+
+    @MainActor private func tinySettingsRead(_ app: XCUIApplication, revision: String) throws -> PhysicalTinySettingsProfile {
+        try tinySettingsIdle(app, revision: revision)
+        try openPhysicalSettingsPage("settings.models", app: app, revision: revision)
+        let model = try tinySettingsSelectedModel(app, revision: revision)
+        try openPhysicalSettingsPage("settings.privacy", app: app, revision: revision)
+        func value(_ identifier: String) throws -> Bool {
+            let control = app.switches[identifier]
+            try tinySettingsReveal(control, app: app, revision: revision)
+            let raw = try XCTUnwrap(control.value as? String)
+            try require(raw == "0" || raw == "1", "Only exact native switch values authorize mutation")
+            return raw == "1"
+        }
+        let audio = try value("privacy.saveAudio"), pii = try value("privacy.pii")
+        if pii {
+            try require(app.descendants(matching: .any)["privacy.pii.active"].firstMatch.waitForExistence(timeout: 180),
+                        "Requested PII is not yet active")
+        }
+        return .init(model: model, saveAudio: audio, pii: pii)
+    }
+
+    @MainActor
+    func testTinySettingsPrepareRollsBackEveryPartiallyAppliedStep() async throws {
+        for failingStep in 1...3 {
+            let fake = PhysicalTinySettingsFake(failingPrepareStep: failingStep)
+            do {
+                try await PhysicalTinySettingsTransaction.prepare(change: fake.change, verify: fake.verify, commit: {})
+                XCTFail("A failed partial preparation must not succeed")
+            } catch PhysicalTinySettingsFake.Failure.injected {}
+            XCTAssertEqual(fake.profile, .original)
+            XCTAssertEqual(fake.restoreKeys, [.model, .pii, .saveAudio])
+        }
+    }
+
+    @MainActor
+    func testTinySettingsCommitRequiresVerifiedTargetAndCommitFailureRollsBack() async throws {
+        let fake = PhysicalTinySettingsFake()
+        var committed = false
+        try await PhysicalTinySettingsTransaction.prepare(change: fake.change, verify: fake.verify) {
+            XCTAssertEqual(fake.profile, .strict)
+            committed = true
+        }
+        XCTAssertTrue(committed)
+        try await PhysicalTinySettingsTransaction.restore(change: fake.change, verify: fake.verify)
+        XCTAssertEqual(fake.profile, .original)
+        do {
+            try await PhysicalTinySettingsTransaction.prepare(change: fake.change, verify: fake.verify) {
+                throw PhysicalTinySettingsFake.Failure.injected
+            }
+            XCTFail("A receipt commit failure must restore the original settings")
+        } catch PhysicalTinySettingsFake.Failure.injected {
+            XCTAssertEqual(fake.profile, .original)
+        }
+    }
+
+    @MainActor
+    func testTinySettingsCancellationJoinsRestorationAndReportsItsFailure() async throws {
+        let work = Task { @MainActor in
+            let fake = PhysicalTinySettingsFake(cancelPrepareStep: 2)
+            do {
+                try await PhysicalTinySettingsTransaction.prepare(change: fake.change, verify: fake.verify, commit: {})
+                return false
+            } catch is CancellationError { return fake.profile == .original }
+            catch { return false }
+        }
+        let restored = await work.value
+        XCTAssertTrue(restored)
+        let fake = PhysicalTinySettingsFake(failingPrepareStep: 1, failRestoration: true)
+        do {
+            try await PhysicalTinySettingsTransaction.prepare(change: fake.change, verify: fake.verify, commit: {})
+            XCTFail("A failed rollback must remain an explicit recovery requirement")
+        } catch is PhysicalTinySettingsTransaction.RestorationRequired {
+            XCTAssertNotEqual(fake.profile, .original)
+        }
+    }
+
+    @MainActor
+    func testTinySettingsReceiptRejectsAnotherRevisionRunAndBaseline() throws {
+        let revision = String(repeating: "a", count: 40), run = "00000000-0000-0000-0000-000000000001"
+        var receipt = PhysicalTinySettingsReceipt(version: 1, revision: revision, runID: run, original: .original, phase: .changing)
+        let decoded = try JSONDecoder().decode(PhysicalTinySettingsReceipt.self, from: JSONEncoder().encode(receipt))
+        XCTAssertNoThrow(try decoded.validate(revision: revision, runID: run))
+        XCTAssertThrowsError(try decoded.validate(revision: String(repeating: "b", count: 40), runID: run))
+        XCTAssertThrowsError(try decoded.validate(revision: revision, runID: UUID().uuidString))
+        receipt.original.saveAudio = false
+        XCTAssertThrowsError(try receipt.validate(revision: revision, runID: run))
+        receipt.original = .original
+        receipt.version = 2
+        XCTAssertThrowsError(try receipt.validate(revision: revision, runID: run))
+    }
+
     /// Opt-in regression against an already installed ordinary app. The parent
     /// preserves its data, owns the phone/audio lease and selects destination artifacts.
     @MainActor
@@ -20,22 +907,20 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         let priorModel = try XCTUnwrap(environment["PICHI_PHYSICAL_PRIOR_MODEL"])
         let support = try FileManager.default.url(for: .applicationSupportDirectory,
             in: .userDomainMask, appropriateFor: nil, create: false)
-        let player = try AVAudioPlayer(contentsOf: support.appendingPathComponent("BackgroundRecordingUI/speech.wav"))
-        player.numberOfLoops = -1
-        player.volume = 0.15
-        try require(player.prepareToPlay(), "Prepare approved synthetic speech in the phone runner")
+        let fixture = support.appendingPathComponent("BackgroundRecordingUI/speech.wav")
+        var ownedPlayer: AVAudioPlayer?
         let audio = AVAudioSession.sharedInstance()
         let category = audio.category, mode = audio.mode, options = audio.categoryOptions
         defer {
-            player.stop()
+            ownedPlayer?.stop()
             try? audio.setActive(false, options: .notifyOthersOnDeactivation)
             try? audio.setCategory(category, mode: mode, options: options)
         }
         let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice")
         var ownsRecording = false
+        var observedOwnedRecording = false
         func selectModel(_ model: String) throws {
-            try self.openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
-            try self.tap(app.buttons["settings.models"], "Open model settings")
+            try self.openPhysicalSettingsPage("settings.models", app: app, revision: revision)
             let selected = app.descendants(matching: .any)["model.selected.\(model)"].firstMatch
             if !selected.exists {
                 let activate = app.buttons["model.activate.\(model)"]
@@ -46,6 +931,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         }
         do {
             app.activate()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "initial-foreground")
             try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
             try require(!app.buttons["meeting.stop"].exists
                 && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
@@ -54,15 +940,25 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             capture("background-01-gigaam", revision: revision)
             let runner = XCUIApplication(bundleIdentifier: try XCTUnwrap(Bundle.main.bundleIdentifier))
             runner.activate()
+            try await waitForPhysicalAppState(runner, .runningForeground, phase: "fixture-foreground")
             try audio.setCategory(.playback, mode: .default, options: .mixWithOthers)
             try audio.setActive(true)
+            // prepareToPlay can activate the session; it follows foreground admission
+            // and the explicit playback configuration, just like play itself.
+            let player = try AVAudioPlayer(contentsOf: fixture)
+            ownedPlayer = player
+            player.numberOfLoops = -1
+            player.volume = 0.15
+            try require(player.prepareToPlay(), "Prepare approved synthetic speech in the phone runner")
             try require(player.play(), "Start the owned phone speaker fixture")
             app.activate()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "recording-foreground")
             try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
             try reveal(app.buttons["meeting.start"], in: app, revision: revision)
-            try tap(app.buttons["meeting.start"], "Start normal microphone recording")
             ownsRecording = true
+            try tap(app.buttons["meeting.start"], "Start normal microphone recording")
             try await waitForVisibleRecording(in: app, timeout: 90)
+            observedOwnedRecording = true
             try await observeVisibleRecording(in: app, player: player, seconds: 6)
             capture("background-02-recording", revision: revision)
             var timer = try visibleTimerSeconds(in: app)
@@ -76,50 +972,109 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
                 .press(forDuration: 0.05, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)))
             app.activate()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "after-notifications")
             try verifyVisibleRecording(in: app)
             try require(visibleTimerSeconds(in: app) > timer, "Recording must survive Notification Center")
             capture("background-04-after-notifications", revision: revision)
             timer = try visibleTimerSeconds(in: app)
 
             XCUIDevice.shared.press(.home)
-            try require(app.state == .runningBackground, "The actual app must enter background on Home")
+            try await waitForPhysicalAppState(app, .runningBackground, phase: "home-background")
             try await Task.sleep(nanoseconds: 8_000_000_000)
             try require(app.state == .runningBackground && player.isPlaying, "Microphone app and fixture must remain alive on Home")
             capture("background-05-home", revision: revision)
             app.activate()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "after-home")
             try verifyVisibleRecording(in: app)
             try require(visibleTimerSeconds(in: app) > timer, "Recording must survive Home")
             timer = try visibleTimerSeconds(in: app)
 
             let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
             settings.activate()
-            try require(settings.state == .runningForeground && app.state == .runningBackground,
-                "Settings must really replace the recording UI")
+            try await waitForPhysicalAppState(settings, .runningForeground, phase: "settings-foreground")
+            try await waitForPhysicalAppState(app, .runningBackground, phase: "settings-background")
             try await Task.sleep(nanoseconds: 8_000_000_000)
+            try require(settings.state == .runningForeground && app.state == .runningBackground && player.isPlaying,
+                "Settings must remain in foreground while recording and the fixture stay alive")
             capture("background-06-other-app", revision: revision)
             app.activate()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "after-settings")
             try verifyVisibleRecording(in: app)
             try require(visibleTimerSeconds(in: app) > timer, "Recording must survive another app")
             try require(liveTextCharacterCount(in: app) > 0, "Physical synthetic speech must produce visible captions")
             capture("background-07-returned", revision: revision)
             player.stop()
-            try tap(app.buttons["meeting.stop"], "Stop only this test's recording")
+            try await requestPhysicalOwnedStop(in: app)
             try await waitForCompletedTranscript(in: app, timeout: 180)
             ownsRecording = false
             capture("background-08-completed", revision: revision)
             try selectModel(priorModel)
         } catch {
-            player.stop()
-            app.activate()
-            if ownsRecording, app.buttons["meeting.stop"].exists {
-                app.buttons["meeting.stop"].tap()
-                try? await waitForCompletedTranscript(in: app, timeout: 120)
+            let primaryError = error
+            let failure = error as NSError
+            print("[PHYSICAL_GIGAAM] primary_error domain=\(failure.domain) code=\(failure.code) detail=\(failure.localizedDescription)")
+            ownedPlayer?.stop()
+            // Cleanup must still join when the original test task was cancelled.
+            let cleanup = Task { @MainActor in
+                do {
+                    if ownsRecording {
+                        try await self.finishPhysicalOwnedRecording(in: app, observed: observedOwnedRecording)
+                        ownsRecording = false
+                    } else {
+                        app.activate()
+                        try await self.waitForPhysicalAppState(app, .runningForeground, phase: "cleanup-foreground")
+                    }
+                    self.capture("background-failure", revision: revision)
+                    if !app.buttons["meeting.stop"].exists { try selectModel(priorModel) }
+                    print("[PHYSICAL_GIGAAM] cleanup_joined=true")
+                } catch {
+                    let cleanupError = error as NSError
+                    print("[PHYSICAL_GIGAAM] cleanup_requires_parent_inspection domain=\(cleanupError.domain) code=\(cleanupError.code) detail=\(cleanupError.localizedDescription)")
+                    self.capture("background-cleanup-unresolved", revision: revision)
+                }
             }
-            capture("background-failure", revision: revision)
-            if !app.buttons["meeting.stop"].exists { try? selectModel(priorModel) }
-            throw error
+            await cleanup.value
+            throw primaryError
         }
         #endif
+    }
+
+    @MainActor private func finishPhysicalOwnedRecording(in app: XCUIApplication, observed: Bool) async throws {
+        app.activate()
+        try await waitForPhysicalAppState(app, .runningForeground, phase: "cleanup-foreground")
+        let stop = app.buttons["meeting.stop"]
+        try await PhysicalOwnedRecordingCleanup.run(observe: {
+            guard app.state == .runningForeground, app.alerts.count == 0 else { return nil }
+            return PhysicalUITransitionWait.ownedRecordingAction(
+                stopReady: stop.exists && stop.isEnabled && stop.isHittable,
+                processing: app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                completed: observed && app.buttons["transcript.more"].exists && !stop.exists)
+        }, stop: { try await self.requestPhysicalOwnedStop(in: app) },
+           join: { try await self.waitForCompletedTranscript(in: app, timeout: 120) })
+    }
+
+    @MainActor private func waitForPhysicalAppState(_ app: XCUIApplication, _ expected: XCUIApplication.State,
+                                                   phase: String) async throws {
+        print("[PHYSICAL_GIGAAM] phase=\(phase) initial_state=\(app.state.rawValue) expected=\(expected.rawValue)")
+        do {
+            try await PhysicalUITransitionWait.until(timeout: 10, condition: { app.state == expected })
+        } catch {
+            print("[PHYSICAL_GIGAAM] phase=\(phase) failed_state=\(app.state.rawValue)")
+            throw error
+        }
+        print("[PHYSICAL_GIGAAM] phase=\(phase) observed_state=\(app.state.rawValue)")
+    }
+
+    @MainActor private func requestPhysicalOwnedStop(in app: XCUIApplication) async throws {
+        let stop = app.buttons["meeting.stop"]
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+            app.state == .runningForeground && app.alerts.count == 0
+                && stop.exists && stop.isEnabled && stop.isHittable
+        })
+        try tap(stop, "Stop only this test's recording through the ready public control")
+        // Disabled/gone is early UI admission evidence, never proof that capture joined.
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: { !stop.exists || !stop.isEnabled })
+        print("[PHYSICAL_GIGAAM] stop_control_transition_observed=true capture_join_not_yet_proven=true")
     }
 
     /// Observes an already running frozen Release after the parent preserves its data.
@@ -514,11 +1469,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                                                 appropriateFor: nil, create: false)
         let fixture = assets.appendingPathComponent("PhysicalReleaseUI/audio/owner-enrollment.wav")
         try require(FileManager.default.fileExists(atPath: fixture.path), "Stage the approved synthetic owner voice WAV in the runner")
-        let player = try AVAudioPlayer(contentsOf: fixture)
-        try require(player.duration.isFinite && player.duration >= 15, "Owner checking requires a valid single-voice speech fixture")
-        player.numberOfLoops = -1
-        player.volume = 0.8
-        try require(player.prepareToPlay(), "The runner must prepare actual synthetic speech playback")
+        var ownedPlayer: AVAudioPlayer?
 
         let app = XCUIApplication()
         app.launchArguments = []
@@ -559,7 +1510,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         var ownsEnrollment = false
         var savedSyntheticProfile = false
         defer {
-            player.stop()
+            ownedPlayer?.stop()
             if ownsPlaybackSession { try? audioSession.setActive(false, options: .notifyOthersOnDeactivation) }
             if changedPlaybackCategory {
                 try? audioSession.setCategory(originalCategory, mode: originalMode, options: originalOptions)
@@ -573,6 +1524,12 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             changedPlaybackCategory = true
             try audioSession.setActive(true)
             ownsPlaybackSession = true
+            let player = try AVAudioPlayer(contentsOf: fixture)
+            ownedPlayer = player
+            try require(player.duration.isFinite && player.duration >= 15, "Owner checking requires a valid single-voice speech fixture")
+            player.numberOfLoops = -1
+            player.volume = 0.8
+            try require(player.prepareToPlay(), "The runner must prepare actual synthetic speech playback")
             try require(player.play(), "The runner must start synthetic owner speech")
             app.activate()
             try tap(start, "Start the ordinary owner voice microphone capture")
@@ -624,7 +1581,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                         "Navigation must remain responsive and the deleted profile must not return")
             capture("owner-06-clean-settings-reopened", revision: revision)
         } catch {
-            player.stop()
+            ownedPlayer?.stop()
             // The precondition proved no human profile existed, so a saved one is the synthetic sample.
             if savedSyntheticProfile || (app.buttons["ownerVoice.delete"].exists && ownsEnrollment) {
                 app.activate()
@@ -660,6 +1617,108 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
     }
 
     @MainActor
+    func testPhysicalOwnedPostSoakCompletedJSONShareAndRelaunch() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires the parent's exact owned completed physical-device session")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_POST_SOAK_CONTINUATION"] == "1" else {
+            throw XCTSkip("Explicitly enable only the after-Stop continuation; this never replays the soak")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let selected = try PhysicalPostSoakAuthorization.select(environment, revision: revision)
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                 appropriateFor: nil, create: false)
+        let receiptURL = support.appendingPathComponent("PhysicalReleaseUI/post-soak/\(selected.runID.uuidString).json")
+        let attributes = try FileManager.default.attributesOfItem(atPath: receiptURL.path)
+        try require(((attributes[.size] as? NSNumber)?.intValue ?? Int.max) <= 8192,
+                    "The parent must stage a bounded owned-session attestation in this runner only")
+        let receiptData = try Data(contentsOf: receiptURL)
+        try require(receiptData.count <= 8192, "The runner receipt exceeded its bound")
+        try JSONDecoder().decode(PhysicalPostSoakReceipt.self, from: receiptData).validate(selected)
+        let app = try attachReadOnlyPhysicalApp(revision: revision)
+        let sessionID = selected.sessionID.uuidString
+        let activity = app.otherElements["ActivityListView"]
+        try require(!activity.exists && !app.otherElements["Browse View (Picker)"].exists,
+                    "Never adopt a pre-existing share sheet or document picker")
+        capture("post-soak-01-idle-attested", revision: revision)
+
+        func reopenOwnedSession(_ step: String) async throws {
+            try require(!app.buttons["meeting.stop"].exists
+                        && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                        "Continuation must remain idle; it owns no capture or processing attempt")
+            try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
+            let rows = app.buttons.matching(identifier: "history.session.\(sessionID)")
+            try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+                rows.count == 1 && rows.firstMatch.isHittable && rows.firstMatch.isEnabled
+            })
+            try require(rows.firstMatch.staticTexts.matching(NSPredicate(format: "label == %@", selected.title)).count == 1,
+                        "The unique exact session ID must also have the attested title")
+            capture("\(step)-exact-history-id", revision: revision)
+            try tap(rows.firstMatch, "Reopen only the attested owned completed session")
+            try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+                completedReadOnlyTranscriptVisible(in: app, title: selected.title)
+                    && app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@",
+                        "transcript.paragraph.")).count > 0
+            })
+            try require(app.buttons["transcript.copy"].exists, "The completed transcript must expose its ordinary copy control")
+            capture("\(step)-completed-transcript", revision: revision)
+        }
+
+        try await reopenOwnedSession("post-soak-02")
+        try tap(app.buttons["transcript.more"], "Inspect only the owned completed transcript's actions")
+        capture("post-soak-03-actions", revision: revision)
+        try require(firstButton(in: app, labels: ["Export Audio", "Экспорт аудио"]) == nil,
+                    "The attested memory-only session must never offer audio export")
+        let json = try XCTUnwrap(firstButton(in: app, labels: ["Export as JSON", "Экспортировать как JSON"]))
+        var ownsShare = true
+        func ownedShareClose() -> XCUIElement? {
+            let identified = activity.buttons.matching(identifier: "header.closeButton")
+            if identified.count == 1 { return identified.firstMatch }
+            let labelled = activity.navigationBars.matching(identifier: "UIActivityContentView").buttons.matching(
+                NSPredicate(format: "label IN %@", ["Close", "Закрыть"]))
+            return labelled.count == 1 ? labelled.firstMatch : nil
+        }
+        defer {
+            if ownsShare {
+                capture("post-soak-failure-before-share-cleanup", revision: revision)
+                if app.state == .runningForeground, app.alerts.count == 0, activity.exists,
+                   let close = ownedShareClose(), close.isHittable {
+                    close.tap()
+                    let closed = activity.waitForNonExistence(timeout: 5)
+                    print("[PHYSICAL_POST_SOAK] owned_share_cleanup_joined=\(closed)")
+                }
+                if activity.exists { print("[PHYSICAL_POST_SOAK] share_cleanup_requires_parent_inspection=true") }
+            }
+        }
+        try tap(json, "Present only the owned completed session's JSON share sheet")
+        try await PhysicalUITransitionWait.until(timeout: 15, condition: { activity.exists && app.alerts.count == 0 })
+        try await waitForOwnedShareSaveAction(in: app, revision: revision)
+        capture("post-soak-04-native-json-share", revision: revision)
+        // The parent may copy the owned temporary JSON for inspection. No destination,
+        // recipient, clipboard action or Files save is selected by this runner.
+        print("[PHYSICAL_POST_SOAK] export_presented kind=json sessionID=\(sessionID) inspectionSeconds=15 delivery_attempted=false")
+        try await Task.sleep(nanoseconds: 15_000_000_000)
+        try tap(try XCTUnwrap(ownedShareClose()), "Close only this continuation's native share sheet without delivery")
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+            !activity.exists && completedReadOnlyTranscriptVisible(in: app, title: selected.title)
+        })
+        ownsShare = false
+        capture("post-soak-05-share-dismissed", revision: revision)
+        // Admission above and the completed transcript check prove no active attempt
+        // belongs to another owner before this explicitly authorized normal relaunch.
+        app.terminate()
+        app.launchArguments = []
+        app.launchEnvironment = [:]
+        app.launch()
+        try await waitForPhysicalAppState(app, .runningForeground, phase: "post-soak-normal-relaunch")
+        capture("post-soak-06-normal-relaunch", revision: revision)
+        try await reopenOwnedSession("post-soak-07")
+        print("[PHYSICAL_POST_SOAK] completed sessionID=\(sessionID) afterStopOnly=true fullSoakPass=false delivery_attempted=false")
+        #endif
+    }
+
+    @MainActor
     func testReleaseTinyFiveMinuteBackgroundRecordingAndJSONShare() async throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("Requires an explicitly authorized physical-device audio lease")
@@ -672,6 +1731,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"],
                                     "The frozen AUT source revision must be recorded")
         try require(!revision.isEmpty && revision != "working-tree", "A concrete AUT revision is required")
+        try PhysicalSpeakerLabelsPreflight.validate(environment, revision: revision)
         let runnerID = try XCTUnwrap(Bundle.main.bundleIdentifier)
         try require(runnerID.hasSuffix(".xctrunner"), "Playback must be owned by the UI test runner")
         let backgroundModes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
@@ -681,17 +1741,14 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                                                 appropriateFor: nil, create: false)
         let fixture = assets.appendingPathComponent("PhysicalReleaseUI/audio/ru.wav")
         try require(FileManager.default.fileExists(atPath: fixture.path), "Stage the approved public Russian WAV in the runner")
-        let player = try AVAudioPlayer(contentsOf: fixture)
-        try require(player.duration.isFinite && player.duration >= 1, "The staged speech fixture must be valid")
-        player.numberOfLoops = -1
-        player.volume = 0.8
-        try require(player.prepareToPlay(), "The runner must prepare real fixture playback")
+        var ownedPlayer: AVAudioPlayer?
 
         let app = XCUIApplication()
         // Preserve the user's actual language, theme, model and privacy choices.
         app.launchArguments = []
         app.launchEnvironment = [:]
         app.activate()
+        try await waitForPhysicalAppState(app, .runningForeground, phase: "tiny-initial-foreground")
         try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
         try require(!app.buttons["meeting.stop"].exists
                     && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
@@ -699,27 +1756,19 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         capture("01-installed-app", revision: revision)
         try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
         let previousSessionIDs = historyIDs(in: app)
-        try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
-        if !app.buttons["settings.models"].exists {
-            try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
-        }
-        try tap(app.buttons["settings.models"], "Open the installed model settings")
+        try openPhysicalSettingsPage("settings.models", app: app, revision: revision)
         capture("02-models-opened", revision: revision)
         let selectedTiny = app.descendants(matching: .any)["model.selected.whisper-tiny"].firstMatch
         try reveal(selectedTiny, in: app, revision: revision)
         try require(selectedTiny.exists, "Whisper Tiny must already be selected; the test never changes the model")
         capture("03-tiny-selected", revision: revision)
-        try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
-        try tap(app.buttons["settings.privacy"], "Open privacy")
+        try openPhysicalSettingsPage("settings.privacy", app: app, revision: revision)
         try require(app.switches["privacy.saveAudio"].waitForExistence(timeout: 5), "Audio privacy must be visible")
         try require(app.switches["privacy.saveAudio"].value as? String == "0", "Save audio must already be OFF")
         try require(app.switches["privacy.pii"].value as? String == "1", "PII must already be ON")
         capture("04-strict-privacy", revision: revision)
-        try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
-        try tap(app.buttons["settings.recording"], "Open recording settings")
-        let speakers = app.switches["recording.diarization"]
-        try reveal(speakers, in: app, revision: revision)
-        try require(speakers.value as? String == "1", "Speaker labels must already be ON")
+        try openPhysicalSettingsPage("settings.participants", app: app, revision: revision)
+        try verifyAutomaticParticipantResources(in: app, revision: revision)
         capture("05-speaker-settings", revision: revision)
         try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
         if !app.buttons["meeting.start"].exists {
@@ -736,10 +1785,11 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         let originalMode = audioSession.mode
         let originalOptions = audioSession.categoryOptions
         var ownsRecording = false
+        var observedOwnedRecording = false
         var changedPlaybackCategory = false
         var ownsPlaybackSession = false
         defer {
-            player.stop()
+            ownedPlayer?.stop()
             if ownsPlaybackSession {
                 try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
             }
@@ -752,19 +1802,26 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             // the AUT. This uses the public audio background mode, not background assertions.
             let runner = XCUIApplication(bundleIdentifier: runnerID)
             runner.activate()
-            try require(runner.state == .runningForeground, "The runner must own foreground playback initiation")
+            try await waitForPhysicalAppState(runner, .runningForeground, phase: "tiny-fixture-foreground")
             try audioSession.setCategory(.playback, mode: .default, options: .mixWithOthers)
             changedPlaybackCategory = true
             try audioSession.setActive(true)
             ownsPlaybackSession = true
+            let player = try AVAudioPlayer(contentsOf: fixture)
+            ownedPlayer = player
+            try require(player.duration.isFinite && player.duration >= 1, "The staged speech fixture must be valid")
+            player.numberOfLoops = -1
+            player.volume = 0.8
+            try require(player.prepareToPlay(), "The runner must prepare real fixture playback")
             try require(player.play(), "The runner must start synthetic speech")
             app.activate()
-            try tap(app.buttons["meeting.start"], "Start through the ordinary Release UI")
-            // Once the Start action has been admitted, failure cleanup owns this attempt,
-            // even if preparation has not yet exposed an enabled Stop button.
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "tiny-recording-foreground")
+            // Own the only Start tap even if its automation response fails after delivery.
             ownsRecording = true
+            try tap(app.buttons["meeting.start"], "Start through the ordinary Release UI")
             try require(app.buttons["meeting.stop"].waitForExistence(timeout: 30), "The Release app must start recording")
             try require(app.buttons["meeting.stop"].isEnabled, "Capture must reach the recording state")
+            observedOwnedRecording = true
             capture("08-recording-started", revision: revision)
             let start = ProcessInfo.processInfo.systemUptime
             var earlyTextCount = 0
@@ -777,8 +1834,8 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     earlyTextCount = liveTextCharacterCount(in: app)
                     capture("09-live-at-ten-seconds", revision: revision)
                     preferences.activate()
-                    try require(preferences.state == .runningForeground, "Settings must be the actual foreground app")
-                    try require(app.state == .runningBackground, "The AUT must enter actual background recording")
+                    try await waitForPhysicalAppState(preferences, .runningForeground, phase: "tiny-settings-foreground")
+                    try await waitForPhysicalAppState(app, .runningBackground, phase: "tiny-recording-background")
                     capture("10-actual-background", revision: revision)
                     print("[PHYSICAL_RELEASE_UI] background_started revision=\(revision) earlyCharacters=\(earlyTextCount)")
                 } else if second > 10 {
@@ -791,11 +1848,12 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             player.stop()
             try require(!player.isPlaying, "The owned player must stop before completion")
             app.activate()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "tiny-after-background")
             try require(app.buttons["meeting.stop"].waitForExistence(timeout: 5) && app.buttons["meeting.stop"].isEnabled,
                         "Capture must still be active after five minutes")
             let finalTextCount = liveTextCharacterCount(in: app)
             try require(finalTextCount > max(earlyTextCount, 20), "Protected committed text must advance during background capture")
-            try verifyLatestCaptionVisible(in: app)
+            try await verifyLatestCaptionVisible(in: app, revision: revision)
             capture("11-five-minutes-following-latest", revision: revision)
 
             let viewport = app.descendants(matching: .any)["meeting.liveTranscript"].firstMatch
@@ -804,10 +1862,10 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(latest.waitForExistence(timeout: 5), "Reading older captions must pause automatic following")
             capture("12-reading-older-captions", revision: revision)
             try tap(latest, "Return to the latest protected text")
-            try verifyLatestCaptionVisible(in: app)
+            try await verifyLatestCaptionVisible(in: app, revision: revision)
             capture("13-returned-to-latest", revision: revision)
 
-            try tap(app.buttons["meeting.stop"], "Stop and transcribe through the Release UI")
+            try await requestPhysicalOwnedStop(in: app)
             capture("14-stop-requested", revision: revision)
             try await waitForCompletedTranscript(in: app, timeout: 120)
             ownsRecording = false
@@ -822,9 +1880,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             let jsonExport = try XCTUnwrap(firstButton(in: app, labels: ["Export as JSON", "Экспортировать как JSON"]),
                                           "The actual JSON export action must be present")
             try tap(jsonExport, "Export the protected JSON transcript")
-            let saveToFiles = try await waitForButton(in: app,
-                labels: ["Save to Files", "Сохранить в Файлы"], timeout: 15)
-            try require(saveToFiles.exists, "The actual native share sheet must offer Save to Files")
+            try await waitForOwnedShareSaveAction(in: app, revision: revision)
             capture("17-native-json-share", revision: revision)
             // The parent can copy the AUT's owned temporary share directory here. This
             // verifies generated JSON, not delivery to a guessed/cloud Files destination.
@@ -845,6 +1901,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             capture("19-completed-history-row", revision: revision)
             app.terminate()
             app.launch()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "tiny-relaunch")
             capture("20-normal-relaunch", revision: revision)
             try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
             try tap(app.buttons["history.session.\(sessionID)"], "Reopen the persisted meeting after normal relaunch")
@@ -853,27 +1910,29 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(!app.buttons["meeting.stop"].exists, "Relaunch must not restore active capture")
             capture("21-persisted-transcript-reopened", revision: revision)
         } catch {
-            player.stop()
+            let primaryError = error
+            let failure = error as NSError
+            print("[PHYSICAL_RELEASE_UI] primary_error domain=\(failure.domain) code=\(failure.code) detail=\(failure.localizedDescription)")
+            ownedPlayer?.stop()
             if ownsRecording {
                 // Request the same normal stop/join path as the user. Never stop someone
                 // else's pre-existing recording or delete checkpoints after a failure.
                 // An unstructured cleanup task does not inherit the test task's
                 // cancellation. Join it before returning the original failure.
                 let cleanup = Task { @MainActor in
-                    app.activate()
-                    let stop = app.buttons["meeting.stop"]
-                    if stop.waitForExistence(timeout: 30), stop.isEnabled {
-                        stop.tap()
-                        do { try await self.waitForCompletedTranscript(in: app, timeout: 120) }
-                        catch { print("[PHYSICAL_RELEASE_UI] cleanup_stop_requires_parent_inspection") }
-                    } else {
-                        print("[PHYSICAL_RELEASE_UI] cleanup_stop_unavailable_requires_parent_inspection")
+                    do {
+                        try await self.finishPhysicalOwnedRecording(in: app, observed: observedOwnedRecording)
+                        ownsRecording = false
+                        print("[PHYSICAL_RELEASE_UI] cleanup_joined=true")
+                    } catch {
+                        let cleanupError = error as NSError
+                        print("[PHYSICAL_RELEASE_UI] cleanup_stop_requires_parent_inspection domain=\(cleanupError.domain) code=\(cleanupError.code) detail=\(cleanupError.localizedDescription)")
                     }
                     self.capture("failure-owned-recording-cleanup", revision: revision)
                 }
                 await cleanup.value
             }
-            throw error
+            throw primaryError
         }
         #endif
     }
@@ -982,7 +2041,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     try require(intervalEndTimer >= intervalStartTimer + 55, "The visible recording timer must advance through each external speech interval")
                     let liveCharacters = liveTextCharacterCount(in: app)
                     try require(liveCharacters > 0, "External audible input must produce actual visible live text during every interval")
-                    try verifyLatestCaptionVisible(in: app)
+                    try await verifyLatestCaptionVisible(in: app, revision: revision)
                     print("[VISIBLE_UI_RECORDING] source=\(audioSource) playbackEvidence=parent_checkpoint_ack interval=\(interval) observedSeconds=60 timerStart=\(intervalStartTimer) timerEnd=\(intervalEndTimer) liveCharacters=\(liveCharacters)")
                     try await visibleCheckpoint("07-recording-\(interval * 60)-seconds", app: app, revision: revision, directory: checkpoints)
                     intervalStartTimer = try visibleTimerSeconds(in: app)
@@ -1312,14 +2371,16 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         capture("navigation-\(identifier)", revision: revision)
     }
 
-    @MainActor private func reveal(_ element: XCUIElement, in app: XCUIApplication, revision: String) throws {
-        for step in 0..<5 where !element.exists || !element.isHittable {
-            let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
-            try require(scroll.exists, "Settings must expose its native scrollable form")
-            scroll.swipeUp()
-            capture("settings-scroll-\(step)", revision: revision)
-        }
-        try require(element.exists, "The required existing setting must be present")
+    @MainActor private func reveal(_ element: XCUIElement, in app: XCUIApplication, revision: String,
+                                   container: XCUIElement? = nil) throws {
+        try PhysicalControlReveal.run(ready: { element.exists && element.isHittable }, scroll: { upward, step in
+            let scroll = container ?? (app.collectionViews.firstMatch.exists
+                ? app.collectionViews.firstMatch : app.tables.firstMatch)
+            try require(scroll.exists && scroll.isHittable && app.alerts.count == 0,
+                        "Settings must expose its visible native form without a prompt")
+            if upward { scroll.swipeUp() } else { scroll.swipeDown() }
+            capture("settings-scroll-\(upward ? "up" : "down")-\(step)", revision: revision)
+        })
     }
 
     @MainActor private func historyIDs(in app: XCUIApplication) -> Set<String> {
@@ -1340,24 +2401,51 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "meeting.liveParagraph.")).allElementsBoundByIndex
     }
 
-    @MainActor private func verifyLatestCaptionVisible(in app: XCUIApplication) throws {
-        let latest = try XCTUnwrap(liveParagraphs(in: app).last, "At least one committed protected paragraph is required")
-        let viewport = app.descendants(matching: .any)["meeting.liveTranscript"].firstMatch
-        try require(viewport.frame.height > 0 && !latest.frame.intersection(viewport.frame).isEmpty && latest.isHittable,
-                    "The latest committed paragraph must actually be visible in the native viewport")
+    @MainActor private func verifyLatestCaptionVisible(in app: XCUIApplication, revision: String) async throws {
+        var settling = PhysicalCaptionGeometry.Settling()
+        do {
+            try await PhysicalUITransitionWait.until(timeout: 5, condition: {
+                guard let latest = liveParagraphs(in: app).last else {
+                    settling = PhysicalCaptionGeometry.Settling()
+                    print("[PHYSICAL_CAPTION_GEOMETRY] committed_paragraph_missing=true")
+                    return false
+                }
+                let viewport = app.descendants(matching: .any)["meeting.liveTranscript"].firstMatch
+                let sample = PhysicalCaptionGeometry.Sample(identifier: latest.identifier,
+                                                            paragraph: latest.frame, viewport: viewport.frame)
+                // A noninteractive accessibility paragraph may be readable even when
+                // XCTest cannot hit-test its full, partly offscreen text-and-wave row.
+                print("[PHYSICAL_CAPTION_GEOMETRY] identifier=\(sample.identifier) paragraph=\(sample.paragraph) "
+                    + "viewport=\(sample.viewport) intersection=\(sample.paragraph.intersection(sample.viewport)) "
+                    + "hittable=\(latest.isHittable) tailVisible=\(sample.tailIsVisible)")
+                return settling.observe(sample)
+            })
+        } catch {
+            capture("caption-tail-visibility-failure", revision: revision)
+            throw error
+        }
     }
 
     @MainActor private func firstButton(in app: XCUIApplication, labels: [String]) -> XCUIElement? {
         labels.map { app.buttons[$0].firstMatch }.first { $0.exists }
     }
 
-    @MainActor private func waitForButton(in app: XCUIApplication, labels: [String], timeout: TimeInterval) async throws -> XCUIElement {
-        let deadline = ProcessInfo.processInfo.systemUptime + timeout
-        while ProcessInfo.processInfo.systemUptime < deadline {
-            if let button = firstButton(in: app, labels: labels) { return button }
-            try await Task.sleep(nanoseconds: 250_000_000)
+    @MainActor private func waitForOwnedShareSaveAction(in app: XCUIApplication, revision: String) async throws {
+        let activity = app.otherElements["ActivityListView"]
+        // System versions expose this observation-only action with different AX types.
+        // Match an exact supported label inside only the share UI opened by the caller.
+        let action = activity.descendants(matching: .any).matching(NSPredicate(format: "label IN %@",
+            ["Save to Files", "Сохранить в Файлы", "Сохранить в «Файлы»"])).firstMatch
+        capture("native-json-share-before-action-query", revision: revision)
+        do {
+            try await PhysicalUITransitionWait.until(timeout: 15, condition: {
+                activity.exists && app.alerts.count == 0 && action.exists
+            })
+            print("[PHYSICAL_JSON_SHARE] save_action_observed=true axType=\(action.elementType.rawValue) action_tapped=false")
+        } catch {
+            capture("native-json-share-action-query-failure", revision: revision)
+            throw error
         }
-        throw verificationFailure("The expected native share action did not appear")
     }
 
     @MainActor private func waitForCompletedTranscript(in app: XCUIApplication, timeout: TimeInterval) async throws {
