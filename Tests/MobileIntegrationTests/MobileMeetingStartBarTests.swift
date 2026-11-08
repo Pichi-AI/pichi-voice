@@ -4,6 +4,16 @@ import XCTest
 @testable import PichiVoiceMobile
 
 final class MobileMeetingStartBarTests: XCTestCase {
+    func testDockedNavigationGapIsConfinedToPortraitPhone() {
+        XCTAssertTrue(MobileMeetingStartBar.needsDockedNavigationGap(idiom: .phone, verticalSizeClass: .regular))
+        XCTAssertFalse(MobileMeetingStartBar.needsDockedNavigationGap(idiom: .phone, verticalSizeClass: .compact))
+        XCTAssertFalse(MobileMeetingStartBar.needsDockedNavigationGap(idiom: .phone, verticalSizeClass: nil))
+        for sizeClass: UserInterfaceSizeClass? in [.regular, .compact, nil] {
+            XCTAssertFalse(MobileMeetingStartBar.needsDockedNavigationGap(idiom: .pad, verticalSizeClass: sizeClass))
+            XCTAssertFalse(MobileMeetingStartBar.needsDockedNavigationGap(idiom: .unspecified, verticalSizeClass: sizeClass))
+        }
+    }
+
     func testTabRowActionIsConfinedToVisibleHistoryRoot() {
         XCTAssertTrue(MobileMeetingStartBar.showsTabRowAction(showingRecordings: true,
             historyIsAtRoot: true, isCapturing: false, privateDataVisible: true))
