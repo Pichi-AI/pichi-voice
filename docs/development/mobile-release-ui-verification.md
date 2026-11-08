@@ -155,7 +155,17 @@ Tiny and the GigaAM system-transition selector share the real scroll/jump check:
 a settled current tail and at least two actual committed paragraphs, a native
 Table swipe to older history, the former tail outside the viewport, the admitted
 Jump action, a settled visible latest tail and disappearance of Jump afterward.
-GigaAM performs this after fixture playback stops and before its owned Stop.
+Before stopping fixture playback, GigaAM waits at most sixty additional seconds
+for actual committed-history geometry: at least two distinct valid earlier
+paragraphs spanning 1.75 native Table viewport heights. The current tail is excluded
+because its inline pending wave can shrink when replaced by text. Invalid or
+horizontally foreign frames do not contribute; duplicate paragraph IDs reject the
+sample. The wait continuously requires its own player and valid recording UI,
+returns as soon as ready and logs only counts, span, viewport height and readiness.
+Timeout fails explicitly and enters normal owned Stop/join cleanup. Three
+`testPhysicalCaptionHistoryExtent*` cases cover the exact threshold, insufficient
+extent, pending-tail inflation, malformed/foreign frames and duplicate identities.
+GigaAM then performs scroll/jump after fixture playback stops and before its owned Stop.
 Insufficient committed history fails rather than skipping this assertion. The
 short GigaAM check is separate acceptance evidence; it never reclassifies a failed
 five-minute Tiny whole-flow run. Tiny then presses Stop Recording, waits for normal

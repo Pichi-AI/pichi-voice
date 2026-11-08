@@ -72,6 +72,47 @@ private nonisolated enum PhysicalCaptionGeometry {
         }
     }
 
+    struct ParagraphFrame {
+        let identifier: String
+        let frame: CGRect
+    }
+
+    struct HistoryExtent {
+        let validParagraphCount: Int
+        let invalidParagraphCount: Int
+        let duplicateIdentifiers: Bool
+        let span: CGFloat
+        let viewportHeight: CGFloat
+
+        var isReady: Bool {
+            !duplicateIdentifiers && validParagraphCount >= 2 && span.isFinite
+                && viewportHeight.isFinite && viewportHeight > 0 && span / viewportHeight >= 1.75
+        }
+    }
+
+    static func committedHistory(_ paragraphs: [ParagraphFrame], viewport: CGRect) -> HistoryExtent {
+        func valid(_ frame: CGRect) -> Bool {
+            !frame.isNull && !frame.isInfinite && frame.width > 0 && frame.height > 0
+                && [frame.minX, frame.minY, frame.maxX, frame.maxY].allSatisfy(\.isFinite)
+        }
+        let identifiers = paragraphs.map(\.identifier).filter { !$0.isEmpty }
+        let duplicates = Set(identifiers).count != identifiers.count
+        guard valid(viewport) else {
+            return HistoryExtent(validParagraphCount: 0, invalidParagraphCount: paragraphs.count,
+                                 duplicateIdentifiers: duplicates, span: 0, viewportHeight: 0)
+        }
+        // The current tail may include an inline pending wave. Only earlier rows
+        // establish committed scroll extent that survives replacement of that wave.
+        let closed = paragraphs.dropLast()
+        let frames = closed.filter {
+            !$0.identifier.isEmpty && valid($0.frame)
+                && min($0.frame.maxX, viewport.maxX) > max($0.frame.minX, viewport.minX)
+        }.map(\.frame)
+        let span = (frames.map(\.maxY).max() ?? 0) - (frames.map(\.minY).min() ?? 0)
+        return HistoryExtent(validParagraphCount: frames.count, invalidParagraphCount: closed.count - frames.count,
+                             duplicateIdentifiers: duplicates, span: span, viewportHeight: viewport.height)
+    }
+
     struct Settling {
         private var previous: Sample?
 
@@ -451,6 +492,55 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         XCTAssertFalse(settling.observe(.init(identifier: "tail", paragraph: .zero, viewport: viewport)))
         XCTAssertFalse(settling.observe(replacement))
         XCTAssertTrue(settling.observe(replacement))
+    }
+
+    func testPhysicalCaptionHistoryExtentAcceptsExactThresholdOfDistinctCommittedRows() {
+        let viewport = CGRect(x: 10, y: 100, width: 300, height: 400)
+        let paragraphs: [PhysicalCaptionGeometry.ParagraphFrame] = [
+            .init(identifier: "first", frame: CGRect(x: 10, y: -300, width: 300, height: 200)),
+            .init(identifier: "second", frame: CGRect(x: 10, y: -100, width: 300, height: 500)),
+            .init(identifier: "tail", frame: CGRect(x: 10, y: 400, width: 300, height: 100))
+        ]
+        let extent = PhysicalCaptionGeometry.committedHistory(paragraphs, viewport: viewport)
+        XCTAssertEqual(extent.validParagraphCount, 2)
+        XCTAssertEqual(extent.span, 700)
+        XCTAssertTrue(extent.isReady)
+    }
+
+    func testPhysicalCaptionHistoryExtentRejectsInsufficientHistoryAndPendingTailInflation() {
+        let viewport = CGRect(x: 10, y: 100, width: 300, height: 400)
+        let short: [PhysicalCaptionGeometry.ParagraphFrame] = [
+            .init(identifier: "first", frame: CGRect(x: 10, y: 0, width: 300, height: 300)),
+            .init(identifier: "second", frame: CGRect(x: 10, y: 300, width: 300, height: 399)),
+            .init(identifier: "tail", frame: CGRect(x: 10, y: 699, width: 300, height: 5000))
+        ]
+        let extent = PhysicalCaptionGeometry.committedHistory(short, viewport: viewport)
+        XCTAssertEqual(extent.span, 699)
+        XCTAssertFalse(extent.isReady)
+        XCTAssertFalse(PhysicalCaptionGeometry.committedHistory(Array(short.suffix(2)), viewport: viewport).isReady)
+        XCTAssertFalse(PhysicalCaptionGeometry.committedHistory([], viewport: viewport).isReady)
+    }
+
+    func testPhysicalCaptionHistoryExtentRejectsMalformedForeignAndDuplicateGeometry() {
+        let viewport = CGRect(x: 10, y: 100, width: 300, height: 400)
+        let good = PhysicalCaptionGeometry.ParagraphFrame(identifier: "first", frame: CGRect(x: 10, y: -300, width: 300, height: 700))
+        let tail = PhysicalCaptionGeometry.ParagraphFrame(identifier: "tail", frame: CGRect(x: 10, y: 400, width: 300, height: 100))
+        for frame in [CGRect.zero, .null, .infinite, CGRect(x: CGFloat.nan, y: 0, width: 300, height: 800),
+                      CGRect(x: 500, y: -5000, width: 300, height: 5000)] {
+            let malformed = PhysicalCaptionGeometry.ParagraphFrame(identifier: "bad", frame: frame)
+            let extent = PhysicalCaptionGeometry.committedHistory([good, malformed, tail], viewport: viewport)
+            XCTAssertEqual(extent.validParagraphCount, 1)
+            XCTAssertEqual(extent.invalidParagraphCount, 1)
+            XCTAssertFalse(extent.isReady)
+        }
+        let duplicate = PhysicalCaptionGeometry.committedHistory([good, good, tail], viewport: viewport)
+        XCTAssertTrue(duplicate.duplicateIdentifiers)
+        XCTAssertFalse(duplicate.isReady)
+        let emptyID = PhysicalCaptionGeometry.ParagraphFrame(identifier: "", frame: good.frame)
+        XCTAssertFalse(PhysicalCaptionGeometry.committedHistory([good, emptyID, tail], viewport: viewport).isReady)
+        for invalidViewport in [CGRect.zero, .null, .infinite] {
+            XCTAssertFalse(PhysicalCaptionGeometry.committedHistory([good, tail], viewport: invalidViewport).isReady)
+        }
     }
 
     func testPhysicalCaptionLatestControlPrefersCanonicalAndAcceptsExactInheritedLabels() {
@@ -1403,6 +1493,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(visibleTimerSeconds(in: app) > timer, "Recording must survive another app")
             try require(liveTextCharacterCount(in: app) > 0, "Physical synthetic speech must produce visible captions")
             capture("background-07-returned", revision: revision)
+            try await waitForPhysicalCommittedCaptionHistory(in: app, player: player, revision: revision)
             player.stop()
             try await exercisePhysicalCaptionScrollAndJump(in: app, revision: revision, prefix: "background-07-caption")
             try await requestPhysicalOwnedStop(in: app)
@@ -3113,6 +3204,36 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             return try XCTUnwrap(selected)
         } catch {
             capture("caption-jump-control-admission-failure", revision: revision)
+            throw error
+        }
+    }
+
+    @MainActor private func waitForPhysicalCommittedCaptionHistory(in app: XCUIApplication, player: AVAudioPlayer,
+                                                                   revision: String) async throws {
+        let started = ProcessInfo.processInfo.systemUptime
+        let deadline = started + 60
+        do {
+            while true {
+                try Task.checkCancellation()
+                try verifyVisibleRecording(in: app)
+                try require(player.isPlaying, "The owned fixture must remain playing while committed scroll history grows")
+                let viewports = app.tables.matching(identifier: PhysicalCaptionLatestControl.viewportID)
+                try require(viewports.count == 1, "Committed history readiness requires the unique actual native Table viewport")
+                let paragraphs = liveParagraphs(in: app).map {
+                    PhysicalCaptionGeometry.ParagraphFrame(identifier: $0.identifier, frame: $0.frame)
+                }
+                let extent = PhysicalCaptionGeometry.committedHistory(paragraphs, viewport: viewports.firstMatch.frame)
+                let elapsed = ProcessInfo.processInfo.systemUptime - started
+                print("[PHYSICAL_CAPTION_HISTORY] revision=\(revision) elapsed=\(elapsed) sampled=\(paragraphs.count) committed=\(extent.validParagraphCount) "
+                    + "invalid=\(extent.invalidParagraphCount) duplicateIDs=\(extent.duplicateIdentifiers) span=\(extent.span) "
+                    + "viewportHeight=\(extent.viewportHeight) ready=\(extent.isReady)")
+                if extent.isReady { return }
+                try require(ProcessInfo.processInfo.systemUptime < deadline,
+                            "Committed captions did not reach two distinct earlier paragraphs spanning 1.75 native viewports within 60 additional seconds")
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        } catch {
+            print("[PHYSICAL_CAPTION_HISTORY] readiness_failed=true revision=\(revision)")
             throw error
         }
     }
