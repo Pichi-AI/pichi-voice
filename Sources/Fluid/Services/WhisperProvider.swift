@@ -863,6 +863,9 @@ final class WhisperProvider: TranscriptionProvider {
         let descriptor = TranscribeSpeechModelCatalog.descriptor(for: model)
         return {
             if let descriptor {
+                // A missing installed artifact is a valid pre-download state. Corrupt existing
+                // files still fail verification rather than being bound to a trusted identity.
+                guard FileManager.default.fileExists(atPath: url.path) else { return nil }
                 try descriptor.validateArtifact(at: url)
                 return "sha256:" + descriptor.sha256
             }

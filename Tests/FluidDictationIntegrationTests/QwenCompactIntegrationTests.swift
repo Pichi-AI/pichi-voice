@@ -92,6 +92,21 @@ final class QwenCompactIntegrationTests: XCTestCase {
         XCTAssertThrowsError(try descriptor.validateArtifact(at: url))
     }
 
+    func testMissingCompactArtifactAllowsPreparationRouteButExistingCorruptionFailsClosed() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("QwenUninstalled.\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fingerprint = WhisperProvider.installedArtifactFingerprintOperation(for: .qwen3Asr06BQ4, directory: root)
+        XCTAssertNil(try fingerprint(), "Provider construction must be possible before its first download")
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: SettingsStore.SpeechModel.qwen3Asr06BQ4.rawValue,
+            asrArtifactDirectory: root, languageCode: "auto", speakerLabelsEnabled: false)
+        let provider = try PichiMeetingProviderFactory.make(configuration)
+        XCTAssertTrue(provider is WhisperProvider)
+        XCTAssertFalse(provider.modelsExistOnDisk())
+        try Data([0]).write(to: root.appendingPathComponent(TranscribeSpeechModelCatalog.qwen06Q4.fileName))
+        XCTAssertThrowsError(try fingerprint(), "A corrupt installed file must not become a trusted pin")
+    }
+
     func testChunkPolicyPreservesCoverageAndWordingWithoutFabricatingTiming() async throws {
         var seen: [[Float]] = []
         let result = try await TranscribeAudioChunkPolicy(maximumSamples: 4).transcribe(Array(0..<10).map(Float.init)) { chunk in
