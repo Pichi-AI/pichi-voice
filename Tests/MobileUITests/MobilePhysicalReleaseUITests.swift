@@ -82,6 +82,34 @@ private nonisolated enum PhysicalCaptionGeometry {
     }
 }
 
+private nonisolated enum PhysicalCaptionLatestControl {
+    static let canonicalID = "meeting.liveTranscript.latest"
+    static let viewportID = "meeting.liveTranscript"
+    static let labels = ["Jump to latest captions", "Перейти к последним субтитрам"]
+    struct Candidate {
+        let identifier: String
+        let label: String
+        let frame: CGRect
+        let enabled: Bool
+        let hittable: Bool
+    }
+
+    static func select(_ buttons: [Candidate], viewport: CGRect) -> Int? {
+        let canonical = buttons.indices.filter { buttons[$0].identifier == canonicalID }
+        let matches = canonical.isEmpty ? buttons.indices.filter {
+            buttons[$0].identifier == viewportID && labels.contains(buttons[$0].label)
+        } : canonical
+        guard matches.count == 1, let index = matches.first else { return nil }
+        let button = buttons[index]
+        let frames = [viewport, button.frame]
+        guard button.enabled, button.hittable, labels.contains(button.label),
+              frames.allSatisfy({ !$0.isNull && !$0.isInfinite && $0.width > 0 && $0.height > 0
+                  && [$0.minX, $0.minY, $0.maxX, $0.maxY].allSatisfy(\.isFinite) }),
+              viewport.contains(button.frame) else { return nil }
+        return index
+    }
+}
+
 private nonisolated struct PhysicalPostSoakAuthorization: Codable, Equatable {
     struct Unverified: Error {}
     let revision: String
@@ -423,6 +451,63 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         XCTAssertFalse(settling.observe(.init(identifier: "tail", paragraph: .zero, viewport: viewport)))
         XCTAssertFalse(settling.observe(replacement))
         XCTAssertTrue(settling.observe(replacement))
+    }
+
+    func testPhysicalCaptionLatestControlPrefersCanonicalAndAcceptsExactInheritedLabels() {
+        let viewport = CGRect(x: 24, y: 186.7, width: 354, height: 513)
+        func button(_ identifier: String, _ label: String) -> PhysicalCaptionLatestControl.Candidate {
+            .init(identifier: identifier, label: label, frame: CGRect(x: 328, y: 649.7, width: 44, height: 44), enabled: true, hittable: true)
+        }
+        for label in PhysicalCaptionLatestControl.labels {
+            let inherited = button(PhysicalCaptionLatestControl.viewportID, label)
+            let canonical = button(PhysicalCaptionLatestControl.canonicalID, label)
+            XCTAssertEqual(PhysicalCaptionLatestControl.select([inherited], viewport: viewport), 0)
+            XCTAssertEqual(PhysicalCaptionLatestControl.select([inherited, canonical], viewport: viewport), 1)
+            XCTAssertEqual(PhysicalCaptionLatestControl.select([canonical], viewport: viewport), 0)
+        }
+    }
+
+    func testPhysicalCaptionLatestControlRejectsForeignLabelIDOutsideAndInvalidFrames() {
+        let viewport = CGRect(x: 10, y: 100, width: 300, height: 400)
+        func button(_ identifier: String, _ label: String, _ frame: CGRect) -> PhysicalCaptionLatestControl.Candidate {
+            .init(identifier: identifier, label: label, frame: frame, enabled: true, hittable: true)
+        }
+        let goodFrame = CGRect(x: 250, y: 450, width: 44, height: 44)
+        for candidate in [button("other", PhysicalCaptionLatestControl.labels[0], goodFrame),
+                          button(PhysicalCaptionLatestControl.viewportID, "Other action", goodFrame),
+                          button(PhysicalCaptionLatestControl.canonicalID, "Other action", goodFrame)] {
+            XCTAssertNil(PhysicalCaptionLatestControl.select([candidate], viewport: viewport))
+        }
+        for frame in [CGRect(x: 280, y: 450, width: 44, height: 44),
+                      CGRect(x: 250, y: 470, width: 44, height: 44), .zero, .null, .infinite,
+                      CGRect(x: CGFloat.nan, y: 450, width: 44, height: 44)] {
+            XCTAssertNil(PhysicalCaptionLatestControl.select([button(PhysicalCaptionLatestControl.viewportID,
+                PhysicalCaptionLatestControl.labels[0], frame)], viewport: viewport))
+        }
+    }
+
+    func testPhysicalCaptionLatestControlRejectsDuplicateAndUnreadyControlsWithoutFallback() {
+        let viewport = CGRect(x: 0, y: 0, width: 300, height: 400)
+        func button(_ identifier: String, enabled: Bool = true, hittable: Bool = true) -> PhysicalCaptionLatestControl.Candidate {
+            .init(identifier: identifier, label: PhysicalCaptionLatestControl.labels[0],
+                  frame: CGRect(x: 250, y: 350, width: 44, height: 44), enabled: enabled, hittable: hittable)
+        }
+        let inherited = button(PhysicalCaptionLatestControl.viewportID)
+        let canonical = button(PhysicalCaptionLatestControl.canonicalID)
+        XCTAssertNil(PhysicalCaptionLatestControl.select([], viewport: viewport))
+        XCTAssertNil(PhysicalCaptionLatestControl.select([canonical, canonical], viewport: viewport))
+        XCTAssertNil(PhysicalCaptionLatestControl.select([inherited, inherited], viewport: viewport))
+        for unready in [button(PhysicalCaptionLatestControl.canonicalID, enabled: false),
+                        button(PhysicalCaptionLatestControl.canonicalID, hittable: false)] {
+            XCTAssertNil(PhysicalCaptionLatestControl.select([inherited, unready], viewport: viewport))
+        }
+        for unready in [button(PhysicalCaptionLatestControl.viewportID, enabled: false),
+                        button(PhysicalCaptionLatestControl.viewportID, hittable: false)] {
+            XCTAssertNil(PhysicalCaptionLatestControl.select([unready], viewport: viewport))
+        }
+        for invalidViewport in [CGRect.zero, .null, .infinite] {
+            XCTAssertNil(PhysicalCaptionLatestControl.select([canonical], viewport: invalidViewport))
+        }
     }
 
     private var postSoakTestEnvironment: [String: String] {
@@ -1294,6 +1379,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(liveTextCharacterCount(in: app) > 0, "Physical synthetic speech must produce visible captions")
             capture("background-07-returned", revision: revision)
             player.stop()
+            try await exercisePhysicalCaptionScrollAndJump(in: app, revision: revision, prefix: "background-07-caption")
             try await requestPhysicalOwnedStop(in: app)
             try await waitForCompletedTranscript(in: app, timeout: 180)
             ownsRecording = false
@@ -2361,14 +2447,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try await verifyLatestCaptionVisible(in: app, revision: revision)
             capture("11-five-minutes-following-latest", revision: revision)
 
-            let viewport = app.descendants(matching: .any)["meeting.liveTranscript"].firstMatch
-            viewport.swipeDown()
-            let latest = app.buttons["meeting.liveTranscript.latest"]
-            try require(latest.waitForExistence(timeout: 5), "Reading older captions must pause automatic following")
-            capture("12-reading-older-captions", revision: revision)
-            try tap(latest, "Return to the latest protected text")
-            try await verifyLatestCaptionVisible(in: app, revision: revision)
-            capture("13-returned-to-latest", revision: revision)
+            try await exercisePhysicalCaptionScrollAndJump(in: app, revision: revision, prefix: "12-tiny-caption")
 
             try await requestPhysicalOwnedStop(in: app)
             capture("14-stop-requested", revision: revision)
@@ -2906,6 +2985,61 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "meeting.liveParagraph.")).allElementsBoundByIndex
     }
 
+    @MainActor private func waitForPhysicalCaptionLatestControl(in app: XCUIApplication, revision: String) async throws -> XCUIElement {
+        var selected: XCUIElement?
+        do {
+            try await PhysicalUITransitionWait.until(timeout: 5, condition: {
+                let viewports = app.tables.matching(identifier: PhysicalCaptionLatestControl.viewportID)
+                guard app.state == .runningForeground, app.alerts.count == 0, viewports.count == 1,
+                      app.buttons["meeting.stop"].exists, app.buttons["meeting.stop"].isEnabled else { return false }
+                // Query Button and Table separately: source 1a can propagate the outer
+                // viewport ID to its inset Jump button on the actual native AX tree.
+                let buttons = app.buttons.matching(NSPredicate(format: "identifier IN %@",
+                    [PhysicalCaptionLatestControl.canonicalID, PhysicalCaptionLatestControl.viewportID])).allElementsBoundByIndex
+                let candidates = buttons.map {
+                    PhysicalCaptionLatestControl.Candidate(identifier: $0.identifier, label: $0.label, frame: $0.frame,
+                                                           enabled: $0.isEnabled, hittable: $0.isHittable)
+                }
+                guard let index = PhysicalCaptionLatestControl.select(candidates, viewport: viewports.firstMatch.frame) else { return false }
+                selected = buttons[index]
+                print("[PHYSICAL_CAPTION_JUMP] selectedID=\(candidates[index].identifier) canonical=\(candidates[index].identifier == PhysicalCaptionLatestControl.canonicalID)")
+                return true
+            })
+            return try XCTUnwrap(selected)
+        } catch {
+            capture("caption-jump-control-admission-failure", revision: revision)
+            throw error
+        }
+    }
+
+    @MainActor private func exercisePhysicalCaptionScrollAndJump(in app: XCUIApplication, revision: String, prefix: String) async throws {
+        try verifyVisibleRecording(in: app)
+        try await verifyLatestCaptionVisible(in: app, revision: revision)
+        let paragraphs = liveParagraphs(in: app)
+        try require(paragraphs.count >= 2, "Scroll acceptance requires actual committed caption history, never a skipped assertion")
+        let formerTailID = try XCTUnwrap(paragraphs.last).identifier
+        let viewports = app.tables.matching(identifier: PhysicalCaptionLatestControl.viewportID)
+        try require(viewports.count == 1 && viewports.firstMatch.isHittable,
+                    "The native caption Table must uniquely own the recording viewport and scroll gesture")
+        capture("\(prefix)-01-following", revision: revision)
+        viewports.firstMatch.swipeDown()
+        let latest = try await waitForPhysicalCaptionLatestControl(in: app, revision: revision)
+        let formerTail = app.descendants(matching: .any).matching(identifier: formerTailID).firstMatch
+        try require(!formerTail.exists || !PhysicalCaptionGeometry.Sample(identifier: formerTailID,
+            paragraph: formerTail.frame, viewport: viewports.firstMatch.frame).tailIsVisible,
+            "A real scroll must expose older history with the former latest tail outside the viewport")
+        try require(!liveParagraphs(in: app).isEmpty, "Older committed captions must remain readable after scrolling")
+        capture("\(prefix)-02-reading-older", revision: revision)
+        try tap(latest, "Return to the latest captions through the uniquely admitted native Jump button")
+        try await verifyLatestCaptionVisible(in: app, revision: revision)
+        try await PhysicalUITransitionWait.until(timeout: 5, condition: {
+            let buttons = app.buttons.matching(NSPredicate(format: "identifier IN %@ AND label IN %@",
+                [PhysicalCaptionLatestControl.canonicalID, PhysicalCaptionLatestControl.viewportID], PhysicalCaptionLatestControl.labels))
+            return buttons.count == 0
+        })
+        capture("\(prefix)-03-returned-to-latest", revision: revision)
+    }
+
     @MainActor private func verifyLatestCaptionVisible(in app: XCUIApplication, revision: String) async throws {
         var settling = PhysicalCaptionGeometry.Settling()
         do {
@@ -2915,7 +3049,9 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     print("[PHYSICAL_CAPTION_GEOMETRY] committed_paragraph_missing=true")
                     return false
                 }
-                let viewport = app.descendants(matching: .any)["meeting.liveTranscript"].firstMatch
+                let viewports = app.tables.matching(identifier: PhysicalCaptionLatestControl.viewportID)
+                guard viewports.count == 1 else { return false }
+                let viewport = viewports.firstMatch
                 let sample = PhysicalCaptionGeometry.Sample(identifier: latest.identifier,
                                                             paragraph: latest.frame, viewport: viewport.frame)
                 // A noninteractive accessibility paragraph may be readable even when

@@ -142,7 +142,23 @@ and hit-test result without transcript text. Failure captures the native screen
 before throwing. Three `testPhysicalCaptionGeometry*` cases cover visible full/tall
 tails, intersecting rows with an offscreen tail, invalid geometry and settling.
 A real scroll gesture pauses following; the existing jump
-button returns to the latest text. It presses Stop Recording, waits for normal
+button returns to the latest text. The native viewport is selected as the unique
+Table with ID `meeting.liveTranscript`, never an untyped first match. Source 1a
+can propagate that ID to the inset Jump Button. The runner prefers the canonical
+`meeting.liveTranscript.latest` Button, and accepts the inherited viewport ID only
+with the exact English/Russian Jump label, a unique enabled/hittable Button and a
+valid frame fully inside the actual Table. Duplicate, foreign, outside or unready
+controls fail the bounded five-second admission. Three
+`testPhysicalCaptionLatestControl*` logical cases cover these contracts.
+
+Tiny and the GigaAM system-transition selector share the real scroll/jump check:
+a settled current tail and at least two actual committed paragraphs, a native
+Table swipe to older history, the former tail outside the viewport, the admitted
+Jump action, a settled visible latest tail and disappearance of Jump afterward.
+GigaAM performs this after fixture playback stops and before its owned Stop.
+Insufficient committed history fails rather than skipping this assertion. The
+short GigaAM check is separate acceptance evidence; it never reclassifies a failed
+five-minute Tiny whole-flow run. Tiny then presses Stop Recording, waits for normal
 completion, opens the actual JSON export action and verifies the native share
 sheet. There must be no audio-export action for this strict meeting.
 
