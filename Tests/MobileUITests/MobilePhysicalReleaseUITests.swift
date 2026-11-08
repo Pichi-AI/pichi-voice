@@ -203,6 +203,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         var calls: [String] = []
         var returned = false
         var releaseJoin: CheckedContinuation<Void, Never>?
+        var joinReleased = false
         let enteredJoin = expectation(description: "Cleanup entered the real join operation")
         let cleanup = Task { @MainActor in
             try await PhysicalOwnedRecordingCleanup.run(observe: {
@@ -214,7 +215,8 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             }, join: {
                 calls.append("join")
                 await withCheckedContinuation { continuation in
-                    releaseJoin = continuation
+                    if joinReleased { continuation.resume() }
+                    else { releaseJoin = continuation }
                     enteredJoin.fulfill()
                 }
                 if joinFails { throw Failure.join }
@@ -226,7 +228,9 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         XCTAssertFalse(returned, "Returning before join releases would abandon owned capture")
         XCTAssertEqual(calls, initiallyProcessing ? ["join"] : ["stop", "join"])
         XCTAssertEqual(time, initiallyProcessing ? 0 : 2)
+        joinReleased = true
         releaseJoin?.resume()
+        releaseJoin = nil
         if entered != .completed { cleanup.cancel() }
         do {
             try await cleanup.value
