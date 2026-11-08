@@ -750,12 +750,24 @@ final class MobileNavigationUITests: XCTestCase {
             if UIDevice.current.userInterfaceIdiom == .phone {
                 XCTAssertLessThan(start.frame.width, app.windows.firstMatch.frame.width * 0.5)
                 XCTAssertGreaterThan(start.frame.midX, app.windows.firstMatch.frame.midX)
-                let list = app.descendants(matching: .any)["history.list"].firstMatch
-                XCTAssertGreaterThan(list.frame.maxY, start.frame.maxY,
-                    "History extends behind the floating button instead of losing a footer strip")
+                if #available(iOS 26.0, *) {
+                    let tabs = app.tabBars.firstMatch
+                    let recordings = tabs.buttons[language == "ru" ? "Записи" : "Recordings"]
+                    let settings = tabs.buttons[language == "ru" ? "Настройки" : "Settings"]
+                    XCTAssertEqual(start.frame.midY, recordings.frame.midY, accuracy: 2,
+                        "Recording shares the native navigation row")
+                    XCTAssertEqual(start.frame.midY, settings.frame.midY, accuracy: 2)
+                    XCTAssertLessThanOrEqual(start.frame.height, 48)
+                    XCTAssertTrue(start.frame.intersection(recordings.frame).isEmpty)
+                    XCTAssertTrue(start.frame.intersection(settings.frame).isEmpty)
+                }
             }
             if app.tabBars.firstMatch.exists {
-                XCTAssertTrue(start.frame.intersection(app.tabBars.firstMatch.frame).isEmpty)
+                if #available(iOS 26.0, *), UIDevice.current.userInterfaceIdiom == .phone {
+                    XCTAssertFalse(start.frame.intersection(app.tabBars.firstMatch.frame).isEmpty)
+                } else {
+                    XCTAssertTrue(start.frame.intersection(app.tabBars.firstMatch.frame).isEmpty)
+                }
             }
             let last = app.buttons["history.session.DDD86147-F0B9-4B13-88B5-099B1E0D8BA5"]
             let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
@@ -765,11 +777,13 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertTrue(last.isHittable, "The final synthetic recording can be reached")
             XCTAssertLessThanOrEqual(last.frame.maxY, start.frame.minY - 8,
                 "Scrolling can expose the complete last row above the recording action")
-            capture("floating-\(language)-\(appearance)-landscape")
+            capture("tabrow-\(language)-\(appearance)-landscape")
             last.tap()
             XCTAssertTrue(app.buttons["transcript.more"].waitForExistence(timeout: 5))
-            openNavigation("meetings", title: language == "ru" ? "Записи" : "Recordings")
-            openNavigation("settings", title: language == "ru" ? "Настройки" : "Settings")
+            XCTAssertFalse(start.exists, "The floating action must not cover a saved recording")
+            openNavigation("meetings", title: language == "ru" ? "Записи" : "Recordings", captureStep: false)
+            openNavigation("settings", title: language == "ru" ? "Настройки" : "Settings", captureStep: false)
+            XCTAssertFalse(start.exists, "Recording actions belong only on the history root")
             let recording = app.buttons["settings.recording"]
             XCTAssertTrue(recording.waitForExistence(timeout: 5))
             recording.tap()
@@ -780,12 +794,12 @@ final class MobileNavigationUITests: XCTestCase {
                     "Recording configuration remains editable in the main Settings flow")
             }
             XCTAssertFalse(app.buttons["settings.recording.done"].exists, "Recording settings uses normal navigation")
-            openNavigation("meetings", title: language == "ru" ? "Записи" : "Recordings")
+            openNavigation("meetings", title: language == "ru" ? "Записи" : "Recordings", captureStep: false)
             XCUIDevice.shared.orientation = .portrait
             waitForOrientation(portrait: true)
             XCTAssertTrue(start.isHittable)
             XCTAssertFalse(app.buttons["meeting.settings"].exists)
-            capture("floating-\(language)-\(appearance)-portrait")
+            capture("tabrow-\(language)-\(appearance)-portrait")
         }
         #endif
     }
@@ -2282,7 +2296,7 @@ final class MobileNavigationUITests: XCTestCase {
         }
     }
 
-    private func openNavigation(_ identifier: String, title: String) {
+    private func openNavigation(_ identifier: String, title: String, captureStep: Bool = true) {
         let sidebar = app.buttons["navigation.\(identifier)"]
         if sidebar.exists && sidebar.isHittable { sidebar.tap() }
         else {
@@ -2291,7 +2305,7 @@ final class MobileNavigationUITests: XCTestCase {
                           "Navigation must target a visible sidebar or tab control")
             tab.tap()
         }
-        capture("navigation-\(identifier)")
+        if captureStep { capture("navigation-\(identifier)") }
     }
 
     private func tapNativeSwitch(_ identifier: String) throws {

@@ -4,6 +4,19 @@ import XCTest
 @testable import PichiVoiceMobile
 
 final class MobileMeetingStartBarTests: XCTestCase {
+    func testTabRowActionIsConfinedToVisibleHistoryRoot() {
+        XCTAssertTrue(MobileMeetingStartBar.showsTabRowAction(showingRecordings: true,
+            historyIsAtRoot: true, isCapturing: false, privateDataVisible: true))
+        XCTAssertFalse(MobileMeetingStartBar.showsTabRowAction(showingRecordings: false,
+            historyIsAtRoot: true, isCapturing: false, privateDataVisible: true))
+        XCTAssertFalse(MobileMeetingStartBar.showsTabRowAction(showingRecordings: true,
+            historyIsAtRoot: false, isCapturing: false, privateDataVisible: true))
+        XCTAssertFalse(MobileMeetingStartBar.showsTabRowAction(showingRecordings: true,
+            historyIsAtRoot: true, isCapturing: true, privateDataVisible: true))
+        XCTAssertFalse(MobileMeetingStartBar.showsTabRowAction(showingRecordings: true,
+            historyIsAtRoot: true, isCapturing: false, privateDataVisible: false))
+    }
+
     func testLandscapePhoneFloatsAndPortraitKeepsDockedControl() {
         XCTAssertTrue(MobileMeetingStartBar.usesFloatingLayout(idiom: .phone,
             verticalSizeClass: .compact, dynamicTypeSize: .large))
