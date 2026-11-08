@@ -56,6 +56,7 @@ python3 -B -S Tests/test_physical_ui_smoke_observation.py
 python3 -S Tests/test_meeting_diarization_eval.py
 python3 -S Tests/test_lint_changed.py
 python3 -B -S -m unittest discover -s tools -p test_meeting_asr_text_eval.py
+python3 -B -S -m unittest discover -s tools -p test_qwen_gigaam_eval.py
 python3 -S tools/meeting-native-eval/test_batch_preflight.py
 python3 -B -S tools/meeting-native-eval/test_weak_score.py
 python3 -B -S tools/meeting-native-eval/test_migrate_replay_v2.py
