@@ -468,3 +468,102 @@ pages, errors, operations or prompts stop the driver; it never launches/relaunch
 replaces app data, injects fixtures or accepts OS prompts. Three
 `testPhysicalFirstUse*` logical cases cover admission separately from the unexecuted
 physical UI case. The parent owns subsequent download and setup decisions.
+
+## iPad Tiny-selected continuation to final account page
+
+`testPhysicalIPadTinySelectedSetupToFinalAccountWithParentCheckpoints` attaches only
+to the already foreground unified iPad build 34 at source
+`1a245d0447b08e3fc681d439ea4ef3b392e034c2`, on actual `onboarding.step.1` with Tiny
+selected and Next unpressed. It uses ordinary Next to download/prepare Tiny and
+speaker resources, retains PII OFF, skips voice enrollment and default-OFF location,
+then stops at the configured final account page. It never taps sign-in, guest,
+Get started or a credential field. Setup completion and authentication remain
+separate owner actions. Legacy app/data, existing resources and OS settings are
+not changed by this test.
+
+The sole iPad owner verifies the exact destination and source/build, zero new
+unified recordings, preserved Legacy namespace/data, signed-out state, PII OFF and
+current Tiny-selection state. No phone is admitted: the runner checks actual iPad
+idiom, while the exact private destination remains an external parent attestation.
+Use a fresh UUID and this runner-only environment, with every other physical gate
+including `PICHI_PHYSICAL_FIRST_USE_WELCOME_TO_TINY` disabled:
+
+```text
+PICHI_PHYSICAL_SETUP_CONTINUATION=1
+PICHI_TEST_REVISION=1a245d0447b08e3fc681d439ea4ef3b392e034c2
+PICHI_PHYSICAL_SETUP_AUT_REVISION=1a245d0447b08e3fc681d439ea4ef3b392e034c2
+PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT=1
+PICHI_PHYSICAL_SETUP_OPERATION=tiny-selected-to-final-account
+PICHI_PHYSICAL_SETUP_FROM_STAGE=tiny-selected
+PICHI_PHYSICAL_SETUP_RUN_ID=<fresh run UUID>
+PICHI_PHYSICAL_SETUP_DEVICE_ID=<exact private lowercase 40-hex iPad UDID>
+```
+
+Stage a regular JSON file of at most 8192 bytes in the runner's Application Support
+at `PhysicalReleaseUI/setup-continuation/<uppercase run UUID>.json`:
+
+```json
+{
+  "version": 1,
+  "authorization": {
+    "revision": "1a245d0447b08e3fc681d439ea4ef3b392e034c2",
+    "runID": "<same fresh run UUID>",
+    "deviceID": "<same privately verified iPad UDID>",
+    "operation": "tiny-selected-to-final-account",
+    "fromStage": "tiny-selected"
+  },
+  "issuedAt": "<current UTC ISO-8601 timestamp>",
+  "build": "34",
+  "bundleID": "ai.pichi.voice",
+  "legacyBundleID": "ai.pichi.voice.mobile",
+  "newNamespaceEmpty": true,
+  "legacyNamespacePreserved": true,
+  "destinationVerified": true,
+  "foregroundTinySelectedAttested": true,
+  "tinyPreparationNotStarted": true,
+  "signedOutAttested": true,
+  "piiOffAttested": true
+}
+```
+
+Admission rejects the old Welcome receipt, wrong operation/stage, mismatched
+identity, unsafe attestations, future/older-than-fifteen-minute receipts and
+consumed runs. The immutable receipt gains a sibling `.consumed` claim. Its fresh
+`<run UUID>/` checkpoint directory must not pre-exist. The existing checkpoint
+mechanism writes each native PNG and accessibility snapshot there, then requires
+a matching `<step>.ack` within 120 seconds. The owner inspects the actual expected
+screen before writing each ACK:
+
+1. `01-tiny-selected-before-download`
+2. `02-tiny-preparation-or-ready`
+3. `03-participants-before-prepare`
+4. `04-participants-preparation-or-ready`
+5. `05-privacy-pii-off`
+6. `06-owner-voice-skip-offer`
+7. `07-location-off-skip-offer`
+8. `08-final-account-no-auth`
+
+A preparation checkpoint can show visible progress or its already reached next
+page; the runner logs that distinction without claiming an unobserved download
+animation. Each preparation is bounded to 600 seconds including its progress ACK.
+The following page is accepted only after the normal service-backed Next flow
+advances there. Unexpected pages, errors, prompts, keyboard/auth state or recording
+stop admission. Set native execution allowances to at least the test's 2400-second
+bound; do not inherit the shorter acoustic-test CLI deadline.
+
+Failure/cancellation joins an independent task that taps only the owned ordinary
+Cancel when present and waits up to 30 seconds for its UI operation to join. An
+already advanced idle operation needs no Cancel. Primary and cleanup failures are
+both preserved. UI join does not prove shutdown of shared downloads:
+`MobileRequiredResources` deliberately leaves its app-owned install alive when its
+foreground waiter is cancelled. The runner reports
+`backgroundResourceShutdownVerified=false`; the owner must inspect unresolved
+background work rather than delete resources or claim full cancellation. Two
+`testPhysicalSetupContinuation*` admission cases and four
+`testPhysicalSetupPreparation*` cases cover receipt boundaries, rejected or
+pre-cancelled Start, success, failure aggregation and joined cancellation with an actually cancelled
+task. They do not replace the native resource journey.
+
+The final account checkpoint is the last capture. After its ACK and test return,
+the owner ends native capture before any human credential entry. This test neither
+handles credentials nor claims guest setup or sign-in completed.

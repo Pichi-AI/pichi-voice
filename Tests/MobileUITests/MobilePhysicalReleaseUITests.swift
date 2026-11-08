@@ -268,6 +268,78 @@ private nonisolated struct PhysicalFirstUseReceipt: Codable {
     }
 }
 
+private nonisolated struct PhysicalSetupContinuationAuthorization: Codable, Equatable {
+    struct Unverified: Error {}
+    let revision: String
+    let runID: UUID
+    let deviceID: String
+    let operation: String
+    let fromStage: String
+
+    static func select(_ environment: [String: String], revision: String) throws -> Self {
+        guard revision == PhysicalOwnedPlaybackAuthorization.frozenRevision,
+              environment["PICHI_PHYSICAL_SETUP_CONTINUATION"] == "1",
+              environment["PICHI_PHYSICAL_FIRST_USE_WELCOME_TO_TINY"] != "1",
+              environment["PICHI_PHYSICAL_SETUP_AUT_REVISION"] == revision,
+              environment["PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT"] == "1",
+              environment["PICHI_PHYSICAL_SETUP_OPERATION"] == "tiny-selected-to-final-account",
+              environment["PICHI_PHYSICAL_SETUP_FROM_STAGE"] == "tiny-selected",
+              let run = environment["PICHI_PHYSICAL_SETUP_RUN_ID"], let runID = UUID(uuidString: run),
+              let deviceID = environment["PICHI_PHYSICAL_SETUP_DEVICE_ID"], deviceID.count == 40,
+              deviceID.allSatisfy({ "0123456789abcdef".contains($0) }) else { throw Unverified() }
+        return Self(revision: revision, runID: runID, deviceID: deviceID,
+                    operation: "tiny-selected-to-final-account", fromStage: "tiny-selected")
+    }
+}
+
+private nonisolated struct PhysicalSetupContinuationReceipt: Codable {
+    let version: Int
+    let authorization: PhysicalSetupContinuationAuthorization
+    let issuedAt: Date
+    let build: String
+    let bundleID: String
+    let legacyBundleID: String
+    let newNamespaceEmpty: Bool
+    let legacyNamespacePreserved: Bool
+    let destinationVerified: Bool
+    let foregroundTinySelectedAttested: Bool
+    let tinyPreparationNotStarted: Bool
+    let signedOutAttested: Bool
+    let piiOffAttested: Bool
+
+    func validate(_ expected: PhysicalSetupContinuationAuthorization, now: Date, consumed: Bool) throws {
+        let age = now.timeIntervalSince(issuedAt)
+        guard version == 1, authorization == expected, build == "34", bundleID == "ai.pichi.voice",
+              legacyBundleID == "ai.pichi.voice.mobile", newNamespaceEmpty, legacyNamespacePreserved,
+              destinationVerified, foregroundTinySelectedAttested, tinyPreparationNotStarted,
+              signedOutAttested, piiOffAttested, !consumed, age.isFinite, age >= 0, age <= 900 else {
+            throw PhysicalSetupContinuationAuthorization.Unverified()
+        }
+    }
+}
+
+@MainActor private enum PhysicalSetupPreparation {
+    struct Failure: Error {
+        let primary: Error
+        let cleanup: Error
+    }
+
+    static func run(start: () throws -> Void, observe: () async throws -> Void,
+                    cancelOwnedUI: @escaping @MainActor () async throws -> Void) async throws {
+        // A rejected or cancelled Start never grants ownership of another operation's Cancel.
+        try Task.checkCancellation()
+        try start()
+        do { try await observe() } catch {
+            let primary = error
+            let cleanup = Task { @MainActor in
+                do { try await cancelOwnedUI(); return nil as Error? } catch { return error }
+            }
+            if let cleanupError = await cleanup.value { throw Failure(primary: primary, cleanup: cleanupError) }
+            throw primary
+        }
+    }
+}
+
 private nonisolated enum PhysicalPlaybackPosition {
     static func seconds(_ value: String?) -> Int? {
         guard let value else { return nil }
@@ -822,6 +894,145 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             XCTAssertThrowsError(try receipt.validate(receipt.authorization, now: Date(timeIntervalSince1970: time), consumed: false))
         }
         XCTAssertThrowsError(try receipt.validate(receipt.authorization, now: receipt.issuedAt, consumed: true))
+    }
+
+    private var setupContinuationTestEnvironment: [String: String] {
+        ["PICHI_PHYSICAL_SETUP_CONTINUATION": "1",
+         "PICHI_PHYSICAL_SETUP_AUT_REVISION": PhysicalOwnedPlaybackAuthorization.frozenRevision,
+         "PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT": "1",
+         "PICHI_PHYSICAL_SETUP_OPERATION": "tiny-selected-to-final-account",
+         "PICHI_PHYSICAL_SETUP_FROM_STAGE": "tiny-selected",
+         "PICHI_PHYSICAL_SETUP_RUN_ID": "00000000-0000-0000-0000-000000000001",
+         "PICHI_PHYSICAL_SETUP_DEVICE_ID": String(repeating: "a", count: 40)]
+    }
+
+    private func setupContinuationTestReceipt() throws -> PhysicalSetupContinuationReceipt {
+        PhysicalSetupContinuationReceipt(version: 1,
+            authorization: try PhysicalSetupContinuationAuthorization.select(setupContinuationTestEnvironment,
+                revision: PhysicalOwnedPlaybackAuthorization.frozenRevision), issuedAt: Date(timeIntervalSince1970: 1000),
+            build: "34", bundleID: "ai.pichi.voice", legacyBundleID: "ai.pichi.voice.mobile",
+            newNamespaceEmpty: true, legacyNamespacePreserved: true, destinationVerified: true,
+            foregroundTinySelectedAttested: true, tinyPreparationNotStarted: true, signedOutAttested: true, piiOffAttested: true)
+    }
+
+    func testPhysicalSetupContinuationAcceptsFreshExactOperationAndRejectsOldWelcomeReceipt() throws {
+        let receipt = try setupContinuationTestReceipt()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(PhysicalSetupContinuationReceipt.self, from: encoder.encode(receipt))
+        try decoded.validate(receipt.authorization, now: Date(timeIntervalSince1970: 1001), consumed: false)
+        XCTAssertThrowsError(try decoder.decode(PhysicalSetupContinuationReceipt.self, from: encoder.encode(firstUseTestReceipt())))
+    }
+
+    func testPhysicalSetupContinuationRejectsMissingForeignStageDeviceAndUnsafeAttestations() throws {
+        let receipt = try setupContinuationTestReceipt()
+        for key in setupContinuationTestEnvironment.keys {
+            var changed = setupContinuationTestEnvironment
+            changed.removeValue(forKey: key)
+            XCTAssertThrowsError(try PhysicalSetupContinuationAuthorization.select(changed, revision: receipt.authorization.revision), key)
+            changed[key] = "invalid"
+            XCTAssertThrowsError(try PhysicalSetupContinuationAuthorization.select(changed, revision: receipt.authorization.revision), key)
+        }
+        var conflicting = setupContinuationTestEnvironment
+        conflicting["PICHI_PHYSICAL_FIRST_USE_WELCOME_TO_TINY"] = "1"
+        XCTAssertThrowsError(try PhysicalSetupContinuationAuthorization.select(conflicting, revision: receipt.authorization.revision))
+        for key in ["PICHI_PHYSICAL_SETUP_DEVICE_ID", "PICHI_PHYSICAL_SETUP_RUN_ID"] {
+            var changed = setupContinuationTestEnvironment
+            changed[key] = key.hasSuffix("DEVICE_ID") ? String(repeating: "b", count: 40) : "00000000-0000-0000-0000-000000000002"
+            let foreign = try PhysicalSetupContinuationAuthorization.select(changed, revision: receipt.authorization.revision)
+            XCTAssertThrowsError(try receipt.validate(foreign, now: receipt.issuedAt, consumed: false))
+        }
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(receipt)) as? [String: Any])
+        for (key, invalid) in [("version", 2 as Any), ("build", "23"), ("bundleID", "ai.pichi.voice.mobile"),
+                               ("legacyBundleID", "other"), ("newNamespaceEmpty", false), ("legacyNamespacePreserved", false),
+                               ("destinationVerified", false), ("foregroundTinySelectedAttested", false),
+                               ("tinyPreparationNotStarted", false), ("signedOutAttested", false), ("piiOffAttested", false)] {
+            var changed = json
+            changed[key] = invalid
+            let unsafe = try JSONDecoder().decode(PhysicalSetupContinuationReceipt.self, from: JSONSerialization.data(withJSONObject: changed))
+            XCTAssertThrowsError(try unsafe.validate(receipt.authorization, now: receipt.issuedAt, consumed: false), key)
+        }
+        for time in [999.0, 1901.0] {
+            XCTAssertThrowsError(try receipt.validate(receipt.authorization, now: Date(timeIntervalSince1970: time), consumed: false))
+        }
+        XCTAssertThrowsError(try receipt.validate(receipt.authorization, now: receipt.issuedAt, consumed: true))
+    }
+
+    @MainActor
+    func testPhysicalSetupPreparationSuccessAndRejectedStartNeverCancel() async throws {
+        enum Failure: Error { case start }
+        var calls: [String] = []
+        try await PhysicalSetupPreparation.run(start: { calls.append("start") }, observe: { calls.append("ready") },
+            cancelOwnedUI: { calls.append("cancel") })
+        XCTAssertEqual(calls, ["start", "ready"])
+        do {
+            try await PhysicalSetupPreparation.run(start: { throw Failure.start }, observe: { XCTFail("Start was rejected") },
+                cancelOwnedUI: { XCTFail("No operation is owned") })
+            XCTFail("Rejected Start must propagate")
+        } catch Failure.start { }
+    }
+
+    @MainActor
+    func testPhysicalSetupPreparationCancelledBeforeStartNeverActs() async throws {
+        var calls: [String] = []
+        let operation = Task { @MainActor in
+            try await PhysicalSetupPreparation.run(start: { calls.append("start") }, observe: { calls.append("observe") },
+                cancelOwnedUI: { calls.append("cancel") })
+        }
+        // The MainActor task cannot start until this actor turn yields below.
+        operation.cancel()
+        do {
+            try await operation.value
+            XCTFail("A pre-cancelled preparation must not begin")
+        } catch is CancellationError { }
+        XCTAssertTrue(calls.isEmpty)
+    }
+
+    @MainActor
+    func testPhysicalSetupPreparationRetainsPrimaryAndCancelFailure() async throws {
+        enum Failure: Error, Equatable { case preparation, cancel }
+        do {
+            try await PhysicalSetupPreparation.run(start: {}, observe: { throw Failure.preparation },
+                cancelOwnedUI: { throw Failure.cancel })
+            XCTFail("Both failures must be retained")
+        } catch let failure as PhysicalSetupPreparation.Failure {
+            XCTAssertEqual(failure.primary as? Failure, .preparation)
+            XCTAssertEqual(failure.cleanup as? Failure, .cancel)
+        }
+    }
+
+    @MainActor
+    func testPhysicalSetupPreparationCancellationJoinsIndependentUICleanup() async throws {
+        var returned = false
+        var releaseObserve: CheckedContinuation<Void, Never>?
+        var releaseCleanup: CheckedContinuation<Void, Never>?
+        let observing = expectation(description: "Preparation observation entered")
+        let entered = expectation(description: "Owned UI cancellation entered")
+        let operation = Task { @MainActor in
+            do {
+                try await PhysicalSetupPreparation.run(start: {}, observe: {
+                    await withCheckedContinuation { continuation in releaseObserve = continuation; observing.fulfill() }
+                    try Task.checkCancellation()
+                }, cancelOwnedUI: {
+                    XCTAssertFalse(Task.isCancelled)
+                    await withCheckedContinuation { continuation in releaseCleanup = continuation; entered.fulfill() }
+                })
+                XCTFail("Cancellation must propagate")
+            } catch is CancellationError { }
+            returned = true
+        }
+        let observed = await XCTWaiter.fulfillment(of: [observing], timeout: 2)
+        XCTAssertEqual(observed, .completed)
+        operation.cancel()
+        releaseObserve?.resume()
+        let cancelling = await XCTWaiter.fulfillment(of: [entered], timeout: 2)
+        XCTAssertEqual(cancelling, .completed)
+        XCTAssertFalse(returned, "Cancellation cannot return before owned UI cleanup joins")
+        releaseCleanup?.resume()
+        try await operation.value
+        XCTAssertTrue(returned)
     }
 
     func testPhysicalSpeakerPreflightAcceptsVerifiedCurrentSettingsAndSession() throws {
@@ -2273,6 +2484,175 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     "This bounded driver must stop before model download or activation")
         capture("first-use-03-tiny-selected-before-download", revision: revision)
         print("[PHYSICAL_FIRST_USE] welcome_to_tiny_selection=true download_started=false setup_completed=false account_choice_reached=false")
+        #endif
+    }
+
+    /// Completes only the known local setup choices, then leaves authentication to the owner.
+    @MainActor
+    func testPhysicalIPadTinySelectedSetupToFinalAccountWithParentCheckpoints() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires the exact attested empty unified physical iPad at Tiny selection")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_SETUP_CONTINUATION"] == "1" else {
+            throw XCTSkip("Explicitly authorize the Tiny-selected setup continuation, never authentication")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let selected = try PhysicalSetupContinuationAuthorization.select(environment, revision: revision)
+        try require(UIDevice.current.userInterfaceIdiom == .pad, "This continuation is restricted to the attested iPad")
+        executionTimeAllowance = 2400
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                 appropriateFor: nil, create: false)
+        let directory = support.appendingPathComponent("PhysicalReleaseUI/setup-continuation", isDirectory: true)
+        let receiptURL = directory.appendingPathComponent("\(selected.runID.uuidString).json")
+        let consumedURL = directory.appendingPathComponent("\(selected.runID.uuidString).consumed")
+        let checkpoints = directory.appendingPathComponent(selected.runID.uuidString, isDirectory: true)
+        let values = try receiptURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        try require(values.isRegularFile == true && values.isSymbolicLink != true && (values.fileSize ?? Int.max) <= 8192,
+                    "A bounded regular parent continuation receipt must authorize this run")
+        let data = try Data(contentsOf: receiptURL)
+        try require(data.count <= 8192, "The continuation receipt exceeded its bound")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        try decoder.decode(PhysicalSetupContinuationReceipt.self, from: data).validate(selected, now: Date(),
+            consumed: FileManager.default.fileExists(atPath: consumedURL.path))
+        try require(!FileManager.default.fileExists(atPath: checkpoints.path), "A fresh run cannot inherit old checkpoints or ACKs")
+        let existing = XCUIApplication(bundleIdentifier: "ai.pichi.voice")
+        try require(existing.state == .runningForeground, "Never launch or activate a different setup state")
+        let app = try attachReadOnlyPhysicalApp(revision: revision)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        func stages() -> [Int] {
+            (0...6).filter { app.descendants(matching: .any)["onboarding.step.\($0)"].firstMatch.exists }
+        }
+        func requireState(_ allowed: Set<Int>, allowError: Bool = false) throws {
+            let observed = stages()
+            try require(app.state == .runningForeground && app.alerts.count == 0 && springboard.alerts.count == 0
+                        && app.sheets.count == 0 && app.keyboards.count == 0 && !observed.isEmpty
+                        && observed.allSatisfy({ allowed.contains($0) })
+                        && !app.buttons["meeting.stop"].exists && !app.buttons["ownerVoice.stop"].exists
+                        && !app.buttons["account.signOut"].exists
+                        && !app.descendants(matching: .any)["account.signingIn"].firstMatch.exists
+                        && app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "history.session.")).count == 0,
+                        "Stop on any unowned page, prompt, account state, recording or namespace content")
+            if !allowError {
+                try require(!app.descendants(matching: .any)["onboarding.error"].firstMatch.exists
+                            && !app.descendants(matching: .any)["account.error"].firstMatch.exists,
+                            "The actual setup must not expose a preparation or account error")
+            }
+        }
+        func requireIdlePage(_ stage: Int) throws {
+            try requireState([stage])
+            try require(stages() == [stage] && !app.buttons["onboarding.cancel"].exists,
+                        "Only the exact idle expected setup page can accept the next choice")
+        }
+        func waitForPage(_ target: Int, from: Int, timeout: TimeInterval) async throws {
+            let deadline = ProcessInfo.processInfo.systemUptime + timeout
+            while true {
+                try Task.checkCancellation()
+                try requireState([from, target])
+                if stages() == [target] && !app.buttons["onboarding.cancel"].exists { return }
+                try require(ProcessInfo.processInfo.systemUptime < deadline, "Setup did not reach expected stage \(target) within its bound")
+                try await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+        func checkpoint(_ name: String, stage: Int) async throws {
+            try requireIdlePage(stage)
+            try await visibleCheckpoint(name, app: app, revision: revision, directory: checkpoints)
+            try requireIdlePage(stage)
+        }
+        func prepare(_ from: Int, to target: Int, checkpointName: String, progressID: String) async throws {
+            try requireIdlePage(from)
+            try await PhysicalSetupPreparation.run(start: {
+                try tap(app.buttons["onboarding.next"], "Start only the current ordinary local setup preparation")
+            }, observe: {
+                let preparationStarted = ProcessInfo.processInfo.systemUptime
+                // The preparation can finish before its first progress snapshot. Preserve
+                // that distinction instead of claiming a download animation was observed.
+                let deadline = ProcessInfo.processInfo.systemUptime + 15
+                while true {
+                    try Task.checkCancellation()
+                    try requireState([from, target])
+                    if stages() == [target] && !app.buttons["onboarding.cancel"].exists { break }
+                    if app.buttons["onboarding.cancel"].exists
+                        && app.descendants(matching: .any)[progressID].firstMatch.exists { break }
+                    try require(ProcessInfo.processInfo.systemUptime < deadline, "Preparation exposed neither expected progress nor completion")
+                    try await Task.sleep(nanoseconds: 250_000_000)
+                }
+                let observedProgress = app.buttons["onboarding.cancel"].exists
+                print("[PHYSICAL_SETUP_CONTINUATION] from=\(from) visibleProgressObserved=\(observedProgress)")
+                try await visibleCheckpoint(checkpointName, app: app, revision: revision, directory: checkpoints)
+                let remaining = max(0, 600 - (ProcessInfo.processInfo.systemUptime - preparationStarted))
+                try await waitForPage(target, from: from, timeout: remaining)
+            }, cancelOwnedUI: {
+                try requireState([from, target], allowError: true)
+                let cancel = app.buttons["onboarding.cancel"]
+                let requestedCancel = cancel.exists
+                if requestedCancel { try self.tap(cancel, "Cancel only the local preparation started by this continuation") }
+                try await PhysicalUITransitionWait.until(timeout: 30, condition: {
+                    app.state == .runningForeground && app.alerts.count == 0 && springboard.alerts.count == 0
+                        && !app.buttons["onboarding.cancel"].exists && app.buttons["onboarding.next"].isEnabled
+                })
+                // MobileRequiredResources deliberately keeps its app-owned background
+                // install alive when its foreground waiter is cancelled. UI join is narrower.
+                print("[PHYSICAL_SETUP_CONTINUATION] cancelledFrom=\(from) ownedUICancelRequested=\(requestedCancel) ownedUIOperationJoined=true backgroundResourceShutdownVerified=false")
+            })
+        }
+        try requireIdlePage(1)
+        let tiny = app.buttons["onboarding.model.whisper-tiny"]
+        try require(tiny.exists && tiny.isSelected && !app.descendants(matching: .any)["model.preparation.progress"].firstMatch.exists,
+                    "Admission starts only at the selected Tiny card before its Next action")
+        try Data("claimed".utf8).write(to: consumedURL, options: .withoutOverwriting)
+        try FileManager.default.createDirectory(at: checkpoints, withIntermediateDirectories: false)
+        try await checkpoint("01-tiny-selected-before-download", stage: 1)
+        try require(tiny.isSelected, "The parent checkpoint must retain the chosen Tiny model")
+        try await prepare(1, to: 2, checkpointName: "02-tiny-preparation-or-ready", progressID: "model.preparation.progress")
+        try await checkpoint("03-participants-before-prepare", stage: 2)
+        try require(app.descendants(matching: .any)["recording.requiredResources"].firstMatch.exists,
+                    "Participants must expose the ordinary resource preparation status")
+        try await prepare(2, to: 3, checkpointName: "04-participants-preparation-or-ready", progressID: "recording.requiredResources")
+        try requireIdlePage(3)
+        try require(app.switches["privacy.pii"].value as? String == "0"
+                    && !app.descendants(matching: .any)["privacy.pii.progress"].firstMatch.exists
+                    && !app.descendants(matching: .any)["privacy.pii.active"].firstMatch.exists,
+                    "Retain ordinary PII OFF; never toggle privacy to force this flow")
+        try await checkpoint("05-privacy-pii-off", stage: 3)
+        try require(app.switches["privacy.pii"].value as? String == "0", "PII must remain OFF after the parent checkpoint")
+        try tap(app.buttons["onboarding.next"], "Continue with unchanged ordinary privacy choices")
+        try await waitForPage(4, from: 3, timeout: 10)
+        try require(app.buttons["ownerVoice.start"].exists && app.buttons["onboarding.skip"].exists,
+                    "The new namespace must offer optional voice enrollment without starting it")
+        try await checkpoint("06-owner-voice-skip-offer", stage: 4)
+        try tap(app.buttons["onboarding.skip"], "Skip optional owner voice enrollment without microphone capture")
+        try await waitForPage(5, from: 4, timeout: 10)
+        try require(app.switches["meetingLocation.enabled"].value as? String == "0", "Location must already be OFF")
+        try await checkpoint("07-location-off-skip-offer", stage: 5)
+        try require(app.switches["meetingLocation.enabled"].value as? String == "0", "Retain default location OFF")
+        try tap(app.buttons["onboarding.skip"], "Skip the optional location offer without requesting permission")
+        try await waitForPage(6, from: 5, timeout: 10)
+        try requireIdlePage(6)
+        try require(app.descendants(matching: .any)["onboarding.account"].firstMatch.exists
+                    && app.buttons["account.signIn"].exists && app.buttons["account.continueAsGuest"].exists,
+                    "Stop at the actual configured optional-account page; do not invent an authentication route")
+        let signIn = app.buttons["account.signIn"]
+        let finalScrolls = app.scrollViews
+        try require(finalScrolls.count == 1, "The actual final setup page must own one scroll viewport")
+        try PhysicalControlReveal.run(ready: {
+            try Task.checkCancellation()
+            try requireIdlePage(6)
+            let viewport = finalScrolls.firstMatch.frame.intersection(app.windows.firstMatch.frame)
+            // Legacy Sign in is disabled until the human supplies credentials.
+            // Visibility does not require making that authentication action enabled.
+            return signIn.exists && signIn.frame.width > 0 && signIn.frame.height > 0 && viewport.contains(signIn.frame)
+        }, scroll: { upward, _ in
+            try requireIdlePage(6)
+            try require(finalScrolls.count == 1 && finalScrolls.firstMatch.isHittable,
+                        "Only the actual final setup page may reveal its account controls")
+            if upward { finalScrolls.firstMatch.swipeUp() } else { finalScrolls.firstMatch.swipeDown() }
+        })
+        // This is the final capture and ACK. The owner must end capture before
+        // entering credentials after this test returns; no auth control is tapped.
+        try await checkpoint("08-final-account-no-auth", stage: 6)
+        print("[PHYSICAL_SETUP_CONTINUATION] finalAccountPageReached=true setupCompleted=false authAttempted=false credentialsEntered=false")
         #endif
     }
 
