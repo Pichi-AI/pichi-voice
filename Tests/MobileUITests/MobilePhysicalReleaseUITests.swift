@@ -1479,6 +1479,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         app.launchArguments = []
         app.launchEnvironment = [:]
         app.activate()
+        try await waitForPhysicalAppState(app, .runningForeground, phase: "tiny-initial-foreground")
         try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
         try require(!app.buttons["meeting.stop"].exists
                     && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
@@ -1532,7 +1533,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             // the AUT. This uses the public audio background mode, not background assertions.
             let runner = XCUIApplication(bundleIdentifier: runnerID)
             runner.activate()
-            try require(runner.state == .runningForeground, "The runner must own foreground playback initiation")
+            try await waitForPhysicalAppState(runner, .runningForeground, phase: "tiny-fixture-foreground")
             try audioSession.setCategory(.playback, mode: .default, options: .mixWithOthers)
             changedPlaybackCategory = true
             try audioSession.setActive(true)
@@ -1545,6 +1546,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(player.prepareToPlay(), "The runner must prepare real fixture playback")
             try require(player.play(), "The runner must start synthetic speech")
             app.activate()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "tiny-recording-foreground")
             // Own the only Start tap even if its automation response fails after delivery.
             ownsRecording = true
             try tap(app.buttons["meeting.start"], "Start through the ordinary Release UI")
@@ -1563,8 +1565,8 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     earlyTextCount = liveTextCharacterCount(in: app)
                     capture("09-live-at-ten-seconds", revision: revision)
                     preferences.activate()
-                    try require(preferences.state == .runningForeground, "Settings must be the actual foreground app")
-                    try require(app.state == .runningBackground, "The AUT must enter actual background recording")
+                    try await waitForPhysicalAppState(preferences, .runningForeground, phase: "tiny-settings-foreground")
+                    try await waitForPhysicalAppState(app, .runningBackground, phase: "tiny-recording-background")
                     capture("10-actual-background", revision: revision)
                     print("[PHYSICAL_RELEASE_UI] background_started revision=\(revision) earlyCharacters=\(earlyTextCount)")
                 } else if second > 10 {
@@ -1577,6 +1579,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             player.stop()
             try require(!player.isPlaying, "The owned player must stop before completion")
             app.activate()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "tiny-after-background")
             try require(app.buttons["meeting.stop"].waitForExistence(timeout: 5) && app.buttons["meeting.stop"].isEnabled,
                         "Capture must still be active after five minutes")
             let finalTextCount = liveTextCharacterCount(in: app)
@@ -1631,6 +1634,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             capture("19-completed-history-row", revision: revision)
             app.terminate()
             app.launch()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "tiny-relaunch")
             capture("20-normal-relaunch", revision: revision)
             try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
             try tap(app.buttons["history.session.\(sessionID)"], "Reopen the persisted meeting after normal relaunch")

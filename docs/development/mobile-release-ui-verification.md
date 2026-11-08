@@ -124,10 +124,13 @@ the test. Do not add an app probe to bypass it.
 
 The test snapshots the existing history identifiers, inspects the real settings,
 returns to Meetings and presses the real Start action. Once capture is active, it
-records for at least 300 seconds. At second 10 it activates system Settings,
-checks that Settings is foreground and the AUT is actually running in background,
-and keeps checking AUT liveness and owned player playback. It does not reactivate
-the AUT to inspect hidden UI during the background interval.
+records for at least 300 seconds. At second 10 it activates system Settings and
+uses the existing bounded state-wait helper to observe Settings foreground and
+actual AUT background admission. The same helper observes runner/AUT foreground
+activation and the later foreground return/relaunch; an immediate state snapshot
+is not transition proof. Existing delayed/deadline/cancellation cases cover this
+helper. Subsequent background liveness and owned player checks remain strict;
+the test does not reactivate the AUT to inspect hidden UI during that interval.
 
 After five minutes it stops the runner's player, returns to the AUT, verifies that
 protected committed caption text has grown and that the latest paragraph is in
