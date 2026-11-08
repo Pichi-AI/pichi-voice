@@ -52,6 +52,57 @@ final class MobileSettingsReviewUITests: XCTestCase {
         }
     }
 
+    /// Shows the uninstalled model's real settings and limitations without downloading it.
+    func testCompactQwenModelDetailsInBothLanguagesAndThemes() throws {
+        let modelID = "qwen3-asr-0.6b-q4"
+        for (language, appearance) in [("ru", "light"), ("ru", "dark"), ("en", "light"), ("en", "dark")] {
+            app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                                   "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
+            app.launch()
+            openSettings(title: language == "ru" ? "Настройки" : "Settings")
+            let models = app.buttons["settings.models"]
+            reveal(models)
+            XCTAssertTrue(models.exists && models.isHittable)
+            models.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["settings.models.detail"].firstMatch.waitForExistence(timeout: 10))
+            let details = app.buttons["model.details.\(modelID)"].firstMatch
+            reveal(details)
+            XCTAssertTrue(details.exists && details.isHittable)
+            details.tap()
+
+            let recognition = language == "ru"
+                ? "Компактное многоязычное распознавание с автоопределением языка. Текст появляется после остановки записи."
+                : "Compact multilingual recognition with automatic language detection. Produces text after recording stops."
+            let timing = language == "ru"
+                ? "Временные метки слов недоступны. Если в одной фразе говорят несколько человек, участник может остаться неизвестным."
+                : "Word timestamps are unavailable. Speaker labels may remain unknown when speakers share a phrase."
+            let processor = language == "ru"
+                ? "На iPhone и iPad эта модель использует CPU."
+                : "On iPhone and iPad, this model uses the CPU."
+            let recognitionText = app.staticTexts[recognition].firstMatch
+            reveal(recognitionText)
+            XCTAssertTrue(recognitionText.exists)
+            let timingText = app.staticTexts[timing].firstMatch
+            reveal(timingText)
+            XCTAssertTrue(timingText.exists && timingText.isHittable)
+            let processorText = app.staticTexts[processor].firstMatch
+            reveal(processorText)
+            XCTAssertTrue(processorText.exists && processorText.isHittable)
+            capture("qwen-q4-\(language)-\(appearance)-limitations")
+
+            let download = app.buttons["model.download.\(modelID)"]
+            reveal(download)
+            XCTAssertTrue(download.exists && download.isHittable,
+                          "This review requires an uninstalled model and never starts a download")
+            XCTAssertFalse(app.buttons["model.activate.\(modelID)"].exists)
+            XCTAssertFalse(app.descendants(matching: .any)["model.executionStatus.\(modelID)"].firstMatch.exists,
+                           "An unprepared provider must not claim live execution")
+            capture("qwen-q4-\(language)-\(appearance)-download")
+            app.terminate()
+        }
+    }
+
     /// Offline legal resources are reachable from the guest Settings stack in every app appearance.
     func testLicensesInBothLanguagesAndThemes() throws {
         for (language, appearance) in [("ru", "light"), ("ru", "dark"), ("en", "light"), ("en", "dark")] {

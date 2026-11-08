@@ -19,6 +19,30 @@ enum PichiMeetingProviderFactory {
         let maximumTrackCount: Int
     }
 
+    /// Selection surfaces describe the admitted recording mode, rather than promising live
+    /// updates for every model in the library. This value does not change capture policy.
+    nonisolated struct RecordingPresentation: Sendable, Equatable {
+        let updatesDuringRecording: Bool
+
+        var selectionDescription: String {
+            self.updatesDuringRecording
+                ? "Selected for new recordings. Text and speaker labels update during recording."
+                : "Selected for new recordings. Text and speaker labels appear after recording stops."
+        }
+
+        var progressDescription: String {
+            self.updatesDuringRecording
+                ? "Text and participant labels update in fragments. A delay is normal while enough speech is collected."
+                : "Text and participant labels appear after recording stops. Processing can take some time."
+        }
+
+        var speakerLabelsDescription: String {
+            self.updatesDuringRecording
+                ? "Speaker labels appear automatically while you record. Short or overlapping speech can be uncertain. You can correct participant names later."
+                : "Speaker labels appear automatically after recording stops. Short or overlapping speech can be uncertain. You can correct participant names later."
+        }
+    }
+
     private nonisolated struct Registration: Sendable {
         let descriptor: MeetingBackendDescriptor
         let onboardingPriority: Int
@@ -141,6 +165,7 @@ enum PichiMeetingProviderFactory {
                 knownLimits: [
                     "Compact multilingual recognition with automatic language detection. Produces text after recording stops.",
                     "Word timestamps are unavailable. Speaker labels may remain unknown when speakers share a phrase.",
+                    "On iPhone and iPad, this model uses the CPU.",
                     "Speaker resources prepare automatically. Finish setup before an offline meeting.",
                 ],
                 analysisSampleRate: 16_000,
@@ -248,6 +273,14 @@ enum PichiMeetingProviderFactory {
 
     nonisolated static func registeredBackendDescriptor(for modelID: String) -> MeetingBackendDescriptor? {
         self.registrations[modelID]?.descriptor
+    }
+
+    nonisolated static func recordingPresentation(for modelID: String,
+                                                  requestedMode: MeetingSpeakerProcessingMode) -> RecordingPresentation {
+        let descriptor = self.registeredBackendDescriptor(for: modelID)
+        return RecordingPresentation(updatesDuringRecording: requestedMode == .streaming
+            && descriptor?.supportedSpeakerProcessingModes.contains(.streaming) == true
+            && descriptor?.supportedInputs.contains(.boundedMicrophonePCM) == true)
     }
 
     nonisolated static func defaultLanguageCode(for modelID: String) -> String? {

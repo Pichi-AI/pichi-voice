@@ -331,6 +331,12 @@ struct MobileRecordingSettings: View {
 private struct MobileParticipantSettings: View {
     @ObservedObject var required: MobileRequiredResources
     let microphone: MeetingMicrophoneIdentity?
+    @ObservedObject private var settings = SettingsStore.shared
+
+    private var recordingPresentation: PichiMeetingProviderFactory.RecordingPresentation {
+        PichiMeetingProviderFactory.recordingPresentation(for: settings.selectedSpeechModel.rawValue,
+            requestedMode: settings.meetingSpeakerProcessingMode)
+    }
 
     var body: some View {
         Form {
@@ -339,8 +345,8 @@ private struct MobileParticipantSettings: View {
             } header: {
                 Text(PichiLocalization.text("Speaker labels"))
             } footer: {
-                MobileSettingsFooter(PichiLocalization.text("Speaker labels appear automatically while you record. Short or overlapping speech can be uncertain. You can correct participant names later."),
-                    PichiLocalization.text("Text and participant labels update in fragments. A delay is normal while enough speech is collected."))
+                MobileSettingsFooter(PichiLocalization.text(recordingPresentation.speakerLabelsDescription),
+                    PichiLocalization.text(recordingPresentation.progressDescription))
             }
             Section(PichiLocalization.text("My voice")) {
                 MeetingOwnerVoiceSettingsContent(audioArbiter: AppServices.shared.meetingAudioActivityArbiter,
@@ -433,7 +439,8 @@ private struct MobileVoiceEngineSettings: View {
         } else {
             if installed.contains(model.id) {
                 if settings.selectedSpeechModel == model {
-                    Label(PichiLocalization.text("Selected for new recordings. Text and speaker labels update during recording."),
+                    Label(PichiLocalization.text(PichiMeetingProviderFactory.recordingPresentation(for: model.rawValue,
+                        requestedMode: settings.meetingSpeakerProcessingMode).selectionDescription),
                           systemImage: "checkmark.circle.fill")
                         .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
                         .accessibilityIdentifier("model.selected.\(model.id)")

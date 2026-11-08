@@ -35596,6 +35596,23 @@
         }
       }
     },
+    "On iPhone and iPad, this model uses the CPU.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On iPhone and iPad, this model uses the CPU."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На iPhone и iPad эта модель использует CPU."
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "On your Mac": {
       "extractionState": "manual",
       "localizations": {
@@ -46139,6 +46156,23 @@
         }
       }
     },
+    "Selected for new recordings. Text and speaker labels appear after recording stops.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected for new recordings. Text and speaker labels appear after recording stops."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрана для новых записей. Текст и метки участников появляются после остановки записи."
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Selected for new recordings. Text and speaker labels update during recording.": {
       "extractionState": "manual",
       "localizations": {
@@ -48502,6 +48536,23 @@
           }
         }
       }
+    },
+    "Speaker labels appear automatically after recording stops. Short or overlapping speech can be uncertain. You can correct participant names later.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speaker labels appear automatically after recording stops. Short or overlapping speech can be uncertain. You can correct participant names later."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Метки участников появляются автоматически после остановки записи. Короткая речь или одновременные реплики могут определяться неточно. Имена участников можно исправить позже."
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "Speaker labels appear automatically while you record. Short or overlapping speech can be uncertain. You can correct participant names later.": {
       "extractionState": "manual",
@@ -51227,6 +51278,23 @@
           }
         }
       }
+    },
+    "Text and participant labels appear after recording stops. Processing can take some time.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text and participant labels appear after recording stops. Processing can take some time."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст и метки участников появляются после остановки записи. Обработка может занять некоторое время."
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "Text and participant labels update in fragments. A delay is normal while enough speech is collected.": {
       "extractionState": "manual",

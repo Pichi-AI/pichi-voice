@@ -40,6 +40,10 @@ struct MobileOnboarding: View {
     }
 
     private var step: Int { settings.mobileSetupStep }
+    private var recordingPresentation: PichiMeetingProviderFactory.RecordingPresentation {
+        PichiMeetingProviderFactory.recordingPresentation(for: settings.selectedSpeechModel.rawValue,
+            requestedMode: settings.meetingSpeakerProcessingMode)
+    }
     /// Phones in either orientation; Plus and Pro Max phones report a regular width in landscape.
     private var isCompact: Bool { horizontalSizeClass == .compact || verticalSizeClass == .compact }
     private let titles = ["Welcome", "Choose Voice Engine", "Automatic speaker labels", "Data cleanup", "My voice", "Recording location", "Ready to record"]
@@ -217,7 +221,7 @@ struct MobileOnboarding: View {
     private var subtitle: String? {
         switch step {
         case 1: "Choose a local speech model. You can change it later in Settings. Speed and memory use depend on your device."
-        case 2: "Speaker labels appear automatically while you record. Short or overlapping speech can be uncertain. You can correct participant names later."
+        case 2: recordingPresentation.speakerLabelsDescription
         case 4: "Set up your voice so matching speech is labelled You in future recordings. The voice profile stays on this device."
         case 6: "Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new recordings."
         default: nil
@@ -261,7 +265,7 @@ struct MobileOnboarding: View {
         case 2:
             VStack(alignment: .leading, spacing: 12) {
                 MobileRequiredResourcesStatus(resources: required)
-                Text(PichiLocalization.text("Text and participant labels update in fragments. A delay is normal while enough speech is collected."))
+                Text(PichiLocalization.text(recordingPresentation.progressDescription))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 Text(PichiLocalization.text("Speech detection and speaker resources prepare automatically. This installs files without loading every speech model into memory."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)

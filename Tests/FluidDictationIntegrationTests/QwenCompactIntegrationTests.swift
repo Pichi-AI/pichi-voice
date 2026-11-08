@@ -235,6 +235,33 @@ final class QwenCompactIntegrationTests: XCTestCase {
         XCTAssertNil(provider.resolvedLanguageCode(explicit: "ru"))
     }
 
+    func testRecordingPresentationUsesRegisteredCapabilityAndRequestedMode() {
+        let factory = PichiMeetingProviderFactory.self
+        let qwenID = SettingsStore.SpeechModel.qwen3Asr06BQ4.rawValue
+        let qwen = factory.recordingPresentation(for: qwenID, requestedMode: .streaming)
+        XCTAssertFalse(qwen.updatesDuringRecording,
+                       "An unsupported saved live preference must not advertise live Qwen output")
+        XCTAssertEqual(qwen, factory.recordingPresentation(for: qwenID, requestedMode: .afterRecording))
+        XCTAssertEqual(qwen.selectionDescription,
+                       "Selected for new recordings. Text and speaker labels appear after recording stops.")
+        XCTAssertEqual(qwen.progressDescription,
+                       "Text and participant labels appear after recording stops. Processing can take some time.")
+        XCTAssertEqual(qwen.speakerLabelsDescription,
+                       "Speaker labels appear automatically after recording stops. Short or overlapping speech can be uncertain. You can correct participant names later.")
+
+        for model in [SettingsStore.SpeechModel.gigaam, .whisperTiny, .parakeetTDT] {
+            let live = factory.recordingPresentation(for: model.rawValue, requestedMode: .streaming)
+            XCTAssertTrue(live.updatesDuringRecording)
+            XCTAssertEqual(live.selectionDescription,
+                           "Selected for new recordings. Text and speaker labels update during recording.")
+            XCTAssertFalse(factory.recordingPresentation(for: model.rawValue,
+                requestedMode: .afterRecording).updatesDuringRecording,
+                "A live-capable model must still describe the explicitly selected offline mode")
+        }
+        XCTAssertFalse(factory.recordingPresentation(for: "unknown-future-model",
+            requestedMode: .streaming).updatesDuringRecording)
+    }
+
     func testSettingsAndOnboardingUseSamePreparationAdmissionWithoutChangingSelection() async throws {
         let settings = SettingsStore.shared
         let selection = settings.selectedSpeechModel
