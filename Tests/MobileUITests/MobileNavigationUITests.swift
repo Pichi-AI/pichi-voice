@@ -725,6 +725,57 @@ final class MobileNavigationUITests: XCTestCase {
         #endif
     }
 
+    func testRecordingStartBarAdaptsOnlyOnLandscapePhone() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Layout acceptance owns isolated simulators only")
+        #else
+        defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+        for (language, appearance) in [("en", "light"), ("ru", "dark")] {
+            app.terminate()
+            app.launchArguments = Self.completedSetup + ["-PichiInterfaceLanguage", language,
+                "-AppleLanguages", "(\(language))", "-AppleInterfaceStyle", appearance == "dark" ? "Dark" : "Light"]
+            app.launch()
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 20))
+            XCUIDevice.shared.orientation = .landscapeLeft
+            waitForOrientation(portrait: false)
+            let start = app.buttons["meeting.start"], settings = app.buttons["meeting.settings"]
+            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            XCTAssertTrue(start.isHittable)
+            XCTAssertTrue(settings.isHittable)
+            XCTAssertGreaterThanOrEqual(start.frame.height, 44)
+            XCTAssertGreaterThanOrEqual(settings.frame.height, 44)
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                XCTAssertLessThan(start.frame.width, app.windows.firstMatch.frame.width * 0.5)
+                XCTAssertEqual(start.frame.midY, settings.frame.midY, accuracy: 4)
+                XCTAssertGreaterThan(start.frame.minX, settings.frame.maxX)
+                XCTAssertLessThanOrEqual(start.frame.height, 56)
+            } else {
+                XCTAssertGreaterThanOrEqual(settings.frame.minY, start.frame.maxY - 1,
+                    "The iPad retains its existing stacked footer")
+            }
+            if app.tabBars.firstMatch.exists {
+                XCTAssertTrue(start.frame.intersection(app.tabBars.firstMatch.frame).isEmpty)
+                XCTAssertTrue(settings.frame.intersection(app.tabBars.firstMatch.frame).isEmpty)
+            }
+            let summary = settings.value as? String
+            capture("footer-\(language)-\(appearance)-landscape")
+            settings.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["settings.recording.detail"].firstMatch.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["settings.recording.done"].isHittable,
+                "The compact action opens the existing recording settings sheet")
+            app.buttons["settings.recording.done"].tap()
+            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            XCTAssertEqual(settings.value as? String, summary)
+            XCUIDevice.shared.orientation = .portrait
+            waitForOrientation(portrait: true)
+            XCTAssertGreaterThanOrEqual(settings.frame.minY, start.frame.maxY - 1)
+            XCTAssertTrue(start.isHittable)
+            XCTAssertEqual(settings.value as? String, summary, "Rotation preserves recording configuration")
+            capture("footer-\(language)-\(appearance)-portrait")
+        }
+        #endif
+    }
+
     func testMVPSettingsAndOrientation() throws {
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
         XCTAssertGreaterThanOrEqual(app.buttons["meeting.start"].frame.height, 44)

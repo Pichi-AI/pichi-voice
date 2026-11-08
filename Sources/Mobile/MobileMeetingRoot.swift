@@ -31,6 +31,7 @@ struct MobileMeetingRoot: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The private profile root keeps this tree disabled until the account and its storage are
@@ -707,42 +708,14 @@ struct MobileMeetingRoot: View {
         .navigationDestination(for: MeetingSessionID.self) { id in meetingPage(id) }
     }
 
-    /// Start stays in the same place on every screen size. Below it, what the next recording uses;
-    /// the line opens the same settings as Settings > Recording.
+    /// A short phone window puts settings beside Start, preserving the list's vertical space.
     private var startBar: some View {
-        let preparing = isStarting && coordinator.isQuiescent
-        return VStack(spacing: 0) {
-            Button { beginMeeting() } label: {
-                Label(PichiLocalization.text(preparing ? "Preparing recording…" : "Start Recording"), systemImage: "record.circle")
-                    .foregroundStyle(theme.palette.accentForeground)
-                    .frame(maxWidth: .infinity, minHeight: 48)
-                    .animation(nil, value: preparing)
-            }.buttonStyle(.borderedProminent)
-                .disabled(isBusy || !coordinator.isQuiescent)
-                .accessibilityIdentifier("meeting.start")
-            if coordinator.isProcessing {
-                Label(PichiLocalization.text("Preparing your transcript"), systemImage: "text.alignleft")
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                    .frame(minHeight: 44)
-            } else {
-                Button { showRecordingSettings = true } label: {
-                    HStack(spacing: theme.metrics.spacing.xs) {
-                        Image(systemName: "mic")
-                        Text(verbatim: nextRecordingSummary.joined(separator: " · "))
-                        Image(systemName: "chevron.right").imageScale(.small)
-                    }
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                    .frame(minHeight: 44)
-                    .contentShape(Rectangle())
-                }.buttonStyle(.plain).disabled(isBusy)
-                    .accessibilityLabel(PichiLocalization.text("Recording settings"))
-                    .accessibilityValue(nextRecordingSummary.joined(separator: ", "))
-                    .accessibilityIdentifier("meeting.settings")
-            }
-        }
-        .padding(.horizontal, 24).padding(.top, 12)
-        .frame(maxWidth: 560).frame(maxWidth: .infinity)
-        .background(theme.palette.toolbarBackground)
+        MobileMeetingStartBar(
+            inline: MobileMeetingStartBar.usesInlineLayout(idiom: UIDevice.current.userInterfaceIdiom,
+                verticalSizeClass: verticalSizeClass, dynamicTypeSize: dynamicTypeSize),
+            preparing: isStarting && coordinator.isQuiescent, processing: coordinator.isProcessing,
+            startDisabled: isBusy || !coordinator.isQuiescent, settingsDisabled: isBusy,
+            summary: nextRecordingSummary, start: beginMeeting, openSettings: { showRecordingSettings = true })
     }
 
     /// The microphone and transcript language the next recording uses.
