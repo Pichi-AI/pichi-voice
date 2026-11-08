@@ -599,7 +599,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(!app.switches[identifier].exists, "Participant labels are automatic, not legacy UI switches")
         }
         if requireReady {
-            let ready = app.staticTexts.matching(NSPredicate(format: "label IN %@", [
+            let ready = app.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", [
                 "Speech detection and speaker labels are ready", "Определение речи и участников готово"
             ])).firstMatch
             try require(ready.waitForExistence(timeout: 180) && app.alerts.count == 0,
