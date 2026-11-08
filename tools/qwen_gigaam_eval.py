@@ -204,7 +204,8 @@ def score_engine(manifest: dict, report: dict, manifest_sha256: str) -> dict:
                          "first": timing_summary([run for run in runs if run["phase"] == "first"]),
                          "warm": timing_summary([run for run in runs if run["phase"] == "warm"])},
               "perClip": rows}
-    for field in ("footprint", "memory", "platform", "host", "modelID", "modelArtifactSHA256",
+    for field in ("footprint", "memory", "platform", "host", "hardwareModel", "modelID", "providerName",
+                  "modelArtifactSHA256", "modelArtifact", "loadedModelFingerprint",
                   "runtimeBackend", "executionStatus", "warmupSeconds"):
         if field in report:
             result[field] = report[field]
