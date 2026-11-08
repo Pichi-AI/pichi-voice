@@ -2,6 +2,19 @@ import XCTest
 import UIKit
 @preconcurrency import AVFoundation
 
+private nonisolated enum PhysicalSpeakerLabelsPreflight {
+    struct Unverified: Error {}
+
+    static func validate(_ environment: [String: String], revision: String) throws {
+        guard revision.count == 40 && revision.allSatisfy({ "0123456789abcdef".contains($0) }),
+              environment["PICHI_PHYSICAL_SPEAKER_LABELS_PREFLIGHT"] == "1",
+              environment["PICHI_PHYSICAL_SPEAKER_PREFLIGHT_REVISION"] == revision,
+              environment["PICHI_PHYSICAL_SPEAKER_SESSION_MODE"] == "streaming",
+              let sessionID = environment["PICHI_PHYSICAL_SPEAKER_SESSION_ID"],
+              UUID(uuidString: sessionID) != nil else { throw Unverified() }
+    }
+}
+
 @MainActor private enum PhysicalControlReveal {
     struct NotVisible: Error {}
 
@@ -179,6 +192,36 @@ private nonisolated struct PhysicalTinySettingsReceipt: Codable {
 /// Opt-in tests of the installed app through its public UI. Audible fixtures belong
 /// to the runner; silent input uses only the app's explicit DEBUG capture adapter.
 final class MobilePhysicalReleaseUITests: XCTestCase {
+    func testPhysicalSpeakerPreflightAcceptsVerifiedCurrentSettingsAndSession() throws {
+        let revision = String(repeating: "a", count: 40)
+        try PhysicalSpeakerLabelsPreflight.validate([
+            "PICHI_PHYSICAL_SPEAKER_LABELS_PREFLIGHT": "1",
+            "PICHI_PHYSICAL_SPEAKER_PREFLIGHT_REVISION": revision,
+            "PICHI_PHYSICAL_SPEAKER_SESSION_MODE": "streaming",
+            "PICHI_PHYSICAL_SPEAKER_SESSION_ID": "00000000-0000-0000-0000-000000000001"
+        ], revision: revision)
+    }
+
+    func testPhysicalSpeakerPreflightRejectsMissingDisabledOrStaleEvidence() throws {
+        let revision = String(repeating: "a", count: 40)
+        let verified = [
+            "PICHI_PHYSICAL_SPEAKER_LABELS_PREFLIGHT": "1",
+            "PICHI_PHYSICAL_SPEAKER_PREFLIGHT_REVISION": revision,
+            "PICHI_PHYSICAL_SPEAKER_SESSION_MODE": "streaming",
+            "PICHI_PHYSICAL_SPEAKER_SESSION_ID": "00000000-0000-0000-0000-000000000001"
+        ]
+        for (key, invalid) in [("PICHI_PHYSICAL_SPEAKER_LABELS_PREFLIGHT", "0"),
+                               ("PICHI_PHYSICAL_SPEAKER_PREFLIGHT_REVISION", String(repeating: "b", count: 40)),
+                               ("PICHI_PHYSICAL_SPEAKER_SESSION_MODE", "afterRecording"),
+                               ("PICHI_PHYSICAL_SPEAKER_SESSION_ID", "invalid")] {
+            var changed = verified
+            changed[key] = invalid
+            XCTAssertThrowsError(try PhysicalSpeakerLabelsPreflight.validate(changed, revision: revision))
+            changed.removeValue(forKey: key)
+            XCTAssertThrowsError(try PhysicalSpeakerLabelsPreflight.validate(changed, revision: revision))
+        }
+    }
+
     @MainActor
     func testPhysicalControlRevealFindsTargetsInEitherDirection() throws {
         for target in [-2, 0, 2] {
@@ -221,10 +264,13 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
         try await PhysicalUITransitionWait.until(timeout: 10, condition: { app.frame.width > app.frame.height })
         let original = try tinySettingsRead(app, revision: revision)
-        for page in ["models", "privacy", "recording", "models"] {
+        for page in ["models", "privacy", "recording", "participants", "models"] {
             try openPhysicalSettingsPage("settings.\(page)", app: app, revision: revision)
             let detail = app.descendants(matching: .any)["settings.\(page).detail"].firstMatch
             try require(detail.waitForExistence(timeout: 10), "The selected Settings page must open")
+            if page == "participants" {
+                try verifyAutomaticParticipantResources(in: app, revision: revision, requireReady: false)
+            }
             capture("settings-navigation-\(page)", revision: revision)
             // Switching sections preserves the pushed Settings page; the next call
             // must also exercise the app's explicit Settings reselect-to-root contract.
@@ -410,6 +456,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             && UUID(uuidString: runID) != nil
             && environment["PICHI_PHYSICAL_TINY_SETTINGS_IDLE_PREFLIGHT"] == "1",
             "The parent must verify the frozen AUT, current backup, idle state and exclusive ownership")
+        if !restore { try PhysicalSpeakerLabelsPreflight.validate(environment, revision: revision) }
         try Task.checkCancellation()
         let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice")
         app.launchArguments = []
@@ -487,10 +534,8 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             // The concrete original profile comes from the parent's verified backup.
             // Reject a disagreement before the first mutation, never adopt it as a baseline.
             try verify(.original)
-            try openPhysicalSettingsPage("settings.recording", app: app, revision: revision)
-            let speakers = app.switches["recording.diarization"]
-            try tinySettingsReveal(speakers, app: app, revision: revision)
-            try require(speakers.value as? String == "1", "The unchanged participant setting must already satisfy the Tiny testcase")
+            try openPhysicalSettingsPage("settings.participants", app: app, revision: revision)
+            try verifyAutomaticParticipantResources(in: app, revision: revision)
             try openPhysicalSettingsPage("settings.models", app: app, revision: revision)
             try tinySettingsReveal(app.buttons["model.activate.whisper-tiny"], app: app, revision: revision)
             try require(app.buttons["model.activate.whisper-tiny"].isEnabled,
@@ -541,6 +586,25 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
 
     @MainActor private func tinySettingsReveal(_ element: XCUIElement, app: XCUIApplication, revision: String) throws {
         try reveal(element, in: app, revision: revision)
+    }
+
+    @MainActor private func verifyAutomaticParticipantResources(in app: XCUIApplication, revision: String,
+                                                               requireReady: Bool = true) throws {
+        try require(app.descendants(matching: .any)["settings.participants.detail"].firstMatch.exists,
+                    "Inspect automatic participant resources only on their ordinary Settings page")
+        let resources = app.descendants(matching: .any)["recording.requiredResources"].firstMatch
+        try require(resources.waitForExistence(timeout: 10), "Automatic participant resources must be present")
+        try reveal(resources, in: app, revision: revision)
+        for identifier in ["recording.diarization", "recording.streamingDiarization"] {
+            try require(!app.switches[identifier].exists, "Participant labels are automatic, not legacy UI switches")
+        }
+        if requireReady {
+            let ready = app.staticTexts.matching(NSPredicate(format: "label IN %@", [
+                "Speech detection and speaker labels are ready", "Определение речи и участников готово"
+            ])).firstMatch
+            try require(ready.waitForExistence(timeout: 180) && app.alerts.count == 0,
+                        "Automatic speech detection and participant resources must be ready")
+        }
     }
 
     @MainActor private func tinySettingsSelectedModel(_ app: XCUIApplication, revision: String) throws -> String {
@@ -1398,6 +1462,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"],
                                     "The frozen AUT source revision must be recorded")
         try require(!revision.isEmpty && revision != "working-tree", "A concrete AUT revision is required")
+        try PhysicalSpeakerLabelsPreflight.validate(environment, revision: revision)
         let runnerID = try XCTUnwrap(Bundle.main.bundleIdentifier)
         try require(runnerID.hasSuffix(".xctrunner"), "Playback must be owned by the UI test runner")
         let backgroundModes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
@@ -1432,10 +1497,8 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try require(app.switches["privacy.saveAudio"].value as? String == "0", "Save audio must already be OFF")
         try require(app.switches["privacy.pii"].value as? String == "1", "PII must already be ON")
         capture("04-strict-privacy", revision: revision)
-        try openPhysicalSettingsPage("settings.recording", app: app, revision: revision)
-        let speakers = app.switches["recording.diarization"]
-        try reveal(speakers, in: app, revision: revision)
-        try require(speakers.value as? String == "1", "Speaker labels must already be ON")
+        try openPhysicalSettingsPage("settings.participants", app: app, revision: revision)
+        try verifyAutomaticParticipantResources(in: app, revision: revision)
         capture("05-speaker-settings", revision: revision)
         try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
         if !app.buttons["meeting.start"].exists {

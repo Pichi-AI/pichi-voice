@@ -110,7 +110,8 @@ language/theme and asserts the existing UI choices rather than changing them:
 
 - Whisper Tiny is installed and selected.
 - Save audio is OFF and sensitive-data redaction is ON.
-- Speaker labels are ON.
+- Automatic participant resources are ready, and the parent has verified the
+  underlying enabled speaker-label policy as described below.
 - No existing meeting is recording or processing.
 
 English and Russian app action labels come from the current String Catalog; test
@@ -180,6 +181,28 @@ ordinary model/Privacy controls to prepare already installed Tiny, audio OFF and
 PII ON. It waits for PII to become active. No recording, account, voice profile,
 model deletion or OS prompt belongs to this driver.
 
+Participants are automatic in the current mobile UI. Neither prepare nor the
+recording body expects the removed `recording.diarization` switch. Both inspect
+Settings > Participants and its `recording.requiredResources` readiness message.
+Before either selector, the parent must verify the current saved/default
+`meetingSpeakerLabelsEnabled` value and a completed session from the same frozen
+AUT whose metadata has `speakerLabelsEnabled=true` and
+`speakerProcessingMode=streaming`. Set these values in the runner only:
+
+```text
+PICHI_PHYSICAL_SPEAKER_LABELS_PREFLIGHT=1
+PICHI_PHYSICAL_SPEAKER_PREFLIGHT_REVISION=<exact frozen AUT source SHA>
+PICHI_PHYSICAL_SPEAKER_SESSION_ID=<verified baseline session UUID>
+PICHI_PHYSICAL_SPEAKER_SESSION_MODE=streaming
+```
+
+These attestations are checked before preparation can mutate settings and before
+the recording body acts. They do not substitute for checking the new Tiny
+session's own speaker flags, mode and labels after capture. Restore deliberately
+does not require new speaker evidence, so missing evidence cannot prevent undoing
+the three owned setting changes. Two `testPhysicalSpeakerPreflight*` cases cover
+valid evidence and missing, disabled, mismatched or stale evidence.
+
 The physical owner must first preserve current data and verify the ordinary
 frozen AUT is running and idle. In the runner only, set `PICHI_TEST_REVISION` to
 that full source SHA, `PICHI_PHYSICAL_TINY_SETTINGS_IDLE_PREFLIGHT=1`,
@@ -213,6 +236,6 @@ without waiving visibility, enabled-state or prompt checks. Two
 outcomes. With `PICHI_PHYSICAL_SETTINGS_NAVIGATION=1`, the read-only
 `testPhysicalSettingsNavigationRevealsLandscapeRows` case also requires the ordinary
 idle preflight and exact AUT revision, rotates through XCTest's public orientation
-API, visits models/privacy/recording across section switches, checks the original
+API, visits models/privacy/recording/participants across section switches, checks the original
 model/audio/PII profile and returns to idle Recordings in landscape. It never
 starts capture or changes those settings; run it before the acoustic cases.
