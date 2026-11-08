@@ -43,7 +43,10 @@ final class MobileFirstRunWalkthroughUITests: XCTestCase {
         let kiosk = app.buttons["settings.kiosk"]
         reveal(kiosk); kiosk.tap(); settle(); capture("03-restricted-mode")
         backToSettings()
-        app.buttons["settings.recording"].tap(); settle(); capture("04-recording-settings")
+        let recordingSettings = app.buttons["settings.recording"]
+        for _ in 0..<4 where !recordingSettings.isHittable { app.collectionViews.firstMatch.swipeDown() }
+        XCTAssertTrue(recordingSettings.isHittable)
+        recordingSettings.tap(); settle(); capture("04-recording-settings")
         backToSettings()
         open("meetings")
         XCTAssertFalse(app.buttons["meeting.settings"].exists)
