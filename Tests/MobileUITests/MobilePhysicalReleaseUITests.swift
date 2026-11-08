@@ -1279,6 +1279,17 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             cancelled = true
         })) { XCTAssertTrue($0 is CancellationError) }
         XCTAssertEqual(gestures, 1)
+        gestures = 0
+        cancelled = false
+        XCTAssertThrowsError(try PhysicalControlReveal.run(ready: {
+            // Model cancellation delivered while the native readiness query runs.
+            cancelled = true
+            return false
+        }, scroll: { _, _ in
+            if cancelled { throw CancellationError() }
+            gestures += 1
+        })) { XCTAssertTrue($0 is CancellationError) }
+        XCTAssertEqual(gestures, 0, "A late cancellation check must precede the actual UI event")
     }
 
     @MainActor
@@ -2826,6 +2837,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         #else
         let environment = ProcessInfo.processInfo.environment
         guard environment["PICHI_PHYSICAL_SETUP_GUEST_COMPLETION"] == "1" else { throw XCTSkip("Enable only the owned iPad guest completion") }
+        try Task.checkCancellation()
         let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
         let selected = try PhysicalSetupContinuationAuthorization.selectGuest(environment, revision: revision)
         try require(UIDevice.current.userInterfaceIdiom == .pad, "Guest completion never admits a phone")
@@ -2869,14 +2881,27 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     && emptyCredential(app.secureTextFields["account.legacy.password"]),
                     "Guest admission requires the exact idle final page with empty, unfocused credential fields")
         let guest = app.buttons["account.continueAsGuest"]
-        try reveal(guest, in: app, revision: revision, container: app.scrollViews.firstMatch)
+        try Task.checkCancellation()
+        try PhysicalControlReveal.run(ready: {
+            try Task.checkCancellation()
+            return guest.exists && guest.isHittable
+        }, scroll: { upward, _ in
+            let scroll = app.scrollViews.firstMatch
+            try require(idle() && scroll.exists && scroll.isHittable, "Reveal only the idle final account page")
+            try Task.checkCancellation()
+            if upward { scroll.swipeUp() } else { scroll.swipeDown() }
+        })
         try require(idle() && emptyCredential(app.textFields["account.legacy.email"])
                     && emptyCredential(app.secureTextFields["account.legacy.password"]), "Never discard entered credential state")
+        try Task.checkCancellation()
         try Data("claimed".utf8).write(to: consumedURL, options: .withoutOverwriting)
         capture("guest-completion-01-empty-account-page", revision: revision)
         try require(emptyCredential(app.textFields["account.legacy.email"]) && emptyCredential(app.secureTextFields["account.legacy.password"]),
                     "Credentials must still be empty immediately before the guest action")
-        try tap(guest, "Use the ordinary Continue as guest action and its joined local setup service flow")
+        try require(guest.waitForExistence(timeout: 5) && guest.isHittable && guest.isEnabled,
+                    "The ordinary Continue as guest action must be ready")
+        try Task.checkCancellation()
+        guest.tap()
         let deadline = ProcessInfo.processInfo.systemUptime + 120
         while true {
             try Task.checkCancellation()
@@ -3719,6 +3744,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         let deadline = ProcessInfo.processInfo.systemUptime + timeout
         var grantedPrompt = false
         while ProcessInfo.processInfo.systemUptime < deadline {
+            try Task.checkCancellation()
             if let revision = microphonePromptRevision {
                 let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
                 let alerts = springboard.alerts.count > 0 ? springboard.alerts : app.alerts
@@ -3737,7 +3763,11 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     let buttons = alert.buttons.allElementsBoundByIndex
                     let index = try XCTUnwrap(PhysicalMicrophonePrompt.grantIndex(texts: texts, buttons: buttons.map(\.label)),
                                              "Reject every prompt except the exact Pichi Voice microphone purpose and unique grant action")
-                    try tap(buttons[index], "Grant only the explicitly authorized Pichi Voice microphone permission after owned Start")
+                    let grant = buttons[index]
+                    try require(grant.waitForExistence(timeout: 5) && grant.isHittable && grant.isEnabled,
+                                "Only the exact authorized microphone grant control may receive the event")
+                    try Task.checkCancellation()
+                    grant.tap()
                     try require(alert.waitForNonExistence(timeout: 5), "The owned microphone prompt must close normally")
                     grantedPrompt = true
                     print("[PHYSICAL_MICROPHONE_PROMPT] exactOwnedPromptGranted=true revision=\(revision)")

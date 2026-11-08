@@ -602,6 +602,9 @@ supported Pichi Voice microphone title, the app's exact English/Russian micropho
 usage text, and exactly one known Allow/OK plus one deny choice. It handles at most
 one such prompt. Every other app, purpose, unknown/duplicate button or additional
 prompt fails; password, Touch ID and unrelated OS prompts are never accepted.
+Guest reveal/receipt claim and both guest/microphone events check cancellation
+before acting, including after native readiness queries. A pre-cancelled attempt
+sends no event; cancellation after delivered Start retains normal owned cleanup.
 Without the opt-in, existing permission preflight behavior is unchanged. The normal
 parent checkpoints still observe actual recording before external synthetic speech.
 
