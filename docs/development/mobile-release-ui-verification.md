@@ -65,6 +65,18 @@ to the foreground and activating its `.playback` audio session. Preparation can 
 calling it earlier can fail with an iOS background activation error before the
 AUT is touched. Keep preparation inside the existing owned playback cleanup.
 
+The GigaAM system-transition selector waits up to ten seconds for each actual
+foreground/background transition before its fixed background observation. A
+wait does not accept a suspended or terminated recording app. It logs the
+expected and observed state and the first failure before cleanup, so a cleanup
+failure cannot hide the original boundary. Its owned Stop requires an enabled,
+hittable control and observes that control becoming disabled or disappearing.
+That is early UI admission evidence only; the normal completion check must still
+join and expose the transcript. Cancellation joins a separate cleanup task;
+unresolved cleanup is explicitly reported for the physical owner. Three
+`testPhysicalTransitionWait*` cases cover delayed state, deadline and
+cancellation with a deterministic clock, separately from physical acceptance.
+
 ## Explicit gates and preconditions
 
 Set these variables in the **UI runner** test entry only:

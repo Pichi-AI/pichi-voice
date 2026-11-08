@@ -2,6 +2,22 @@ import XCTest
 import UIKit
 @preconcurrency import AVFoundation
 
+@MainActor private enum PhysicalUITransitionWait {
+    struct TimedOut: Error {}
+
+    static func until(timeout: TimeInterval, condition: () -> Bool,
+                      now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+                      pause: () async throws -> Void = { try await Task.sleep(nanoseconds: 250_000_000) }) async throws {
+        let deadline = now() + timeout
+        while true {
+            try Task.checkCancellation()
+            if condition() { return }
+            guard now() < deadline else { throw TimedOut() }
+            try await pause()
+        }
+    }
+}
+
 private nonisolated struct PhysicalTinySettingsProfile: Codable, Equatable, Sendable {
     var model: String
     var saveAudio: Bool
@@ -106,6 +122,44 @@ private nonisolated struct PhysicalTinySettingsReceipt: Codable {
 /// Opt-in tests of the installed app through its public UI. Audible fixtures belong
 /// to the runner; silent input uses only the app's explicit DEBUG capture adapter.
 final class MobilePhysicalReleaseUITests: XCTestCase {
+    @MainActor
+    func testPhysicalTransitionWaitObservesDelayedState() async throws {
+        var time: TimeInterval = 0
+        var observations = 0
+        try await PhysicalUITransitionWait.until(timeout: 3, condition: {
+            observations += 1
+            return time == 2
+        }, now: { time }, pause: { time += 1 })
+        XCTAssertEqual(time, 2)
+        XCTAssertEqual(observations, 3)
+    }
+
+    @MainActor
+    func testPhysicalTransitionWaitRejectsMissingStateAtDeadline() async throws {
+        var time: TimeInterval = 0
+        do {
+            try await PhysicalUITransitionWait.until(timeout: 2, condition: { false },
+                                                    now: { time }, pause: { time += 1 })
+            XCTFail("A missing background or Stop transition must fail")
+        } catch is PhysicalUITransitionWait.TimedOut {
+            XCTAssertEqual(time, 2)
+        }
+    }
+
+    @MainActor
+    func testPhysicalTransitionWaitPreservesCancellation() async throws {
+        let work = Task { @MainActor in
+            do {
+                try await PhysicalUITransitionWait.until(timeout: 10, condition: { false },
+                    pause: { withUnsafeCurrentTask { $0?.cancel() } })
+                return false
+            } catch is CancellationError { return true }
+            catch { return false }
+        }
+        let cancelled = await work.value
+        XCTAssertTrue(cancelled)
+    }
+
     @MainActor
     func testPhysicalPrepareTinyStrictSettings() async throws {
         try await physicalTinySettings(restore: false)
@@ -416,6 +470,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         }
         do {
             app.activate()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "initial-foreground")
             try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
             try require(!app.buttons["meeting.stop"].exists
                 && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
@@ -424,7 +479,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             capture("background-01-gigaam", revision: revision)
             let runner = XCUIApplication(bundleIdentifier: try XCTUnwrap(Bundle.main.bundleIdentifier))
             runner.activate()
-            try require(runner.state == .runningForeground, "The runner must prepare playback in foreground")
+            try await waitForPhysicalAppState(runner, .runningForeground, phase: "fixture-foreground")
             try audio.setCategory(.playback, mode: .default, options: .mixWithOthers)
             try audio.setActive(true)
             // prepareToPlay can activate the session; it follows foreground admission
@@ -436,10 +491,11 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(player.prepareToPlay(), "Prepare approved synthetic speech in the phone runner")
             try require(player.play(), "Start the owned phone speaker fixture")
             app.activate()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "recording-foreground")
             try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
             try reveal(app.buttons["meeting.start"], in: app, revision: revision)
-            try tap(app.buttons["meeting.start"], "Start normal microphone recording")
             ownsRecording = true
+            try tap(app.buttons["meeting.start"], "Start normal microphone recording")
             try await waitForVisibleRecording(in: app, timeout: 90)
             try await observeVisibleRecording(in: app, player: player, seconds: 6)
             capture("background-02-recording", revision: revision)
@@ -454,50 +510,97 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
                 .press(forDuration: 0.05, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)))
             app.activate()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "after-notifications")
             try verifyVisibleRecording(in: app)
             try require(visibleTimerSeconds(in: app) > timer, "Recording must survive Notification Center")
             capture("background-04-after-notifications", revision: revision)
             timer = try visibleTimerSeconds(in: app)
 
             XCUIDevice.shared.press(.home)
-            try require(app.state == .runningBackground, "The actual app must enter background on Home")
+            try await waitForPhysicalAppState(app, .runningBackground, phase: "home-background")
             try await Task.sleep(nanoseconds: 8_000_000_000)
             try require(app.state == .runningBackground && player.isPlaying, "Microphone app and fixture must remain alive on Home")
             capture("background-05-home", revision: revision)
             app.activate()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "after-home")
             try verifyVisibleRecording(in: app)
             try require(visibleTimerSeconds(in: app) > timer, "Recording must survive Home")
             timer = try visibleTimerSeconds(in: app)
 
             let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
             settings.activate()
-            try require(settings.state == .runningForeground && app.state == .runningBackground,
-                "Settings must really replace the recording UI")
+            try await waitForPhysicalAppState(settings, .runningForeground, phase: "settings-foreground")
+            try await waitForPhysicalAppState(app, .runningBackground, phase: "settings-background")
             try await Task.sleep(nanoseconds: 8_000_000_000)
+            try require(settings.state == .runningForeground && app.state == .runningBackground && player.isPlaying,
+                "Settings must remain in foreground while recording and the fixture stay alive")
             capture("background-06-other-app", revision: revision)
             app.activate()
+            try await waitForPhysicalAppState(app, .runningForeground, phase: "after-settings")
             try verifyVisibleRecording(in: app)
             try require(visibleTimerSeconds(in: app) > timer, "Recording must survive another app")
             try require(liveTextCharacterCount(in: app) > 0, "Physical synthetic speech must produce visible captions")
             capture("background-07-returned", revision: revision)
             player.stop()
-            try tap(app.buttons["meeting.stop"], "Stop only this test's recording")
+            try await requestPhysicalOwnedStop(in: app)
             try await waitForCompletedTranscript(in: app, timeout: 180)
             ownsRecording = false
             capture("background-08-completed", revision: revision)
             try selectModel(priorModel)
         } catch {
+            let primaryError = error
+            let failure = error as NSError
+            print("[PHYSICAL_GIGAAM] primary_error domain=\(failure.domain) code=\(failure.code) detail=\(failure.localizedDescription)")
             ownedPlayer?.stop()
-            app.activate()
-            if ownsRecording, app.buttons["meeting.stop"].exists {
-                app.buttons["meeting.stop"].tap()
-                try? await waitForCompletedTranscript(in: app, timeout: 120)
+            // Cleanup must still join when the original test task was cancelled.
+            let cleanup = Task { @MainActor in
+                do {
+                    app.activate()
+                    try await self.waitForPhysicalAppState(app, .runningForeground, phase: "cleanup-foreground")
+                    if ownsRecording {
+                        if app.buttons["meeting.stop"].exists && app.buttons["meeting.stop"].isEnabled {
+                            try await self.requestPhysicalOwnedStop(in: app)
+                        }
+                        try await self.waitForCompletedTranscript(in: app, timeout: 120)
+                        ownsRecording = false
+                    }
+                    self.capture("background-failure", revision: revision)
+                    if !app.buttons["meeting.stop"].exists { try selectModel(priorModel) }
+                    print("[PHYSICAL_GIGAAM] cleanup_joined=true")
+                } catch {
+                    let cleanupError = error as NSError
+                    print("[PHYSICAL_GIGAAM] cleanup_requires_parent_inspection domain=\(cleanupError.domain) code=\(cleanupError.code) detail=\(cleanupError.localizedDescription)")
+                    self.capture("background-cleanup-unresolved", revision: revision)
+                }
             }
-            capture("background-failure", revision: revision)
-            if !app.buttons["meeting.stop"].exists { try? selectModel(priorModel) }
-            throw error
+            await cleanup.value
+            throw primaryError
         }
         #endif
+    }
+
+    @MainActor private func waitForPhysicalAppState(_ app: XCUIApplication, _ expected: XCUIApplication.State,
+                                                   phase: String) async throws {
+        print("[PHYSICAL_GIGAAM] phase=\(phase) initial_state=\(app.state.rawValue) expected=\(expected.rawValue)")
+        do {
+            try await PhysicalUITransitionWait.until(timeout: 10, condition: { app.state == expected })
+        } catch {
+            print("[PHYSICAL_GIGAAM] phase=\(phase) failed_state=\(app.state.rawValue)")
+            throw error
+        }
+        print("[PHYSICAL_GIGAAM] phase=\(phase) observed_state=\(app.state.rawValue)")
+    }
+
+    @MainActor private func requestPhysicalOwnedStop(in app: XCUIApplication) async throws {
+        let stop = app.buttons["meeting.stop"]
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+            app.state == .runningForeground && app.alerts.count == 0
+                && stop.exists && stop.isEnabled && stop.isHittable
+        })
+        try tap(stop, "Stop only this test's recording through the ready public control")
+        // Disabled/gone is early UI admission evidence, never proof that capture joined.
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: { !stop.exists || !stop.isEnabled })
+        print("[PHYSICAL_GIGAAM] stop_control_transition_observed=true capture_join_not_yet_proven=true")
     }
 
     /// Observes an already running frozen Release after the parent preserves its data.
