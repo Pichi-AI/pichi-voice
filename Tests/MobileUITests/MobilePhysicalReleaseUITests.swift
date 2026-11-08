@@ -172,6 +172,42 @@ private nonisolated enum PhysicalPlaybackPosition {
     }
 }
 
+private nonisolated struct PhysicalPlaybackPauseObservation {
+    struct StillAdvancing: Error {}
+    let initialPosition: Int
+    let startedAt: TimeInterval
+    private var previousPosition: Int
+    private var previousTime: TimeInterval
+    private var stablePosition: Int?
+    private var stableSince: TimeInterval?
+
+    init(position: Int, now: TimeInterval) {
+        initialPosition = position
+        previousPosition = position
+        startedAt = now
+        previousTime = now
+    }
+
+    mutating func observe(position: Int, now: TimeInterval) throws -> Bool {
+        guard initialPosition >= 0, startedAt.isFinite, now.isFinite, now >= previousTime,
+              position >= previousPosition,
+              position == initialPosition || (initialPosition < Int.max && position == initialPosition + 1) else {
+            throw StillAdvancing()
+        }
+        previousPosition = position
+        previousTime = now
+        // Match the saved-playback test's bounded queued-callback allowance. A
+        // running player crosses more than one displayed boundary in 3.5 seconds.
+        if now - startedAt < 3.5 { return false }
+        if stablePosition == nil {
+            stablePosition = position
+            stableSince = now
+        }
+        guard position == stablePosition, let stableSince else { throw StillAdvancing() }
+        return now - stableSince >= 2
+    }
+}
+
 @MainActor private enum PhysicalOwnedRecordingCleanup {
     struct StopAndJoinFailure: Error {
         let stopError: Error
@@ -481,6 +517,38 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         for value in [nil, "", "0:3", "0:60", "-1:00", "1:00 / 2:00", "x:00", "99999999999999999999999:00"] {
             XCTAssertNil(PhysicalPlaybackPosition.seconds(value))
         }
+    }
+
+    func testPhysicalPlaybackPauseAllowsOneQueuedBoundaryThenRequiresTwoStableSeconds() throws {
+        var observation = PhysicalPlaybackPauseObservation(position: 10, now: 0)
+        XCTAssertFalse(try observation.observe(position: 10, now: 0.1))
+        XCTAssertFalse(try observation.observe(position: 11, now: 0.25))
+        XCTAssertFalse(try observation.observe(position: 11, now: 3.5))
+        XCTAssertFalse(try observation.observe(position: 11, now: 5.49))
+        XCTAssertTrue(try observation.observe(position: 11, now: 5.5))
+    }
+
+    func testPhysicalPlaybackPauseAcceptsNoQueuedUpdateAndRejectsOvershootOrReversal() throws {
+        var stable = PhysicalPlaybackPauseObservation(position: 10, now: 0)
+        XCTAssertFalse(try stable.observe(position: 10, now: 3.5))
+        XCTAssertTrue(try stable.observe(position: 10, now: 5.5))
+        var advancing = PhysicalPlaybackPauseObservation(position: 10, now: 0)
+        XCTAssertFalse(try advancing.observe(position: 11, now: 0.25))
+        XCTAssertThrowsError(try advancing.observe(position: 12, now: 1.25))
+        var reversing = PhysicalPlaybackPauseObservation(position: 10, now: 0)
+        XCTAssertFalse(try reversing.observe(position: 11, now: 0.25))
+        XCTAssertThrowsError(try reversing.observe(position: 10, now: 0.5))
+    }
+
+    func testPhysicalPlaybackPauseRejectsNeverStableWindowAndInvalidClock() throws {
+        var neverStable = PhysicalPlaybackPauseObservation(position: 10, now: 0)
+        XCTAssertFalse(try neverStable.observe(position: 10, now: 3.5))
+        // Even the otherwise allowed one-second boundary fails after settling.
+        XCTAssertThrowsError(try neverStable.observe(position: 11, now: 4))
+        var regressingClock = PhysicalPlaybackPauseObservation(position: 10, now: 1)
+        XCTAssertThrowsError(try regressingClock.observe(position: 10, now: 0.5))
+        var invalidClock = PhysicalPlaybackPauseObservation(position: 10, now: 0)
+        XCTAssertThrowsError(try invalidClock.observe(position: 10, now: .infinity))
     }
 
     func testPhysicalSpeakerPreflightAcceptsVerifiedCurrentSettingsAndSession() throws {
@@ -1929,15 +1997,19 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try await PhysicalUITransitionWait.until(timeout: 5, condition: {
             firstButton(in: app, labels: playLabels)?.isEnabled == true
         })
-        let paused = try XCTUnwrap(PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String))
-        let pauseDeadline = ProcessInfo.processInfo.systemUptime + 2
-        repeat {
+        let pauseStart = try XCTUnwrap(PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String))
+        var pauseObservation = PhysicalPlaybackPauseObservation(position: pauseStart, now: ProcessInfo.processInfo.systemUptime)
+        let pauseDeadline = ProcessInfo.processInfo.systemUptime + 10
+        while true {
             try require(completedReadOnlyTranscriptVisible(in: app, title: selected.title)
-                        && firstButton(in: app, labels: playLabels)?.isEnabled == true
-                        && PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String) == paused,
-                        "Paused native playback must keep its observed position stable")
+                        && firstButton(in: app, labels: playLabels)?.isEnabled == true,
+                        "The native player must remain paused throughout settling and stable observation")
+            let position = try XCTUnwrap(PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String))
+            if try pauseObservation.observe(position: position, now: ProcessInfo.processInfo.systemUptime) { break }
+            try require(ProcessInfo.processInfo.systemUptime < pauseDeadline, "Paused playback did not settle within its bound")
             try await Task.sleep(nanoseconds: 250_000_000)
-        } while ProcessInfo.processInfo.systemUptime < pauseDeadline
+        }
+        let paused = try XCTUnwrap(PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String))
         capture("owned-playback-03-paused-stable", revision: revision)
         try tap(try XCTUnwrap(firstButton(in: app, labels: playLabels)), "Resume only the owned native audio player")
         try await PhysicalUITransitionWait.until(timeout: 10, condition: {

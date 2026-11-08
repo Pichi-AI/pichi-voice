@@ -360,11 +360,16 @@ on failure. Retry only with fresh verification and a new run UUID.
 The test opens only the unique exact history UUID with its expected title. It
 uses the existing paragraph audio control, native slider value and English/Russian
 transport labels to observe progression, stable pause, resumed progression and
-player closure. Only after these pass does it return to history, partially reveal
+player closure. Pause first allows at most one queued displayed-second boundary
+during 3.5 seconds, matching the existing saved-playback test, then requires a
+separate two-second window with no position change. Overshoot, reversal, lost
+paused state or movement during that stable window fails before deletion. Only after these pass does it return to history, partially reveal
 the exact `history.delete.<session UUID>` action, and delete that row. It confirms
 only the known recording-deletion dialog if one appears, then requires the history
 list with that exact row absent. Failure closes only its owned player when safe;
 it does not delete the session as cleanup. Preserve the independent session/audio
 backup and native screenshots. Four `testPhysicalOwnedPlayback*` and
 `testPhysicalPlaybackPosition*` logical cases cover receipt admission and native
-time parsing; they do not establish physical playback or deletion acceptance.
+time parsing. Three `testPhysicalPlaybackPause*` cases cover a queued integer
+boundary, overshoot/reversal and failure to remain stable. These logical cases do
+not establish physical playback or deletion acceptance.
