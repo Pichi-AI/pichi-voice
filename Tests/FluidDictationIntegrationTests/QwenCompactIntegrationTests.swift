@@ -296,6 +296,29 @@ final class QwenCompactIntegrationTests: XCTestCase {
     }
 
     #if os(macOS)
+    func testFreshMacDraftResolvesAutomaticLanguageAndKeepsStoredChoice() throws {
+        let suite = "QwenMacDraft.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.meetingRecordingDefaults = MeetingRecordingDefaults(isConfigured: true, mode: .inRoom,
+            applicationBundleIdentifier: nil, microphoneCaptureDeviceID: "synthetic",
+            microphoneCoreAudioUID: "synthetic", microphoneRole: .unknown, languageCode: "ru")
+        settings.selectedSpeechModel = .qwen3Asr06BQ4
+        var draft = MeetingTranscriptionSetupDraft(settings: settings)
+        XCTAssertEqual(draft.languageCode, "auto")
+        XCTAssertTrue(draft.supportsLanguageSelection(for: SettingsStore.SpeechModel.qwen3Asr06BQ4.rawValue))
+        XCTAssertEqual(settings.meetingRecordingDefaults.languageCode, "ru")
+        draft.languageCode = "en"
+        XCTAssertFalse(draft.supportsLanguageSelection(for: SettingsStore.SpeechModel.qwen3Asr06BQ4.rawValue),
+            "A user-supplied unsupported value cannot be saved as a valid language")
+        draft.reconcileLanguage(for: SettingsStore.SpeechModel.qwen3Asr06BQ4.rawValue)
+        XCTAssertEqual(draft.languageCode, "auto")
+        settings.selectedSpeechModel = .gigaam
+        XCTAssertEqual(MeetingTranscriptionSetupDraft(settings: settings).languageCode, "ru")
+        XCTAssertEqual(settings.meetingRecordingDefaults.languageCode, "ru")
+    }
+
     func testMenuBarFreshQwenRequestUsesAutomaticLanguageWithoutRewritingSavedDefaults() throws {
         for preferred in [nil, "ru", "en"] as [String?] {
             let defaults = MeetingRecordingDefaults(isConfigured: true, mode: .inRoom,

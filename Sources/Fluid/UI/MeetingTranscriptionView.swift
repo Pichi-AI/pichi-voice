@@ -62,6 +62,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
             browserDetectionEnabled: settings.meetingAutoDetectBrowserEnabled,
             fallbackLanguageCode: PichiMeetingProviderFactory.defaultLanguageCode(for: settings.selectedSpeechModel.rawValue) ?? "ru"
         )
+        self.reconcileLanguage(for: settings.selectedSpeechModel.rawValue)
     }
 
     init(
@@ -82,6 +83,18 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         self.selectedApplicationID = nil
         // Left unset here: selectPreferredMicrophone decides once identities load.
         self.selectedMicrophoneID = nil
+    }
+
+    /// A newly selected model resolves this draft's default without changing saved preferences.
+    mutating func reconcileLanguage(for modelID: String) {
+        self.languageCode = PichiMeetingProviderFactory.registeredRecordingLanguageCode(for: modelID,
+            preferredLanguageCode: self.languageCode) ?? self.languageCode
+    }
+
+    func supportsLanguageSelection(for modelID: String) -> Bool {
+        let codes = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID)
+            ?? VoiceEngineLanguageCatalog.parakeetV3LanguageIDs
+        return codes.contains(self.languageCode)
     }
 
     mutating func chooseApplication(_ application: MeetingApplicationIdentity?) {
@@ -616,8 +629,11 @@ struct MeetingTranscriptionView: View {
         .task { self.prepareMeetingPresentation() }
         .onChange(of: self.settings.selectedSpeechModel) { _, _ in
             guard self.privateState.capture() != nil else { return }
-            if self.settings.meetingRecordingDefaults.languageCode == nil, self.coordinator.isQuiescent {
-                self.privateState.setupDraft.languageCode = PichiMeetingProviderFactory.defaultLanguageCode(for: self.settings.selectedSpeechModel.rawValue) ?? "ru"
+            if self.coordinator.isQuiescent {
+                if self.settings.meetingRecordingDefaults.languageCode == nil {
+                    self.privateState.setupDraft.languageCode = PichiMeetingProviderFactory.defaultLanguageCode(for: self.settings.selectedSpeechModel.rawValue) ?? "ru"
+                }
+                self.privateState.setupDraft.reconcileLanguage(for: self.settings.selectedSpeechModel.rawValue)
             }
             self.privateState.run { _ in await self.refreshModelReadiness() }
         }
@@ -1359,7 +1375,8 @@ struct MeetingTranscriptionView: View {
         let configuration = MeetingCaptureConfiguration(
             mode: session.mode,
             title: session.defaultTitleBase ?? session.title,
-            languageCode: session.languageCode,
+            languageCode: PichiMeetingProviderFactory.registeredRecordingLanguageCode(
+                for: self.settings.selectedSpeechModel.rawValue, preferredLanguageCode: session.languageCode) ?? session.languageCode,
             platform: session.platform,
             application: application,
             applicationAudioScope: session.applicationAudioScope,

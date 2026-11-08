@@ -98,8 +98,20 @@ struct MeetingRecordingSettingsSheet: View {
         return section == .integrations && !hasUnsavedChanges ? "Close" : "Cancel"
     }
 
+    private var recordingLanguageCodes: Set<String> {
+        PichiMeetingProviderFactory.registeredLanguageCodes(for: self.settings.selectedSpeechModel.rawValue)
+            ?? VoiceEngineLanguageCatalog.parakeetV3LanguageIDs
+    }
+
+    private var recordingLanguages: [VoiceEngineLanguage] {
+        let registered = PichiMeetingProviderFactory.registeredLanguageCodes(for: self.settings.selectedSpeechModel.rawValue) != nil
+        let models: [SettingsStore.SpeechModel] = registered ? [self.settings.selectedSpeechModel] : [.parakeetTDT]
+        return VoiceEngineLanguageCatalog.allLanguages(availableModels: models)
+            .filter { self.recordingLanguageCodes.contains($0.id) }
+    }
+
     private var canSave: Bool {
-        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.draft.languageCode) else { return false }
+        guard self.draft.supportsLanguageSelection(for: self.settings.selectedSpeechModel.rawValue) else { return false }
         guard self.microphones.contains(where: { $0.id == self.draft.selectedMicrophoneID }) else { return false }
         return self.draft.mode == .inRoom
             || self.draft.applicationAudioScope == .systemAudio
@@ -311,20 +323,31 @@ struct MeetingRecordingSettingsSheet: View {
             FluidManagementGroup(title: PichiLocalization.text("Transcript language")) {
                 MeetingAdaptiveSetupRow(
                     title: PichiLocalization.text("Language"),
-                    detail: PichiLocalization.text("Models with meeting captions show them in their supported languages. Other models show English live captions on Apple Silicon only.")
+                    detail: self.recordingLanguageCodes == ["auto"] ? nil
+                        : PichiLocalization.text("Models with meeting captions show them in their supported languages. Other models show English live captions on Apple Silicon only.")
                 ) {
-                    Menu {
-                        Picker("Meeting language", selection: self.$draft.languageCode) {
-                            ForEach(VoiceEngineLanguageCatalog.allLanguages(availableModels: [.parakeetTDT])) { language in
-                                Text(language.localizedDisplayName(locale: self.locale)).tag(language.id)
+                    if self.recordingLanguageCodes == ["auto"] {
+                        Text(PichiLocalization.text("Automatic"))
+                            .accessibilityLabel("Meeting transcript language")
+                    } else {
+                        Menu {
+                            Picker("Meeting language", selection: self.$draft.languageCode) {
+                                if self.recordingLanguageCodes.contains("auto") {
+                                    Text(PichiLocalization.text("Automatic")).tag("auto")
+                                }
+                                ForEach(self.recordingLanguages) { language in
+                                    Text(language.localizedDisplayName(locale: self.locale)).tag(language.id)
+                                }
                             }
+                            .pickerStyle(.inline)
+                        } label: {
+                            Text(self.draft.languageCode == "auto" ? PichiLocalization.text("Automatic")
+                                : self.recordingLanguages.first(where: { $0.id == self.draft.languageCode })?.localizedDisplayName(locale: self.locale)
+                                    ?? PichiLocalization.text("Choose language…"))
                         }
-                        .pickerStyle(.inline)
-                    } label: {
-                        Text(VoiceEngineLanguageCatalog.language(id: self.draft.languageCode, availableModels: [.parakeetTDT])?.localizedDisplayName(locale: self.locale) ?? PichiLocalization.text("Choose language…"))
+                        .fluidDropdownStyle(fillsWidth: true)
+                        .accessibilityLabel("Meeting transcript language")
                     }
-                    .fluidDropdownStyle(fillsWidth: true)
-                    .accessibilityLabel("Meeting transcript language")
                 }
             }
 
