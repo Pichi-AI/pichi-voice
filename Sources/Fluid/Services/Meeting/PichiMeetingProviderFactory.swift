@@ -287,6 +287,17 @@ enum PichiMeetingProviderFactory {
         self.registrations[modelID]?.defaultLanguageCode
     }
 
+    /// Resolve fresh defaults against registered language capabilities. Explicit pinned
+    /// configurations are still validated as supplied; unknown providers keep caller policy.
+    nonisolated static func registeredRecordingLanguageCode(for modelID: String,
+                                                            preferredLanguageCode: String?) -> String? {
+        guard let registration = self.registrations[modelID] else { return nil }
+        if let preferredLanguageCode, registration.descriptor.supportedLanguageCodes.contains(preferredLanguageCode) {
+            return preferredLanguageCode
+        }
+        return registration.defaultLanguageCode
+    }
+
     static func registeredModelsExistOnDisk(for modelID: String) -> Bool? {
         self.registrations[modelID]?.modelsExistOnDisk()
     }

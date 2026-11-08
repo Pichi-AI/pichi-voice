@@ -141,9 +141,8 @@ final class AppServices: ObservableObject {
                 let speakerLabelsEnabled = settings.meetingSpeakerLabelsEnabled
                 let speakerProcessingMode = settings.recordingSpeakerProcessingMode(for: mode)
                 let piiRedactionEnabled = settings.meetingPIIRedactionRequested
-                let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) ?? []
-                let language = preferences.languageCode.flatMap { supported.contains($0) ? $0 : nil }
-                    ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
+                let language = PichiMeetingProviderFactory.registeredRecordingLanguageCode(
+                    for: modelID, preferredLanguageCode: preferences.languageCode) ?? "auto"
                 let microphone = try await resolveMicrophone(preferences.microphoneCoreAudioUID)
                 try Task.checkCancellation()
                 guard settings.selectedSpeechModel.rawValue == modelID,

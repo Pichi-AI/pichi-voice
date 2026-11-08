@@ -10,6 +10,7 @@ extension AppServices {
         let configuration = try await discovery.perform {
             guard SettingsStore.shared.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
             let defaults = SettingsStore.shared.meetingRecordingDefaults
+            let selectedModelID = SettingsStore.shared.selectedSpeechModel.rawValue
             let target = defaults.mode == .onlineCall && defaults.effectiveApplicationAudioScope == .selectedApplication && defaults.usesAutomaticApplication ? self.meetingAutomaticTarget : nil
             if defaults.mode == .onlineCall, defaults.effectiveApplicationAudioScope == .selectedApplication, defaults.usesAutomaticApplication, target == nil {
                 throw MeetingCaptureError.applicationNotSelected
@@ -17,10 +18,12 @@ extension AppServices {
             let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID
             let microphones = await MeetingCaptureSourceCatalog.microphoneSnapshot()
             try Task.checkCancellation()
-            guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
+            guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+                  SettingsStore.shared.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
             let applications = try await defaults.mode == .onlineCall && defaults.effectiveApplicationAudioScope == .selectedApplication ? MeetingCaptureSourceCatalog.availableApplications() : []
             try Task.checkCancellation()
-            guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
+            guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+                  SettingsStore.shared.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
             // Never capture a replacement app when detection changed during source discovery.
             if let target, target != self.meetingAutomaticTarget {
                 throw MeetingCaptureError.applicationUnavailable(target.bundleIdentifier)
@@ -30,7 +33,8 @@ extension AppServices {
                 target: target,
                 microphones: microphones,
                 applications: applications,
-                preferredInputUID: preferredInputUID
+                preferredInputUID: preferredInputUID,
+                selectedModelID: selectedModelID
             )
             return SettingsStore.shared.applyingMeetingRecordingPreferences(to: configuration)
         }
@@ -45,7 +49,8 @@ extension AppServices {
         target: MeetingAutoDetector.ResolvedTarget?,
         microphones: MeetingMicrophoneCatalogSnapshot,
         applications: [MeetingApplicationIdentity],
-        preferredInputUID: String?
+        preferredInputUID: String?,
+        selectedModelID: String? = nil
     ) throws -> MeetingCaptureConfiguration {
         let savedMicrophone = defaults.savedMicrophone(in: microphones.identities)
         let selection = MeetingMicrophonePreselection.select(
@@ -70,7 +75,10 @@ extension AppServices {
         return MeetingCaptureConfiguration(
             mode: defaults.mode,
             title: MeetingTranscriptionSetupDraft.defaultTitle(mode: defaults.mode, applicationDisplayName: application?.displayName),
-            languageCode: defaults.languageCode ?? "en",
+            languageCode: selectedModelID.flatMap {
+                PichiMeetingProviderFactory.registeredRecordingLanguageCode(for: $0,
+                    preferredLanguageCode: defaults.languageCode)
+            } ?? defaults.languageCode ?? "en",
             platform: application.map { MeetingPlatformProfile(identifier: $0.bundleIdentifier, displayName: $0.displayName) },
             application: application,
             applicationAudioScope: defaults.mode == .onlineCall ? defaults.effectiveApplicationAudioScope : nil,

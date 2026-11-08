@@ -332,6 +332,9 @@ final class MeetingRecordingSourcePromptController: ObservableObject, PrivatePro
         async let installedApplications = MeetingInstalledCallApplications.snapshot()
         var defaults = SettingsStore.shared.meetingRecordingDefaults
         defaults.languageCode = defaults.languageCode ?? MeetingTranscriptionSetupDraft(settings: .shared).languageCode
+        defaults.languageCode = PichiMeetingProviderFactory.registeredRecordingLanguageCode(
+            for: SettingsStore.shared.selectedSpeechModel.rawValue,
+            preferredLanguageCode: defaults.languageCode) ?? defaults.languageCode
         let audioStorageMode: MeetingAudioStorageMode = SettingsStore.shared.meetingSaveAudio ? .retainedFiles : .memoryOnly
         let speakerLabelsEnabled = SettingsStore.shared.meetingSpeakerLabelsEnabled
         let inRoomSpeakerProcessingMode = SettingsStore.shared.recordingSpeakerProcessingMode(for: .inRoom)

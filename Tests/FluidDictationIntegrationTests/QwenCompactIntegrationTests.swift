@@ -280,6 +280,37 @@ final class QwenCompactIntegrationTests: XCTestCase {
             "Input topology is validated by admission, not silently changed by request resolution")
     }
 
+    func testFreshRecordingLanguageUsesRegisteredCapabilitiesWithoutChangingExplicitAdmission() throws {
+        let qwenID = SettingsStore.SpeechModel.qwen3Asr06BQ4.rawValue
+        for preferred in [nil, "ru", "en", "auto"] as [String?] {
+            XCTAssertEqual(PichiMeetingProviderFactory.registeredRecordingLanguageCode(for: qwenID,
+                preferredLanguageCode: preferred), "auto")
+        }
+        XCTAssertEqual(PichiMeetingProviderFactory.registeredRecordingLanguageCode(for: SettingsStore.SpeechModel.gigaam.rawValue,
+            preferredLanguageCode: "ru"), "ru")
+        XCTAssertNil(PichiMeetingProviderFactory.registeredRecordingLanguageCode(for: "unregistered-model",
+            preferredLanguageCode: "ru"), "Unknown providers retain the caller's existing fallback")
+        let explicit = MeetingFinalProcessingConfiguration(asrModel: qwenID, languageCode: "ru", speakerLabelsEnabled: false)
+        XCTAssertThrowsError(try MeetingProviderOptions.resolve(explicit),
+            "Resolving fresh defaults must not rewrite explicit pinned language requests")
+    }
+
+    #if os(macOS)
+    func testMenuBarFreshQwenRequestUsesAutomaticLanguageWithoutRewritingSavedDefaults() throws {
+        for preferred in [nil, "ru", "en"] as [String?] {
+            let defaults = MeetingRecordingDefaults(isConfigured: true, mode: .inRoom,
+                applicationBundleIdentifier: nil, microphoneCaptureDeviceID: "synthetic",
+                microphoneCoreAudioUID: "synthetic", microphoneRole: .unknown, languageCode: preferred)
+            let configuration = try AppServices.menuBarMeetingConfiguration(defaults: defaults,
+                target: nil, microphones: .init(identities: [.init(captureDeviceID: "synthetic",
+                    coreAudioUID: "synthetic", displayName: "Synthetic microphone")], defaultCoreAudioUID: "synthetic"),
+                applications: [], preferredInputUID: nil, selectedModelID: SettingsStore.SpeechModel.qwen3Asr06BQ4.rawValue)
+            XCTAssertEqual(configuration.languageCode, "auto")
+            XCTAssertEqual(defaults.languageCode, preferred)
+        }
+    }
+    #endif
+
     func testRecordingPresentationUsesRegisteredCapabilityAndRequestedMode() {
         let factory = PichiMeetingProviderFactory.self
         let qwenID = SettingsStore.SpeechModel.qwen3Asr06BQ4.rawValue

@@ -461,8 +461,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         // Freeze source intent and language before microphone/source discovery suspends.
         let defaults = self.settings.meetingRecordingDefaults
         let scope = defaults.effectiveApplicationAudioScope
-        let languageCode = defaults.languageCode
-            ?? PichiMeetingProviderFactory.defaultLanguageCode(for: self.settings.selectedSpeechModel.rawValue) ?? "ru"
+        let languageCode = PichiMeetingProviderFactory.registeredRecordingLanguageCode(
+            for: self.settings.selectedSpeechModel.rawValue, preferredLanguageCode: defaults.languageCode)
+            ?? defaults.languageCode ?? "ru"
         let storageMode: MeetingAudioStorageMode = self.settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
         let speakerLabelsEnabled = self.settings.meetingSpeakerLabelsEnabled
         let speakerProcessingMode = self.settings.recordingSpeakerProcessingMode(for: mode)

@@ -212,9 +212,8 @@ extension MeetingProcessingPipeline {
         MeetingTimelineTrace.shared?.record("idle_preparation_selection", fields: ["hasOwner": "true",
             "nativePairEnabled": String(nativePairEnabled), "streaming": String(speakerMode == .streaming),
             "speakerLabels": String(settings.meetingSpeakerLabelsEnabled), "hasIdleFactory": String(idleResourcePreparation != nil)])
-        let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) ?? []
-        let language = settings.meetingRecordingDefaults.languageCode.flatMap { supported.contains($0) ? $0 : nil }
-            ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
+        let language = PichiMeetingProviderFactory.registeredRecordingLanguageCode(for: modelID,
+            preferredLanguageCode: settings.meetingRecordingDefaults.languageCode) ?? "auto"
         let backendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
             selectedModelID: modelID, savedBackendID: settings.meetingTranscriptionBackendID)
         var configuration = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: backendID, languageCode: language,
