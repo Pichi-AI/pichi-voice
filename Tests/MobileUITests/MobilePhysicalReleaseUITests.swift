@@ -23,7 +23,6 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         let player = try AVAudioPlayer(contentsOf: support.appendingPathComponent("BackgroundRecordingUI/speech.wav"))
         player.numberOfLoops = -1
         player.volume = 0.15
-        try require(player.prepareToPlay(), "Prepare approved synthetic speech in the phone runner")
         let audio = AVAudioSession.sharedInstance()
         let category = audio.category, mode = audio.mode, options = audio.categoryOptions
         defer {
@@ -54,8 +53,12 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             capture("background-01-gigaam", revision: revision)
             let runner = XCUIApplication(bundleIdentifier: try XCTUnwrap(Bundle.main.bundleIdentifier))
             runner.activate()
+            try require(runner.state == .runningForeground, "The runner must prepare playback in foreground")
             try audio.setCategory(.playback, mode: .default, options: .mixWithOthers)
             try audio.setActive(true)
+            // prepareToPlay can activate the session; it follows foreground admission
+            // and the explicit playback configuration, just like play itself.
+            try require(player.prepareToPlay(), "Prepare approved synthetic speech in the phone runner")
             try require(player.play(), "Start the owned phone speaker fixture")
             app.activate()
             try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
@@ -518,7 +521,6 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try require(player.duration.isFinite && player.duration >= 15, "Owner checking requires a valid single-voice speech fixture")
         player.numberOfLoops = -1
         player.volume = 0.8
-        try require(player.prepareToPlay(), "The runner must prepare actual synthetic speech playback")
 
         let app = XCUIApplication()
         app.launchArguments = []
@@ -573,6 +575,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             changedPlaybackCategory = true
             try audioSession.setActive(true)
             ownsPlaybackSession = true
+            try require(player.prepareToPlay(), "The runner must prepare actual synthetic speech playback")
             try require(player.play(), "The runner must start synthetic owner speech")
             app.activate()
             try tap(start, "Start the ordinary owner voice microphone capture")
@@ -685,7 +688,6 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try require(player.duration.isFinite && player.duration >= 1, "The staged speech fixture must be valid")
         player.numberOfLoops = -1
         player.volume = 0.8
-        try require(player.prepareToPlay(), "The runner must prepare real fixture playback")
 
         let app = XCUIApplication()
         // Preserve the user's actual language, theme, model and privacy choices.
@@ -757,6 +759,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             changedPlaybackCategory = true
             try audioSession.setActive(true)
             ownsPlaybackSession = true
+            try require(player.prepareToPlay(), "The runner must prepare real fixture playback")
             try require(player.play(), "The runner must start synthetic speech")
             app.activate()
             try tap(app.buttons["meeting.start"], "Start through the ordinary Release UI")
