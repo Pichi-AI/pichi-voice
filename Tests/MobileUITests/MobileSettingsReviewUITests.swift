@@ -112,17 +112,9 @@ final class MobileSettingsReviewUITests: XCTestCase {
                 back.tap()
                 XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 5))
             }
-            // The Recording sheet on the start screen is the second entry to the same page.
             openMeetings(title: language == "ru" ? "Записи" : "Recordings")
-            let quickSettings = app.buttons["meeting.settings"]
-            XCTAssertTrue(quickSettings.waitForExistence(timeout: 10))
-            quickSettings.tap()
-            settle()
-            // A downward swipe at the top would dismiss the sheet, so it stays where it ends.
-            captureScrolling("\(prefix)-90-recording-sheet", returnToTop: false)
-            let done = app.buttons["settings.recording.done"]
-            XCTAssertTrue(done.waitForExistence(timeout: 5))
-            done.tap()
+            XCTAssertFalse(app.buttons["meeting.settings"].exists,
+                           "Configuration is available only through main Settings")
         }
     }
 

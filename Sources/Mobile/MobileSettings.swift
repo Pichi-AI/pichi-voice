@@ -255,12 +255,10 @@ private struct MobileSettingsColumn: ViewModifier {
     }
 }
 
-/// What the next recording uses. Meetings opens the same page as a sheet.
+/// Configure the next recording through the main Settings navigation.
 struct MobileRecordingSettings: View {
     let microphones: [MeetingMicrophoneIdentity]
-    var isPresentedAsSheet = false
     @ObservedObject private var settings = SettingsStore.shared
-    @Environment(\.dismiss) private var dismiss
 
     private var selectedMicrophone: Binding<String> {
         Binding(get: { settings.meetingRecordingDefaults.microphoneCoreAudioUID ?? "" }, set: { selected in
@@ -325,14 +323,6 @@ struct MobileRecordingSettings: View {
                 MobileSettingsFooter(MeetingLocationExplanation.paragraphs)
             }
         }.mobileSettingsPage().navigationTitle(PichiLocalization.text("Recording"))
-            .toolbar {
-                if isPresentedAsSheet {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button(PichiLocalization.text("Done")) { dismiss() }
-                            .accessibilityIdentifier("settings.recording.done")
-                    }
-                }
-            }
             .accessibilityIdentifier("settings.recording.detail")
     }
 }
