@@ -733,7 +733,7 @@ final class MobileNavigationUITests: XCTestCase {
         for (language, appearance) in [("en", "light"), ("ru", "dark")] {
             app.terminate()
             app.launchArguments = Self.completedSetup + ["-PichiInterfaceLanguage", language,
-                "-AppleLanguages", "(\(language))", "-AppleInterfaceStyle", appearance == "dark" ? "Dark" : "Light"]
+                "-AppleLanguages", "(\(language))", "-ThemePreference", appearance]
             app.launch()
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 20))
             XCUIDevice.shared.orientation = .landscapeLeft
