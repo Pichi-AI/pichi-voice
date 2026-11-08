@@ -132,7 +132,9 @@ final class QwenGigaAMBenchmarkTests: XCTestCase {
             report.loadSeconds = ProcessInfo.processInfo.systemUptime - began
             if let gigaam = provider as? PichiGigaAMProvider {
                 report.loadedModelFingerprint = gigaam.loadedModelFingerprint
-                XCTAssertEqual(gigaam.loadedModelFingerprint, GigaAMModelCatalog.downloadableModel.fingerprint)
+                guard gigaam.loadedModelFingerprint == GigaAMModelCatalog.downloadableModel.fingerprint else {
+                    throw PairedASRFixture.Failure.invalid("Prepared GigaAM artifact differs from the pinned Q8 model")
+                }
             }
             // Decode outside the measured provider call. The first real inference is reported
             // separately; scored runs are warm, without claiming a cold filesystem/cache.
@@ -163,7 +165,6 @@ final class QwenGigaAMBenchmarkTests: XCTestCase {
                         iteration: iteration, wallSeconds: wall, phase: "warm"))
                 }
             }
-            report.status = "completed"
         } catch {
             report.status = "failed"
             report.failure = String(describing: type(of: error))
@@ -176,7 +177,13 @@ final class QwenGigaAMBenchmarkTests: XCTestCase {
         sampler.mark("release")
         await Task { @MainActor in await provider.releaseResidency() }.value
         report.memory = sampler.stop()
-        XCTAssertFalse(provider.isReady, "Owned model must be unloaded after replay")
+        guard !provider.isReady else {
+            report.status = "failed"
+            report.failure = "Owned model did not unload after replay"
+            try self.attach(report, output: env["PICHI_ASR_BENCH_OUTPUT"])
+            throw PairedASRFixture.Failure.invalid("Owned model did not unload after replay")
+        }
+        report.status = "completed"
         try self.attach(report, output: env["PICHI_ASR_BENCH_OUTPUT"])
     }
 
