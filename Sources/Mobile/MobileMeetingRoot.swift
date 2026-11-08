@@ -78,10 +78,6 @@ struct MobileMeetingRoot: View {
         get { privatePresentation.showMicrophoneSettings }
         nonmutating set { privatePresentation.showMicrophoneSettings = newValue }
     }
-    private var showRecordingSettings: Bool {
-        get { privatePresentation.showRecordingSettings }
-        nonmutating set { privatePresentation.showRecordingSettings = newValue }
-    }
     @State private var startFeedback = 0
     @State private var isStarting = false
     @State private var microphoneSnapshot = MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil)
@@ -202,9 +198,6 @@ struct MobileMeetingRoot: View {
             }
             Button(PichiLocalization.text("OK"), role: .cancel) { error = nil }
         } message: { Text(error ?? "") }
-        .sheet(isPresented: $privatePresentation.showRecordingSettings) {
-            NavigationStack { MobileRecordingSettings(microphones: microphoneSnapshot.identities, isPresentedAsSheet: true) }
-        }
         .sheet(item: $privatePresentation.edit) { draft in
             MeetingEditSheet(draft: draft, cancel: { edit = nil }) { kind, updated in
                 edit = nil
@@ -704,27 +697,17 @@ struct MobileMeetingRoot: View {
         .modifier(MeetingSearch(isAvailable: !sessions.isEmpty || !search.isEmpty, text: $privatePresentation.search))
         .refreshable { await refreshHistory() }.accessibilityIdentifier("history.list")
         .mobileReadableColumn()
-        .safeAreaInset(edge: .bottom, spacing: 0) { startBar }
+        .modifier(MobileMeetingStartPlacement(control: startBar))
         .navigationDestination(for: MeetingSessionID.self) { id in meetingPage(id) }
     }
 
-    /// A short phone window puts settings beside Start, preserving the list's vertical space.
-    private var startBar: some View {
+    /// Landscape phones float the action over history; configuration lives only in Settings.
+    private var startBar: MobileMeetingStartBar {
         MobileMeetingStartBar(
-            inline: MobileMeetingStartBar.usesInlineLayout(idiom: UIDevice.current.userInterfaceIdiom,
+            floating: MobileMeetingStartBar.usesFloatingLayout(idiom: UIDevice.current.userInterfaceIdiom,
                 verticalSizeClass: verticalSizeClass, dynamicTypeSize: dynamicTypeSize),
-            preparing: isStarting && coordinator.isQuiescent, processing: coordinator.isProcessing,
-            startDisabled: isBusy || !coordinator.isQuiescent, settingsDisabled: isBusy,
-            summary: nextRecordingSummary, start: beginMeeting, openSettings: { showRecordingSettings = true })
-    }
-
-    /// The microphone and transcript language the next recording uses.
-    private var nextRecordingSummary: [String] {
-        let defaults = settings.meetingRecordingDefaults
-        let uid = defaults.microphoneCoreAudioUID ?? microphoneSnapshot.defaultCoreAudioUID
-        let microphone = microphoneSnapshot.identities.first { $0.coreAudioUID == uid }?.displayName
-            ?? PichiLocalization.text("System Default")
-        return [microphone, MobileRecordingSettings.languageTitle(settings: settings)]
+            preparing: isStarting && coordinator.isQuiescent,
+            startDisabled: isBusy || !coordinator.isQuiescent, start: beginMeeting)
     }
 
     /// A meeting's own page: its progress while processing, then its transcript or recovery.
@@ -1228,7 +1211,6 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
     @Published var error: String?
     @Published var showError: Bool = false
     @Published var showMicrophoneSettings: Bool = false
-    @Published var showRecordingSettings: Bool = false
     @Published var edit: MeetingEditDraft?
     @Published var participantEdit: MeetingParticipantEditDraft?
     @Published var speakerAssignment: MeetingSpeakerAssignmentDraft?
@@ -1313,7 +1295,7 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
         copiedSessionID = nil; edit = nil; participantEdit = nil; speakerAssignment = nil; deletion = nil
         share?.cleanup(); share = nil
         transcriptReadingSource = nil; transcriptReading = []
-        error = nil; showError = false; showMicrophoneSettings = false; showRecordingSettings = false
+        error = nil; showError = false; showMicrophoneSettings = false
     }
 }
 

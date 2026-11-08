@@ -725,11 +725,12 @@ final class MobileNavigationUITests: XCTestCase {
         #endif
     }
 
-    func testRecordingStartBarAdaptsOnlyOnLandscapePhone() throws {
+    func testFloatingRecordingActionAndSettingsOnlyInMainNavigation() throws {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Layout acceptance owns isolated simulators only")
         #else
         defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+        app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
         for (language, appearance) in [("en", "light"), ("ru", "dark")] {
             app.terminate()
             app.launchArguments = Self.completedSetup + ["-PichiInterfaceLanguage", language,
@@ -738,40 +739,52 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 20))
             XCUIDevice.shared.orientation = .landscapeLeft
             waitForOrientation(portrait: false)
-            let start = app.buttons["meeting.start"], settings = app.buttons["meeting.settings"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            let start = app.buttons["meeting.start"]
+            XCTAssertFalse(app.buttons["meeting.settings"].exists)
+            XCTAssertFalse(app.descendants(matching: .any)["recording.microphone"].firstMatch.exists)
+            XCTAssertFalse(app.descendants(matching: .any)["recording.language"].firstMatch.exists)
             XCTAssertTrue(start.isHittable)
-            XCTAssertTrue(settings.isHittable)
             XCTAssertGreaterThanOrEqual(start.frame.height, 44)
-            XCTAssertGreaterThanOrEqual(settings.frame.height, 44)
+            XCTAssertTrue(app.windows.firstMatch.frame.contains(start.frame))
             if UIDevice.current.userInterfaceIdiom == .phone {
                 XCTAssertLessThan(start.frame.width, app.windows.firstMatch.frame.width * 0.5)
-                XCTAssertEqual(start.frame.midY, settings.frame.midY, accuracy: 4)
-                XCTAssertGreaterThan(start.frame.minX, settings.frame.maxX)
-                XCTAssertLessThanOrEqual(start.frame.height, 56)
-            } else {
-                XCTAssertGreaterThanOrEqual(settings.frame.minY, start.frame.maxY - 1,
-                    "The iPad retains its existing stacked footer")
+                XCTAssertGreaterThan(start.frame.midX, app.windows.firstMatch.frame.midX)
+                let list = app.descendants(matching: .any)["history.list"].firstMatch
+                XCTAssertGreaterThan(list.frame.maxY, start.frame.maxY,
+                    "History extends behind the floating button instead of losing a footer strip")
             }
             if app.tabBars.firstMatch.exists {
                 XCTAssertTrue(start.frame.intersection(app.tabBars.firstMatch.frame).isEmpty)
-                XCTAssertTrue(settings.frame.intersection(app.tabBars.firstMatch.frame).isEmpty)
             }
-            let summary = settings.value as? String
-            capture("footer-\(language)-\(appearance)-landscape")
-            settings.tap()
+            let last = app.buttons["history.session.DDD86147-F0B9-4B13-88B5-099B1E0D8BA5"]
+            let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+            for _ in 0..<8 where !last.isHittable || last.frame.maxY > start.frame.minY - 8 {
+                scroll.swipeUp()
+            }
+            XCTAssertTrue(last.isHittable, "The final synthetic recording can be reached")
+            XCTAssertLessThanOrEqual(last.frame.maxY, start.frame.minY - 8,
+                "Scrolling can expose the complete last row above the recording action")
+            capture("floating-\(language)-\(appearance)-landscape")
+            last.tap()
+            XCTAssertTrue(app.buttons["transcript.more"].waitForExistence(timeout: 5))
+            openNavigation("meetings", title: language == "ru" ? "Записи" : "Recordings")
+            openNavigation("settings", title: language == "ru" ? "Настройки" : "Settings")
+            let recording = app.buttons["settings.recording"]
+            XCTAssertTrue(recording.waitForExistence(timeout: 5))
+            recording.tap()
             XCTAssertTrue(app.descendants(matching: .any)["settings.recording.detail"].firstMatch.waitForExistence(timeout: 5))
-            XCTAssertTrue(app.buttons["settings.recording.done"].isHittable,
-                "The compact action opens the existing recording settings sheet")
-            app.buttons["settings.recording.done"].tap()
-            XCTAssertTrue(settings.waitForExistence(timeout: 5))
-            XCTAssertEqual(settings.value as? String, summary)
+            for identifier in ["recording.microphone", "recording.language"] {
+                let picker = app.descendants(matching: .any)[identifier].firstMatch
+                XCTAssertTrue(picker.exists && picker.isEnabled && picker.isHittable,
+                    "Recording configuration remains editable in the main Settings flow")
+            }
+            XCTAssertFalse(app.buttons["settings.recording.done"].exists, "Recording settings uses normal navigation")
+            openNavigation("meetings", title: language == "ru" ? "Записи" : "Recordings")
             XCUIDevice.shared.orientation = .portrait
             waitForOrientation(portrait: true)
-            XCTAssertGreaterThanOrEqual(settings.frame.minY, start.frame.maxY - 1)
             XCTAssertTrue(start.isHittable)
-            XCTAssertEqual(settings.value as? String, summary, "Rotation preserves recording configuration")
-            capture("footer-\(language)-\(appearance)-portrait")
+            XCTAssertFalse(app.buttons["meeting.settings"].exists)
+            capture("floating-\(language)-\(appearance)-portrait")
         }
         #endif
     }
@@ -788,11 +801,8 @@ final class MobileNavigationUITests: XCTestCase {
             let tabBar = app.tabBars.firstMatch.frame
             XCTAssertTrue(app.buttons["meeting.start"].frame.intersection(tabBar).isEmpty,
                           "The floating tab bar must not cover the recording action")
-            let recordingSettings = app.buttons["meeting.settings"]
-            XCTAssertTrue(recordingSettings.waitForExistence(timeout: 5))
-            XCTAssertGreaterThanOrEqual(recordingSettings.frame.height, 44)
-            XCTAssertTrue(recordingSettings.frame.intersection(tabBar).isEmpty,
-                          "The floating tab bar must not cover the next recording's settings")
+            XCTAssertFalse(app.buttons["meeting.settings"].exists,
+                           "Recording configuration belongs only in main Settings")
         }
         openNavigation("settings", title: "Settings")
         XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 5))
@@ -1065,7 +1075,7 @@ final class MobileNavigationUITests: XCTestCase {
         }
     }
 
-    func testRotatingDeepSettingsAndClosingRecordingSheet() throws {
+    func testRotatingDeepSettingsPreservesMainRecordingRoute() throws {
         openNavigation("settings", title: "Settings")
         app.buttons["settings.models"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["settings.models.detail"].firstMatch.waitForExistence(timeout: 5))
@@ -1076,14 +1086,16 @@ final class MobileNavigationUITests: XCTestCase {
         capture("models-landscape")
         openNavigation("meetings", title: "Recordings")
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
-        app.buttons["meeting.settings"].tap()
-        let done = app.buttons["settings.recording.done"]
-        XCTAssertTrue(done.waitForExistence(timeout: 5))
-        capture("recording-settings-sheet")
-        done.tap()
-        XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["meeting.settings"].exists)
+        openNavigation("settings", title: "Settings")
+        openNavigation("settings", title: "Settings")
+        app.buttons["settings.recording"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["settings.recording.detail"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["settings.recording.done"].exists)
+        capture("recording-main-settings")
+        openNavigation("meetings", title: "Recordings")
         XCTAssertTrue(app.buttons["meeting.start"].isHittable)
-        capture("sheet-closed-meetings")
+        capture("main-settings-to-meetings")
     }
 
     func testReselectingSettingsReturnsToRoot() throws {

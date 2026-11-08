@@ -1,82 +1,65 @@
 import SwiftUI
 import UIKit
 
-/// Presentation only: both arrangements invoke the root's existing recording and settings actions.
+/// Presentation only; recording admission and preparation stay with the existing root action.
 struct MobileMeetingStartBar: View {
-    let inline: Bool
+    let floating: Bool
     let preparing: Bool
-    let processing: Bool
     let startDisabled: Bool
-    let settingsDisabled: Bool
-    let summary: [String]
     let start: () -> Void
-    let openSettings: () -> Void
     @Environment(\.theme) private var theme
 
-    static func usesInlineLayout(idiom: UIUserInterfaceIdiom, verticalSizeClass: UserInterfaceSizeClass?,
-                                 dynamicTypeSize: DynamicTypeSize) -> Bool {
+    static func usesFloatingLayout(idiom: UIUserInterfaceIdiom, verticalSizeClass: UserInterfaceSizeClass?,
+                                   dynamicTypeSize: DynamicTypeSize) -> Bool {
         idiom == .phone && verticalSizeClass == .compact && !dynamicTypeSize.isAccessibilitySize
     }
 
     var body: some View {
         Group {
-            if inline {
-                HStack(spacing: theme.metrics.spacing.lg) {
-                    recordingSettings
-                    Spacer(minLength: 16)
-                    startButton.fixedSize(horizontal: true, vertical: false)
-                }
-                .padding(.horizontal, 24).padding(.vertical, 8)
+            if floating {
+                startButton.fixedSize(horizontal: true, vertical: false)
             } else {
-                VStack(spacing: 0) {
-                    startButton
-                    recordingSettings
-                }
-                .padding(.horizontal, 24).padding(.top, 12)
-                .frame(maxWidth: 560).frame(maxWidth: .infinity)
+                startButton
+                    .padding(.horizontal, 24).padding(.top, 12)
+                    .frame(maxWidth: 560).frame(maxWidth: .infinity)
+                    .background(theme.palette.toolbarBackground)
             }
         }
-        .background(theme.palette.toolbarBackground)
     }
 
     private var startButton: some View {
         Button(action: start) {
             Label(PichiLocalization.text(preparing ? "Preparing recording…" : "Start Recording"), systemImage: "record.circle")
                 .foregroundStyle(theme.palette.accentForeground)
-                .frame(maxWidth: inline ? nil : .infinity, minHeight: inline ? 32 : 48)
+                .frame(maxWidth: floating ? nil : .infinity, minHeight: floating ? 32 : 48)
                 .animation(nil, value: preparing)
         }.buttonStyle(.borderedProminent)
             .disabled(startDisabled)
             .accessibilityIdentifier("meeting.start")
     }
+}
 
-    @ViewBuilder private var recordingSettings: some View {
-        if processing {
-            Label(PichiLocalization.text("Preparing your transcript"), systemImage: "text.alignleft")
-                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                .frame(minHeight: 44)
-        } else {
-            Button(action: openSettings) {
-                HStack(spacing: theme.metrics.spacing.xs) {
-                    Image(systemName: "mic")
-                    if inline {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(Array(summary.enumerated()), id: \.offset) { _, item in
-                                Text(verbatim: item).lineLimit(1).truncationMode(.middle)
+/// Reserve scrolling room, not a footer strip: the last row can move above the floating action.
+struct MobileMeetingStartPlacement: ViewModifier {
+    let control: MobileMeetingStartBar
+    @State private var floatingHeight: CGFloat = 80
+
+    func body(content: Content) -> some View {
+        if control.floating {
+            content
+                .contentMargins(.bottom, floatingHeight, for: .scrollContent)
+                .overlay(alignment: .bottomTrailing) {
+                    control.padding(.horizontal, 24).padding(.vertical, 12)
+                        .background {
+                            GeometryReader { geometry in
+                                Color.clear
+                                    .onAppear { floatingHeight = geometry.size.height }
+                                    .onChange(of: geometry.size.height) { _, height in floatingHeight = height }
                             }
                         }
-                    } else {
-                        Text(verbatim: summary.joined(separator: " · "))
-                    }
-                    Image(systemName: "chevron.right").imageScale(.small)
                 }
-                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
-            }.buttonStyle(.plain).disabled(settingsDisabled)
-                .accessibilityLabel(PichiLocalization.text("Recording settings"))
-                .accessibilityValue(summary.joined(separator: ", "))
-                .accessibilityIdentifier("meeting.settings")
+        } else {
+            content.safeAreaInset(edge: .bottom, spacing: 0) { control }
         }
     }
 }
