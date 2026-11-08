@@ -4,6 +4,12 @@ import UIKit
 
 @MainActor private enum PhysicalUITransitionWait {
     struct TimedOut: Error {}
+    enum OwnedRecordingAction: Equatable { case requestStop, join }
+
+    static func ownedRecordingAction(stopReady: Bool, processing: Bool, completed: Bool) -> OwnedRecordingAction? {
+        if processing || completed { return .join }
+        return stopReady ? .requestStop : nil
+    }
 
     static func until(timeout: TimeInterval, condition: () -> Bool,
                       now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
@@ -158,6 +164,34 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         }
         let cancelled = await work.value
         XCTAssertTrue(cancelled)
+    }
+
+    @MainActor
+    func testPhysicalCleanupWaitsForTemporarilyDisabledStop() async throws {
+        var time: TimeInterval = 0
+        var decision: PhysicalUITransitionWait.OwnedRecordingAction?
+        try await PhysicalUITransitionWait.until(timeout: 3, condition: {
+            decision = PhysicalUITransitionWait.ownedRecordingAction(
+                stopReady: time >= 2, processing: false, completed: false)
+            return decision != nil
+        }, now: { time }, pause: { time += 1 })
+        XCTAssertEqual(time, 2)
+        XCTAssertEqual(decision, .requestStop)
+    }
+
+    @MainActor
+    func testPhysicalCleanupJoinsAlreadyProcessingOrCompleted() async throws {
+        for processing in [true, false] {
+            var pauses = 0
+            var decision: PhysicalUITransitionWait.OwnedRecordingAction?
+            try await PhysicalUITransitionWait.until(timeout: 3, condition: {
+                decision = PhysicalUITransitionWait.ownedRecordingAction(
+                    stopReady: false, processing: processing, completed: !processing)
+                return decision != nil
+            }, pause: { pauses += 1 })
+            XCTAssertEqual(decision, .join)
+            XCTAssertEqual(pauses, 0)
+        }
     }
 
     @MainActor
@@ -457,6 +491,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         }
         let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice")
         var ownsRecording = false
+        var observedOwnedRecording = false
         func selectModel(_ model: String) throws {
             try self.openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
             try self.tap(app.buttons["settings.models"], "Open model settings")
@@ -497,6 +532,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             ownsRecording = true
             try tap(app.buttons["meeting.start"], "Start normal microphone recording")
             try await waitForVisibleRecording(in: app, timeout: 90)
+            observedOwnedRecording = true
             try await observeVisibleRecording(in: app, player: player, seconds: 6)
             capture("background-02-recording", revision: revision)
             var timer = try visibleTimerSeconds(in: app)
@@ -558,7 +594,17 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     app.activate()
                     try await self.waitForPhysicalAppState(app, .runningForeground, phase: "cleanup-foreground")
                     if ownsRecording {
-                        if app.buttons["meeting.stop"].exists && app.buttons["meeting.stop"].isEnabled {
+                        let stop = app.buttons["meeting.stop"]
+                        var decision: PhysicalUITransitionWait.OwnedRecordingAction?
+                        try await PhysicalUITransitionWait.until(timeout: 30, condition: {
+                            guard app.state == .runningForeground, app.alerts.count == 0 else { return false }
+                            decision = PhysicalUITransitionWait.ownedRecordingAction(
+                                stopReady: stop.exists && stop.isEnabled && stop.isHittable,
+                                processing: app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                                completed: observedOwnedRecording && app.buttons["transcript.more"].exists && !stop.exists)
+                            return decision != nil
+                        })
+                        if decision == .requestStop {
                             try await self.requestPhysicalOwnedStop(in: app)
                         }
                         try await self.waitForCompletedTranscript(in: app, timeout: 120)

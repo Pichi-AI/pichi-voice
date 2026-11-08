@@ -73,7 +73,11 @@ failure cannot hide the original boundary. Its owned Stop requires an enabled,
 hittable control and observes that control becoming disabled or disappearing.
 That is early UI admission evidence only; the normal completion check must still
 join and expose the transcript. Cancellation joins a separate cleanup task;
-unresolved cleanup is explicitly reported for the physical owner. Three
+unresolved cleanup is explicitly reported for the physical owner. Cleanup waits
+up to thirty seconds for a ready owned Stop or actual processing/completion;
+a temporarily disabled or missing Stop alone never counts as an accepted Stop.
+Two deterministic cleanup cases cover disabled-to-ready and already processing
+or completed. Three
 `testPhysicalTransitionWait*` cases cover delayed state, deadline and
 cancellation with a deterministic clock, separately from physical acceptance.
 
