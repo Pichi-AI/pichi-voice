@@ -24,6 +24,21 @@ import UIKit
     }
 }
 
+@MainActor private enum PhysicalOwnedRecordingCleanup {
+    static func run(observe: () -> PhysicalUITransitionWait.OwnedRecordingAction?,
+                    stop: () async throws -> Void, join: () async throws -> Void,
+                    now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+                    pause: () async throws -> Void = { try await Task.sleep(nanoseconds: 250_000_000) }) async throws {
+        var action: PhysicalUITransitionWait.OwnedRecordingAction?
+        try await PhysicalUITransitionWait.until(timeout: 30, condition: {
+            action = observe()
+            return action != nil
+        }, now: now, pause: pause)
+        if action == .requestStop { try await stop() }
+        try await join()
+    }
+}
+
 private nonisolated struct PhysicalTinySettingsProfile: Codable, Equatable, Sendable {
     var model: String
     var saveAudio: Bool
@@ -128,6 +143,59 @@ private nonisolated struct PhysicalTinySettingsReceipt: Codable {
 /// Opt-in tests of the installed app through its public UI. Audible fixtures belong
 /// to the runner; silent input uses only the app's explicit DEBUG capture adapter.
 final class MobilePhysicalReleaseUITests: XCTestCase {
+    @MainActor
+    func testOwnedRecordingCleanupWaitsForReadyStopAndJoinsBeforeReturning() async throws {
+        try await verifyOwnedRecordingCleanupJoin(initiallyProcessing: false)
+    }
+
+    @MainActor
+    func testOwnedRecordingCleanupJoinsProcessingWithoutAnotherStop() async throws {
+        try await verifyOwnedRecordingCleanupJoin(initiallyProcessing: true)
+    }
+
+    @MainActor
+    func testOwnedRecordingCleanupPropagatesJoinFailure() async throws {
+        enum Failure: Error { case join }
+        var stopCalls = 0
+        do {
+            try await PhysicalOwnedRecordingCleanup.run(observe: { .join },
+                stop: { stopCalls += 1 }, join: { throw Failure.join })
+            XCTFail("Failed completion must remain an unresolved cleanup")
+        } catch Failure.join {
+            XCTAssertEqual(stopCalls, 0)
+        }
+    }
+
+    @MainActor private func verifyOwnedRecordingCleanupJoin(initiallyProcessing: Bool) async throws {
+        var time: TimeInterval = 0
+        var calls: [String] = []
+        var returned = false
+        var releaseJoin: CheckedContinuation<Void, Never>?
+        let enteredJoin = expectation(description: "Cleanup entered the real join operation")
+        let cleanup = Task { @MainActor in
+            try await PhysicalOwnedRecordingCleanup.run(observe: {
+                PhysicalUITransitionWait.ownedRecordingAction(stopReady: time >= 2,
+                    processing: initiallyProcessing, completed: false)
+            }, stop: { calls.append("stop") }, join: {
+                calls.append("join")
+                await withCheckedContinuation { continuation in
+                    releaseJoin = continuation
+                    enteredJoin.fulfill()
+                }
+            }, now: { time }, pause: { time += 1 })
+            returned = true
+        }
+        let entered = await XCTWaiter.fulfillment(of: [enteredJoin], timeout: 2)
+        XCTAssertEqual(entered, .completed)
+        XCTAssertFalse(returned, "Returning before join releases would abandon owned capture")
+        XCTAssertEqual(calls, initiallyProcessing ? ["join"] : ["stop", "join"])
+        XCTAssertEqual(time, initiallyProcessing ? 0 : 2)
+        releaseJoin?.resume()
+        if entered != .completed { cleanup.cancel() }
+        try await cleanup.value
+        XCTAssertTrue(returned)
+    }
+
     @MainActor
     func testPhysicalTransitionWaitObservesDelayedState() async throws {
         var time: TimeInterval = 0
@@ -591,24 +659,12 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             // Cleanup must still join when the original test task was cancelled.
             let cleanup = Task { @MainActor in
                 do {
-                    app.activate()
-                    try await self.waitForPhysicalAppState(app, .runningForeground, phase: "cleanup-foreground")
                     if ownsRecording {
-                        let stop = app.buttons["meeting.stop"]
-                        var decision: PhysicalUITransitionWait.OwnedRecordingAction?
-                        try await PhysicalUITransitionWait.until(timeout: 30, condition: {
-                            guard app.state == .runningForeground, app.alerts.count == 0 else { return false }
-                            decision = PhysicalUITransitionWait.ownedRecordingAction(
-                                stopReady: stop.exists && stop.isEnabled && stop.isHittable,
-                                processing: app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
-                                completed: observedOwnedRecording && app.buttons["transcript.more"].exists && !stop.exists)
-                            return decision != nil
-                        })
-                        if decision == .requestStop {
-                            try await self.requestPhysicalOwnedStop(in: app)
-                        }
-                        try await self.waitForCompletedTranscript(in: app, timeout: 120)
+                        try await self.finishPhysicalOwnedRecording(in: app, observed: observedOwnedRecording)
                         ownsRecording = false
+                    } else {
+                        app.activate()
+                        try await self.waitForPhysicalAppState(app, .runningForeground, phase: "cleanup-foreground")
                     }
                     self.capture("background-failure", revision: revision)
                     if !app.buttons["meeting.stop"].exists { try selectModel(priorModel) }
@@ -623,6 +679,20 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             throw primaryError
         }
         #endif
+    }
+
+    @MainActor private func finishPhysicalOwnedRecording(in app: XCUIApplication, observed: Bool) async throws {
+        app.activate()
+        try await waitForPhysicalAppState(app, .runningForeground, phase: "cleanup-foreground")
+        let stop = app.buttons["meeting.stop"]
+        try await PhysicalOwnedRecordingCleanup.run(observe: {
+            guard app.state == .runningForeground, app.alerts.count == 0 else { return nil }
+            return PhysicalUITransitionWait.ownedRecordingAction(
+                stopReady: stop.exists && stop.isEnabled && stop.isHittable,
+                processing: app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                completed: observed && app.buttons["transcript.more"].exists && !stop.exists)
+        }, stop: { try await self.requestPhysicalOwnedStop(in: app) },
+           join: { try await self.waitForCompletedTranscript(in: app, timeout: 120) })
     }
 
     @MainActor private func waitForPhysicalAppState(_ app: XCUIApplication, _ expected: XCUIApplication.State,
@@ -1261,6 +1331,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         let originalMode = audioSession.mode
         let originalOptions = audioSession.categoryOptions
         var ownsRecording = false
+        var observedOwnedRecording = false
         var changedPlaybackCategory = false
         var ownsPlaybackSession = false
         defer {
@@ -1290,12 +1361,12 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(player.prepareToPlay(), "The runner must prepare real fixture playback")
             try require(player.play(), "The runner must start synthetic speech")
             app.activate()
-            try tap(app.buttons["meeting.start"], "Start through the ordinary Release UI")
-            // Once the Start action has been admitted, failure cleanup owns this attempt,
-            // even if preparation has not yet exposed an enabled Stop button.
+            // Own the only Start tap even if its automation response fails after delivery.
             ownsRecording = true
+            try tap(app.buttons["meeting.start"], "Start through the ordinary Release UI")
             try require(app.buttons["meeting.stop"].waitForExistence(timeout: 30), "The Release app must start recording")
             try require(app.buttons["meeting.stop"].isEnabled, "Capture must reach the recording state")
+            observedOwnedRecording = true
             capture("08-recording-started", revision: revision)
             let start = ProcessInfo.processInfo.systemUptime
             var earlyTextCount = 0
@@ -1338,7 +1409,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try verifyLatestCaptionVisible(in: app)
             capture("13-returned-to-latest", revision: revision)
 
-            try tap(app.buttons["meeting.stop"], "Stop and transcribe through the Release UI")
+            try await requestPhysicalOwnedStop(in: app)
             capture("14-stop-requested", revision: revision)
             try await waitForCompletedTranscript(in: app, timeout: 120)
             ownsRecording = false
@@ -1384,6 +1455,9 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(!app.buttons["meeting.stop"].exists, "Relaunch must not restore active capture")
             capture("21-persisted-transcript-reopened", revision: revision)
         } catch {
+            let primaryError = error
+            let failure = error as NSError
+            print("[PHYSICAL_RELEASE_UI] primary_error domain=\(failure.domain) code=\(failure.code) detail=\(failure.localizedDescription)")
             ownedPlayer?.stop()
             if ownsRecording {
                 // Request the same normal stop/join path as the user. Never stop someone
@@ -1391,20 +1465,19 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                 // An unstructured cleanup task does not inherit the test task's
                 // cancellation. Join it before returning the original failure.
                 let cleanup = Task { @MainActor in
-                    app.activate()
-                    let stop = app.buttons["meeting.stop"]
-                    if stop.waitForExistence(timeout: 30), stop.isEnabled {
-                        stop.tap()
-                        do { try await self.waitForCompletedTranscript(in: app, timeout: 120) }
-                        catch { print("[PHYSICAL_RELEASE_UI] cleanup_stop_requires_parent_inspection") }
-                    } else {
-                        print("[PHYSICAL_RELEASE_UI] cleanup_stop_unavailable_requires_parent_inspection")
+                    do {
+                        try await self.finishPhysicalOwnedRecording(in: app, observed: observedOwnedRecording)
+                        ownsRecording = false
+                        print("[PHYSICAL_RELEASE_UI] cleanup_joined=true")
+                    } catch {
+                        let cleanupError = error as NSError
+                        print("[PHYSICAL_RELEASE_UI] cleanup_stop_requires_parent_inspection domain=\(cleanupError.domain) code=\(cleanupError.code) detail=\(cleanupError.localizedDescription)")
                     }
                     self.capture("failure-owned-recording-cleanup", revision: revision)
                 }
                 await cleanup.value
             }
-            throw error
+            throw primaryError
         }
         #endif
     }
