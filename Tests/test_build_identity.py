@@ -69,7 +69,8 @@ class BuildIdentityTests(unittest.TestCase):
                     (root / folder / source.name).touch()
             (root / 'Fluid.xcodeproj/xcshareddata/xcschemes').mkdir(parents=True)
             for name in ['MobileRegisteredModelInferenceTests.swift', 'MeetingOwnerVoiceProfileTests.swift',
-                         'MeetingTranscriptAssemblerTests.swift']:
+                         'MeetingTranscriptAssemblerTests.swift', 'QwenCompactIntegrationTests.swift',
+                         'QwenGigaAMBenchmarkTests.swift']:
                 if (ROOT / 'Tests/FluidDictationIntegrationTests' / name).is_file():
                     destination = root / 'Tests/FluidDictationIntegrationTests' / name
                     destination.parent.mkdir(parents=True, exist_ok=True)
