@@ -255,7 +255,7 @@ private struct MobileSettingsColumn: ViewModifier {
     }
 }
 
-/// What the next recording uses. Meetings opens the same page as a sheet.
+/// Configure the next recording through the main Settings navigation.
 struct MobileRecordingSettings: View {
     let microphones: [MeetingMicrophoneIdentity]
     @ObservedObject private var settings = SettingsStore.shared

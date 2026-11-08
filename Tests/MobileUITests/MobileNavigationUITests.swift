@@ -83,7 +83,8 @@ final class MobileNavigationUITests: XCTestCase {
             app.launchEnvironment["PICHI_UI_SHARED_GUEST_HISTORY_PROFILE"] = "a"
         }
         if name.contains("testSpeakerColorsNativeSmoke") || name.contains("testParticipantInlineNameAndOwnerTransferSmoke")
-            || name.contains("testColdGuestHistoryLoadsWithoutManualRefresh") {
+            || name.contains("testColdGuestHistoryLoadsWithoutManualRefresh")
+            || name.contains("testFloatingRecordingActionAndSettingsOnlyInMainNavigation") {
             app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
             app.launchArguments += ["-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
                 "-MeetingPIIRedactionEnabled", "NO", "-MeetingPIIRedactionRequested", "NO",
