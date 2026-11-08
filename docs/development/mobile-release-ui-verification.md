@@ -312,3 +312,59 @@ idle preflight and exact AUT revision, rotates through XCTest's public orientati
 API, visits models/privacy/recording/participants across section switches, checks the original
 model/audio/PII profile and returns to idle Recordings in landscape. It never
 starts capture or changes those settings; run it before the acoustic cases.
+
+## Owned synthetic playback and deletion on App Review 34
+
+`testPhysicalOwnedCompletedSyntheticPlaybackPauseStopAndDelete` is a separate
+opt-in physical UI continuation. It attaches to the unchanged ordinary AUT at
+`1a245d0447b08e3fc681d439ea4ef3b392e034c2`. The parent must hold the device/UI/audio
+lease, independently back up the exact completed synthetic session and its retained
+audio, and verify the AUT is idle. Never select an existing private/user recording.
+The first visible playable paragraph must have enough audio for observed progress,
+a two-second pause and resumed progress (at least twelve seconds is recommended).
+No recording, model/settings/account changes, export, clipboard or relaunch occur.
+
+In the runner only, set `PICHI_PHYSICAL_OWNED_PLAYBACK_DELETE=1`,
+`PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT=1`, and `PICHI_TEST_REVISION` plus
+`PICHI_PHYSICAL_OWNED_PLAYBACK_AUT_REVISION` to the exact SHA above. Set
+`PICHI_PHYSICAL_OWNED_PLAYBACK_RUN_ID` to a fresh UUID,
+`PICHI_PHYSICAL_OWNED_PLAYBACK_SESSION_ID` to the exact owned session UUID and
+`PICHI_PHYSICAL_OWNED_PLAYBACK_SESSION_TITLE` to its exact display title. Stage this
+at most 8192-byte regular JSON file in the runner's Application Support directory,
+`PhysicalReleaseUI/owned-playback/<uppercase run UUID>.json`:
+
+```json
+{
+  "version": 1,
+  "authorization": {
+    "revision": "1a245d0447b08e3fc681d439ea4ef3b392e034c2",
+    "runID": "<fresh run UUID>",
+    "sessionID": "<exact owned session UUID>",
+    "title": "<exact display title>"
+  },
+  "issuedAt": "<current UTC ISO-8601 date, for example 2026-11-08T12:00:00Z>",
+  "state": "completed",
+  "audioStorageMode": "retainedFiles",
+  "syntheticOwned": true,
+  "backedUp": true,
+  "exclusiveIdleAttested": true
+}
+```
+
+This is parent attestation, not independent sandbox inspection. Before app
+interaction, the runner rejects mismatched identities, unsafe state, future or
+older-than-fifteen-minute receipts and consumed runs. It exclusively creates a
+sibling `<run UUID>.consumed` marker; preserve receipt and marker as evidence even
+on failure. Retry only with fresh verification and a new run UUID.
+
+The test opens only the unique exact history UUID with its expected title. It
+uses the existing paragraph audio control, native slider value and English/Russian
+transport labels to observe progression, stable pause, resumed progression and
+player closure. Only after these pass does it return to history, partially reveal
+the exact `history.delete.<session UUID>` action, and delete that row. It confirms
+only the known recording-deletion dialog if one appears, then requires the history
+list with that exact row absent. Failure closes only its owned player when safe;
+it does not delete the session as cleanup. Preserve the independent session/audio
+backup and native screenshots. Four `testPhysicalOwnedPlayback*` and
+`testPhysicalPlaybackPosition*` logical cases cover receipt admission and native
+time parsing; they do not establish physical playback or deletion acceptance.

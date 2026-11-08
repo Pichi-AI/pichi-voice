@@ -119,6 +119,59 @@ private nonisolated struct PhysicalPostSoakReceipt: Codable {
     }
 }
 
+// This test-only authorization pins the ordinary App Review 34 AUT, not the runner revision.
+private nonisolated struct PhysicalOwnedPlaybackAuthorization: Codable, Equatable {
+    struct Unverified: Error {}
+    static let frozenRevision = "1a245d0447b08e3fc681d439ea4ef3b392e034c2"
+    let revision: String
+    let runID: UUID
+    let sessionID: UUID
+    let title: String
+
+    static func select(_ environment: [String: String], revision: String) throws -> Self {
+        guard revision == frozenRevision,
+              environment["PICHI_PHYSICAL_OWNED_PLAYBACK_DELETE"] == "1",
+              environment["PICHI_PHYSICAL_OWNED_PLAYBACK_AUT_REVISION"] == revision,
+              environment["PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT"] == "1",
+              let run = environment["PICHI_PHYSICAL_OWNED_PLAYBACK_RUN_ID"], let runID = UUID(uuidString: run),
+              let session = environment["PICHI_PHYSICAL_OWNED_PLAYBACK_SESSION_ID"], let sessionID = UUID(uuidString: session),
+              let title = environment["PICHI_PHYSICAL_OWNED_PLAYBACK_SESSION_TITLE"],
+              !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.count <= 1024,
+              runID != sessionID else { throw Unverified() }
+        return Self(revision: revision, runID: runID, sessionID: sessionID, title: title)
+    }
+}
+
+private nonisolated struct PhysicalOwnedPlaybackReceipt: Codable {
+    let version: Int
+    let authorization: PhysicalOwnedPlaybackAuthorization
+    let issuedAt: Date
+    let state: String
+    let audioStorageMode: String
+    let syntheticOwned: Bool
+    let backedUp: Bool
+    let exclusiveIdleAttested: Bool
+
+    func validate(_ expected: PhysicalOwnedPlaybackAuthorization, now: Date, consumed: Bool) throws {
+        let age = now.timeIntervalSince(issuedAt)
+        guard version == 1, authorization == expected, state == "completed", audioStorageMode == "retainedFiles",
+              syntheticOwned, backedUp, exclusiveIdleAttested, !consumed,
+              age.isFinite, age >= 0, age <= 900 else { throw PhysicalOwnedPlaybackAuthorization.Unverified() }
+    }
+}
+
+private nonisolated enum PhysicalPlaybackPosition {
+    static func seconds(_ value: String?) -> Int? {
+        guard let value else { return nil }
+        let parts = value.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts[1].count == 2,
+              parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy({ $0.isASCII && $0.isNumber }) }),
+              let minutes = Int(parts[0]), let seconds = Int(parts[1]), seconds < 60,
+              minutes <= (Int.max - seconds) / 60 else { return nil }
+        return minutes * 60 + seconds
+    }
+}
+
 @MainActor private enum PhysicalOwnedRecordingCleanup {
     struct StopAndJoinFailure: Error {
         let stopError: Error
@@ -356,6 +409,77 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             var changed = receipt
             mutate(&changed)
             XCTAssertThrowsError(try changed.validate(selected))
+        }
+    }
+
+    private var ownedPlaybackTestEnvironment: [String: String] {
+        ["PICHI_PHYSICAL_OWNED_PLAYBACK_DELETE": "1",
+         "PICHI_PHYSICAL_OWNED_PLAYBACK_AUT_REVISION": PhysicalOwnedPlaybackAuthorization.frozenRevision,
+         "PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT": "1",
+         "PICHI_PHYSICAL_OWNED_PLAYBACK_RUN_ID": "00000000-0000-0000-0000-000000000001",
+         "PICHI_PHYSICAL_OWNED_PLAYBACK_SESSION_ID": "00000000-0000-0000-0000-000000000002",
+         "PICHI_PHYSICAL_OWNED_PLAYBACK_SESSION_TITLE": "Owned synthetic playback fixture"]
+    }
+
+    private func ownedPlaybackTestReceipt() throws -> PhysicalOwnedPlaybackReceipt {
+        PhysicalOwnedPlaybackReceipt(version: 1,
+            authorization: try PhysicalOwnedPlaybackAuthorization.select(ownedPlaybackTestEnvironment,
+                revision: PhysicalOwnedPlaybackAuthorization.frozenRevision),
+            issuedAt: Date(timeIntervalSince1970: 1000), state: "completed", audioStorageMode: "retainedFiles",
+            syntheticOwned: true, backedUp: true, exclusiveIdleAttested: true)
+    }
+
+    func testPhysicalOwnedPlaybackReceiptAcceptsExactFreshUnusedSelection() throws {
+        let receipt = try ownedPlaybackTestReceipt()
+        let decoded = try JSONDecoder().decode(PhysicalOwnedPlaybackReceipt.self, from: JSONEncoder().encode(receipt))
+        try decoded.validate(receipt.authorization, now: Date(timeIntervalSince1970: 1001), consumed: false)
+        XCTAssertEqual(receipt.authorization.sessionID.uuidString, ownedPlaybackTestEnvironment["PICHI_PHYSICAL_OWNED_PLAYBACK_SESSION_ID"])
+    }
+
+    func testPhysicalOwnedPlaybackAuthorizationRejectsMissingForeignOrMalformedSelection() throws {
+        let revision = PhysicalOwnedPlaybackAuthorization.frozenRevision
+        for key in ownedPlaybackTestEnvironment.keys {
+            var changed = ownedPlaybackTestEnvironment
+            changed.removeValue(forKey: key)
+            XCTAssertThrowsError(try PhysicalOwnedPlaybackAuthorization.select(changed, revision: revision), key)
+            changed = ownedPlaybackTestEnvironment
+            changed[key] = key.hasSuffix("TITLE") ? " " : "invalid"
+            XCTAssertThrowsError(try PhysicalOwnedPlaybackAuthorization.select(changed, revision: revision), key)
+        }
+        XCTAssertThrowsError(try PhysicalOwnedPlaybackAuthorization.select(ownedPlaybackTestEnvironment, revision: String(repeating: "a", count: 40)))
+        var sameID = ownedPlaybackTestEnvironment
+        sameID["PICHI_PHYSICAL_OWNED_PLAYBACK_RUN_ID"] = sameID["PICHI_PHYSICAL_OWNED_PLAYBACK_SESSION_ID"]
+        XCTAssertThrowsError(try PhysicalOwnedPlaybackAuthorization.select(sameID, revision: revision))
+    }
+
+    func testPhysicalOwnedPlaybackReceiptRejectsForeignUnsafeStaleFutureAndConsumedState() throws {
+        let receipt = try ownedPlaybackTestReceipt()
+        for key in ["PICHI_PHYSICAL_OWNED_PLAYBACK_RUN_ID", "PICHI_PHYSICAL_OWNED_PLAYBACK_SESSION_ID",
+                    "PICHI_PHYSICAL_OWNED_PLAYBACK_SESSION_TITLE"] {
+            var foreign = ownedPlaybackTestEnvironment
+            foreign[key] = key.hasSuffix("TITLE") ? "Foreign session" : "00000000-0000-0000-0000-000000000003"
+            let selected = try PhysicalOwnedPlaybackAuthorization.select(foreign, revision: receipt.authorization.revision)
+            XCTAssertThrowsError(try receipt.validate(selected, now: receipt.issuedAt, consumed: false))
+        }
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(receipt)) as? [String: Any])
+        for (key, invalid) in [("version", 2 as Any), ("state", "processing"), ("audioStorageMode", "memoryOnly"),
+                               ("syntheticOwned", false), ("backedUp", false), ("exclusiveIdleAttested", false)] {
+            var changed = json
+            changed[key] = invalid
+            let invalidReceipt = try JSONDecoder().decode(PhysicalOwnedPlaybackReceipt.self, from: JSONSerialization.data(withJSONObject: changed))
+            XCTAssertThrowsError(try invalidReceipt.validate(receipt.authorization, now: receipt.issuedAt, consumed: false), key)
+        }
+        for time in [999.0, 1901.0] {
+            XCTAssertThrowsError(try receipt.validate(receipt.authorization, now: Date(timeIntervalSince1970: time), consumed: false))
+        }
+        XCTAssertThrowsError(try receipt.validate(receipt.authorization, now: receipt.issuedAt, consumed: true))
+    }
+
+    func testPhysicalPlaybackPositionAcceptsNativeTimeAndRejectsMalformedOrOverflowValues() {
+        XCTAssertEqual(PhysicalPlaybackPosition.seconds("0:03"), 3)
+        XCTAssertEqual(PhysicalPlaybackPosition.seconds("12:59"), 779)
+        for value in [nil, "", "0:3", "0:60", "-1:00", "1:00 / 2:00", "x:00", "99999999999999999999999:00"] {
+            XCTAssertNil(PhysicalPlaybackPosition.seconds(value))
         }
     }
 
@@ -1715,6 +1839,151 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         capture("post-soak-06-normal-relaunch", revision: revision)
         try await reopenOwnedSession("post-soak-07")
         print("[PHYSICAL_POST_SOAK] completed sessionID=\(sessionID) afterStopOnly=true fullSoakPass=false delivery_attempted=false")
+        #endif
+    }
+
+    /// Destructive only for the exact freshly attested, independently backed-up synthetic fixture.
+    @MainActor
+    func testPhysicalOwnedCompletedSyntheticPlaybackPauseStopAndDelete() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires the parent's owned completed synthetic physical-device fixture")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_OWNED_PLAYBACK_DELETE"] == "1" else {
+            throw XCTSkip("Explicitly authorize playback and deletion of only the backed-up synthetic fixture")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let selected = try PhysicalOwnedPlaybackAuthorization.select(environment, revision: revision)
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                 appropriateFor: nil, create: false)
+        let directory = support.appendingPathComponent("PhysicalReleaseUI/owned-playback", isDirectory: true)
+        let receiptURL = directory.appendingPathComponent("\(selected.runID.uuidString).json")
+        let consumedURL = directory.appendingPathComponent("\(selected.runID.uuidString).consumed")
+        let values = try receiptURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        try require(values.isRegularFile == true && values.isSymbolicLink != true && (values.fileSize ?? Int.max) <= 8192,
+                    "Only a bounded regular parent receipt in this runner can authorize playback and deletion")
+        let data = try Data(contentsOf: receiptURL)
+        try require(data.count <= 8192, "The owned playback receipt exceeded its bound")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let receipt = try decoder.decode(PhysicalOwnedPlaybackReceipt.self, from: data)
+        try receipt.validate(selected, now: Date(), consumed: FileManager.default.fileExists(atPath: consumedURL.path))
+        // A separate exclusive claim preserves the immutable parent receipt and prevents replay,
+        // including after failure. A retry needs a newly verified receipt and fresh run UUID.
+        try Data("claimed".utf8).write(to: consumedURL, options: .withoutOverwriting)
+        let app = try attachReadOnlyPhysicalApp(revision: revision)
+        try require(!app.otherElements["ActivityListView"].exists && !app.otherElements["Browse View (Picker)"].exists
+                    && app.sheets.count == 0
+                    && app.sliders.matching(NSPredicate(format: "label == %@", "Audio chunk position")).count == 0,
+                    "Never adopt a pre-existing share sheet, picker, dialog or audio player")
+        try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
+        let sessionID = selected.sessionID.uuidString
+        let rows = app.buttons.matching(identifier: "history.session.\(sessionID)")
+        func requireOwnedRow() throws {
+            try require(app.state == .runningForeground && app.alerts.count == 0 && app.sheets.count == 0
+                        && rows.count == 1 && rows.firstMatch.isHittable && rows.firstMatch.isEnabled
+                        && rows.firstMatch.staticTexts.matching(NSPredicate(format: "label == %@", selected.title)).count == 1,
+                        "Only the unique exact owned session ID with its attested title may be opened or deleted")
+        }
+        try requireOwnedRow()
+        capture("owned-playback-01-exact-history", revision: revision)
+        try tap(rows.firstMatch, "Open only the attested completed synthetic fixture")
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+            completedReadOnlyTranscriptVisible(in: app, title: selected.title)
+        })
+        let audio = try XCTUnwrap(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@",
+            "transcript.audio.")).allElementsBoundByIndex.first { $0.isHittable && $0.isEnabled })
+        let ownedAudio = app.buttons[audio.identifier]
+        let slider = app.sliders.matching(NSPredicate(format: "label == %@", "Audio chunk position"))
+        let pauseLabels = ["Pause audio chunk", "Приостановить воспроизведение фрагмента"]
+        let playLabels = ["Play audio chunk", "Воспроизвести аудиофрагмент"]
+        let closeLabels = ["Close audio player", "Закрыть аудиоплеер"]
+        try require(slider.count == 0 && firstButton(in: app, labels: pauseLabels) == nil,
+                    "Never adopt an existing playback owner")
+        var ownsPlayback = false
+        defer {
+            if ownsPlayback {
+                capture("owned-playback-failure-before-cleanup", revision: revision)
+                if completedReadOnlyTranscriptVisible(in: app, title: selected.title),
+                   app.sheets.count == 0, ownedAudio.exists, ownedAudio.isHittable, closeLabels.contains(ownedAudio.label) {
+                    ownedAudio.tap()
+                    let joined = slider.firstMatch.waitForNonExistence(timeout: 5)
+                    print("[PHYSICAL_OWNED_PLAYBACK] owned_playback_cleanup_joined=\(joined)")
+                }
+                if slider.count > 0 { print("[PHYSICAL_OWNED_PLAYBACK] cleanup_requires_parent_inspection=true") }
+            }
+        }
+        ownsPlayback = true
+        try tap(ownedAudio, "Play audio only from the owned synthetic transcript paragraph")
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+            slider.count == 1 && firstButton(in: app, labels: pauseLabels)?.isEnabled == true
+        })
+        let initial = try XCTUnwrap(PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String))
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+            completedReadOnlyTranscriptVisible(in: app, title: selected.title)
+                && firstButton(in: app, labels: pauseLabels)?.isEnabled == true
+                && (PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String) ?? -1) >= initial + 2
+        })
+        capture("owned-playback-02-progressing", revision: revision)
+        try tap(try XCTUnwrap(firstButton(in: app, labels: pauseLabels)), "Pause the owned native audio player")
+        try await PhysicalUITransitionWait.until(timeout: 5, condition: {
+            firstButton(in: app, labels: playLabels)?.isEnabled == true
+        })
+        let paused = try XCTUnwrap(PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String))
+        let pauseDeadline = ProcessInfo.processInfo.systemUptime + 2
+        repeat {
+            try require(completedReadOnlyTranscriptVisible(in: app, title: selected.title)
+                        && firstButton(in: app, labels: playLabels)?.isEnabled == true
+                        && PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String) == paused,
+                        "Paused native playback must keep its observed position stable")
+            try await Task.sleep(nanoseconds: 250_000_000)
+        } while ProcessInfo.processInfo.systemUptime < pauseDeadline
+        capture("owned-playback-03-paused-stable", revision: revision)
+        try tap(try XCTUnwrap(firstButton(in: app, labels: playLabels)), "Resume only the owned native audio player")
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+            firstButton(in: app, labels: pauseLabels)?.isEnabled == true
+                && (PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String) ?? -1) >= paused + 1
+        })
+        try require(closeLabels.contains(ownedAudio.label), "The same paragraph must own the expanded player")
+        try tap(ownedAudio, "Stop the owned player through its ordinary close audio control")
+        try await PhysicalUITransitionWait.until(timeout: 5, condition: {
+            slider.count == 0 && firstButton(in: app, labels: pauseLabels) == nil
+                && firstButton(in: app, labels: playLabels) == nil
+                && completedReadOnlyTranscriptVisible(in: app, title: selected.title)
+        })
+        ownsPlayback = false
+        capture("owned-playback-04-stopped", revision: revision)
+        try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
+        try requireOwnedRow()
+        // A partial native drag reveals the exact action without a destructive full swipe.
+        rows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).press(forDuration: 0.1,
+            thenDragTo: rows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5)))
+        let delete = app.buttons.matching(identifier: "history.delete.\(sessionID)")
+        try require(delete.count == 1 && app.alerts.count == 0 && app.sheets.count == 0,
+                    "The exact owned row must expose its own ordinary Delete action")
+        capture("owned-playback-05-exact-delete-action", revision: revision)
+        try tap(delete.firstMatch, "Delete only the independently backed-up synthetic session")
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+            rows.count == 0 || app.alerts.count > 0 || app.sheets.count > 0
+        })
+        if app.alerts.count > 0 || app.sheets.count > 0 {
+            let dialogs = app.alerts.count > 0 ? app.alerts : app.sheets
+            let dialog = dialogs.firstMatch
+            try require(dialogs.count == 1 && dialog.staticTexts.matching(NSPredicate(format: "label IN %@",
+                ["Delete this recording with its transcript and audio?", "Удалить эту запись вместе с расшифровкой и аудио?"])).count == 1,
+                "Only the known recording-deletion confirmation from the owned action may be accepted")
+            let confirm = dialog.buttons.matching(NSPredicate(format: "label IN %@", ["Delete", "Удалить"]))
+            try require(confirm.count == 1, "The owned recording confirmation must have one exact destructive action")
+            try tap(confirm.firstMatch, "Confirm only the owned synthetic recording deletion")
+        }
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+            app.state == .runningForeground && app.alerts.count == 0 && app.sheets.count == 0 && rows.count == 0
+                && app.descendants(matching: .any)["history.list"].firstMatch.exists
+                && !app.buttons["meeting.stop"].exists
+                && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists
+        })
+        capture("owned-playback-06-owned-row-gone", revision: revision)
+        print("[PHYSICAL_OWNED_PLAYBACK] sessionID=\(sessionID) playback_progress_pause_resume_stop=true owned_row_deleted=true")
         #endif
     }
 
