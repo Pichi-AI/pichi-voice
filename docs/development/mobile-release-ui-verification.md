@@ -373,3 +373,61 @@ backup and native screenshots. Four `testPhysicalOwnedPlayback*` and
 time parsing. Three `testPhysicalPlaybackPause*` cases cover a queued integer
 boundary, overshoot/reversal and failure to remain stable. These logical cases do
 not establish physical playback or deletion acceptance.
+
+## New unified iPad Welcome to Tiny selection
+
+`testPhysicalNewUnifiedIPadWelcomeToTinySelection` is a bounded first-use driver
+for the already foreground ordinary `ai.pichi.voice` build 34 at source
+`1a245d0447b08e3fc681d439ea4ef3b392e034c2`. It advances the actual Welcome page,
+selects the Tiny card and stops at model selection before download. It does not
+complete guest setup, install/activate a model, prepare speaker resources, choose
+privacy/voice/location/account options, record or change the Legacy app.
+
+The sole device owner must verify the exact test destination, preserve Legacy
+`ai.pichi.voice.mobile`, independently verify the new unified namespace is empty
+and the foreground app is at Welcome, and stage a fresh one-use parent receipt.
+The private device ID remains outside source control. It is external attestation:
+the runner checks it against the selected environment/receipt and checks the actual
+iPad idiom; public UIKit does not independently expose the physical UDID.
+
+Runner-only environment:
+
+```text
+PICHI_PHYSICAL_FIRST_USE_WELCOME_TO_TINY=1
+PICHI_TEST_REVISION=1a245d0447b08e3fc681d439ea4ef3b392e034c2
+PICHI_PHYSICAL_FIRST_USE_AUT_REVISION=1a245d0447b08e3fc681d439ea4ef3b392e034c2
+PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT=1
+PICHI_PHYSICAL_FIRST_USE_RUN_ID=<fresh run UUID>
+PICHI_PHYSICAL_FIRST_USE_DEVICE_ID=<exact parent-verified lowercase 40-hex iPad UDID>
+```
+
+Stage a bounded regular file under the runner's Application Support directory at
+`PhysicalReleaseUI/first-use/<uppercase run UUID>.json`:
+
+```json
+{
+  "version": 1,
+  "authorization": {
+    "revision": "1a245d0447b08e3fc681d439ea4ef3b392e034c2",
+    "runID": "<same fresh run UUID>",
+    "deviceID": "<same parent-verified private iPad UDID>"
+  },
+  "issuedAt": "<current UTC ISO-8601 timestamp>",
+  "build": "34",
+  "bundleID": "ai.pichi.voice",
+  "legacyBundleID": "ai.pichi.voice.mobile",
+  "newNamespaceEmpty": true,
+  "legacyNamespacePreserved": true,
+  "destinationVerified": true,
+  "foregroundWelcomeAttested": true
+}
+```
+
+Admission rejects mismatched, missing, future, older-than-fifteen-minute or consumed
+attestations before interaction. The sibling `.consumed` marker claims this run
+before advancing Welcome. Only stable identifiers are used. Screenshots mark the
+attested Welcome, model-choice page and selected Tiny before download. Unexpected
+pages, errors, operations or prompts stop the driver; it never launches/relaunches,
+replaces app data, injects fixtures or accepts OS prompts. Three
+`testPhysicalFirstUse*` logical cases cover admission separately from the unexecuted
+physical UI case. The parent owns subsequent download and setup decisions.

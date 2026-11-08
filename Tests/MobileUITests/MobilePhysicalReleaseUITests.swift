@@ -160,6 +160,45 @@ private nonisolated struct PhysicalOwnedPlaybackReceipt: Codable {
     }
 }
 
+private nonisolated struct PhysicalFirstUseAuthorization: Codable, Equatable {
+    struct Unverified: Error {}
+    let revision: String
+    let runID: UUID
+    let deviceID: String
+
+    static func select(_ environment: [String: String], revision: String) throws -> Self {
+        guard revision == PhysicalOwnedPlaybackAuthorization.frozenRevision,
+              environment["PICHI_PHYSICAL_FIRST_USE_WELCOME_TO_TINY"] == "1",
+              environment["PICHI_PHYSICAL_FIRST_USE_AUT_REVISION"] == revision,
+              environment["PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT"] == "1",
+              let run = environment["PICHI_PHYSICAL_FIRST_USE_RUN_ID"], let runID = UUID(uuidString: run),
+              let deviceID = environment["PICHI_PHYSICAL_FIRST_USE_DEVICE_ID"], deviceID.count == 40,
+              deviceID.allSatisfy({ "0123456789abcdef".contains($0) }) else { throw Unverified() }
+        return Self(revision: revision, runID: runID, deviceID: deviceID)
+    }
+}
+
+private nonisolated struct PhysicalFirstUseReceipt: Codable {
+    let version: Int
+    let authorization: PhysicalFirstUseAuthorization
+    let issuedAt: Date
+    let build: String
+    let bundleID: String
+    let legacyBundleID: String
+    let newNamespaceEmpty: Bool
+    let legacyNamespacePreserved: Bool
+    let destinationVerified: Bool
+    let foregroundWelcomeAttested: Bool
+
+    func validate(_ expected: PhysicalFirstUseAuthorization, now: Date, consumed: Bool) throws {
+        let age = now.timeIntervalSince(issuedAt)
+        guard version == 1, authorization == expected, build == "34", bundleID == "ai.pichi.voice",
+              legacyBundleID == "ai.pichi.voice.mobile", newNamespaceEmpty, legacyNamespacePreserved,
+              destinationVerified, foregroundWelcomeAttested, !consumed,
+              age.isFinite, age >= 0, age <= 900 else { throw PhysicalFirstUseAuthorization.Unverified() }
+    }
+}
+
 private nonisolated enum PhysicalPlaybackPosition {
     static func seconds(_ value: String?) -> Int? {
         guard let value else { return nil }
@@ -549,6 +588,65 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         XCTAssertThrowsError(try regressingClock.observe(position: 10, now: 0.5))
         var invalidClock = PhysicalPlaybackPauseObservation(position: 10, now: 0)
         XCTAssertThrowsError(try invalidClock.observe(position: 10, now: .infinity))
+    }
+
+    private var firstUseTestEnvironment: [String: String] {
+        ["PICHI_PHYSICAL_FIRST_USE_WELCOME_TO_TINY": "1",
+         "PICHI_PHYSICAL_FIRST_USE_AUT_REVISION": PhysicalOwnedPlaybackAuthorization.frozenRevision,
+         "PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT": "1",
+         "PICHI_PHYSICAL_FIRST_USE_RUN_ID": "00000000-0000-0000-0000-000000000001",
+         "PICHI_PHYSICAL_FIRST_USE_DEVICE_ID": String(repeating: "a", count: 40)]
+    }
+
+    private func firstUseTestReceipt() throws -> PhysicalFirstUseReceipt {
+        PhysicalFirstUseReceipt(version: 1, authorization: try PhysicalFirstUseAuthorization.select(firstUseTestEnvironment,
+            revision: PhysicalOwnedPlaybackAuthorization.frozenRevision), issuedAt: Date(timeIntervalSince1970: 1000),
+            build: "34", bundleID: "ai.pichi.voice", legacyBundleID: "ai.pichi.voice.mobile",
+            newNamespaceEmpty: true, legacyNamespacePreserved: true, destinationVerified: true, foregroundWelcomeAttested: true)
+    }
+
+    func testPhysicalFirstUseReceiptAcceptsExactFreshUnusedAttestation() throws {
+        let receipt = try firstUseTestReceipt()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(PhysicalFirstUseReceipt.self, from: encoder.encode(receipt))
+        try decoded.validate(receipt.authorization, now: Date(timeIntervalSince1970: 1001), consumed: false)
+    }
+
+    func testPhysicalFirstUseAuthorizationRejectsMissingDisabledMalformedOrStaleInputs() {
+        for key in firstUseTestEnvironment.keys {
+            var changed = firstUseTestEnvironment
+            changed.removeValue(forKey: key)
+            XCTAssertThrowsError(try PhysicalFirstUseAuthorization.select(changed, revision: PhysicalOwnedPlaybackAuthorization.frozenRevision), key)
+            changed[key] = "invalid"
+            XCTAssertThrowsError(try PhysicalFirstUseAuthorization.select(changed, revision: PhysicalOwnedPlaybackAuthorization.frozenRevision), key)
+        }
+        XCTAssertThrowsError(try PhysicalFirstUseAuthorization.select(firstUseTestEnvironment, revision: String(repeating: "b", count: 40)))
+    }
+
+    func testPhysicalFirstUseReceiptRejectsForeignDestinationNamespaceAndUnpreservedLegacy() throws {
+        let receipt = try firstUseTestReceipt()
+        for key in ["PICHI_PHYSICAL_FIRST_USE_DEVICE_ID", "PICHI_PHYSICAL_FIRST_USE_RUN_ID"] {
+            var changed = firstUseTestEnvironment
+            changed[key] = key.hasSuffix("DEVICE_ID") ? String(repeating: "b", count: 40) : "00000000-0000-0000-0000-000000000002"
+            let foreign = try PhysicalFirstUseAuthorization.select(changed, revision: receipt.authorization.revision)
+            XCTAssertThrowsError(try receipt.validate(foreign, now: receipt.issuedAt, consumed: false))
+        }
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(receipt)) as? [String: Any])
+        for (key, invalid) in [("version", 2 as Any), ("build", "23"), ("bundleID", "ai.pichi.voice.mobile"),
+                               ("legacyBundleID", "other"), ("newNamespaceEmpty", false), ("legacyNamespacePreserved", false),
+                               ("destinationVerified", false), ("foregroundWelcomeAttested", false)] {
+            var changed = json
+            changed[key] = invalid
+            let unsafe = try JSONDecoder().decode(PhysicalFirstUseReceipt.self, from: JSONSerialization.data(withJSONObject: changed))
+            XCTAssertThrowsError(try unsafe.validate(receipt.authorization, now: receipt.issuedAt, consumed: false), key)
+        }
+        for time in [999.0, 1901.0] {
+            XCTAssertThrowsError(try receipt.validate(receipt.authorization, now: Date(timeIntervalSince1970: time), consumed: false))
+        }
+        XCTAssertThrowsError(try receipt.validate(receipt.authorization, now: receipt.issuedAt, consumed: true))
     }
 
     func testPhysicalSpeakerPreflightAcceptsVerifiedCurrentSettingsAndSession() throws {
@@ -1907,6 +2005,72 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         capture("post-soak-06-normal-relaunch", revision: revision)
         try await reopenOwnedSession("post-soak-07")
         print("[PHYSICAL_POST_SOAK] completed sessionID=\(sessionID) afterStopOnly=true fullSoakPass=false delivery_attempted=false")
+        #endif
+    }
+
+    /// A bounded first-use handoff: select Tiny, then stop before any download or other choice.
+    @MainActor
+    func testPhysicalNewUnifiedIPadWelcomeToTinySelection() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires the parent's exact newly installed unified physical iPad app")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_FIRST_USE_WELCOME_TO_TINY"] == "1" else {
+            throw XCTSkip("Explicitly authorize only Welcome to Tiny selection in the new empty namespace")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let selected = try PhysicalFirstUseAuthorization.select(environment, revision: revision)
+        try require(UIDevice.current.userInterfaceIdiom == .pad, "First-use admission is restricted to the attested iPad")
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                 appropriateFor: nil, create: false)
+        let directory = support.appendingPathComponent("PhysicalReleaseUI/first-use", isDirectory: true)
+        let receiptURL = directory.appendingPathComponent("\(selected.runID.uuidString).json")
+        let consumedURL = directory.appendingPathComponent("\(selected.runID.uuidString).consumed")
+        let values = try receiptURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        try require(values.isRegularFile == true && values.isSymbolicLink != true && (values.fileSize ?? Int.max) <= 8192,
+                    "First use requires a bounded regular parent receipt in this runner")
+        let data = try Data(contentsOf: receiptURL)
+        try require(data.count <= 8192, "The first-use receipt exceeded its bound")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let receipt = try decoder.decode(PhysicalFirstUseReceipt.self, from: data)
+        try receipt.validate(selected, now: Date(), consumed: FileManager.default.fileExists(atPath: consumedURL.path))
+        let running = XCUIApplication(bundleIdentifier: "ai.pichi.voice")
+        try require(running.state == .runningForeground, "Never launch, activate or adopt a background first-use app")
+        let app = try attachReadOnlyPhysicalApp(revision: revision)
+        func requirePage(_ step: Int) throws {
+            let visibleSteps = (0...6).filter { app.descendants(matching: .any)["onboarding.step.\($0)"].firstMatch.exists }
+            try require(app.state == .runningForeground && app.alerts.count == 0 && app.sheets.count == 0
+                        && visibleSteps == [step] && !app.descendants(matching: .any)["onboarding.error"].firstMatch.exists
+                        && !app.buttons["onboarding.cancel"].exists && !app.buttons["meeting.start"].exists
+                        && !app.buttons["ownerVoice.stop"].exists
+                        && !app.otherElements["ActivityListView"].exists,
+                        "Stop at any unexpected page, operation, prompt or recording state")
+        }
+        try requirePage(0)
+        let next = app.buttons["onboarding.next"]
+        try require(next.exists && next.isEnabled && next.isHittable, "Welcome must expose its actual Next control")
+        capture("first-use-01-attested-welcome", revision: revision)
+        try Data("claimed".utf8).write(to: consumedURL, options: .withoutOverwriting)
+        try tap(next, "Advance only the attested fresh Welcome page")
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+            app.descendants(matching: .any)["onboarding.step.1"].firstMatch.exists
+                && !app.descendants(matching: .any)["onboarding.step.0"].firstMatch.exists
+        })
+        try requirePage(1)
+        capture("first-use-02-model-choice", revision: revision)
+        let tiny = app.buttons["onboarding.model.whisper-tiny"]
+        if !tiny.isHittable {
+            try reveal(tiny, in: app, revision: revision, container: app.scrollViews.firstMatch)
+        }
+        try requirePage(1)
+        try tap(tiny, "Select only the requested Tiny model through its real onboarding card")
+        try await PhysicalUITransitionWait.until(timeout: 5, condition: { tiny.isSelected })
+        try requirePage(1)
+        try require(!app.descendants(matching: .any)["model.preparation.progress"].firstMatch.exists,
+                    "This bounded driver must stop before model download or activation")
+        capture("first-use-03-tiny-selected-before-download", revision: revision)
+        print("[PHYSICAL_FIRST_USE] welcome_to_tiny_selection=true download_started=false setup_completed=false account_choice_reached=false")
         #endif
     }
 
