@@ -139,7 +139,7 @@ final class AppServices: ObservableObject {
                 let savedBackendID = settings.meetingTranscriptionBackendID
                 let storageMode: MeetingAudioStorageMode = settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
                 let speakerLabelsEnabled = settings.meetingSpeakerLabelsEnabled
-                let speakerProcessingMode = settings.meetingSpeakerProcessingMode(for: mode)
+                let speakerProcessingMode = settings.recordingSpeakerProcessingMode(for: mode)
                 let piiRedactionEnabled = settings.meetingPIIRedactionRequested
                 let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) ?? []
                 let language = preferences.languageCode.flatMap { supported.contains($0) ? $0 : nil }
@@ -394,8 +394,8 @@ final class AppServices: ObservableObject {
                         settings.meetingTranscriptionBackendID.rawValue,
                         settings.meetingRecordingDefaults.languageCode ?? "",
                         String(settings.meetingPIIRedactionEnabled), String(settings.meetingSpeakerLabelsEnabled),
-                        settings.meetingSpeakerProcessingMode(for: .inRoom).rawValue, String(settings.meetingSaveAudio)].joined(separator: "|")
-        let enabled = settings.meetingPIIRedactionEnabled || settings.meetingSpeakerProcessingMode(for: .inRoom) == .streaming
+                        settings.recordingSpeakerProcessingMode(for: .inRoom).rawValue, String(settings.meetingSaveAudio)].joined(separator: "|")
+        let enabled = settings.meetingPIIRedactionEnabled || settings.recordingSpeakerProcessingMode(for: .inRoom) == .streaming
         if MeetingTimelineTrace.enabled {
             let decision = ["sceneActive": String(isSceneActive), "uiReady": String(isUIReady),
                 "restoreComplete": String(hasRestoredInitialState), "quiescent": String(coordinator.isQuiescent),
@@ -423,7 +423,7 @@ final class AppServices: ObservableObject {
 
     private func observeIdleResourceStores() {
         let store = PichiMeetingProviderFactory.speakerModelStore(for: settings.selectedSpeechModel.rawValue,
-            speakerProcessingMode: settings.meetingSpeakerProcessingMode(for: .inRoom))
+            speakerProcessingMode: settings.recordingSpeakerProcessingMode(for: .inRoom))
         guard idleResourceObservers.isEmpty || store !== observedSpeakerStore else { return }
         observedSpeakerStore = store
         idleResourceObservers.removeAll()

@@ -206,7 +206,7 @@ extension MeetingProcessingPipeline {
             MeetingTimelineTrace.shared?.record("idle_preparation_selection", fields: ["hasOwner": "false"])
             return nil
         }
-        let speakerMode = settings.meetingSpeakerProcessingMode(for: .inRoom)
+        let speakerMode = settings.recordingSpeakerProcessingMode(for: .inRoom)
         let nativePairEnabled = PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: modelID) == true
             && settings.meetingSpeakerLabelsEnabled && speakerMode == .streaming && idleResourcePreparation != nil
         MeetingTimelineTrace.shared?.record("idle_preparation_selection", fields: ["hasOwner": "true",

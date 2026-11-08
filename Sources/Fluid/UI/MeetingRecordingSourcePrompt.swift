@@ -334,8 +334,8 @@ final class MeetingRecordingSourcePromptController: ObservableObject, PrivatePro
         defaults.languageCode = defaults.languageCode ?? MeetingTranscriptionSetupDraft(settings: .shared).languageCode
         let audioStorageMode: MeetingAudioStorageMode = SettingsStore.shared.meetingSaveAudio ? .retainedFiles : .memoryOnly
         let speakerLabelsEnabled = SettingsStore.shared.meetingSpeakerLabelsEnabled
-        let inRoomSpeakerProcessingMode = SettingsStore.shared.meetingSpeakerProcessingMode(for: .inRoom)
-        let onlineCallSpeakerProcessingMode = SettingsStore.shared.meetingSpeakerProcessingMode(for: .onlineCall)
+        let inRoomSpeakerProcessingMode = SettingsStore.shared.recordingSpeakerProcessingMode(for: .inRoom)
+        let onlineCallSpeakerProcessingMode = SettingsStore.shared.recordingSpeakerProcessingMode(for: .onlineCall)
         let piiRedactionEnabled = SettingsStore.shared.meetingPIIRedactionEnabled
         let target = AppServices.shared.meetingAutomaticTarget
         let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID

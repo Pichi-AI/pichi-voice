@@ -410,6 +410,17 @@ extension SettingsStore {
             && descriptor?.supportedInputs.contains(input) == true ? .streaming : .afterRecording
     }
 
+    /// Resolve a fresh default request for the selected backend without rewriting the saved
+    /// preference or any pinned attempt. Explicit configurations still pass admission unchanged.
+    /// Input/topology incompatibility remains an admission error, rather than a silent fallback.
+    func recordingSpeakerProcessingMode(for mode: MeetingCaptureMode) -> MeetingSpeakerProcessingMode {
+        let requested = self.meetingSpeakerProcessingMode(for: mode)
+        guard let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.selectedSpeechModel.rawValue),
+              !descriptor.supportedSpeakerProcessingModes.contains(requested),
+              descriptor.supportedSpeakerProcessingModes.contains(.afterRecording) else { return requested }
+        return .afterRecording
+    }
+
     /// Freeze the current recording policy when a platform has resolved its sources.
     /// Capture admission owns encryption requirements; applying preferences must preserve
     /// that explicit requirement as well as the selected sources and backend override.
@@ -419,7 +430,7 @@ extension SettingsStore {
         configured.audioStorageMode = self.meetingSaveAudio ? .retainedFiles : .memoryOnly
         configured.speakerLabelsEnabled = speakerLabelsEnabled
         configured.speakerProcessingMode = speakerLabelsEnabled
-            && self.meetingSpeakerProcessingMode(for: configuration.mode) == .streaming ? .streaming : nil
+            && self.recordingSpeakerProcessingMode(for: configuration.mode) == .streaming ? .streaming : nil
         configured.piiRedactionEnabled = self.meetingPIIRedactionEnabled
         return configured
     }

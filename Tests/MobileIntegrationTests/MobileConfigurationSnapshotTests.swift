@@ -7,6 +7,40 @@ import XCTest
 /// microphone lookup is controlled; the settings, coordinator, pipeline and store are real.
 @MainActor
 final class MobileConfigurationSnapshotTests: XCTestCase {
+    func testSelectedQwenDefaultRequestUsesAfterRecordingWithoutChangingSavedStreamingPreference() async throws {
+        let suite = "QwenDefaultConfiguration.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .qwen3Asr06BQ4
+        settings.meetingSpeakerProcessingMode = .streaming
+        settings.meetingSaveAudio = true
+        settings.meetingSpeakerLabelsEnabled = true
+        settings.meetingPIIRedactionEnabled = false
+        let microphone = MeetingMicrophoneIdentity(captureDeviceID: "synthetic-qwen", displayName: "Synthetic microphone")
+        let services = AppServices(
+            store: MeetingSessionStore(rootDirectory: root.appendingPathComponent("meetings", isDirectory: true)),
+            settings: settings,
+            privacy: PichiTranscriptPrivacyService(modelStore: .init(directory: root.appendingPathComponent("privacy", isDirectory: true))),
+            microphoneResolver: { _ in microphone }
+        )
+        let configuration = try await services.meetingSessionCoordinator.defaultConfiguration(mode: .inRoom,
+            title: "Synthetic after-recording request")
+        XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, .afterRecording)
+        XCTAssertEqual(configuration.languageCode, "auto")
+        XCTAssertEqual(configuration.audioStorageMode, .retainedFiles)
+        XCTAssertTrue(configuration.speakerLabelsEnabled)
+        XCTAssertFalse(configuration.piiRedactionEnabled)
+        XCTAssertEqual(configuration.microphone, microphone)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
+        XCTAssertEqual(defaults.string(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode), "streaming")
+        try configuration.validate()
+        let session = MeetingSession(configuration: configuration,
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        XCTAssertEqual(session.effectiveSpeakerProcessingMode, .afterRecording)
+    }
+
     func testNewInRoomRequestsPreferRegisteredStreamingWithoutChangingLegacyChoices() throws {
         let suite = "StreamingCapabilityDefaults.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

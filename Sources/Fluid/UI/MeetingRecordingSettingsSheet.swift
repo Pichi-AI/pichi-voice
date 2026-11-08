@@ -328,7 +328,7 @@ struct MeetingRecordingSettingsSheet: View {
                 }
             }
 
-            let processingMode = self.settings.meetingSpeakerProcessingMode(for: self.draft.mode)
+            let processingMode = self.settings.recordingSpeakerProcessingMode(for: self.draft.mode)
             if let store = PichiMeetingProviderFactory.speakerModelStore(for: self.settings.selectedSpeechModel.rawValue,
                 speakerProcessingMode: processingMode) {
                 MeetingModelSettingsSection(store: store, processingMode: processingMode,

@@ -235,6 +235,36 @@ final class QwenCompactIntegrationTests: XCTestCase {
         XCTAssertNil(provider.resolvedLanguageCode(explicit: "ru"))
     }
 
+    func testNewRecordingResolvesSelectedCapabilitiesWithoutMigratingStoredOrExplicitRequests() throws {
+        let suite = "QwenRecordingMode.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.meetingSpeakerProcessingMode = .streaming
+        settings.meetingSaveAudio = false
+        settings.meetingPIIRedactionEnabled = true
+        settings.selectedSpeechModel = .qwen3Asr06BQ4
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
+        XCTAssertEqual(settings.recordingSpeakerProcessingMode(for: .inRoom), .afterRecording)
+        XCTAssertEqual(settings.recordingSpeakerProcessingMode(for: .onlineCall), .afterRecording)
+        XCTAssertEqual(defaults.string(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode), "streaming")
+        XCTAssertFalse(settings.meetingSaveAudio)
+        XCTAssertTrue(settings.meetingPIIRedactionEnabled)
+
+        let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(
+            for: SettingsStore.SpeechModel.qwen3Asr06BQ4.rawValue))
+        let explicit = MeetingFinalProcessingConfiguration(asrModel: SettingsStore.SpeechModel.qwen3Asr06BQ4.rawValue,
+            languageCode: "auto", speakerProcessingMode: .streaming)
+        XCTAssertThrowsError(try descriptor.validateSpeakerProcessingMode(configuration: explicit, mode: .inRoom),
+            "An explicit pinned unsupported request must still fail admission")
+        settings.selectedSpeechModel = .gigaam
+        XCTAssertEqual(settings.recordingSpeakerProcessingMode(for: .inRoom), .streaming,
+            "Returning to a capable model restores the unchanged saved preference")
+        XCTAssertEqual(settings.recordingSpeakerProcessingMode(for: .onlineCall),
+                       settings.meetingSpeakerProcessingMode(for: .onlineCall),
+            "Input topology is validated by admission, not silently changed by request resolution")
+    }
+
     func testRecordingPresentationUsesRegisteredCapabilityAndRequestedMode() {
         let factory = PichiMeetingProviderFactory.self
         let qwenID = SettingsStore.SpeechModel.qwen3Asr06BQ4.rawValue
