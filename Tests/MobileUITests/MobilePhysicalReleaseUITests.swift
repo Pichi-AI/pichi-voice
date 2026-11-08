@@ -2,9 +2,381 @@ import XCTest
 import UIKit
 @preconcurrency import AVFoundation
 
+private nonisolated struct PhysicalTinySettingsProfile: Codable, Equatable, Sendable {
+    var model: String
+    var saveAudio: Bool
+    var pii: Bool
+    static let original = Self(model: "gigaam-v3-eou", saveAudio: true, pii: false)
+    static let strict = Self(model: "whisper-tiny", saveAudio: false, pii: true)
+}
+
+private nonisolated struct PhysicalTinySettingsReceipt: Codable {
+    enum Phase: String, Codable { case changing, prepared, restored, restorationRequired }
+    var version: Int
+    var revision: String
+    var runID: String
+    var original: PhysicalTinySettingsProfile
+    var phase: Phase
+
+    func validate(revision: String, runID: String) throws {
+        guard version == 1, self.revision == revision, self.runID == runID,
+              original == .original else {
+            throw NSError(domain: "PhysicalTinySettingsReceipt", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Receipt ownership, frozen revision or original profile differs"])
+        }
+    }
+
+    func save(to url: URL) throws {
+        try JSONEncoder().encode(self).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+}
+
+@MainActor private enum PhysicalTinySettingsTransaction {
+    enum Key: Equatable { case model, saveAudio, pii }
+    struct RestorationRequired: Error {}
+    typealias Change = @MainActor (Key, PhysicalTinySettingsProfile) async throws -> Void
+    typealias Verify = @MainActor (PhysicalTinySettingsProfile) throws -> Void
+
+    static func prepare(change: @escaping Change, verify: @escaping Verify,
+                        commit: () throws -> Void) async throws {
+        do {
+            for key: Key in [.saveAudio, .pii, .model] {
+                try Task.checkCancellation()
+                try await change(key, .strict)
+            }
+            try Task.checkCancellation()
+            try verify(.strict)
+            try commit()
+        } catch {
+            let preparationError = error
+            do { try await restore(change: change, verify: verify) }
+            catch { throw RestorationRequired() }
+            throw preparationError
+        }
+    }
+
+    static func restore(change: @escaping Change, verify: @escaping Verify) async throws {
+        // Mandatory rollback owns its task and joins even when preparation was cancelled.
+        let cleanup = Task { @MainActor in
+            for key: Key in [.model, .pii, .saveAudio] { try await change(key, .original) }
+            try verify(.original)
+        }
+        try await cleanup.value
+    }
+}
+
+@MainActor private final class PhysicalTinySettingsFake {
+    enum Failure: Error { case injected }
+    var profile = PhysicalTinySettingsProfile.original
+    var restoreKeys: [PhysicalTinySettingsTransaction.Key] = []
+    let failingPrepareStep: Int?
+    let cancelPrepareStep: Int?
+    let failRestoration: Bool
+    private var prepareSteps = 0
+
+    init(failingPrepareStep: Int? = nil, cancelPrepareStep: Int? = nil, failRestoration: Bool = false) {
+        self.failingPrepareStep = failingPrepareStep
+        self.cancelPrepareStep = cancelPrepareStep
+        self.failRestoration = failRestoration
+    }
+
+    func change(_ key: PhysicalTinySettingsTransaction.Key, _ target: PhysicalTinySettingsProfile) async throws {
+        if target == .original {
+            restoreKeys.append(key)
+            if failRestoration { throw Failure.injected }
+        }
+        switch key {
+        case .model: profile.model = target.model
+        case .saveAudio: profile.saveAudio = target.saveAudio
+        case .pii: profile.pii = target.pii
+        }
+        if target == .strict {
+            prepareSteps += 1
+            if cancelPrepareStep == prepareSteps { withUnsafeCurrentTask { $0?.cancel() } }
+            if failingPrepareStep == prepareSteps { throw Failure.injected }
+        }
+    }
+
+    func verify(_ expected: PhysicalTinySettingsProfile) throws {
+        if profile != expected { throw Failure.injected }
+    }
+}
+
 /// Opt-in tests of the installed app through its public UI. Audible fixtures belong
 /// to the runner; silent input uses only the app's explicit DEBUG capture adapter.
 final class MobilePhysicalReleaseUITests: XCTestCase {
+    @MainActor
+    func testPhysicalPrepareTinyStrictSettings() async throws {
+        try await physicalTinySettings(restore: false)
+    }
+
+    @MainActor
+    func testPhysicalRestoreTinyOriginalSettings() async throws {
+        try await physicalTinySettings(restore: true)
+    }
+
+    @MainActor private func physicalTinySettings(restore: Bool) async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Settings preparation requires the explicitly owned physical device")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_TINY_SETTINGS_OPERATION"] == (restore ? "restore" : "prepare") else {
+            throw XCTSkip("Enable exactly the requested physical settings operation")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let runID = try XCTUnwrap(environment["PICHI_PHYSICAL_TINY_SETTINGS_RUN_ID"])
+        try require(revision.count == 40 && revision.allSatisfy { "0123456789abcdef".contains($0) }
+            && UUID(uuidString: runID) != nil
+            && environment["PICHI_PHYSICAL_TINY_SETTINGS_IDLE_PREFLIGHT"] == "1",
+            "The parent must verify the frozen AUT, current backup, idle state and exclusive ownership")
+        try Task.checkCancellation()
+        let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice")
+        app.launchArguments = []
+        app.launchEnvironment = [:]
+        try require(app.state == .runningForeground || app.state == .runningBackground,
+                    "Settings preparation never launches or resumes an unknown AUT")
+        app.activate()
+        try tinySettingsIdle(app, revision: revision)
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                 appropriateFor: nil, create: true)
+        let directory = support.appendingPathComponent("PhysicalReleaseUI/tiny-settings", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let url = directory.appendingPathComponent(runID + ".json")
+        let change: PhysicalTinySettingsTransaction.Change = { key, target in
+            try self.tinySettingsIdle(app, revision: revision)
+            switch key {
+            case .model: try self.tinySettingsSelectModel(target.model, app: app, revision: revision)
+            case .saveAudio, .pii:
+                try self.tinySettingsOpen("settings.privacy", app: app, revision: revision)
+                let identifier = key == .saveAudio ? "privacy.saveAudio" : "privacy.pii"
+                let value = key == .saveAudio ? target.saveAudio : target.pii
+                let control = app.switches[identifier]
+                try self.tinySettingsReveal(control, app: app, revision: revision)
+                let before = try XCTUnwrap(control.value as? String)
+                try self.require(before == "0" || before == "1", "Read an exact native switch value before changing it")
+                if before != (value ? "1" : "0") {
+                    try self.require(control.isEnabled && control.isHittable && app.alerts.count == 0,
+                                     "Change only the observed enabled privacy switch")
+                    control.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+                }
+                let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value ? "1" : "0"), object: control)
+                try self.require(XCTWaiter.wait(for: [changed], timeout: 10) == .completed,
+                                 "Verify the requested native switch value")
+                if key == .pii {
+                    let active = app.descendants(matching: .any)["privacy.pii.active"].firstMatch
+                    if value {
+                        try self.require(active.waitForExistence(timeout: 180), "Requested PII must actually finish preparation")
+                    } else {
+                        let progress = app.descendants(matching: .any)["privacy.pii.progress"].firstMatch
+                        try self.require(active.waitForNonExistence(timeout: 30)
+                            && progress.waitForNonExistence(timeout: 30), "PII restoration must finish cancellation")
+                    }
+                }
+            }
+            try self.require(app.alerts.count == 0, "Never approve an operating-system or application prompt")
+        }
+        let verify: PhysicalTinySettingsTransaction.Verify = { expected in
+            try self.require(self.tinySettingsRead(app, revision: revision) == expected,
+                             "The public UI must show the complete expected settings profile")
+        }
+        if restore || FileManager.default.fileExists(atPath: url.path) {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            try require(values.isRegularFile == true && values.isSymbolicLink != true
+                && (values.fileSize ?? Int.max) <= 4096, "Only a bounded regular runner-owned receipt can authorize restoration")
+            var receipt = try JSONDecoder().decode(PhysicalTinySettingsReceipt.self, from: Data(contentsOf: url))
+            try receipt.validate(revision: revision, runID: runID)
+            if !restore {
+                try require(receipt.phase == .prepared, "Restore an interrupted preparation before reusing its run ID")
+                try verify(.strict)
+                return
+            }
+            if receipt.phase == .restored { try verify(.original); return }
+            do {
+                try await PhysicalTinySettingsTransaction.restore(change: change, verify: verify)
+                receipt.phase = .restored
+                try receipt.save(to: url)
+                capture("tiny-settings-restored", revision: revision)
+            } catch {
+                receipt.phase = .restorationRequired
+                try? receipt.save(to: url)
+                throw error
+            }
+        } else {
+            // The concrete original profile comes from the parent's verified backup.
+            // Reject a disagreement before the first mutation, never adopt it as a baseline.
+            try verify(.original)
+            try tinySettingsOpen("settings.recording", app: app, revision: revision)
+            let speakers = app.switches["recording.diarization"]
+            try tinySettingsReveal(speakers, app: app, revision: revision)
+            try require(speakers.value as? String == "1", "The unchanged participant setting must already satisfy the Tiny testcase")
+            try tinySettingsOpen("settings.models", app: app, revision: revision)
+            try tinySettingsReveal(app.buttons["model.activate.whisper-tiny"], app: app, revision: revision)
+            try require(app.buttons["model.activate.whisper-tiny"].isEnabled,
+                        "Tiny must already be installed; downloading or deleting a model is outside this driver")
+            var receipt = PhysicalTinySettingsReceipt(version: 1, revision: revision, runID: runID,
+                                                      original: .original, phase: .changing)
+            try receipt.save(to: url)
+            do {
+                try await PhysicalTinySettingsTransaction.prepare(change: change, verify: verify) {
+                    receipt.phase = .prepared
+                    try receipt.save(to: url)
+                }
+                capture("tiny-settings-prepared", revision: revision)
+            } catch {
+                receipt.phase = error is PhysicalTinySettingsTransaction.RestorationRequired ? .restorationRequired : .restored
+                try? receipt.save(to: url)
+                throw error
+            }
+        }
+        try tinySettingsIdle(app, revision: revision)
+        print("[PHYSICAL_TINY_SETTINGS] operation=\(restore ? "restore" : "prepare") runID=\(runID) verified=true")
+        #endif
+    }
+
+    @MainActor private func tinySettingsIdle(_ app: XCUIApplication, revision: String) throws {
+        try require(app.state == .runningForeground && app.alerts.count == 0, "Preserve any foreground interruption or prompt")
+        try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
+        try require(!app.buttons["meeting.stop"].exists
+            && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+            && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+            "This driver owns no recording and must never stop or alter an active attempt")
+    }
+
+    @MainActor private func tinySettingsOpen(_ identifier: String, app: XCUIApplication, revision: String) throws {
+        try require(app.state == .runningForeground && app.alerts.count == 0, "Settings navigation cannot dismiss a prompt")
+        try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
+        try tap(app.buttons[identifier], "Open only the requested public Settings page")
+    }
+
+    @MainActor private func tinySettingsReveal(_ element: XCUIElement, app: XCUIApplication, revision: String) throws {
+        if element.exists && element.isHittable { return }
+        let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+        try require(scroll.exists && app.alerts.count == 0, "Use only the ordinary Settings form")
+        for _ in 0..<5 where !element.exists || !element.isHittable { scroll.swipeDown() }
+        try reveal(element, in: app, revision: revision)
+        try require(element.isHittable, "Only the observed existing control may be used")
+    }
+
+    @MainActor private func tinySettingsSelectedModel(_ app: XCUIApplication, revision: String) throws -> String {
+        let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+        for direction in 0..<2 {
+            for _ in 0..<6 {
+                let selected = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "model.selected.")).allElementsBoundByIndex
+                let identifiers = Set(selected.map(\.identifier))
+                if identifiers.count == 1, let identifier = identifiers.first {
+                    let model = String(identifier.dropFirst("model.selected.".count))
+                    try require(model == "gigaam-v3-eou" || model == "whisper-tiny", "Do not overwrite an unrelated model selection")
+                    return model
+                }
+                try require(identifiers.isEmpty && scroll.exists && app.alerts.count == 0, "Model selection must be unambiguous")
+                if direction == 0 { scroll.swipeDown() } else { scroll.swipeUp() }
+            }
+        }
+        throw verificationFailure("The public UI did not expose one installed selected model")
+    }
+
+    @MainActor private func tinySettingsSelectModel(_ model: String, app: XCUIApplication, revision: String) throws {
+        try tinySettingsOpen("settings.models", app: app, revision: revision)
+        if try tinySettingsSelectedModel(app, revision: revision) == model { return }
+        let activate = app.buttons["model.activate.\(model)"]
+        try tinySettingsReveal(activate, app: app, revision: revision)
+        try tap(activate, "Activate only an already installed owned model")
+        try require(app.descendants(matching: .any)["model.selected.\(model)"].firstMatch.waitForExistence(timeout: 45),
+                    "The model must finish its public activation transaction")
+    }
+
+    @MainActor private func tinySettingsRead(_ app: XCUIApplication, revision: String) throws -> PhysicalTinySettingsProfile {
+        try tinySettingsIdle(app, revision: revision)
+        try tinySettingsOpen("settings.models", app: app, revision: revision)
+        let model = try tinySettingsSelectedModel(app, revision: revision)
+        try tinySettingsOpen("settings.privacy", app: app, revision: revision)
+        func value(_ identifier: String) throws -> Bool {
+            let control = app.switches[identifier]
+            try tinySettingsReveal(control, app: app, revision: revision)
+            let raw = try XCTUnwrap(control.value as? String)
+            try require(raw == "0" || raw == "1", "Only exact native switch values authorize mutation")
+            return raw == "1"
+        }
+        let audio = try value("privacy.saveAudio"), pii = try value("privacy.pii")
+        if pii {
+            try require(app.descendants(matching: .any)["privacy.pii.active"].firstMatch.waitForExistence(timeout: 180),
+                        "Requested PII is not yet active")
+        }
+        return .init(model: model, saveAudio: audio, pii: pii)
+    }
+
+    @MainActor
+    func testTinySettingsPrepareRollsBackEveryPartiallyAppliedStep() async throws {
+        for failingStep in 1...3 {
+            let fake = PhysicalTinySettingsFake(failingPrepareStep: failingStep)
+            do {
+                try await PhysicalTinySettingsTransaction.prepare(change: fake.change, verify: fake.verify, commit: {})
+                XCTFail("A failed partial preparation must not succeed")
+            } catch PhysicalTinySettingsFake.Failure.injected {}
+            XCTAssertEqual(fake.profile, .original)
+            XCTAssertEqual(fake.restoreKeys, [.model, .pii, .saveAudio])
+        }
+    }
+
+    @MainActor
+    func testTinySettingsCommitRequiresVerifiedTargetAndCommitFailureRollsBack() async throws {
+        let fake = PhysicalTinySettingsFake()
+        var committed = false
+        try await PhysicalTinySettingsTransaction.prepare(change: fake.change, verify: fake.verify) {
+            XCTAssertEqual(fake.profile, .strict)
+            committed = true
+        }
+        XCTAssertTrue(committed)
+        try await PhysicalTinySettingsTransaction.restore(change: fake.change, verify: fake.verify)
+        XCTAssertEqual(fake.profile, .original)
+        do {
+            try await PhysicalTinySettingsTransaction.prepare(change: fake.change, verify: fake.verify) {
+                throw PhysicalTinySettingsFake.Failure.injected
+            }
+            XCTFail("A receipt commit failure must restore the original settings")
+        } catch PhysicalTinySettingsFake.Failure.injected {
+            XCTAssertEqual(fake.profile, .original)
+        }
+    }
+
+    @MainActor
+    func testTinySettingsCancellationJoinsRestorationAndReportsItsFailure() async throws {
+        let work = Task { @MainActor in
+            let fake = PhysicalTinySettingsFake(cancelPrepareStep: 2)
+            do {
+                try await PhysicalTinySettingsTransaction.prepare(change: fake.change, verify: fake.verify, commit: {})
+                return false
+            } catch is CancellationError { return fake.profile == .original }
+            catch { return false }
+        }
+        let restored = await work.value
+        XCTAssertTrue(restored)
+        let fake = PhysicalTinySettingsFake(failingPrepareStep: 1, failRestoration: true)
+        do {
+            try await PhysicalTinySettingsTransaction.prepare(change: fake.change, verify: fake.verify, commit: {})
+            XCTFail("A failed rollback must remain an explicit recovery requirement")
+        } catch is PhysicalTinySettingsTransaction.RestorationRequired {
+            XCTAssertNotEqual(fake.profile, .original)
+        }
+    }
+
+    @MainActor
+    func testTinySettingsReceiptRejectsAnotherRevisionRunAndBaseline() throws {
+        let revision = String(repeating: "a", count: 40), run = "00000000-0000-0000-0000-000000000001"
+        var receipt = PhysicalTinySettingsReceipt(version: 1, revision: revision, runID: run, original: .original, phase: .changing)
+        let decoded = try JSONDecoder().decode(PhysicalTinySettingsReceipt.self, from: JSONEncoder().encode(receipt))
+        XCTAssertNoThrow(try decoded.validate(revision: revision, runID: run))
+        XCTAssertThrowsError(try decoded.validate(revision: String(repeating: "b", count: 40), runID: run))
+        XCTAssertThrowsError(try decoded.validate(revision: revision, runID: UUID().uuidString))
+        receipt.original.saveAudio = false
+        XCTAssertThrowsError(try receipt.validate(revision: revision, runID: run))
+        receipt.original = .original
+        receipt.version = 2
+        XCTAssertThrowsError(try receipt.validate(revision: revision, runID: run))
+    }
+
     /// Opt-in regression against an already installed ordinary app. The parent
     /// preserves its data, owns the phone/audio lease and selects destination artifacts.
     @MainActor

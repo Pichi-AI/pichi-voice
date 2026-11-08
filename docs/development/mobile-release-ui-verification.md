@@ -144,3 +144,37 @@ or personal folder. Separate UI delivery verification needs an observed, explici
 local destination. A single synthetic voice does not prove two-speaker separation,
 Russian PII recall, mixed-language accuracy, an hour-long thermal run or GigaAM
 background performance on the 2017 iPad.
+
+## Physical Tiny settings transaction
+
+When the verified original settings are GigaAM, audio saving ON and PII OFF,
+`MobilePhysicalReleaseUITests.testPhysicalPrepareTinyStrictSettings` uses only the
+ordinary model/Privacy controls to prepare already installed Tiny, audio OFF and
+PII ON. It waits for PII to become active. No recording, account, voice profile,
+model deletion or OS prompt belongs to this driver.
+
+The physical owner must first preserve current data and verify the ordinary
+frozen AUT is running and idle. In the runner only, set `PICHI_TEST_REVISION` to
+that full source SHA, `PICHI_PHYSICAL_TINY_SETTINGS_IDLE_PREFLIGHT=1`,
+`PICHI_PHYSICAL_TINY_SETTINGS_OPERATION=prepare`, and
+`PICHI_PHYSICAL_TINY_SETTINGS_RUN_ID` to a fresh UUID. Run only the prepare
+selector. A disagreement with the original settings fails before mutation.
+
+Run the existing Tiny recording selector separately. Whether it passes or fails,
+once its owned recording has joined Stop, run only
+`testPhysicalRestoreTinyOriginalSettings` with operation `restore` and the same
+UUID/source SHA. Do not rely on XCTest's test-method ordering. Preserve the
+runner data container between these calls. A bounded receipt under its own
+`Library/Application Support/PhysicalReleaseUI/tiny-settings/<UUID>.json` owns
+restoration; it contains only the three settings and source/run identity.
+
+Preparation failure or cancellation joins rollback in an independent cleanup
+task. An interruption that prevents rollback leaves an explicit
+`restorationRequired` receipt for the physical owner. Restoration refuses an
+active recording or prompt and never stops an attempt it does not own. An
+already restored receipt only verifies the original profile again. Keep the
+receipt with the test evidence after successful restoration.
+
+Four `testTinySettings*` cases exercise the transaction with deterministic fake
+controls, including partial writes, cancellation, commit failure, restoration
+failure and mismatched receipts. They do not establish physical UI acceptance.
