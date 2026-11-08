@@ -336,8 +336,9 @@ opt-in physical UI continuation. It attaches to the unchanged ordinary AUT at
 `1a245d0447b08e3fc681d439ea4ef3b392e034c2`. The parent must hold the device/UI/audio
 lease, independently back up the exact completed synthetic session and its retained
 audio, and verify the AUT is idle. Never select an existing private/user recording.
-The first visible playable paragraph must have enough audio for observed progress,
-a two-second pause and resumed progress (at least twelve seconds is recommended).
+The first visible playable paragraph must have enough audio for bounded control
+revelation, observed progress, queued-callback settling, stable pause and resumed
+progress. Its audio range is the whole displayed paragraph, not one word's duration.
 No recording, model/settings/account changes, export, clipboard or relaunch occur.
 
 In the runner only, set `PICHI_PHYSICAL_OWNED_PLAYBACK_DELETE=1`,
@@ -376,7 +377,17 @@ on failure. Retry only with fresh verification and a new run UUID.
 The test opens only the unique exact history UUID with its expected title. It
 uses the existing paragraph audio control, native slider value and English/Russian
 transport labels to observe progression, stable pause, resumed progression and
-player closure. Pause first allows at most one queued displayed-second boundary
+player closure. Before opening, it pins the unique paragraph containing the exact
+audio button inside the owned `meeting.transcript` scroll view. It reveals the
+transport and slider only inside that paragraph. Header controls can scroll away;
+the exact pinned paragraph and idle state retain ownership after the initial UUID
+and title admission. Normal stop and failure cleanup reverse-reveal only the same
+paragraph's Close control. All reveal gestures are bounded and abort on unsafe
+state; cancellation propagates before another gesture, while owned cleanup remains
+available after cancellation. Scoped diagnostics record control IDs, types,
+geometry, readiness and known transport labels without transcript text. Existing
+reveal cases cover both directions, missing/failed gestures, unsafe readiness and
+cancellation. Pause first allows at most one queued displayed-second boundary
 during 3.5 seconds, matching the existing saved-playback test, then requires a
 separate two-second window with no position change. Overshoot, reversal, lost
 paused state or movement during that stable window fails before deletion. Only after these pass does it return to history, partially reveal

@@ -18,16 +18,16 @@ private nonisolated enum PhysicalSpeakerLabelsPreflight {
 @MainActor private enum PhysicalControlReveal {
     struct NotVisible: Error {}
 
-    static func run(ready: () -> Bool, scroll: (Bool, Int) throws -> Void) throws {
+    static func run(startingUpward: Bool = true, ready: () throws -> Bool, scroll: (Bool, Int) throws -> Void) throws {
         // The reverse leg first covers the outbound travel, then searches above
         // the original position even when the first leg never reached an edge.
-        for (upward, limit) in [(true, 5), (false, 10)] {
+        for (upward, limit) in [(startingUpward, 5), (!startingUpward, 10)] {
             for step in 0..<limit {
-                if ready() { return }
+                if try ready() { return }
                 try scroll(upward, step)
             }
         }
-        guard ready() else { throw NotVisible() }
+        guard try ready() else { throw NotVisible() }
     }
 }
 
@@ -766,16 +766,18 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
 
     @MainActor
     func testPhysicalControlRevealFindsTargetsInEitherDirection() throws {
-        for target in [-2, 0, 2] {
-            var position = 0
-            var gestures = 0
-            try PhysicalControlReveal.run(ready: { position == target }, scroll: { upward, _ in
-                position += upward ? 1 : -1
-                gestures += 1
-            })
-            XCTAssertEqual(position, target)
-            XCTAssertLessThanOrEqual(gestures, 15)
-            if target == 0 { XCTAssertEqual(gestures, 0) }
+        for startingUpward in [true, false] {
+            for target in [-2, 0, 2] {
+                var position = 0
+                var gestures = 0
+                try PhysicalControlReveal.run(startingUpward: startingUpward, ready: { position == target }, scroll: { upward, _ in
+                    position += upward ? 1 : -1
+                    gestures += 1
+                })
+                XCTAssertEqual(position, target)
+                XCTAssertLessThanOrEqual(gestures, 15)
+                if target == 0 { XCTAssertEqual(gestures, 0) }
+            }
         }
     }
 
@@ -790,6 +792,29 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         XCTAssertThrowsError(try PhysicalControlReveal.run(ready: { false }, scroll: { _, _ in
             throw Failure.gesture
         })) { XCTAssertTrue($0 is Failure) }
+    }
+
+    @MainActor
+    func testPhysicalControlRevealPreservesUnsafeReadinessAndCancellationBeforeAnotherGesture() {
+        enum Failure: Error { case ownership }
+        var gestures = 0
+        XCTAssertThrowsError(try PhysicalControlReveal.run(ready: { throw Failure.ownership }, scroll: { _, _ in
+            gestures += 1
+        })) { XCTAssertTrue($0 is Failure) }
+        XCTAssertEqual(gestures, 0)
+        XCTAssertThrowsError(try PhysicalControlReveal.run(ready: { throw CancellationError() }, scroll: { _, _ in
+            gestures += 1
+        })) { XCTAssertTrue($0 is CancellationError) }
+        XCTAssertEqual(gestures, 0)
+        var cancelled = false
+        XCTAssertThrowsError(try PhysicalControlReveal.run(startingUpward: false, ready: {
+            if cancelled { throw CancellationError() }
+            return false
+        }, scroll: { _, _ in
+            gestures += 1
+            cancelled = true
+        })) { XCTAssertTrue($0 is CancellationError) }
+        XCTAssertEqual(gestures, 1)
     }
 
     @MainActor
@@ -2209,50 +2234,128 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try await PhysicalUITransitionWait.until(timeout: 10, condition: {
             completedReadOnlyTranscriptVisible(in: app, title: selected.title)
         })
-        let audio = try XCTUnwrap(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@",
+        let transcripts = app.scrollViews.matching(identifier: "meeting.transcript")
+        try require(transcripts.count == 1, "The admitted session must expose one actual transcript scroll owner")
+        let transcript = transcripts.firstMatch
+        let audio = try XCTUnwrap(transcript.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@",
             "transcript.audio.")).allElementsBoundByIndex.first { $0.isHittable && $0.isEnabled })
-        let ownedAudio = app.buttons[audio.identifier]
-        let slider = app.sliders.matching(NSPredicate(format: "label == %@", "Audio chunk position"))
+        let ownedAudioID = audio.identifier
+        let owners = transcript.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@",
+            "transcript.paragraph.")).allElementsBoundByIndex.filter { $0.buttons.matching(identifier: ownedAudioID).count == 1 }
+        try require(owners.count == 1, "The exact audio button must belong to one owned paragraph before opening its player")
+        let ownedParagraphID = try XCTUnwrap(owners.first).identifier
+        let paragraphs = transcript.descendants(matching: .any).matching(identifier: ownedParagraphID)
+        let paragraph = paragraphs.firstMatch
+        let ownedAudio = paragraph.buttons[ownedAudioID]
+        let slider = paragraph.sliders.matching(NSPredicate(format: "label == %@", "Audio chunk position"))
         let pauseLabels = ["Pause audio chunk", "Приостановить воспроизведение фрагмента"]
         let playLabels = ["Play audio chunk", "Воспроизвести аудиофрагмент"]
         let closeLabels = ["Close audio player", "Закрыть аудиоплеер"]
-        try require(slider.count == 0 && firstButton(in: app, labels: pauseLabels) == nil,
-                    "Never adopt an existing playback owner")
+        func transport(_ labels: [String]) -> XCUIElement? {
+            let matches = paragraph.buttons.matching(NSPredicate(format: "label IN %@", labels))
+            return matches.count == 1 ? matches.firstMatch : nil
+        }
+        func ownedTranscriptIsIdle() -> Bool {
+            // Header actions naturally leave the viewport while reading a long paragraph.
+            // Identity remains the exact session admitted above and its pinned paragraph.
+            app.state == .runningForeground && app.alerts.count == 0 && app.sheets.count == 0
+                && transcripts.count == 1 && paragraphs.count == 1
+                && !app.buttons["meeting.stop"].exists && !app.buttons["meeting.retry"].exists
+                && !app.buttons["meeting.restartProcessing"].exists
+                && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+                && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists
+                && !app.otherElements["ActivityListView"].exists && !app.otherElements["Browse View (Picker)"].exists
+        }
+        func diagnoseOwnedControls(_ step: String) {
+            let knownLabels = pauseLabels + playLabels + closeLabels
+            let controls = paragraphs.count == 1 ? paragraph.buttons.allElementsBoundByIndex.filter {
+                $0.identifier == ownedAudioID || knownLabels.contains($0.label)
+            } + slider.allElementsBoundByIndex : []
+            let records = controls.prefix(16).map { control in
+                ["id": control.identifier, "type": String(control.elementType.rawValue), "frame": NSStringFromCGRect(control.frame),
+                 "enabled": String(control.isEnabled), "hittable": String(control.isHittable),
+                 "transportLabel": knownLabels.contains(control.label) ? control.label : "<redacted>"]
+            }
+            let diagnostic: [String: Any] = ["paragraphID": ownedParagraphID, "audioID": ownedAudioID,
+                "paragraphCount": paragraphs.count, "viewportFrame": transcripts.count == 1 ? NSStringFromCGRect(transcript.frame) : "missing",
+                "sliderCount": slider.count, "controls": records]
+            if let data = try? JSONSerialization.data(withJSONObject: diagnostic, options: [.sortedKeys]),
+               let text = String(data: data, encoding: .utf8) {
+                let attachment = XCTAttachment(string: text)
+                attachment.name = "owned-playback-scoped-controls-\(step)-\(revision)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+        func revealOwnedControls(startingUpward: Bool, cleanup: Bool = false, ready: () -> Bool) throws {
+            do {
+                try PhysicalControlReveal.run(startingUpward: startingUpward, ready: {
+                    if !cleanup { try Task.checkCancellation() }
+                    try require(ownedTranscriptIsIdle(), "Never scroll or adopt controls outside the exact owned idle paragraph")
+                    return ready()
+                }, scroll: { upward, _ in
+                    try require(ownedTranscriptIsIdle() && transcript.isHittable,
+                                "Only the owned transcript viewport may receive a reveal gesture")
+                    if upward { transcript.swipeUp() } else { transcript.swipeDown() }
+                })
+            } catch {
+                diagnoseOwnedControls(cleanup ? "cleanup-reveal-failed" : "reveal-failed")
+                capture("owned-playback-scoped-reveal-failure", revision: revision)
+                throw error
+            }
+        }
+        func revealOwnedClose(cleanup: Bool = false) throws {
+            try revealOwnedControls(startingUpward: false, cleanup: cleanup, ready: {
+                ownedAudio.exists && ownedAudio.isEnabled && ownedAudio.isHittable && closeLabels.contains(ownedAudio.label)
+            })
+        }
+        try require(slider.count == 0 && transport(pauseLabels) == nil, "Never adopt an existing playback owner")
         var ownsPlayback = false
         defer {
             if ownsPlayback {
+                diagnoseOwnedControls("failure-before-cleanup")
                 capture("owned-playback-failure-before-cleanup", revision: revision)
-                if completedReadOnlyTranscriptVisible(in: app, title: selected.title),
-                   app.sheets.count == 0, ownedAudio.exists, ownedAudio.isHittable, closeLabels.contains(ownedAudio.label) {
-                    ownedAudio.tap()
+                do {
+                    // Cleanup stays bounded and ownership-checked even if the test task was cancelled.
+                    try revealOwnedClose(cleanup: true)
+                    try tap(ownedAudio, "Close only the exact owned paragraph player after failure")
                     let joined = slider.firstMatch.waitForNonExistence(timeout: 5)
+                        && ownedAudio.exists && !closeLabels.contains(ownedAudio.label)
                     print("[PHYSICAL_OWNED_PLAYBACK] owned_playback_cleanup_joined=\(joined)")
+                    if !joined { print("[PHYSICAL_OWNED_PLAYBACK] cleanup_requires_parent_inspection=true") }
+                } catch {
+                    print("[PHYSICAL_OWNED_PLAYBACK] cleanup_requires_parent_inspection=true")
                 }
-                if slider.count > 0 { print("[PHYSICAL_OWNED_PLAYBACK] cleanup_requires_parent_inspection=true") }
             }
         }
         ownsPlayback = true
         try tap(ownedAudio, "Play audio only from the owned synthetic transcript paragraph")
+        diagnoseOwnedControls("opened-before-player-reveal")
+        try revealOwnedControls(startingUpward: true, ready: {
+            let control = transport(pauseLabels) ?? transport(playLabels)
+            return slider.count == 1 && slider.firstMatch.isHittable && slider.firstMatch.isEnabled
+                && control?.isEnabled == true && control?.isHittable == true
+        })
         try await PhysicalUITransitionWait.until(timeout: 10, condition: {
-            slider.count == 1 && firstButton(in: app, labels: pauseLabels)?.isEnabled == true
+            slider.count == 1 && transport(pauseLabels)?.isEnabled == true
         })
         let initial = try XCTUnwrap(PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String))
         try await PhysicalUITransitionWait.until(timeout: 10, condition: {
-            completedReadOnlyTranscriptVisible(in: app, title: selected.title)
-                && firstButton(in: app, labels: pauseLabels)?.isEnabled == true
+            ownedTranscriptIsIdle()
+                && transport(pauseLabels)?.isEnabled == true
                 && (PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String) ?? -1) >= initial + 2
         })
         capture("owned-playback-02-progressing", revision: revision)
-        try tap(try XCTUnwrap(firstButton(in: app, labels: pauseLabels)), "Pause the owned native audio player")
+        try tap(try XCTUnwrap(transport(pauseLabels)), "Pause the owned native audio player")
         try await PhysicalUITransitionWait.until(timeout: 5, condition: {
-            firstButton(in: app, labels: playLabels)?.isEnabled == true
+            transport(playLabels)?.isEnabled == true
         })
         let pauseStart = try XCTUnwrap(PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String))
         var pauseObservation = PhysicalPlaybackPauseObservation(position: pauseStart, now: ProcessInfo.processInfo.systemUptime)
         let pauseDeadline = ProcessInfo.processInfo.systemUptime + 10
         while true {
-            try require(completedReadOnlyTranscriptVisible(in: app, title: selected.title)
-                        && firstButton(in: app, labels: playLabels)?.isEnabled == true,
+            try require(ownedTranscriptIsIdle()
+                        && transport(playLabels)?.isEnabled == true,
                         "The native player must remain paused throughout settling and stable observation")
             let position = try XCTUnwrap(PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String))
             if try pauseObservation.observe(position: position, now: ProcessInfo.processInfo.systemUptime) { break }
@@ -2261,17 +2364,19 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         }
         let paused = try XCTUnwrap(PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String))
         capture("owned-playback-03-paused-stable", revision: revision)
-        try tap(try XCTUnwrap(firstButton(in: app, labels: playLabels)), "Resume only the owned native audio player")
+        try tap(try XCTUnwrap(transport(playLabels)), "Resume only the owned native audio player")
         try await PhysicalUITransitionWait.until(timeout: 10, condition: {
-            firstButton(in: app, labels: pauseLabels)?.isEnabled == true
+            transport(pauseLabels)?.isEnabled == true
                 && (PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String) ?? -1) >= paused + 1
         })
+        try revealOwnedClose()
         try require(closeLabels.contains(ownedAudio.label), "The same paragraph must own the expanded player")
         try tap(ownedAudio, "Stop the owned player through its ordinary close audio control")
         try await PhysicalUITransitionWait.until(timeout: 5, condition: {
-            slider.count == 0 && firstButton(in: app, labels: pauseLabels) == nil
-                && firstButton(in: app, labels: playLabels) == nil
-                && completedReadOnlyTranscriptVisible(in: app, title: selected.title)
+            slider.count == 0 && transport(pauseLabels) == nil
+                && transport(playLabels) == nil
+                && ownedAudio.exists && !closeLabels.contains(ownedAudio.label)
+                && ownedTranscriptIsIdle()
         })
         ownsPlayback = false
         capture("owned-playback-04-stopped", revision: revision)
