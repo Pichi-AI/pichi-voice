@@ -14,10 +14,18 @@ struct MobileMeetingStartBar: View {
         idiom == .phone && verticalSizeClass == .compact && !dynamicTypeSize.isAccessibilitySize
     }
 
+    /// The root overlay must observe the same visibility boundaries as the history list.
+    static func showsTabRowAction(showingRecordings: Bool, historyIsAtRoot: Bool,
+                                  isCapturing: Bool, privateDataVisible: Bool) -> Bool {
+        showingRecordings && historyIsAtRoot && !isCapturing && privateDataVisible
+    }
+
     var body: some View {
         Group {
             if floating {
-                startButton.fixedSize(horizontal: true, vertical: false)
+                startButton
+                    .font(theme.typography.bodySmallStrong)
+                    .fixedSize(horizontal: true, vertical: false)
             } else {
                 startButton
                     .padding(.horizontal, 24).padding(.top, 12)
@@ -31,7 +39,7 @@ struct MobileMeetingStartBar: View {
         Button(action: start) {
             Label(PichiLocalization.text(preparing ? "Preparing recording…" : "Start Recording"), systemImage: "record.circle")
                 .foregroundStyle(theme.palette.accentForeground)
-                .frame(maxWidth: floating ? nil : .infinity, minHeight: floating ? 32 : 48)
+                .frame(maxWidth: floating ? nil : .infinity, minHeight: floating ? 30 : 48)
                 .animation(nil, value: preparing)
         }.buttonStyle(.borderedProminent)
             .disabled(startDisabled)
@@ -39,16 +47,27 @@ struct MobileMeetingStartBar: View {
     }
 }
 
-/// Reserve scrolling room, not a footer strip: the last row can move above the floating action.
+/// Modern tab bars own the floating action's row. Older full-width bars keep it above history.
 struct MobileMeetingStartPlacement: ViewModifier {
     let control: MobileMeetingStartBar
     @State private var floatingHeight: CGFloat = 80
 
     func body(content: Content) -> some View {
         if control.floating {
-            content
-                .contentMargins(.bottom, floatingHeight, for: .scrollContent)
-                .overlay(alignment: .bottomTrailing) {
+            if #available(iOS 26.0, *) {
+                content
+            } else {
+                legacyFloating(content)
+            }
+        } else {
+            content.safeAreaInset(edge: .bottom, spacing: 0) { control }
+        }
+    }
+
+    private func legacyFloating(_ content: Content) -> some View {
+        content
+            .contentMargins(.bottom, floatingHeight, for: .scrollContent)
+            .overlay(alignment: .bottomTrailing) {
                     control.padding(.horizontal, 24).padding(.vertical, 12)
                         .background {
                             GeometryReader { geometry in
@@ -58,8 +77,5 @@ struct MobileMeetingStartPlacement: ViewModifier {
                             }
                         }
                 }
-        } else {
-            content.safeAreaInset(edge: .bottom, spacing: 0) { control }
-        }
     }
 }

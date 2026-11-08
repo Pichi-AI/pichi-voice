@@ -187,6 +187,11 @@ struct MobileMeetingRoot: View {
                 }
             }
         }
+        .overlay(alignment: .bottomTrailing) {
+            if #available(iOS 26.0, *), showsTabRowStart {
+                startBar.padding(.horizontal, 24)
+            }
+        }
         .foregroundStyle(theme.palette.primaryText)
         .background(theme.palette.windowBackground)
         .alert(PichiLocalization.text("Error"), isPresented: $privatePresentation.showError) {
@@ -701,11 +706,21 @@ struct MobileMeetingRoot: View {
         .navigationDestination(for: MeetingSessionID.self) { id in meetingPage(id) }
     }
 
-    /// Landscape phones float the action over history; configuration lives only in Settings.
+    private var usesFloatingStart: Bool {
+        MobileMeetingStartBar.usesFloatingLayout(idiom: UIDevice.current.userInterfaceIdiom,
+            verticalSizeClass: verticalSizeClass, dynamicTypeSize: dynamicTypeSize)
+    }
+
+    private var showsTabRowStart: Bool {
+        usesFloatingStart && MobileMeetingStartBar.showsTabRowAction(
+            showingRecordings: destination == .meetings, historyIsAtRoot: historyPath.isEmpty,
+            isCapturing: capturingSession != nil, privateDataVisible: privateProfile.isPrivateDataVisible)
+    }
+
+    /// Landscape phones share the native navigation row; configuration lives only in Settings.
     private var startBar: MobileMeetingStartBar {
         MobileMeetingStartBar(
-            floating: MobileMeetingStartBar.usesFloatingLayout(idiom: UIDevice.current.userInterfaceIdiom,
-                verticalSizeClass: verticalSizeClass, dynamicTypeSize: dynamicTypeSize),
+            floating: usesFloatingStart,
             preparing: isStarting && coordinator.isQuiescent,
             startDisabled: isBusy || !coordinator.isQuiescent, start: beginMeeting)
     }
