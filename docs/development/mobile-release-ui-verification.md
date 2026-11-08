@@ -84,10 +84,12 @@ cancellation with a deterministic clock, separately from physical acceptance.
 GigaAM and Tiny use the same owned Stop/join entry. Both wait for actual
 foreground and an actionable Stop or processing/completed state, then await
 completion before clearing ownership. Tiny also uses the ready Stop operation
-on its success path. Three `testOwnedRecordingCleanup*` cases exercise the real
+on its success path. Five `testOwnedRecordingCleanup*` cases exercise the real
 shared entry with controlled operations: delayed readiness, joining an already
 processing attempt, and propagated join failure. The first two hold a join gate
-to prove cleanup cannot return early. Run these alongside the existing nine
+to prove cleanup cannot return early. A failed Stop still attempts bounded join;
+if both fail, both errors are retained. Separate cases hold the join gate after
+an injected Stop failure and check combined failures. Run these alongside the existing nine
 logical cases before physical audio; they do not replace device acceptance.
 
 ## Explicit gates and preconditions

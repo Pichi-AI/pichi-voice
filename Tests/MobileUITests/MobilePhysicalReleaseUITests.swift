@@ -25,6 +25,11 @@ import UIKit
 }
 
 @MainActor private enum PhysicalOwnedRecordingCleanup {
+    struct StopAndJoinFailure: Error {
+        let stopError: Error
+        let joinError: Error
+    }
+
     static func run(observe: () -> PhysicalUITransitionWait.OwnedRecordingAction?,
                     stop: () async throws -> Void, join: () async throws -> Void,
                     now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
@@ -34,8 +39,23 @@ import UIKit
             action = observe()
             return action != nil
         }, now: now, pause: pause)
-        if action == .requestStop { try await stop() }
-        try await join()
+        var stopError: Error?
+        if action == .requestStop {
+            do { try await stop() }
+            catch {
+                stopError = error
+                let failure = error as NSError
+                print("[PHYSICAL_RECORDING_UI] stop_failed_before_join domain=\(failure.domain) code=\(failure.code)")
+            }
+        }
+        do { try await join() }
+        catch {
+            let failure = error as NSError
+            print("[PHYSICAL_RECORDING_UI] join_failed domain=\(failure.domain) code=\(failure.code)")
+            if let stopError { throw StopAndJoinFailure(stopError: stopError, joinError: error) }
+            throw error
+        }
+        if let stopError { throw stopError }
     }
 }
 
@@ -166,7 +186,19 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         }
     }
 
-    @MainActor private func verifyOwnedRecordingCleanupJoin(initiallyProcessing: Bool) async throws {
+    @MainActor
+    func testOwnedRecordingCleanupJoinsAfterStopFailure() async throws {
+        try await verifyOwnedRecordingCleanupJoin(initiallyProcessing: false, stopFails: true)
+    }
+
+    @MainActor
+    func testOwnedRecordingCleanupRetainsStopAndJoinFailures() async throws {
+        try await verifyOwnedRecordingCleanupJoin(initiallyProcessing: false, stopFails: true, joinFails: true)
+    }
+
+    @MainActor private func verifyOwnedRecordingCleanupJoin(initiallyProcessing: Bool,
+                                                           stopFails: Bool = false, joinFails: Bool = false) async throws {
+        enum Failure: Error, Equatable { case stop, join }
         var time: TimeInterval = 0
         var calls: [String] = []
         var returned = false
@@ -176,12 +208,16 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try await PhysicalOwnedRecordingCleanup.run(observe: {
                 PhysicalUITransitionWait.ownedRecordingAction(stopReady: time >= 2,
                     processing: initiallyProcessing, completed: false)
-            }, stop: { calls.append("stop") }, join: {
+            }, stop: {
+                calls.append("stop")
+                if stopFails { throw Failure.stop }
+            }, join: {
                 calls.append("join")
                 await withCheckedContinuation { continuation in
                     releaseJoin = continuation
                     enteredJoin.fulfill()
                 }
+                if joinFails { throw Failure.join }
             }, now: { time }, pause: { time += 1 })
             returned = true
         }
@@ -192,8 +228,20 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         XCTAssertEqual(time, initiallyProcessing ? 0 : 2)
         releaseJoin?.resume()
         if entered != .completed { cleanup.cancel() }
-        try await cleanup.value
-        XCTAssertTrue(returned)
+        do {
+            try await cleanup.value
+            XCTAssertFalse(stopFails || joinFails, "A failed Stop or join must not become cleanup success")
+            XCTAssertTrue(returned)
+        } catch {
+            XCTAssertFalse(returned)
+            if stopFails && joinFails {
+                let failures = try XCTUnwrap(error as? PhysicalOwnedRecordingCleanup.StopAndJoinFailure)
+                XCTAssertEqual(failures.stopError as? Failure, .stop)
+                XCTAssertEqual(failures.joinError as? Failure, .join)
+            } else {
+                guard stopFails, case Failure.stop = error else { throw error }
+            }
+        }
     }
 
     @MainActor
