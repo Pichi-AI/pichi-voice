@@ -77,3 +77,43 @@ nonisolated struct TranscribeAudioChunkPolicy: Sendable {
         return ASRTranscriptionResult(text: parts.joined(separator: " "), confidence: parts.isEmpty ? 0 : confidence)
     }
 }
+
+/// Owns the adapter's bounded native call and its retirement. Closing admission is
+/// synchronous; cleanup joins the call before a successor can use the adapter.
+@MainActor
+final class TranscribeBoundedInferenceOwner {
+    private var operation: (id: UUID, task: Task<ASRTranscriptionResult, Error>)?
+    private var retirement: (id: UUID, task: Task<Void, Never>)?
+    var isRetiring: Bool { self.retirement != nil }
+
+    func run(_ body: @escaping @MainActor () async throws -> ASRTranscriptionResult) async throws -> ASRTranscriptionResult {
+        guard self.operation == nil, self.retirement == nil else { throw MeetingModelResidencyError.busy }
+        let id = UUID()
+        let task = Task { try await body() }
+        self.operation = (id, task)
+        defer { if self.operation?.id == id { self.operation = nil } }
+        return try await withTaskCancellationHandler {
+            let result = try await task.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: { task.cancel() }
+    }
+
+    /// Returns the same drain for overlapping releases. The gate closes before
+    /// returning, including when the caller has already been cancelled.
+    func beginRetirement(cleanup: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+        if let retirement { return retirement.task }
+        let id = UUID()
+        let running = self.operation?.task
+        running?.cancel()
+        let task = Task {
+            _ = await running?.result
+            await cleanup()
+            if self.retirement?.id == id { self.retirement = nil }
+        }
+        self.retirement = (id, task)
+        return task
+    }
+
+    func joinRetirement() async { await self.retirement?.task.value }
+}

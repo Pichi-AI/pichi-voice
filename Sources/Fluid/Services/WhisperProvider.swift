@@ -173,8 +173,7 @@ final class WhisperProvider: TranscriptionProvider {
     private var loadedModelName: String?
     private var loadedSpeechModel: SettingsStore.SpeechModel?
     private typealias ActiveSession = (session: Session, modelName: String, speechModel: SettingsStore.SpeechModel, architecture: String)
-    private var boundedTranscriptionTask: Task<ASRTranscriptionResult, Error>?
-    private var boundedTranscriptionID: UUID?
+    private let boundedInferenceOwner = TranscribeBoundedInferenceOwner()
 
     private let overriddenModelDirectory: URL?
     private let urlSession: URLSession
@@ -359,7 +358,7 @@ final class WhisperProvider: TranscriptionProvider {
     private func activeSession() -> ActiveSession? {
         self.stateLock.lock()
         defer { self.stateLock.unlock() }
-        guard let session = self.session, let modelName = self.loadedModelName,
+        guard self.ready, let session = self.session, let modelName = self.loadedModelName,
               let speechModel = self.loadedSpeechModel, let model = self.model else { return nil }
         return (session, modelName, speechModel, model.arch)
     }
@@ -396,6 +395,7 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
+        await self.boundedInferenceOwner.joinRetirement()
         try Task.checkCancellation()
 
         let targetModel = self.selectedModel
@@ -479,6 +479,8 @@ final class WhisperProvider: TranscriptionProvider {
         let expectedBytes = targetModel.expectedDownloadBytes
         let requiresAutomaticLanguageDetection = self.useAutomaticLanguageDetection
         let modelDisplayName = targetModel.displayName
+        await self.boundedInferenceOwner.joinRetirement()
+        try Task.checkCancellation()
         self.preparationGeneration &+= 1
         let preparationGeneration = self.preparationGeneration
         let preparationStarted = ProcessInfo.processInfo.systemUptime
@@ -604,29 +606,14 @@ final class WhisperProvider: TranscriptionProvider {
                 throw NSError(domain: "WhisperProvider", code: -1,
                     userInfo: [NSLocalizedDescriptionKey: "\(model.displayName) model not loaded"])
             }
-            guard self.boundedTranscriptionTask == nil else { throw MeetingModelResidencyError.busy }
-            let id = UUID()
             let generation = self.preparationGeneration
-            let task = Task {
+            return try await self.boundedInferenceOwner.run {
                 try await TranscribeAudioChunkPolicy(maximumSamples: descriptor.maximumChunkSamples).transcribe(samples, validate: {
                     guard generation == self.preparationGeneration else { throw CancellationError() }
                 }) { chunk in
                     try await self.transcribeSingleChunk(chunk, languageCode: languageCode, active: active)
                 }
             }
-            self.boundedTranscriptionID = id
-            self.boundedTranscriptionTask = task
-            defer {
-                if self.boundedTranscriptionID == id {
-                    self.boundedTranscriptionID = nil
-                    self.boundedTranscriptionTask = nil
-                }
-            }
-            return try await withTaskCancellationHandler {
-                let result = try await task.value
-                try Task.checkCancellation()
-                return result
-            } onCancel: { task.cancel() }
         }
         return try await self.transcribeSingleChunk(samples, languageCode: languageCode)
     }
@@ -828,22 +815,20 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     func releaseResidency() async {
-        // The bounded multi-chunk owner retains one immutable native session. Cancel
-        // and join it before releasing that session or loading another model.
-        if let task = self.boundedTranscriptionTask {
-            task.cancel()
-            _ = await task.result
-        }
+        // Close admission before the first suspension, even if the current native
+        // call completes while the shared retirement task is joining it.
         self.preparationGeneration &+= 1
-        let retired = self.stateLock.withLock { () -> WhisperNativeModelTransfer? in
-            guard let model, let session else { self.ready = false; return nil }
-            let retired = WhisperNativeModelTransfer(model: model, session: session)
-            self.session = nil; self.model = nil; self.ready = false; self.loadedModelName = nil; self.loadedSpeechModel = nil
-            return retired
+        self.stateLock.withLock { self.ready = false }
+        let retirement = self.boundedInferenceOwner.beginRetirement { [self] in
+            let retired = self.stateLock.withLock { () -> WhisperNativeModelTransfer? in
+                guard let model, let session else { return nil }
+                let retired = WhisperNativeModelTransfer(model: model, session: session)
+                self.session = nil; self.model = nil; self.loadedModelName = nil; self.loadedSpeechModel = nil
+                return retired
+            }
+            if let retired { await self.releaseNative(retired) }
         }
-        // Owners already drain inference before release. Explicitly free the pair
-        // on the same native executor; dropping it on MainActor can stall scrolling.
-        if let retired { await self.releaseNative(retired) }
+        await retirement.value
     }
 
     private func releaseNative(_ retired: WhisperNativeModelTransfer) async {

@@ -24,6 +24,22 @@ private final class QwenPreparationFixture: TranscriptionProvider {
 }
 
 @MainActor
+private final class QwenInferenceTestGate {
+    private var opened = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        if self.opened { return }
+        await withCheckedContinuation { self.waiting.append($0) }
+    }
+    func open() {
+        self.opened = true
+        let pending = self.waiting
+        self.waiting.removeAll()
+        for continuation in pending { continuation.resume() }
+    }
+}
+
+@MainActor
 final class QwenCompactIntegrationTests: XCTestCase {
     func testCatalogPublishesDistinctPinnedQ4WithoutWhisperControlsOrInventedRatings() throws {
         let model = SettingsStore.SpeechModel.qwen3Asr06BQ4
@@ -132,6 +148,68 @@ final class QwenCompactIntegrationTests: XCTestCase {
             XCTFail("A retired attempt must not return partial wording")
         } catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertEqual(calls, 1)
+    }
+
+    func testRetirementClosesAdmissionThroughNativeJoinAndCleanupAndCoalescesRelease() async throws {
+        let owner = TranscribeBoundedInferenceOwner()
+        let entered = expectation(description: "native call entered")
+        let cleanupEntered = expectation(description: "cleanup entered after native joined")
+        let nativeGate = QwenInferenceTestGate()
+        let cleanupGate = QwenInferenceTestGate()
+        var nativeStarted = false
+        var cleanupStarted = false
+        defer { nativeGate.open(); cleanupGate.open() }
+        var cleanupCalls = 0
+        var successorCalls = 0
+        let running = Task {
+            try await owner.run {
+                nativeStarted = true
+                entered.fulfill()
+                await nativeGate.wait()
+                try Task.checkCancellation()
+                return .init(text: "cancelled output")
+            }
+        }
+        await fulfillment(of: [entered], timeout: 1)
+        guard nativeStarted else {
+            nativeGate.open(); cleanupGate.open(); running.cancel()
+            _ = await running.result
+            return XCTFail("Native fixture did not start")
+        }
+        let retirement = owner.beginRetirement {
+            cleanupCalls += 1
+            cleanupStarted = true
+            cleanupEntered.fulfill()
+            await cleanupGate.wait()
+        }
+        let secondRetirement = owner.beginRetirement { XCTFail("Concurrent release must reuse the same cleanup") }
+        XCTAssertTrue(owner.isRetiring)
+        do {
+            _ = try await owner.run { successorCalls += 1; return .init(text: "must not enter") }
+            XCTFail("Retirement must synchronously close admission")
+        } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        nativeGate.open()
+        await fulfillment(of: [cleanupEntered], timeout: 1)
+        guard cleanupStarted else {
+            cleanupGate.open()
+            await retirement.value
+            _ = await running.result
+            return XCTFail("Retirement cleanup did not start")
+        }
+        do {
+            _ = try await owner.run { successorCalls += 1; return .init(text: "must not enter during cleanup") }
+            XCTFail("A completed native call must not reopen admission during cleanup")
+        } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        XCTAssertEqual(successorCalls, 0)
+        cleanupGate.open()
+        await retirement.value
+        await secondRetirement.value
+        do { _ = try await running.value; XCTFail("Retired output must not return") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(cleanupCalls, 1)
+        XCTAssertFalse(owner.isRetiring)
+        let successor = try await owner.run { .init(text: "successor") }
+        XCTAssertEqual(successor.text, "successor")
     }
 
     func testOnboardingRouteUsesAutomaticModelBindingAndPreservesRussianDefault() throws {
