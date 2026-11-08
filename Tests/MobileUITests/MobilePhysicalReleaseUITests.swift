@@ -2,6 +2,20 @@ import XCTest
 import UIKit
 @preconcurrency import AVFoundation
 
+@MainActor private enum PhysicalControlReveal {
+    struct NotVisible: Error {}
+
+    static func run(ready: () -> Bool, scroll: (Bool, Int) throws -> Void) throws {
+        for upward in [true, false] {
+            for step in 0..<5 {
+                if ready() { return }
+                try scroll(upward, step)
+            }
+        }
+        guard ready() else { throw NotVisible() }
+    }
+}
+
 @MainActor private enum PhysicalUITransitionWait {
     struct TimedOut: Error {}
     enum OwnedRecordingAction: Equatable { case requestStop, join }
@@ -163,6 +177,62 @@ private nonisolated struct PhysicalTinySettingsReceipt: Codable {
 /// Opt-in tests of the installed app through its public UI. Audible fixtures belong
 /// to the runner; silent input uses only the app's explicit DEBUG capture adapter.
 final class MobilePhysicalReleaseUITests: XCTestCase {
+    @MainActor
+    func testPhysicalControlRevealFindsTargetsInEitherDirection() throws {
+        for target in [-2, 0, 2] {
+            var position = 0
+            var gestures = 0
+            try PhysicalControlReveal.run(ready: { position == target }, scroll: { upward, _ in
+                position = min(2, max(-2, position + (upward ? 1 : -1)))
+                gestures += 1
+            })
+            XCTAssertEqual(position, target)
+            XCTAssertLessThanOrEqual(gestures, 10)
+            if target == 0 { XCTAssertEqual(gestures, 0) }
+        }
+    }
+
+    @MainActor
+    func testPhysicalControlRevealRejectsMissingControlAndPreservesGestureFailure() throws {
+        enum Failure: Error { case gesture }
+        var gestures = 0
+        XCTAssertThrowsError(try PhysicalControlReveal.run(ready: { false }, scroll: { _, _ in
+            gestures += 1
+        })) { XCTAssertTrue($0 is PhysicalControlReveal.NotVisible) }
+        XCTAssertEqual(gestures, 10)
+        XCTAssertThrowsError(try PhysicalControlReveal.run(ready: { false }, scroll: { _, _ in
+            throw Failure.gesture
+        })) { XCTAssertTrue($0 is Failure) }
+    }
+
+    @MainActor
+    func testPhysicalSettingsNavigationRevealsLandscapeRows() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires the explicitly owned idle physical app")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_SETTINGS_NAVIGATION"] == "1" else {
+            throw XCTSkip("Explicitly enable read-only physical settings navigation")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let app = try attachReadOnlyPhysicalApp(revision: revision)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: { app.frame.width > app.frame.height })
+        let original = try tinySettingsRead(app, revision: revision)
+        for page in ["models", "privacy", "recording", "models"] {
+            try openPhysicalSettingsPage("settings.\(page)", app: app, revision: revision)
+            let detail = app.descendants(matching: .any)["settings.\(page).detail"].firstMatch
+            try require(detail.waitForExistence(timeout: 10), "The selected Settings page must open")
+            capture("settings-navigation-\(page)", revision: revision)
+            // Switching sections preserves the pushed Settings page; the next call
+            // must also exercise the app's explicit Settings reselect-to-root contract.
+            try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
+        }
+        XCTAssertEqual(try tinySettingsRead(app, revision: revision), original)
+        try tinySettingsIdle(app, revision: revision)
+        #endif
+    }
+
     @MainActor
     func testOwnedRecordingCleanupWaitsForReadyStopAndJoinsBeforeReturning() async throws {
         try await verifyOwnedRecordingCleanupJoin(initiallyProcessing: false)
@@ -357,7 +427,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             switch key {
             case .model: try self.tinySettingsSelectModel(target.model, app: app, revision: revision)
             case .saveAudio, .pii:
-                try self.tinySettingsOpen("settings.privacy", app: app, revision: revision)
+                try self.openPhysicalSettingsPage("settings.privacy", app: app, revision: revision)
                 let identifier = key == .saveAudio ? "privacy.saveAudio" : "privacy.pii"
                 let value = key == .saveAudio ? target.saveAudio : target.pii
                 let control = app.switches[identifier]
@@ -415,11 +485,11 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             // The concrete original profile comes from the parent's verified backup.
             // Reject a disagreement before the first mutation, never adopt it as a baseline.
             try verify(.original)
-            try tinySettingsOpen("settings.recording", app: app, revision: revision)
+            try openPhysicalSettingsPage("settings.recording", app: app, revision: revision)
             let speakers = app.switches["recording.diarization"]
             try tinySettingsReveal(speakers, app: app, revision: revision)
             try require(speakers.value as? String == "1", "The unchanged participant setting must already satisfy the Tiny testcase")
-            try tinySettingsOpen("settings.models", app: app, revision: revision)
+            try openPhysicalSettingsPage("settings.models", app: app, revision: revision)
             try tinySettingsReveal(app.buttons["model.activate.whisper-tiny"], app: app, revision: revision)
             try require(app.buttons["model.activate.whisper-tiny"].isEnabled,
                         "Tiny must already be installed; downloading or deleting a model is outside this driver")
@@ -452,19 +522,23 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             "This driver owns no recording and must never stop or alter an active attempt")
     }
 
-    @MainActor private func tinySettingsOpen(_ identifier: String, app: XCUIApplication, revision: String) throws {
+    @MainActor private func openPhysicalSettingsPage(_ identifier: String, app: XCUIApplication, revision: String) throws {
         try require(app.state == .runningForeground && app.alerts.count == 0, "Settings navigation cannot dismiss a prompt")
         try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
-        try tap(app.buttons[identifier], "Open only the requested public Settings page")
+        let root = app.descendants(matching: .any)["settings.root"].firstMatch
+        if !root.waitForExistence(timeout: 2) || !root.isHittable {
+            // A section switch preserves its pushed page; reselecting Settings pops to root.
+            try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
+        }
+        try require(root.waitForExistence(timeout: 5) && root.isHittable && app.alerts.count == 0,
+                    "Reveal controls only in the ordinary Settings root")
+        let control = app.buttons[identifier]
+        try reveal(control, in: app, revision: revision, container: root)
+        try tap(control, "Open only the requested public Settings page")
     }
 
     @MainActor private func tinySettingsReveal(_ element: XCUIElement, app: XCUIApplication, revision: String) throws {
-        if element.exists && element.isHittable { return }
-        let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
-        try require(scroll.exists && app.alerts.count == 0, "Use only the ordinary Settings form")
-        for _ in 0..<5 where !element.exists || !element.isHittable { scroll.swipeDown() }
         try reveal(element, in: app, revision: revision)
-        try require(element.isHittable, "Only the observed existing control may be used")
     }
 
     @MainActor private func tinySettingsSelectedModel(_ app: XCUIApplication, revision: String) throws -> String {
@@ -486,7 +560,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
     }
 
     @MainActor private func tinySettingsSelectModel(_ model: String, app: XCUIApplication, revision: String) throws {
-        try tinySettingsOpen("settings.models", app: app, revision: revision)
+        try openPhysicalSettingsPage("settings.models", app: app, revision: revision)
         if try tinySettingsSelectedModel(app, revision: revision) == model { return }
         let activate = app.buttons["model.activate.\(model)"]
         try tinySettingsReveal(activate, app: app, revision: revision)
@@ -497,9 +571,9 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
 
     @MainActor private func tinySettingsRead(_ app: XCUIApplication, revision: String) throws -> PhysicalTinySettingsProfile {
         try tinySettingsIdle(app, revision: revision)
-        try tinySettingsOpen("settings.models", app: app, revision: revision)
+        try openPhysicalSettingsPage("settings.models", app: app, revision: revision)
         let model = try tinySettingsSelectedModel(app, revision: revision)
-        try tinySettingsOpen("settings.privacy", app: app, revision: revision)
+        try openPhysicalSettingsPage("settings.privacy", app: app, revision: revision)
         func value(_ identifier: String) throws -> Bool {
             let control = app.switches[identifier]
             try tinySettingsReveal(control, app: app, revision: revision)
@@ -613,8 +687,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         var ownsRecording = false
         var observedOwnedRecording = false
         func selectModel(_ model: String) throws {
-            try self.openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
-            try self.tap(app.buttons["settings.models"], "Open model settings")
+            try self.openPhysicalSettingsPage("settings.models", app: app, revision: revision)
             let selected = app.descendants(matching: .any)["model.selected.\(model)"].firstMatch
             if !selected.exists {
                 let activate = app.buttons["model.activate.\(model)"]
@@ -1346,24 +1419,18 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         capture("01-installed-app", revision: revision)
         try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
         let previousSessionIDs = historyIDs(in: app)
-        try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
-        if !app.buttons["settings.models"].exists {
-            try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
-        }
-        try tap(app.buttons["settings.models"], "Open the installed model settings")
+        try openPhysicalSettingsPage("settings.models", app: app, revision: revision)
         capture("02-models-opened", revision: revision)
         let selectedTiny = app.descendants(matching: .any)["model.selected.whisper-tiny"].firstMatch
         try reveal(selectedTiny, in: app, revision: revision)
         try require(selectedTiny.exists, "Whisper Tiny must already be selected; the test never changes the model")
         capture("03-tiny-selected", revision: revision)
-        try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
-        try tap(app.buttons["settings.privacy"], "Open privacy")
+        try openPhysicalSettingsPage("settings.privacy", app: app, revision: revision)
         try require(app.switches["privacy.saveAudio"].waitForExistence(timeout: 5), "Audio privacy must be visible")
         try require(app.switches["privacy.saveAudio"].value as? String == "0", "Save audio must already be OFF")
         try require(app.switches["privacy.pii"].value as? String == "1", "PII must already be ON")
         capture("04-strict-privacy", revision: revision)
-        try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
-        try tap(app.buttons["settings.recording"], "Open recording settings")
+        try openPhysicalSettingsPage("settings.recording", app: app, revision: revision)
         let speakers = app.switches["recording.diarization"]
         try reveal(speakers, in: app, revision: revision)
         try require(speakers.value as? String == "1", "Speaker labels must already be ON")
@@ -1968,14 +2035,16 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         capture("navigation-\(identifier)", revision: revision)
     }
 
-    @MainActor private func reveal(_ element: XCUIElement, in app: XCUIApplication, revision: String) throws {
-        for step in 0..<5 where !element.exists || !element.isHittable {
-            let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
-            try require(scroll.exists, "Settings must expose its native scrollable form")
-            scroll.swipeUp()
-            capture("settings-scroll-\(step)", revision: revision)
-        }
-        try require(element.exists, "The required existing setting must be present")
+    @MainActor private func reveal(_ element: XCUIElement, in app: XCUIApplication, revision: String,
+                                   container: XCUIElement? = nil) throws {
+        try PhysicalControlReveal.run(ready: { element.exists && element.isHittable }, scroll: { upward, step in
+            let scroll = container ?? (app.collectionViews.firstMatch.exists
+                ? app.collectionViews.firstMatch : app.tables.firstMatch)
+            try require(scroll.exists && scroll.isHittable && app.alerts.count == 0,
+                        "Settings must expose its visible native form without a prompt")
+            if upward { scroll.swipeUp() } else { scroll.swipeDown() }
+            capture("settings-scroll-\(upward ? "up" : "down")-\(step)", revision: revision)
+        })
     }
 
     @MainActor private func historyIDs(in app: XCUIApplication) -> Set<String> {

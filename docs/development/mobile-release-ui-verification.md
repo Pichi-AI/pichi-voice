@@ -205,3 +205,14 @@ receipt with the test evidence after successful restoration.
 Four `testTinySettings*` cases exercise the transaction with deterministic fake
 controls, including partial writes, cancellation, commit failure, restoration
 failure and mismatched receipts. They do not establish physical UI acceptance.
+
+Settings navigation uses the app's reselect-to-root contract and the existing
+bounded reveal helper before tapping a row. It searches both scroll directions
+without waiving visibility, enabled-state or prompt checks. Two
+`testPhysicalControlReveal*` cases cover offscreen, ready, missing and failed-gesture
+outcomes. With `PICHI_PHYSICAL_SETTINGS_NAVIGATION=1`, the read-only
+`testPhysicalSettingsNavigationRevealsLandscapeRows` case also requires the ordinary
+idle preflight and exact AUT revision, rotates through XCTest's public orientation
+API, visits models/privacy/recording across section switches, checks the original
+model/audio/PII profile and returns to idle Recordings in landscape. It never
+starts capture or changes those settings; run it before the acoustic cases.
