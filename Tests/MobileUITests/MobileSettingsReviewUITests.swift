@@ -92,9 +92,11 @@ final class MobileSettingsReviewUITests: XCTestCase {
             capture("qwen-q4-\(language)-\(appearance)-limitations")
 
             let download = app.buttons["model.download.\(modelID)"]
-            reveal(download)
+            reveal(download, fullyVisible: true)
             XCTAssertTrue(download.exists && download.isHittable,
                           "This review requires an uninstalled model and never starts a download")
+            XCTAssertTrue(app.frame.insetBy(dx: 0, dy: 24).contains(download.frame),
+                          "The complete download action must be inside the native viewport")
             XCTAssertFalse(app.buttons["model.activate.\(modelID)"].exists)
             XCTAssertFalse(app.descendants(matching: .any)["model.executionStatus.\(modelID)"].firstMatch.exists,
                            "An unprepared provider must not claim live execution")
@@ -261,10 +263,22 @@ final class MobileSettingsReviewUITests: XCTestCase {
         }
     }
 
-    private func reveal(_ element: XCUIElement) {
-        let scroll = app.collectionViews.firstMatch
-        for _ in 0..<4 where !(element.exists && element.isHittable) { scroll.swipeUp() }
-        for _ in 0..<4 where !(element.exists && element.isHittable) { scroll.swipeDown() }
+    private func reveal(_ element: XCUIElement, fullyVisible: Bool = false) {
+        // XCUI can call a clipped List action hittable. Select its actual scroll ancestor
+        // and require full viewport coverage when the screenshot must show the action.
+        let scroll: XCUIElement
+        if fullyVisible && element.exists {
+            let containingList = app.collectionViews.containing(.any, identifier: element.identifier).firstMatch
+            scroll = containingList.exists ? containingList : app.collectionViews.firstMatch
+        } else {
+            scroll = app.collectionViews.firstMatch
+        }
+        func visible() -> Bool {
+            element.exists && element.isHittable
+                && (!fullyVisible || app.frame.insetBy(dx: 0, dy: 24).contains(element.frame))
+        }
+        for _ in 0..<4 where !visible() { scroll.swipeUp() }
+        for _ in 0..<4 where !visible() { scroll.swipeDown() }
     }
 
     /// Captures the visible page, then each further screen until the visible text stops changing.
