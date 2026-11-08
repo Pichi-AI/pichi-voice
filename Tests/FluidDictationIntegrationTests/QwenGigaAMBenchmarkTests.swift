@@ -215,15 +215,33 @@ final class QwenGigaAMBenchmarkTests: XCTestCase {
     }
 
     private static func writeSilence(_ url: URL, channels: AVAudioChannelCount) throws {
-        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: channels))
-        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16_000))
-        buffer.frameLength = 16_000
-        let channelData = try XCTUnwrap(buffer.floatChannelData)
-        for channel in 0..<Int(channels) {
-            for frame in 0..<16_000 { channelData[channel][frame] = 0 }
+        // A complete PCM fixture must be closed before the loader hashes or opens it.
+        // A small RIFF container avoids an autoreleased audio writer in this fixture.
+        let channelCount = UInt16(channels)
+        let dataBytes = UInt32(16_000) * UInt32(channelCount) * 2
+        var data = Data()
+        func append16(_ value: UInt16) {
+            var little = value.littleEndian
+            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
         }
-        let file = try AVAudioFile(forWriting: url, settings: format.settings)
-        try file.write(from: buffer)
+        func append32(_ value: UInt32) {
+            var little = value.littleEndian
+            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+        }
+        data.append(contentsOf: "RIFF".utf8)
+        append32(36 + dataBytes)
+        data.append(contentsOf: "WAVEfmt ".utf8)
+        append32(16)
+        append16(1)
+        append16(channelCount)
+        append32(16_000)
+        append32(16_000 * UInt32(channelCount) * 2)
+        append16(channelCount * 2)
+        append16(16)
+        data.append(contentsOf: "data".utf8)
+        append32(dataBytes)
+        data.append(Data(repeating: 0, count: Int(dataBytes)))
+        try data.write(to: url)
     }
 }
 

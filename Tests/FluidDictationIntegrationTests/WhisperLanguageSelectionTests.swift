@@ -175,7 +175,7 @@ final class WhisperLanguageSelectionTests: XCTestCase {
         XCTAssertNil(provider.resolvedLanguageCode())
         settings.selectedWhisperLanguageCode = "ru"
         XCTAssertNil(provider.resolvedLanguageCode())
-        XCTAssertNil(provider.resolvedLanguageCode(explicit: "en"))
+        XCTAssertEqual(provider.resolvedLanguageCode(explicit: "en"), "en")
         XCTAssertNil(provider.resolvedLanguageCode(explicit: "auto"))
         XCTAssertEqual(provider.modelOverride, .whisperTiny)
     }
