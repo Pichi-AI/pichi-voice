@@ -6,8 +6,10 @@ import UIKit
     struct NotVisible: Error {}
 
     static func run(ready: () -> Bool, scroll: (Bool, Int) throws -> Void) throws {
-        for upward in [true, false] {
-            for step in 0..<5 {
+        // The reverse leg first covers the outbound travel, then searches above
+        // the original position even when the first leg never reached an edge.
+        for (upward, limit) in [(true, 5), (false, 10)] {
+            for step in 0..<limit {
                 if ready() { return }
                 try scroll(upward, step)
             }
@@ -183,11 +185,11 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             var position = 0
             var gestures = 0
             try PhysicalControlReveal.run(ready: { position == target }, scroll: { upward, _ in
-                position = min(2, max(-2, position + (upward ? 1 : -1)))
+                position += upward ? 1 : -1
                 gestures += 1
             })
             XCTAssertEqual(position, target)
-            XCTAssertLessThanOrEqual(gestures, 10)
+            XCTAssertLessThanOrEqual(gestures, 15)
             if target == 0 { XCTAssertEqual(gestures, 0) }
         }
     }
@@ -199,7 +201,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         XCTAssertThrowsError(try PhysicalControlReveal.run(ready: { false }, scroll: { _, _ in
             gestures += 1
         })) { XCTAssertTrue($0 is PhysicalControlReveal.NotVisible) }
-        XCTAssertEqual(gestures, 10)
+        XCTAssertEqual(gestures, 15)
         XCTAssertThrowsError(try PhysicalControlReveal.run(ready: { false }, scroll: { _, _ in
             throw Failure.gesture
         })) { XCTAssertTrue($0 is Failure) }
