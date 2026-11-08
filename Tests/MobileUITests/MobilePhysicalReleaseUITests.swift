@@ -1693,7 +1693,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         }
         try tap(json, "Present only the owned completed session's JSON share sheet")
         try await PhysicalUITransitionWait.until(timeout: 15, condition: { activity.exists && app.alerts.count == 0 })
-        _ = try await waitForButton(in: app, labels: ["Save to Files", "Сохранить в Файлы"], timeout: 15)
+        try await waitForOwnedShareSaveAction(in: app, revision: revision)
         capture("post-soak-04-native-json-share", revision: revision)
         // The parent may copy the owned temporary JSON for inspection. No destination,
         // recipient, clipboard action or Files save is selected by this runner.
@@ -1880,9 +1880,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             let jsonExport = try XCTUnwrap(firstButton(in: app, labels: ["Export as JSON", "Экспортировать как JSON"]),
                                           "The actual JSON export action must be present")
             try tap(jsonExport, "Export the protected JSON transcript")
-            let saveToFiles = try await waitForButton(in: app,
-                labels: ["Save to Files", "Сохранить в Файлы"], timeout: 15)
-            try require(saveToFiles.exists, "The actual native share sheet must offer Save to Files")
+            try await waitForOwnedShareSaveAction(in: app, revision: revision)
             capture("17-native-json-share", revision: revision)
             // The parent can copy the AUT's owned temporary share directory here. This
             // verifies generated JSON, not delivery to a guessed/cloud Files destination.
@@ -2432,13 +2430,22 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         labels.map { app.buttons[$0].firstMatch }.first { $0.exists }
     }
 
-    @MainActor private func waitForButton(in app: XCUIApplication, labels: [String], timeout: TimeInterval) async throws -> XCUIElement {
-        let deadline = ProcessInfo.processInfo.systemUptime + timeout
-        while ProcessInfo.processInfo.systemUptime < deadline {
-            if let button = firstButton(in: app, labels: labels) { return button }
-            try await Task.sleep(nanoseconds: 250_000_000)
+    @MainActor private func waitForOwnedShareSaveAction(in app: XCUIApplication, revision: String) async throws {
+        let activity = app.otherElements["ActivityListView"]
+        // System versions expose this observation-only action with different AX types.
+        // Match an exact supported label inside only the share UI opened by the caller.
+        let action = activity.descendants(matching: .any).matching(NSPredicate(format: "label IN %@",
+            ["Save to Files", "Сохранить в Файлы", "Сохранить в «Файлы»"])).firstMatch
+        capture("native-json-share-before-action-query", revision: revision)
+        do {
+            try await PhysicalUITransitionWait.until(timeout: 15, condition: {
+                activity.exists && app.alerts.count == 0 && action.exists
+            })
+            print("[PHYSICAL_JSON_SHARE] save_action_observed=true axType=\(action.elementType.rawValue) action_tapped=false")
+        } catch {
+            capture("native-json-share-action-query-failure", revision: revision)
+            throw error
         }
-        throw verificationFailure("The expected native share action did not appear")
     }
 
     @MainActor private func waitForCompletedTranscript(in app: XCUIApplication, timeout: TimeInterval) async throws {

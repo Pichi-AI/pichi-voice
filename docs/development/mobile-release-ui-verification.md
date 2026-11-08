@@ -146,6 +146,13 @@ button returns to the latest text. It presses Stop Recording, waits for normal
 completion, opens the actual JSON export action and verifies the native share
 sheet. There must be no audio-export action for this strict meeting.
 
+Both JSON-share selectors observe the exact English/Russian Save to Files label
+within their owned native `ActivityListView` descendants. System accessibility
+types vary, so availability does not require a Button. The shared bounded wait
+captures before observation and on failure, logs the observed type, and never
+taps the save action or any destination. The physical continuation is the native
+query regression; existing logical wait tests cover deadline and cancellation.
+
 The runner emits `export_presented` and keeps the share sheet open for 15 seconds.
 The parent may copy the AUT's owned `tmp/meeting-share-<UUID>/` directory during
 that checkpoint and inspect the generated JSON using ordinary device tools. The
