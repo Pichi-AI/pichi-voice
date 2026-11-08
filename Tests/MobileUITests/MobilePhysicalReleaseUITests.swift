@@ -53,6 +53,72 @@ private nonisolated enum PhysicalSpeakerLabelsPreflight {
     }
 }
 
+private nonisolated enum PhysicalCaptionGeometry {
+    struct Sample: Equatable {
+        let identifier: String
+        let paragraph: CGRect
+        let viewport: CGRect
+
+        var tailIsVisible: Bool {
+            guard !identifier.isEmpty, Self.valid(paragraph), Self.valid(viewport) else { return false }
+            // An intersecting tall row can still have its tail below the viewport.
+            return paragraph.maxY > viewport.minY && paragraph.maxY <= viewport.maxY
+                && paragraph.intersection(viewport).width > 0
+        }
+
+        private static func valid(_ rect: CGRect) -> Bool {
+            [rect.minX, rect.minY, rect.width, rect.height, rect.maxX, rect.maxY].allSatisfy(\.isFinite)
+                && rect.size.width > 0 && rect.size.height > 0 && !rect.isNull && !rect.isInfinite
+        }
+    }
+
+    struct Settling {
+        private var previous: Sample?
+
+        mutating func observe(_ sample: Sample) -> Bool {
+            defer { previous = sample.tailIsVisible ? sample : nil }
+            return sample.tailIsVisible && previous == sample
+        }
+    }
+}
+
+private nonisolated struct PhysicalPostSoakAuthorization: Codable, Equatable {
+    struct Unverified: Error {}
+    let revision: String
+    let runID: UUID
+    let sessionID: UUID
+    let title: String
+
+    static func select(_ environment: [String: String], revision: String) throws -> Self {
+        guard revision.count == 40 && revision.allSatisfy({ "0123456789abcdef".contains($0) }),
+              environment["PICHI_PHYSICAL_POST_SOAK_CONTINUATION"] == "1",
+              environment["PICHI_PHYSICAL_POST_SOAK_AUT_REVISION"] == revision,
+              environment["PICHI_PHYSICAL_POST_SOAK_OWNED_IDLE_PREFLIGHT"] == "1",
+              environment["PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT"] == "1",
+              let run = environment["PICHI_PHYSICAL_POST_SOAK_RUN_ID"], let runID = UUID(uuidString: run),
+              let session = environment["PICHI_PHYSICAL_POST_SOAK_SESSION_ID"], let sessionID = UUID(uuidString: session),
+              let title = environment["PICHI_PHYSICAL_POST_SOAK_SESSION_TITLE"],
+              !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.count <= 1024 else {
+            throw Unverified()
+        }
+        return Self(revision: revision, runID: runID, sessionID: sessionID, title: title)
+    }
+}
+
+private nonisolated struct PhysicalPostSoakReceipt: Codable {
+    var version: Int
+    var authorization: PhysicalPostSoakAuthorization
+    var state: String
+    var audioStorageMode: String
+    var piiRedactionEnabled: Bool
+    var exclusiveIdleAttested: Bool
+
+    func validate(_ expected: PhysicalPostSoakAuthorization) throws {
+        guard version == 1, authorization == expected, state == "completed", audioStorageMode == "memoryOnly",
+              piiRedactionEnabled, exclusiveIdleAttested else { throw PhysicalPostSoakAuthorization.Unverified() }
+    }
+}
+
 @MainActor private enum PhysicalOwnedRecordingCleanup {
     struct StopAndJoinFailure: Error {
         let stopError: Error
@@ -192,6 +258,107 @@ private nonisolated struct PhysicalTinySettingsReceipt: Codable {
 /// Opt-in tests of the installed app through its public UI. Audible fixtures belong
 /// to the runner; silent input uses only the app's explicit DEBUG capture adapter.
 final class MobilePhysicalReleaseUITests: XCTestCase {
+    func testPhysicalCaptionGeometryAcceptsVisibleFullAndTallRowTails() {
+        let viewport = CGRect(x: 10, y: 100, width: 300, height: 400)
+        for row in [CGRect(x: 10, y: 120, width: 300, height: 80),
+                    CGRect(x: 10, y: -700, width: 300, height: 1200)] {
+            XCTAssertTrue(PhysicalCaptionGeometry.Sample(identifier: "tail", paragraph: row, viewport: viewport).tailIsVisible)
+        }
+    }
+
+    func testPhysicalCaptionGeometryRejectsIntersectionWithoutVisibleTailAndInvalidFrames() {
+        let viewport = CGRect(x: 10, y: 100, width: 300, height: 400)
+        for row in [CGRect(x: 10, y: 120, width: 300, height: 500),
+                    CGRect(x: 10, y: -100, width: 300, height: 200),
+                    CGRect(x: 400, y: 200, width: 300, height: 40), .zero, .null, .infinite,
+                    CGRect(x: CGFloat.nan, y: 200, width: 300, height: 40),
+                    CGRect(x: 10, y: 200, width: -30, height: 40)] {
+            XCTAssertFalse(PhysicalCaptionGeometry.Sample(identifier: "tail", paragraph: row, viewport: viewport).tailIsVisible)
+        }
+        for invalidViewport in [CGRect.zero, .null, .infinite] {
+            XCTAssertFalse(PhysicalCaptionGeometry.Sample(identifier: "tail", paragraph: viewport,
+                                                         viewport: invalidViewport).tailIsVisible)
+        }
+        XCTAssertFalse(PhysicalCaptionGeometry.Sample(identifier: "", paragraph: viewport, viewport: viewport).tailIsVisible)
+    }
+
+    func testPhysicalCaptionGeometryRequiresStableIdentityAndLayoutAfterInvalidObservation() {
+        let viewport = CGRect(x: 0, y: 100, width: 300, height: 400)
+        let tail = PhysicalCaptionGeometry.Sample(identifier: "tail", paragraph: viewport, viewport: viewport)
+        let moved = PhysicalCaptionGeometry.Sample(identifier: "tail", paragraph: viewport.offsetBy(dx: 0, dy: -1), viewport: viewport)
+        let replacement = PhysicalCaptionGeometry.Sample(identifier: "replacement", paragraph: moved.paragraph, viewport: viewport)
+        var settling = PhysicalCaptionGeometry.Settling()
+        XCTAssertFalse(settling.observe(tail))
+        XCTAssertFalse(settling.observe(moved))
+        XCTAssertFalse(settling.observe(replacement))
+        XCTAssertTrue(settling.observe(replacement))
+        XCTAssertFalse(settling.observe(.init(identifier: "tail", paragraph: .zero, viewport: viewport)))
+        XCTAssertFalse(settling.observe(replacement))
+        XCTAssertTrue(settling.observe(replacement))
+    }
+
+    private var postSoakTestEnvironment: [String: String] {
+        ["PICHI_PHYSICAL_POST_SOAK_CONTINUATION": "1",
+         "PICHI_PHYSICAL_POST_SOAK_AUT_REVISION": String(repeating: "a", count: 40),
+         "PICHI_PHYSICAL_POST_SOAK_OWNED_IDLE_PREFLIGHT": "1",
+         "PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT": "1",
+         "PICHI_PHYSICAL_POST_SOAK_RUN_ID": "00000000-0000-0000-0000-000000000001",
+         "PICHI_PHYSICAL_POST_SOAK_SESSION_ID": "00000000-0000-0000-0000-000000000002",
+         "PICHI_PHYSICAL_POST_SOAK_SESSION_TITLE": "Synthetic completed session"]
+    }
+
+    func testPhysicalPostSoakAuthorizationSelectsExactCompletedReceipt() throws {
+        let selected = try PhysicalPostSoakAuthorization.select(postSoakTestEnvironment, revision: String(repeating: "a", count: 40))
+        XCTAssertEqual(selected.sessionID.uuidString, postSoakTestEnvironment["PICHI_PHYSICAL_POST_SOAK_SESSION_ID"])
+        let receipt = PhysicalPostSoakReceipt(version: 1, authorization: selected, state: "completed",
+                                             audioStorageMode: "memoryOnly", piiRedactionEnabled: true, exclusiveIdleAttested: true)
+        try JSONDecoder().decode(PhysicalPostSoakReceipt.self, from: JSONEncoder().encode(receipt)).validate(selected)
+    }
+
+    func testPhysicalPostSoakAuthorizationRejectsMissingStaleOrMalformedSelection() {
+        let revision = String(repeating: "a", count: 40)
+        for (key, invalid) in [("PICHI_PHYSICAL_POST_SOAK_CONTINUATION", "0"),
+                               ("PICHI_PHYSICAL_POST_SOAK_AUT_REVISION", String(repeating: "b", count: 40)),
+                               ("PICHI_PHYSICAL_POST_SOAK_OWNED_IDLE_PREFLIGHT", "0"),
+                               ("PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT", "0"),
+                               ("PICHI_PHYSICAL_POST_SOAK_RUN_ID", "invalid"),
+                               ("PICHI_PHYSICAL_POST_SOAK_SESSION_ID", "invalid"),
+                               ("PICHI_PHYSICAL_POST_SOAK_SESSION_TITLE", " ")] {
+            var changed = postSoakTestEnvironment
+            changed[key] = invalid
+            XCTAssertThrowsError(try PhysicalPostSoakAuthorization.select(changed, revision: revision))
+            changed.removeValue(forKey: key)
+            XCTAssertThrowsError(try PhysicalPostSoakAuthorization.select(changed, revision: revision))
+        }
+        for invalidRevision in ["working-tree", String(repeating: "z", count: 40)] {
+            XCTAssertThrowsError(try PhysicalPostSoakAuthorization.select(postSoakTestEnvironment, revision: invalidRevision))
+        }
+    }
+
+    func testPhysicalPostSoakReceiptRejectsForeignSessionRunRevisionAndUnsafeState() throws {
+        let selected = try PhysicalPostSoakAuthorization.select(postSoakTestEnvironment, revision: String(repeating: "a", count: 40))
+        let receipt = PhysicalPostSoakReceipt(version: 1, authorization: selected, state: "completed",
+                                             audioStorageMode: "memoryOnly", piiRedactionEnabled: true, exclusiveIdleAttested: true)
+        for key in ["PICHI_PHYSICAL_POST_SOAK_SESSION_ID", "PICHI_PHYSICAL_POST_SOAK_RUN_ID", "PICHI_PHYSICAL_POST_SOAK_SESSION_TITLE"] {
+            var changed = postSoakTestEnvironment
+            changed[key] = key.hasSuffix("TITLE") ? "Another session" : "00000000-0000-0000-0000-000000000003"
+            let foreign = try PhysicalPostSoakAuthorization.select(changed, revision: selected.revision)
+            XCTAssertThrowsError(try receipt.validate(foreign))
+        }
+        var stale = postSoakTestEnvironment
+        stale["PICHI_PHYSICAL_POST_SOAK_AUT_REVISION"] = String(repeating: "b", count: 40)
+        XCTAssertThrowsError(try receipt.validate(PhysicalPostSoakAuthorization.select(stale, revision: String(repeating: "b", count: 40))))
+        let mutations: [(inout PhysicalPostSoakReceipt) -> Void] = [
+            { $0.version = 2 }, { $0.state = "recording" }, { $0.audioStorageMode = "saved" },
+            { $0.piiRedactionEnabled = false }, { $0.exclusiveIdleAttested = false }
+        ]
+        for mutate in mutations {
+            var changed = receipt
+            mutate(&changed)
+            XCTAssertThrowsError(try changed.validate(selected))
+        }
+    }
+
     func testPhysicalSpeakerPreflightAcceptsVerifiedCurrentSettingsAndSession() throws {
         let revision = String(repeating: "a", count: 40)
         try PhysicalSpeakerLabelsPreflight.validate([
@@ -1450,6 +1617,108 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
     }
 
     @MainActor
+    func testPhysicalOwnedPostSoakCompletedJSONShareAndRelaunch() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires the parent's exact owned completed physical-device session")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_POST_SOAK_CONTINUATION"] == "1" else {
+            throw XCTSkip("Explicitly enable only the after-Stop continuation; this never replays the soak")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let selected = try PhysicalPostSoakAuthorization.select(environment, revision: revision)
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                 appropriateFor: nil, create: false)
+        let receiptURL = support.appendingPathComponent("PhysicalReleaseUI/post-soak/\(selected.runID.uuidString).json")
+        let attributes = try FileManager.default.attributesOfItem(atPath: receiptURL.path)
+        try require(((attributes[.size] as? NSNumber)?.intValue ?? Int.max) <= 8192,
+                    "The parent must stage a bounded owned-session attestation in this runner only")
+        let receiptData = try Data(contentsOf: receiptURL)
+        try require(receiptData.count <= 8192, "The runner receipt exceeded its bound")
+        try JSONDecoder().decode(PhysicalPostSoakReceipt.self, from: receiptData).validate(selected)
+        let app = try attachReadOnlyPhysicalApp(revision: revision)
+        let sessionID = selected.sessionID.uuidString
+        let activity = app.otherElements["ActivityListView"]
+        try require(!activity.exists && !app.otherElements["Browse View (Picker)"].exists,
+                    "Never adopt a pre-existing share sheet or document picker")
+        capture("post-soak-01-idle-attested", revision: revision)
+
+        func reopenOwnedSession(_ step: String) async throws {
+            try require(!app.buttons["meeting.stop"].exists
+                        && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                        "Continuation must remain idle; it owns no capture or processing attempt")
+            try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
+            let rows = app.buttons.matching(identifier: "history.session.\(sessionID)")
+            try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+                rows.count == 1 && rows.firstMatch.isHittable && rows.firstMatch.isEnabled
+            })
+            try require(rows.firstMatch.staticTexts.matching(NSPredicate(format: "label == %@", selected.title)).count == 1,
+                        "The unique exact session ID must also have the attested title")
+            capture("\(step)-exact-history-id", revision: revision)
+            try tap(rows.firstMatch, "Reopen only the attested owned completed session")
+            try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+                completedReadOnlyTranscriptVisible(in: app, title: selected.title)
+                    && app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@",
+                        "transcript.paragraph.")).count > 0
+            })
+            try require(app.buttons["transcript.copy"].exists, "The completed transcript must expose its ordinary copy control")
+            capture("\(step)-completed-transcript", revision: revision)
+        }
+
+        try await reopenOwnedSession("post-soak-02")
+        try tap(app.buttons["transcript.more"], "Inspect only the owned completed transcript's actions")
+        capture("post-soak-03-actions", revision: revision)
+        try require(firstButton(in: app, labels: ["Export Audio", "Экспорт аудио"]) == nil,
+                    "The attested memory-only session must never offer audio export")
+        let json = try XCTUnwrap(firstButton(in: app, labels: ["Export as JSON", "Экспортировать как JSON"]))
+        var ownsShare = true
+        func ownedShareClose() -> XCUIElement? {
+            let identified = activity.buttons.matching(identifier: "header.closeButton")
+            if identified.count == 1 { return identified.firstMatch }
+            let labelled = activity.navigationBars.matching(identifier: "UIActivityContentView").buttons.matching(
+                NSPredicate(format: "label IN %@", ["Close", "Закрыть"]))
+            return labelled.count == 1 ? labelled.firstMatch : nil
+        }
+        defer {
+            if ownsShare {
+                capture("post-soak-failure-before-share-cleanup", revision: revision)
+                if app.state == .runningForeground, app.alerts.count == 0, activity.exists,
+                   let close = ownedShareClose(), close.isHittable {
+                    close.tap()
+                    let closed = activity.waitForNonExistence(timeout: 5)
+                    print("[PHYSICAL_POST_SOAK] owned_share_cleanup_joined=\(closed)")
+                }
+                if activity.exists { print("[PHYSICAL_POST_SOAK] share_cleanup_requires_parent_inspection=true") }
+            }
+        }
+        try tap(json, "Present only the owned completed session's JSON share sheet")
+        try await PhysicalUITransitionWait.until(timeout: 15, condition: { activity.exists && app.alerts.count == 0 })
+        _ = try await waitForButton(in: app, labels: ["Save to Files", "Сохранить в Файлы"], timeout: 15)
+        capture("post-soak-04-native-json-share", revision: revision)
+        // The parent may copy the owned temporary JSON for inspection. No destination,
+        // recipient, clipboard action or Files save is selected by this runner.
+        print("[PHYSICAL_POST_SOAK] export_presented kind=json sessionID=\(sessionID) inspectionSeconds=15 delivery_attempted=false")
+        try await Task.sleep(nanoseconds: 15_000_000_000)
+        try tap(try XCTUnwrap(ownedShareClose()), "Close only this continuation's native share sheet without delivery")
+        try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+            !activity.exists && completedReadOnlyTranscriptVisible(in: app, title: selected.title)
+        })
+        ownsShare = false
+        capture("post-soak-05-share-dismissed", revision: revision)
+        // Admission above and the completed transcript check prove no active attempt
+        // belongs to another owner before this explicitly authorized normal relaunch.
+        app.terminate()
+        app.launchArguments = []
+        app.launchEnvironment = [:]
+        app.launch()
+        try await waitForPhysicalAppState(app, .runningForeground, phase: "post-soak-normal-relaunch")
+        capture("post-soak-06-normal-relaunch", revision: revision)
+        try await reopenOwnedSession("post-soak-07")
+        print("[PHYSICAL_POST_SOAK] completed sessionID=\(sessionID) afterStopOnly=true fullSoakPass=false delivery_attempted=false")
+        #endif
+    }
+
+    @MainActor
     func testReleaseTinyFiveMinuteBackgroundRecordingAndJSONShare() async throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("Requires an explicitly authorized physical-device audio lease")
@@ -1584,7 +1853,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                         "Capture must still be active after five minutes")
             let finalTextCount = liveTextCharacterCount(in: app)
             try require(finalTextCount > max(earlyTextCount, 20), "Protected committed text must advance during background capture")
-            try verifyLatestCaptionVisible(in: app)
+            try await verifyLatestCaptionVisible(in: app, revision: revision)
             capture("11-five-minutes-following-latest", revision: revision)
 
             let viewport = app.descendants(matching: .any)["meeting.liveTranscript"].firstMatch
@@ -1593,7 +1862,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(latest.waitForExistence(timeout: 5), "Reading older captions must pause automatic following")
             capture("12-reading-older-captions", revision: revision)
             try tap(latest, "Return to the latest protected text")
-            try verifyLatestCaptionVisible(in: app)
+            try await verifyLatestCaptionVisible(in: app, revision: revision)
             capture("13-returned-to-latest", revision: revision)
 
             try await requestPhysicalOwnedStop(in: app)
@@ -1774,7 +2043,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     try require(intervalEndTimer >= intervalStartTimer + 55, "The visible recording timer must advance through each external speech interval")
                     let liveCharacters = liveTextCharacterCount(in: app)
                     try require(liveCharacters > 0, "External audible input must produce actual visible live text during every interval")
-                    try verifyLatestCaptionVisible(in: app)
+                    try await verifyLatestCaptionVisible(in: app, revision: revision)
                     print("[VISIBLE_UI_RECORDING] source=\(audioSource) playbackEvidence=parent_checkpoint_ack interval=\(interval) observedSeconds=60 timerStart=\(intervalStartTimer) timerEnd=\(intervalEndTimer) liveCharacters=\(liveCharacters)")
                     try await visibleCheckpoint("07-recording-\(interval * 60)-seconds", app: app, revision: revision, directory: checkpoints)
                     intervalStartTimer = try visibleTimerSeconds(in: app)
@@ -2134,11 +2403,29 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "meeting.liveParagraph.")).allElementsBoundByIndex
     }
 
-    @MainActor private func verifyLatestCaptionVisible(in app: XCUIApplication) throws {
-        let latest = try XCTUnwrap(liveParagraphs(in: app).last, "At least one committed protected paragraph is required")
-        let viewport = app.descendants(matching: .any)["meeting.liveTranscript"].firstMatch
-        try require(viewport.frame.height > 0 && !latest.frame.intersection(viewport.frame).isEmpty && latest.isHittable,
-                    "The latest committed paragraph must actually be visible in the native viewport")
+    @MainActor private func verifyLatestCaptionVisible(in app: XCUIApplication, revision: String) async throws {
+        var settling = PhysicalCaptionGeometry.Settling()
+        do {
+            try await PhysicalUITransitionWait.until(timeout: 5, condition: {
+                guard let latest = liveParagraphs(in: app).last else {
+                    settling = PhysicalCaptionGeometry.Settling()
+                    print("[PHYSICAL_CAPTION_GEOMETRY] committed_paragraph_missing=true")
+                    return false
+                }
+                let viewport = app.descendants(matching: .any)["meeting.liveTranscript"].firstMatch
+                let sample = PhysicalCaptionGeometry.Sample(identifier: latest.identifier,
+                                                            paragraph: latest.frame, viewport: viewport.frame)
+                // A noninteractive accessibility paragraph may be readable even when
+                // XCTest cannot hit-test its full, partly offscreen text-and-wave row.
+                print("[PHYSICAL_CAPTION_GEOMETRY] identifier=\(sample.identifier) paragraph=\(sample.paragraph) "
+                    + "viewport=\(sample.viewport) intersection=\(sample.paragraph.intersection(sample.viewport)) "
+                    + "hittable=\(latest.isHittable) tailVisible=\(sample.tailIsVisible)")
+                return settling.observe(sample)
+            })
+        } catch {
+            capture("caption-tail-visibility-failure", revision: revision)
+            throw error
+        }
     }
 
     @MainActor private func firstButton(in app: XCUIApplication, labels: [String]) -> XCUIElement? {

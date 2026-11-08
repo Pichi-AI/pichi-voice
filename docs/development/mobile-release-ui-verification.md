@@ -134,7 +134,14 @@ the test does not reactivate the AUT to inspect hidden UI during that interval.
 
 After five minutes it stops the runner's player, returns to the AUT, verifies that
 protected committed caption text has grown and that the latest paragraph is in
-the native viewport. A real scroll gesture pauses following; the existing jump
+the native viewport. The bounded caption check requires two identical geometry
+observations with the paragraph's bottom boundary inside the native viewport.
+Intersection alone is insufficient for a tall row. Noninteractive paragraph
+`isHittable` is diagnostic only; each observation logs the ID, frames, intersection
+and hit-test result without transcript text. Failure captures the native screen
+before throwing. Three `testPhysicalCaptionGeometry*` cases cover visible full/tall
+tails, intersecting rows with an offscreen tail, invalid geometry and settling.
+A real scroll gesture pauses following; the existing jump
 button returns to the latest text. It presses Stop Recording, waits for normal
 completion, opens the actual JSON export action and verifies the native share
 sheet. There must be no audio-export action for this strict meeting.
@@ -175,6 +182,62 @@ or personal folder. Separate UI delivery verification needs an observed, explici
 local destination. A single synthetic voice does not prove two-speaker separation,
 Russian PII recall, mixed-language accuracy, an hour-long thermal run or GigaAM
 background performance on the 2017 iPad.
+
+## Completed-session continuation after a failed soak
+
+`testPhysicalOwnedPostSoakCompletedJSONShareAndRelaunch` covers only the after-Stop
+steps when the parent has independently verified that this test owner's recording
+completed. It never starts capture, audio playback or processing, changes model or
+privacy settings, or delivers an export. It does not turn an earlier failed
+five-minute test into a whole-flow PASS and does not cover the missed live-caption
+scroll/jump actions.
+
+The parent first preserves current data and verifies exclusive ownership, an idle
+frozen AUT and the exact completed session's memory-only and PII-enabled metadata.
+Set these variables in the runner only; AUT launch arguments/environment stay empty:
+
+```text
+PICHI_PHYSICAL_POST_SOAK_CONTINUATION=1
+PICHI_TEST_REVISION=<exact frozen AUT source SHA>
+PICHI_PHYSICAL_POST_SOAK_AUT_REVISION=<same AUT source SHA>
+PICHI_PHYSICAL_POST_SOAK_OWNED_IDLE_PREFLIGHT=1
+PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT=1
+PICHI_PHYSICAL_POST_SOAK_RUN_ID=<fresh continuation UUID>
+PICHI_PHYSICAL_POST_SOAK_SESSION_ID=<exact owned completed session UUID>
+PICHI_PHYSICAL_POST_SOAK_SESSION_TITLE=<exact saved title>
+```
+
+Stage a private JSON receipt in the runner's own Application Support directory at
+`PhysicalReleaseUI/post-soak/<uppercase continuation UUID>.json`, at most 8192 bytes:
+
+```json
+{
+  "version": 1,
+  "authorization": {
+    "revision": "<same AUT source SHA>",
+    "runID": "<same continuation UUID>",
+    "sessionID": "<same owned completed session UUID>",
+    "title": "<same saved title>"
+  },
+  "state": "completed",
+  "audioStorageMode": "memoryOnly",
+  "piiRedactionEnabled": true,
+  "exclusiveIdleAttested": true
+}
+```
+
+The receipt is a parent attestation, not independent sandbox inspection. The runner
+validates it before app interaction, reopens only the unique exact history ID with
+its expected title, requires readable completed paragraphs and the copy control,
+and rejects an audio-export action. It presents JSON in the native share sheet for
+15 seconds so the parent can copy and inspect the AUT's owned temporary JSON. It
+selects no recipient, clipboard action or save destination, closes only its owned
+share sheet, then normally relaunches and reopens the same exact history ID.
+Unknown prompts and pre-existing share UI fail admission. Failure captures before
+owned share cleanup; unresolved dismissal is reported for parent inspection.
+Three `testPhysicalPostSoak*` logical cases cover selection, receipt round-trip,
+missing/disabled/stale authorization, invalid UUIDs, foreign session/run/title and
+unsafe receipt states. These logical cases do not operate a device or app.
 
 ## Physical Tiny settings transaction
 
