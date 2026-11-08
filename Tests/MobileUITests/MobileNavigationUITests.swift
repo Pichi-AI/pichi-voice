@@ -814,8 +814,13 @@ final class MobileNavigationUITests: XCTestCase {
         capture("02-ready-landscape")
         if app.tabBars.firstMatch.exists {
             let tabBar = app.tabBars.firstMatch.frame
-            XCTAssertTrue(app.buttons["meeting.start"].frame.intersection(tabBar).isEmpty,
-                          "The floating tab bar must not cover the recording action")
+            if #available(iOS 26.0, *), UIDevice.current.userInterfaceIdiom == .phone {
+                XCTAssertEqual(app.buttons["meeting.start"].frame.midY,
+                    app.tabBars.buttons.firstMatch.frame.midY, accuracy: 2)
+            } else {
+                XCTAssertTrue(app.buttons["meeting.start"].frame.intersection(tabBar).isEmpty,
+                              "A full-width tab bar must not cover the recording action")
+            }
             XCTAssertFalse(app.buttons["meeting.settings"].exists,
                            "Recording configuration belongs only in main Settings")
         }
