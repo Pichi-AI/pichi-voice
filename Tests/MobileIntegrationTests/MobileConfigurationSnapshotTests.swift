@@ -49,7 +49,8 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         settings.selectedSpeechModel = .gigaam
         XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
-        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .streaming,
+                       "The registered GigaAM backend supports bounded multi-track PCM")
         XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode),
                      "Reading a capability default must not write or migrate a preference")
         settings.selectedSpeechModel = .whisperTiny
@@ -59,7 +60,7 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)
         settings.meetingSpeakerProcessingMode = .streaming
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .streaming,
-                       "An explicit unsupported request is rejected by admission, not silently rewritten")
+                       "Explicit requests remain unchanged; admission validates the selected topology")
         settings.selectedSpeechModel = .whisperTiny
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
         defaults.set("future-mode", forKey: SettingsStore.Keys.meetingSpeakerProcessingMode)
