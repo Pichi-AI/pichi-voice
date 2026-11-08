@@ -13,6 +13,8 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
         defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
         let settings = SettingsStore(defaults: defaults)
+        // This case models a user choice after the existing mobile migration has completed.
+        settings.migrateMobileSetup()
         settings.selectedSpeechModel = .qwen3Asr06BQ4
         settings.meetingSpeakerProcessingMode = .streaming
         settings.meetingSaveAudio = true

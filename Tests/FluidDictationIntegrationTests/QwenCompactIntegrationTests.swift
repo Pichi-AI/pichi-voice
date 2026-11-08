@@ -362,6 +362,17 @@ final class QwenCompactIntegrationTests: XCTestCase {
     }
 
     func testSettingsAndOnboardingUseSamePreparationAdmissionWithoutChangingSelection() async throws {
+        let originalProfile = PrivateProfileStorage.current
+        let originalAdmission = PrivateProfileStorage.acceptsNewWork
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("QwenPreparation.\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let profile = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: root)
+        PrivateProfileStorage.select(profile)
+        defer {
+            PrivateProfileStorage.select(originalProfile)
+            if !originalAdmission { PrivateProfileStorage.closeAdmission() }
+            try? FileManager.default.removeItem(at: root)
+        }
         let settings = SettingsStore.shared
         let selection = settings.selectedSpeechModel
         let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
