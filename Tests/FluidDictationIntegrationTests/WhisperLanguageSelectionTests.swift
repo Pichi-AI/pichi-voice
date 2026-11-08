@@ -175,7 +175,7 @@ final class WhisperLanguageSelectionTests: XCTestCase {
         XCTAssertNil(provider.resolvedLanguageCode())
         settings.selectedWhisperLanguageCode = "ru"
         XCTAssertNil(provider.resolvedLanguageCode())
-        XCTAssertEqual(provider.resolvedLanguageCode(explicit: "en"), "en")
+        XCTAssertNil(provider.resolvedLanguageCode(explicit: "en"))
         XCTAssertNil(provider.resolvedLanguageCode(explicit: "auto"))
         XCTAssertEqual(provider.modelOverride, .whisperTiny)
     }
@@ -193,9 +193,9 @@ final class WhisperLanguageSelectionTests: XCTestCase {
         XCTAssertEqual(options.timestamps, .none)
     }
 
-    func testQwenHonorsExplicitLanguageWithoutRequestingTimestamps() {
+    func testQwenUsesAutoDetectionWithoutRequestingTimestamps() {
         let options = WhisperProvider.runOptions(languageCode: "en", model: .qwen3Asr17B, whisperLanguageCode: "hu")
-        XCTAssertEqual(options.language, "en")
+        XCTAssertNil(options.language)
         XCTAssertEqual(options.timestamps, .none)
         XCTAssertEqual(WhisperProvider.runOptions(languageCode: "auto", timestamps: .word,
             model: .qwen3Asr17B, whisperLanguageCode: "ru").timestamps, .none)
@@ -211,7 +211,7 @@ final class WhisperLanguageSelectionTests: XCTestCase {
         settings.selectedWhisperLanguageCode = "ru"
         let provider = WhisperProvider(modelOverride: .qwen3Asr17B)
         XCTAssertNil(provider.resolvedLanguageCode())
-        XCTAssertEqual(provider.resolvedLanguageCode(explicit: "en"), "en")
+        XCTAssertNil(provider.resolvedLanguageCode(explicit: "en"))
         XCTAssertNil(provider.resolvedLanguageCode(explicit: "auto"))
         // An active native call supplies its captured model, independently of UI selection.
         XCTAssertNil(provider.resolvedLanguageCode(model: .qwen3Asr17B))

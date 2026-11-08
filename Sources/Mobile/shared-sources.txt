@@ -171,6 +171,7 @@ Sources/Fluid/Services/SpeechModelPreparationOperation.swift
 Sources/Fluid/Services/TranscriptionExecutor.swift
 Sources/Fluid/Services/TranscriptionProvider.swift
 Sources/Fluid/Services/WhisperProvider.swift
+Sources/Fluid/Services/TranscribeSpeechModelCatalog.swift
 Sources/Fluid/Theme/AppTheme.swift
 Sources/Fluid/Theme/Components/FluidDropdown.swift
 Sources/Fluid/Theme/Components/FluidGlassControls.swift

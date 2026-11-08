@@ -303,6 +303,21 @@
               "file": "OpenMDW-1.1-LICENSE.txt"
             }
           ]
+        },
+        {
+          "id": "qwen3-asr",
+          "name": "Qwen3-ASR 0.6B",
+          "license": "Apache-2.0",
+          "documents": [
+            {
+              "titleKey": "Attribution",
+              "file": "Qwen3-ASR-NOTICE.txt"
+            },
+            {
+              "titleKey": "License text",
+              "file": "Qwen3-ASR-LICENSE.txt"
+            }
+          ]
         }
       ]
     }

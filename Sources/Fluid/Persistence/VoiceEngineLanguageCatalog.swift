@@ -312,6 +312,10 @@ enum VoiceEngineLanguageCatalog {
             routes.append(Self.route(language, .nemotronOffline, .nemotron(nemotronLanguage)))
         }
 
+        if TranscribeSpeechModelCatalog.qwenLanguageCodes.contains(language.id) {
+            routes.append(Self.route(language, .qwen3Asr06BQ4, .automatic))
+        }
+
         if let whisperLanguageCode = Self.whisperLanguageCode(for: language.id) {
             for model in Self.whisperModelOrder {
                 routes.append(Self.route(language, model, .whisper(languageCode: whisperLanguageCode)))

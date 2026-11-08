@@ -129,6 +129,49 @@ enum PichiMeetingProviderFactory {
                     directory: PichiMeetingProviderFactory.whisperArtifactDirectory)
             }
         ),
+        SettingsStore.SpeechModel.qwen3Asr06BQ4.rawValue: Registration(
+            descriptor: MeetingBackendDescriptor(
+                id: .qwen06Q4,
+                version: "1",
+                execution: .local,
+                supportedLanguageCodes: ["auto"],
+                supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
+                supportedFinalPrecisions: [.utterance],
+                resultContract: .canonicalEvidence,
+                knownLimits: [
+                    "Compact multilingual recognition with automatic language detection. Produces text after recording stops.",
+                    "Word timestamps are unavailable. Speaker labels may remain unknown when speakers share a phrase.",
+                    "Speaker resources prepare automatically. Finish setup before an offline meeting.",
+                ],
+                analysisSampleRate: 16_000,
+                diarizationDependencies: [.speakerSeparation, .voiceMatching],
+                allowsTranscriptOnlyOnUnsupportedHardware: true,
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM, .boundedMultiTrackPCM],
+                supportedSpeakerProcessingModes: [.afterRecording]
+            ),
+            onboardingPriority: 3,
+            defaultLanguageCode: "auto",
+            providerFactory: { try WhisperProvider(meetingConfiguration: $0) },
+            configurationSnapshot: { languageCode, fingerprint, diarizationEnabled, processingMode in
+                MeetingFinalProcessingConfiguration(
+                    asrModel: SettingsStore.SpeechModel.qwen3Asr06BQ4.rawValue,
+                    asrArtifactFingerprint: fingerprint,
+                    asrArtifactDirectory: PichiMeetingProviderFactory.whisperArtifactDirectory,
+                    languageCode: languageCode,
+                    diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled,
+                        profile: .fast32SplitW8A8, speakerProcessingMode: processingMode),
+                    speakerLabelsEnabled: diarizationEnabled, speakerProcessingMode: processingMode
+                )
+            },
+            speakerProcessingProfiles: [.afterRecording: .fast32SplitW8A8],
+            modelsExistOnDisk: { SettingsStore.SpeechModel.qwen3Asr06BQ4.isInstalled },
+            liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 3 * 1_073_741_824, maximumTrackCount: 2),
+            admissionArtifactFingerprint: { nil }, supportsInstalledIdlePreparation: false,
+            installedArtifactFingerprint: {
+                WhisperProvider.installedArtifactFingerprintOperation(for: .qwen3Asr06BQ4,
+                    directory: PichiMeetingProviderFactory.whisperArtifactDirectory)
+            }
+        ),
         PichiMeetingProviderFactory.parakeetV3ModelID: Registration(
             descriptor: MeetingBackendDescriptor(
                 id: .parakeetV3,
@@ -500,5 +543,6 @@ enum PichiMeetingProviderFactory {
 extension MeetingBackendID {
     nonisolated static let gigaam = MeetingBackendID(rawValue: "local-gigaam-v3-eou-v1")
     nonisolated static let whisperTiny = MeetingBackendID(rawValue: "local-whisper-tiny-multilingual-v1")
+    nonisolated static let qwen06Q4 = MeetingBackendID(rawValue: "local-qwen3-asr-06b-q4-v1")
     nonisolated static let parakeetV3 = MeetingBackendID(rawValue: "local-parakeet-tdt-v3-v1")
 }

@@ -67901,6 +67901,108 @@
           }
         }
       }
+    },
+    "Qwen3 ASR 0.6B Q4": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qwen3 ASR 0.6B Q4"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qwen3 ASR 0.6B Q4"
+          }
+        }
+      }
+    },
+    "Qwen3 - Multilingual 0.6B Q4": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qwen3 - Multilingual 0.6B Q4"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qwen3 - несколько языков 0.6B Q4"
+          }
+        }
+      }
+    },
+    "Compact multilingual recognition with automatic language detection. Produces text after recording stops.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compact multilingual recognition with automatic language detection. Produces text after recording stops."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Компактное многоязычное распознавание с автоопределением языка. Текст появляется после остановки записи."
+          }
+        }
+      }
+    },
+    "Qwen3-ASR by the Qwen team. GGUF conversion by handy-computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qwen3-ASR by the Qwen team. GGUF conversion by handy-computer."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qwen3-ASR от команды Qwen. Преобразование в GGUF: handy-computer."
+          }
+        }
+      }
+    },
+    "Word timestamps are unavailable. Speaker labels may remain unknown when speakers share a phrase.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Word timestamps are unavailable. Speaker labels may remain unknown when speakers share a phrase."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Временные метки слов недоступны. Если в одной фразе говорят несколько человек, участник может остаться неизвестным."
+          }
+        }
+      }
+    },
+    "~562 MiB": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~562 MiB"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~562 МиБ"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

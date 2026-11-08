@@ -172,6 +172,9 @@ final class WhisperProvider: TranscriptionProvider {
     private var ready = false
     private var loadedModelName: String?
     private var loadedSpeechModel: SettingsStore.SpeechModel?
+    private typealias ActiveSession = (session: Session, modelName: String, speechModel: SettingsStore.SpeechModel, architecture: String)
+    private var boundedTranscriptionTask: Task<ASRTranscriptionResult, Error>?
+    private var boundedTranscriptionID: UUID?
 
     private let overriddenModelDirectory: URL?
     private let urlSession: URLSession
@@ -229,6 +232,7 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     func resolvedLanguageCode(explicit: String? = nil, model: SettingsStore.SpeechModel? = nil) -> String? {
+        if TranscribeSpeechModelCatalog.requiresAutomaticLanguage(model ?? self.selectedModel) { return nil }
         if let explicit { return explicit == "auto" ? nil : explicit }
         return self.dictationCaptureLock.withLock {
             if self.useAutomaticLanguageDetection { return nil }
@@ -260,7 +264,7 @@ final class WhisperProvider: TranscriptionProvider {
     /// never follows the dictation language preference after the attempt has started.
     convenience init(meetingConfiguration configuration: MeetingFinalProcessingConfiguration) throws {
         let options = try MeetingProviderOptions.resolve(configuration)
-        guard options.model.isWhisperModel else {
+        guard options.model.isWhisperModel || TranscribeSpeechModelCatalog.descriptor(for: options.model) != nil else {
             throw MeetingProviderOptionsError.unsupportedASRModel(configuration.asrModel)
         }
         self.init(
@@ -305,8 +309,9 @@ final class WhisperProvider: TranscriptionProvider {
         self.legacyModelName.map { self.modelDirectory.appendingPathComponent($0) }
     }
 
-    private var modelDownloadURL: URL? {
-        let modelName = self.modelName
+    static func modelDownloadURL(for model: SettingsStore.SpeechModel) -> URL? {
+        if let descriptor = TranscribeSpeechModelCatalog.descriptor(for: model) { return descriptor.downloadURL }
+        guard let modelName = model.whisperModelFile else { return nil }
         let suffix = "-Q8_0.gguf"
         guard modelName.hasSuffix(suffix) else { return nil }
         let repoName = String(modelName.dropLast(suffix.count))
@@ -351,7 +356,7 @@ final class WhisperProvider: TranscriptionProvider {
         self.ready = true
     }
 
-    private func activeSession() -> (session: Session, modelName: String, speechModel: SettingsStore.SpeechModel, architecture: String)? {
+    private func activeSession() -> ActiveSession? {
         self.stateLock.lock()
         defer { self.stateLock.unlock() }
         guard let session = self.session, let modelName = self.loadedModelName,
@@ -425,7 +430,7 @@ final class WhisperProvider: TranscriptionProvider {
         if !FileManager.default.fileExists(atPath: self.modelURL.path) {
             DebugLogger.shared.info("WhisperProvider: Downloading \(targetModel.displayName) GGUF model...", source: "WhisperProvider")
             progressHandler?(.preparingDownload)
-            try await self.downloadModel { progress in
+            try await self.downloadModel(for: targetModel, destination: self.modelURL) { progress in
                 progressHandler?(.downloading(progress))
             }
         }
@@ -482,15 +487,25 @@ final class WhisperProvider: TranscriptionProvider {
         // Freeze the artifact and backend before crossing the existing executor.
         let prepared = try await self.nativePreparationExecutor.runBlocking {
             try Task.checkCancellation()
-            if let expectedFingerprint,
-               try Self.artifactFingerprint(at: loadedModelURL, expectedBytes: expectedBytes) != expectedFingerprint {
+            let descriptor = TranscribeSpeechModelCatalog.descriptor(for: targetModel)
+            let actualFingerprint: String?
+            if let descriptor {
+                try descriptor.validateArtifact(at: loadedModelURL)
+                actualFingerprint = "sha256:" + descriptor.sha256
+            } else if expectedFingerprint != nil {
+                actualFingerprint = try Self.artifactFingerprint(at: loadedModelURL, expectedBytes: expectedBytes)
+            } else {
+                actualFingerprint = nil
+            }
+            if let expectedFingerprint, actualFingerprint != expectedFingerprint {
                 throw NSError(domain: "WhisperProvider", code: -8, userInfo: [
                     NSLocalizedDescriptionKey: "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run.",
                 ])
             }
+            try Task.checkCancellation()
             let model = try Model(path: loadedModelURL.path, options: ModelOptions(backend: backend))
             try Task.checkCancellation()
-            let options = SessionOptions()
+            let options = SessionOptions(nCtx: TranscribeSpeechModelCatalog.descriptor(for: targetModel)?.contextTokens ?? 0)
             let session = try model.session(options)
             let runtimeBackend = model.backend.lowercased()
             if backend == .metal, !runtimeBackend.contains("metal"), !runtimeBackend.contains("mtl") {
@@ -582,7 +597,42 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     func transcribe(_ samples: [Float], languageCode: String?) async throws -> ASRTranscriptionResult {
-        guard let transcript = try await self.run(samples, languageCode: languageCode, timestamps: .segment) else {
+        let active = self.activeSession()
+        let model = active?.speechModel ?? self.selectedModel
+        if let descriptor = TranscribeSpeechModelCatalog.descriptor(for: model) {
+            guard let active else {
+                throw NSError(domain: "WhisperProvider", code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "\(model.displayName) model not loaded"])
+            }
+            guard self.boundedTranscriptionTask == nil else { throw MeetingModelResidencyError.busy }
+            let id = UUID()
+            let generation = self.preparationGeneration
+            let task = Task {
+                try await TranscribeAudioChunkPolicy(maximumSamples: descriptor.maximumChunkSamples).transcribe(samples, validate: {
+                    guard generation == self.preparationGeneration else { throw CancellationError() }
+                }) { chunk in
+                    try await self.transcribeSingleChunk(chunk, languageCode: languageCode, active: active)
+                }
+            }
+            self.boundedTranscriptionID = id
+            self.boundedTranscriptionTask = task
+            defer {
+                if self.boundedTranscriptionID == id {
+                    self.boundedTranscriptionID = nil
+                    self.boundedTranscriptionTask = nil
+                }
+            }
+            return try await withTaskCancellationHandler {
+                let result = try await task.value
+                try Task.checkCancellation()
+                return result
+            } onCancel: { task.cancel() }
+        }
+        return try await self.transcribeSingleChunk(samples, languageCode: languageCode)
+    }
+
+    private func transcribeSingleChunk(_ samples: [Float], languageCode: String?, active: ActiveSession? = nil) async throws -> ASRTranscriptionResult {
+        guard let transcript = try await self.run(samples, languageCode: languageCode, timestamps: .segment, capturedSession: active) else {
             return ASRTranscriptionResult(text: "", confidence: 0)
         }
         return Self.transcriptionResult(text: transcript.text, segmentTimings: transcript.segments.map {
@@ -590,7 +640,7 @@ final class WhisperProvider: TranscriptionProvider {
         }, sampleCount: samples.count)
     }
 
-    private func run(_ samples: [Float], languageCode: String?, timestamps: TimestampKind) async throws -> Transcript? {
+    private func run(_ samples: [Float], languageCode: String?, timestamps: TimestampKind, capturedSession: ActiveSession? = nil) async throws -> Transcript? {
         try Task.checkCancellation()
         let minSamples = 1
         guard samples.count >= minSamples else {
@@ -601,7 +651,7 @@ final class WhisperProvider: TranscriptionProvider {
             )
         }
 
-        guard let active = self.activeSession() else {
+        guard let active = capturedSession ?? self.activeSession() else {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -1,
@@ -760,8 +810,9 @@ final class WhisperProvider: TranscriptionProvider {
                            model: SettingsStore.SpeechModel = .whisperBase, whisperLanguageCode: String? = nil,
                            loadedModelName: String? = nil, sampleCount: Int? = nil) -> RunOptions {
         let boundedTiny = model.isWhisperModel && (sampleCount.map { WhisperShortInputPolicy.applies(modelFile: loadedModelName, sampleCount: $0) } ?? false)
-        let resolvedLanguage = languageCode ?? (model.isWhisperModel ? whisperLanguageCode : nil)
-        return RunOptions(timestamps: model == .qwen3Asr17B ? .none : timestamps,
+        let autoOnly = TranscribeSpeechModelCatalog.requiresAutomaticLanguage(model)
+        let resolvedLanguage = autoOnly ? nil : languageCode ?? (model.isWhisperModel ? whisperLanguageCode : nil)
+        return RunOptions(timestamps: autoOnly ? .none : timestamps,
                           language: resolvedLanguage == "auto" ? nil : resolvedLanguage,
                           family: boundedTiny ? .whisper(.init(temperature: 0, temperatureInc: 0, seed: 1)) : nil)
     }
@@ -777,6 +828,12 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     func releaseResidency() async {
+        // The bounded multi-chunk owner retains one immutable native session. Cancel
+        // and join it before releasing that session or loading another model.
+        if let task = self.boundedTranscriptionTask {
+            task.cancel()
+            _ = await task.result
+        }
         self.preparationGeneration &+= 1
         let retired = self.stateLock.withLock { () -> WhisperNativeModelTransfer? in
             guard let model, let session else { self.ready = false; return nil }
@@ -818,7 +875,14 @@ final class WhisperProvider: TranscriptionProvider {
         let root = directory ?? AppBrand.cachesDirectory.appendingPathComponent("WhisperModels", isDirectory: true)
         let url = root.appendingPathComponent(file)
         let expectedBytes = model.expectedDownloadBytes
-        return { try Self.artifactFingerprint(at: url, expectedBytes: expectedBytes) }
+        let descriptor = TranscribeSpeechModelCatalog.descriptor(for: model)
+        return {
+            if let descriptor {
+                try descriptor.validateArtifact(at: url)
+                return "sha256:" + descriptor.sha256
+            }
+            return try Self.artifactFingerprint(at: url, expectedBytes: expectedBytes)
+        }
     }
 
     private nonisolated static func artifactFingerprint(at url: URL, expectedBytes: Int64) throws -> String? {
@@ -850,8 +914,8 @@ final class WhisperProvider: TranscriptionProvider {
         }.value
     }
 
-    private func downloadModel(progressHandler: ((Double) -> Void)?) async throws {
-        guard let url = self.modelDownloadURL else {
+    private func downloadModel(for model: SettingsStore.SpeechModel, destination: URL, progressHandler: ((Double) -> Void)?) async throws {
+        guard let url = Self.modelDownloadURL(for: model) else {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -1,
@@ -867,7 +931,7 @@ final class WhisperProvider: TranscriptionProvider {
                 if attempt == 1 {
                     progressHandler?(0.0)
                 }
-                try await self.downloadFile(from: url, to: self.modelURL, progressHandler: progressHandler)
+                try await self.downloadFile(from: url, to: destination, descriptor: TranscribeSpeechModelCatalog.descriptor(for: model), progressHandler: progressHandler)
                 DebugLogger.shared.info("WhisperProvider: Model downloaded successfully", source: "WhisperProvider")
                 return
             } catch let error as NSError {
@@ -916,7 +980,7 @@ final class WhisperProvider: TranscriptionProvider {
         }
     }
 
-    private func downloadFile(from url: URL, to destination: URL, progressHandler: ((Double) -> Void)?) async throws {
+    private func downloadFile(from url: URL, to destination: URL, descriptor: TranscribeSpeechModelCatalog.Descriptor?, progressHandler: ((Double) -> Void)?) async throws {
         var temporaryURL: URL?
         do {
             let (downloadedURL, response) = try await ProgressiveFileDownloader.download(
@@ -965,6 +1029,12 @@ final class WhisperProvider: TranscriptionProvider {
             }
 
             try Task.checkCancellation()
+            if let descriptor {
+                try await self.nativePreparationExecutor.runBlocking {
+                    try descriptor.validateArtifact(at: downloadedURL)
+                    try Task.checkCancellation()
+                }
+            }
             try FileManager.default.createDirectory(
                 at: destination.deletingLastPathComponent(),
                 withIntermediateDirectories: true

@@ -338,6 +338,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             return "Parakeet Flash uses FluidAudio's true streaming EOU pipeline for low-latency English dictation. Best when you want words to appear live as you speak."
         case .qwen3Asr:
             return "Qwen3 ASR is a multilingual FluidAudio model with strong quality, but higher memory usage. Requires macOS 15+."
+        case .qwen3Asr06BQ4:
+            return model.cardDescription
         case .qwen3Asr17B:
             return "On-device dictation for Apple Silicon. Automatically detects 30 languages and produces text after you stop recording."
         case .cohereTranscribeSixBit:
