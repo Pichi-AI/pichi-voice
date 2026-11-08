@@ -2272,12 +2272,12 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                 $0.identifier == ownedAudioID || knownLabels.contains($0.label)
             } + slider.allElementsBoundByIndex : []
             let records = controls.prefix(16).map { control in
-                ["id": control.identifier, "type": String(control.elementType.rawValue), "frame": NSStringFromCGRect(control.frame),
+                ["id": control.identifier, "type": String(control.elementType.rawValue), "frame": String(describing: control.frame),
                  "enabled": String(control.isEnabled), "hittable": String(control.isHittable),
                  "transportLabel": knownLabels.contains(control.label) ? control.label : "<redacted>"]
             }
             let diagnostic: [String: Any] = ["paragraphID": ownedParagraphID, "audioID": ownedAudioID,
-                "paragraphCount": paragraphs.count, "viewportFrame": transcripts.count == 1 ? NSStringFromCGRect(transcript.frame) : "missing",
+                "paragraphCount": paragraphs.count, "viewportFrame": transcripts.count == 1 ? String(describing: transcript.frame) : "missing",
                 "sliderCount": slider.count, "controls": records]
             if let data = try? JSONSerialization.data(withJSONObject: diagnostic, options: [.sortedKeys]),
                let text = String(data: data, encoding: .utf8) {
