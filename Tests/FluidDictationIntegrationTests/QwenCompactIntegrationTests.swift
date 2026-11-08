@@ -368,10 +368,11 @@ final class QwenCompactIntegrationTests: XCTestCase {
         let fixture = QwenPreparationFixture()
         service.modelProvidersForTesting[.qwen3Asr06BQ4] = fixture
         do {
-            for source in [AnalyticsModelDownloadSource.settings, .onboarding] {
+            for sourceIndex in 0..<2 {
                 #if os(iOS)
                 try await service.downloadModel(.qwen3Asr06BQ4, progressHandler: nil)
                 #else
+                let source: AnalyticsModelDownloadSource = sourceIndex == 0 ? .settings : .onboarding
                 try await service.downloadModel(.qwen3Asr06BQ4, source: source, progressHandler: nil)
                 #endif
                 XCTAssertFalse(service.hasActiveModelDownload)
