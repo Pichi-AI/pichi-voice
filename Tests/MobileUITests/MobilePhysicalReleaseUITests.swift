@@ -162,8 +162,8 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     control.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
                 }
                 let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value ? "1" : "0"), object: control)
-                try self.require(XCTWaiter.wait(for: [changed], timeout: 10) == .completed,
-                                 "Verify the requested native switch value")
+                let changeResult = await XCTWaiter.fulfillment(of: [changed], timeout: 10)
+                try self.require(changeResult == .completed, "Verify the requested native switch value")
                 if key == .pii {
                     let active = app.descendants(matching: .any)["privacy.pii.active"].firstMatch
                     if value {
