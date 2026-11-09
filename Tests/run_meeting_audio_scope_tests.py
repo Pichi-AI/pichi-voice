@@ -163,7 +163,7 @@ for mode in MeetingCaptureMode.allCases {
                     let configured = settings.applyingMeetingRecordingPreferences(to: selected)
                     check(configured.audioStorageMode == (saveAudio ? .retainedFiles : .memoryOnly), "Configured retention must reach the resolved source")
                     check(configured.speakerLabelsEnabled == labels, "Configured speaker label policy must reach the resolved source")
-                    check(configured.speakerProcessingMode == (labels && preference == .streaming ? .streaming : nil), "Explicit after-recording and disabled labels must not become streaming")
+                    check(configured.speakerProcessingMode == (labels ? .streaming : nil), "Legacy timing preference cannot defer new recordings; disabled labels stay explicit")
                     check(configured.piiRedactionEnabled == privacy, "Configured privacy policy must reach the resolved source")
                     var identity = configured
                     identity.audioStorageMode = selected.audioStorageMode
@@ -177,7 +177,7 @@ for mode in MeetingCaptureMode.allCases {
                     settings.meetingPIIRedactionEnabled = !privacy
                     check(configured.audioStorageMode == (saveAudio ? .retainedFiles : .memoryOnly)
                         && configured.speakerLabelsEnabled == labels && configured.piiRedactionEnabled == privacy
-                        && configured.speakerProcessingMode == (labels && preference == .streaming ? .streaming : nil),
+                        && configured.speakerProcessingMode == (labels ? .streaming : nil),
                         "A returned capture value cannot follow later preference changes")
                 }
             }

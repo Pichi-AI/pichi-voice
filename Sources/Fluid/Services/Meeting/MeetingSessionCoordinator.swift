@@ -302,6 +302,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private var correctionUndoStacks: [MeetingSessionID: [OwnedTranscriptCorrection]] = [:]
     private let prepareRecordingDependencies: @MainActor (Set<MeetingDiarizationDependency>) async throws -> Void
+    private let prepareRegisteredSpeakerResources: @MainActor (MeetingFinalProcessingConfiguration) async throws -> Void
     private let validateRecordingModels: @MainActor () async throws -> Void
     private let validateFrozenRecordingConfiguration: @MainActor (MeetingFinalProcessingConfiguration) throws -> Void
     private let processingLogger: @MainActor (String) -> Void
@@ -321,6 +322,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         redactorProvider: @escaping @MainActor () throws -> (any TranscriptTextRedacting)? = { nil },
         validateRecordingModels: @escaping @MainActor () async throws -> Void = {},
         prepareRecordingDependencies: @escaping @MainActor (Set<MeetingDiarizationDependency>) async throws -> Void = { _ in },
+        prepareRegisteredSpeakerResources: @escaping @MainActor (MeetingFinalProcessingConfiguration) async throws -> Void = {
+            try await PichiMeetingProviderFactory.prepareSpeakerResources(for: $0)
+        },
         validateFrozenRecordingConfiguration: @escaping @MainActor (MeetingFinalProcessingConfiguration) throws -> Void = { _ in },
         processingLogger: @escaping @MainActor (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingSessionCoordinator") }
     ) {
@@ -338,6 +342,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.redactorProvider = redactorProvider
         self.validateRecordingModels = validateRecordingModels
         self.prepareRecordingDependencies = prepareRecordingDependencies
+        self.prepareRegisteredSpeakerResources = prepareRegisteredSpeakerResources
         self.validateFrozenRecordingConfiguration = validateFrozenRecordingConfiguration
         self.processingLogger = processingLogger
         self.locationPreferenceObserver = settings.objectWillChange.sink { [weak self] _ in
@@ -516,7 +521,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     ) async throws {
         if configuration.effectiveSpeakerProcessingMode == .streaming,
            PichiMeetingProviderFactory.registeredBackendDescriptor(for: configuration.asrModel)?.id == descriptor.id {
-            try await PichiMeetingProviderFactory.prepareSpeakerResources(for: configuration)
+            try await self.prepareRegisteredSpeakerResources(configuration)
         } else {
             try await self.prepareRecordingDependencies(descriptor.diarizationDependencies)
         }

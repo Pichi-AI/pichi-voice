@@ -390,24 +390,19 @@ extension SettingsStore {
         set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingSpeakerLabelsEnabled) }
     }
 
-    /// Settings displays the in-room preference. Capture admission checks its actual topology
-    /// below, including explicit multi-track capability for an online call.
+    /// New recordings share one live processing policy. The setter retains the legacy
+    /// preference storage contract for imports and older clients; it cannot select an offline
+    /// path for a new capture. Encoded sessions retain their own immutable processing mode.
     var meetingSpeakerProcessingMode: MeetingSpeakerProcessingMode {
         get { self.meetingSpeakerProcessingMode(for: .inRoom) }
         set { objectWillChange.send(); self.defaults.set(newValue.rawValue, forKey: Keys.meetingSpeakerProcessingMode) }
     }
 
-    /// Only new requests without a stored choice prefer streaming when the selected backend
-    /// declares that capability. Explicit and unknown future values retain their prior meaning;
-    /// this never migrates encoded sessions, checkpoints or a running attempt's configuration.
+    /// Processing behavior belongs to the meeting, independently of its selected speech model.
+    /// Capability/language validation must reject unsupported requests before capture, rather
+    /// than silently record for a full post-Stop pass. Old manifests and retry pins are untouched.
     func meetingSpeakerProcessingMode(for mode: MeetingCaptureMode) -> MeetingSpeakerProcessingMode {
-        if let stored = self.defaults.object(forKey: Keys.meetingSpeakerProcessingMode) {
-            return (stored as? String).flatMap(MeetingSpeakerProcessingMode.init(rawValue:)) ?? .afterRecording
-        }
-        let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.selectedSpeechModel.rawValue)
-        let input: MeetingBackendInputKind = mode == .onlineCall ? .boundedMultiTrackPCM : .boundedMicrophonePCM
-        return descriptor?.supportedSpeakerProcessingModes.contains(.streaming) == true
-            && descriptor?.supportedInputs.contains(input) == true ? .streaming : .afterRecording
+        .streaming
     }
 
     /// Freeze the current recording policy when a platform has resolved its sources.

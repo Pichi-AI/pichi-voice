@@ -536,7 +536,6 @@ final class MeetingLiveCaptionRouteTests: XCTestCase {
         nil,
         SettingsStore.SpeechModel.appleSpeech.rawValue,
         SettingsStore.SpeechModel.appleSpeechAnalyzer.rawValue,
-        SettingsStore.SpeechModel.parakeetTDTv2.rawValue,
         SettingsStore.SpeechModel.whisperBase.rawValue,
         "fixture.unregistered-provider",
     ]
@@ -551,6 +550,10 @@ final class MeetingLiveCaptionRouteTests: XCTestCase {
         let whisperTiny = PichiMeetingProviderFactory.whisperTinyModelID
         XCTAssertEqual(self.route("ru", parakeetV3), .buffered(modelID: parakeetV3))
         XCTAssertEqual(self.route("en", parakeetV3), .buffered(modelID: parakeetV3))
+        XCTAssertEqual(self.route("en", "parakeet-tdt-v2"), .buffered(modelID: "parakeet-tdt-v2"))
+        XCTAssertEqual(self.route("ru", "parakeet-tdt-v2"), Self.unsupportedLanguage)
+        XCTAssertEqual(self.route("en", "fluid-parakeet-pro"), .buffered(modelID: "fluid-parakeet-pro"))
+        XCTAssertEqual(self.route("de", "fluid-parakeet-pro"), .buffered(modelID: "fluid-parakeet-pro"))
         XCTAssertEqual(self.route("ru", gigaam), .buffered(modelID: gigaam))
         XCTAssertEqual(self.route("en", gigaam), Self.unsupportedLanguage)
         XCTAssertEqual(self.route("ru", whisperTiny), .buffered(modelID: whisperTiny))
