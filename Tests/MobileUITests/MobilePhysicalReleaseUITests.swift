@@ -2876,7 +2876,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         let app = try attachReadOnlyPhysicalApp(revision: revision)
         try require(!app.otherElements["ActivityListView"].exists && !app.otherElements["Browse View (Picker)"].exists
                     && app.sheets.count == 0
-                    && app.sliders.matching(NSPredicate(format: "label == %@", "Audio chunk position")).count == 0,
+                    && app.sliders.matching(PhysicalPlaybackSliderQuery.predicate).count == 0,
                     "Never adopt a pre-existing share sheet, picker, dialog or audio player")
         try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
         let sessionID = selected.sessionID.uuidString
@@ -2906,7 +2906,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         let paragraphs = transcript.descendants(matching: .any).matching(identifier: ownedParagraphID)
         let paragraph = paragraphs.firstMatch
         let ownedAudio = paragraph.buttons[ownedAudioID]
-        let slider = paragraph.sliders.matching(NSPredicate(format: "label == %@", "Audio chunk position"))
+        let slider = paragraph.sliders.matching(PhysicalPlaybackSliderQuery.predicate)
         let pauseLabels = ["Pause audio chunk", "Приостановить воспроизведение фрагмента"]
         let playLabels = ["Play audio chunk", "Воспроизвести аудиофрагмент"]
         let closeLabels = ["Close audio player", "Закрыть аудиоплеер"]
@@ -2992,11 +2992,13 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         diagnoseOwnedControls("opened-before-player-reveal")
         try revealOwnedControls(startingUpward: true, ready: {
             let control = transport(pauseLabels) ?? transport(playLabels)
-            return slider.count == 1 && slider.firstMatch.isHittable && slider.firstMatch.isEnabled
+            return PhysicalPlaybackSliderQuery.isUniqueOwnedMatch(paragraphCount: paragraphs.count, sliderCount: slider.count)
+                && slider.firstMatch.isHittable && slider.firstMatch.isEnabled
                 && control?.isEnabled == true && control?.isHittable == true
         })
         try await PhysicalUITransitionWait.until(timeout: 10, condition: {
-            slider.count == 1 && transport(pauseLabels)?.isEnabled == true
+            PhysicalPlaybackSliderQuery.isUniqueOwnedMatch(paragraphCount: paragraphs.count, sliderCount: slider.count)
+                && transport(pauseLabels)?.isEnabled == true
         })
         let initial = try XCTUnwrap(PhysicalPlaybackPosition.seconds(slider.firstMatch.value as? String))
         try await PhysicalUITransitionWait.until(timeout: 10, condition: {
