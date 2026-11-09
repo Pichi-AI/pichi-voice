@@ -1,8 +1,9 @@
 # Streaming meeting processing
 
-Continuous speaker processing is the default for a new in-room meeting when the registered
-backend advertises streaming support and no explicit processing preference exists. An existing
-preference is preserved. Online-call and unsupported backend defaults remain after-recording.
+New meetings use continuous recognition and speaker processing for both in-room and online-call
+capture. This is a meeting policy, independent of the selected speech model or a legacy stored
+processing preference. Backend admission validates the selected model, language and source
+topology before capture; unsupported requests never silently become after-recording jobs.
 Recognition, text privacy and speaker attribution share the existing meeting pipeline,
 resource owners, session store and native capture engines.
 
@@ -104,7 +105,8 @@ cannot be recovered after process termination.
 Missing mode fields in old serialized sessions still decode as `afterRecording`. The new
 meeting default does not reinterpret saved sessions or checkpoints. Legacy configuration
 identities remain unchanged; streaming identities include the mode and exact model profile. An
-unsupported backend or two-source capture is rejected before permissions and preparation.
+unsupported backend or source topology is rejected before permissions and preparation.
+Online calls use the registered bounded multi-track input with one shared inference owner.
 
 ## Enrolled owner identity
 
