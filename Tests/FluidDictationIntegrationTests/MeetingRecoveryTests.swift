@@ -539,7 +539,7 @@ final class MeetingRecoveryTests: XCTestCase {
         self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
         XCTAssertEqual(session.languageCode, "en")
-        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.productionDefault.rawValue)
+        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.parakeetV2.rawValue)
         XCTAssertEqual(session.state, .recording)
         XCTAssertEqual(capture.startCount, 1)
         XCTAssertEqual(arbiter.acquireCount, 1)
@@ -594,8 +594,8 @@ final class MeetingRecoveryTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = SettingsStore(defaults: defaults)
-        // Tiny and registered Parakeet v3 support streaming. The inherited v2 composite
-        // remains an actual after-recording-only backend for both storage policies.
+        // An explicit legacy backend remains after-recording-only. Selecting Parakeet v2
+        // normally uses its new live registration instead of this saved compatibility route.
         settings.selectedSpeechModel = .parakeetTDTv2
         settings.meetingTranscriptionBackendID = .parakeetNemotron
         let dir = self.makeTempDirectory()
@@ -617,6 +617,7 @@ final class MeetingRecoveryTests: XCTestCase {
             configuration.audioStorageMode = storage
             configuration.speakerLabelsEnabled = true
             configuration.speakerProcessingMode = .streaming
+            configuration.transcriptionBackendID = MeetingBackendID.parakeetNemotron.rawValue
             do {
                 _ = try await coordinator.startRecording(configuration: configuration)
                 XCTFail("A saved recording must not silently downgrade unsupported streaming")

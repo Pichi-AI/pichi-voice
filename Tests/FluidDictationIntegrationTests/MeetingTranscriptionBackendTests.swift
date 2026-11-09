@@ -527,7 +527,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
     func testDefaultRegistryUsesProductionDefaultAndKeepsLegacyRollback() throws {
         let registry = MeetingTranscriptionBackendRegistry.makeDefault()
         XCTAssertEqual(registry.defaultBackendID, .productionDefault)
-        XCTAssertEqual(registry.registeredBackendIDs, [.legacyCompatibility, .parakeetNemotron, .gigaam, .whisperTiny, .parakeetV3])
+        XCTAssertEqual(registry.registeredBackendIDs, [.legacyCompatibility, .parakeetNemotron, .gigaam, .whisperTiny, .parakeetV3, .parakeetV2, .fluidParakeetPro])
 
         let backend = try registry.makeBackend(
             id: registry.defaultBackendID,
@@ -1901,7 +1901,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: sessionDirectory) }
 
-        for backendID in [MeetingBackendID.gigaam, .whisperTiny, .parakeetV3, .parakeetNemotron] {
+        for backendID in [MeetingBackendID.gigaam, .whisperTiny, .parakeetV3, .parakeetV2, .fluidParakeetPro, .parakeetNemotron] {
             let language = backendID == .gigaam ? "ru" : "en"
             let probe = Probe()
             let registry = MeetingTranscriptionBackendRegistry.makeDefault()
