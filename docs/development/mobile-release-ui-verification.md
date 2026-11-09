@@ -638,7 +638,7 @@ attested signed-out final account page, with unique empty/unfocused credential
 fields and completed local preparation. It uses `account.continueAsGuest`, whose
 production action joins account retirement and calls normal final setup Next.
 It stops at empty Recordings with an enabled/hittable Start; it does not record.
-Only nil/empty credential values are admitted, without logging them. Unknown or
+Only explicitly empty credential values are admitted, without logging them. Nil or
 nonempty values, including a placeholder projected as a value, fail safely.
 
 Use the same runtime AUT34/source1a and private iPad destination environment as the

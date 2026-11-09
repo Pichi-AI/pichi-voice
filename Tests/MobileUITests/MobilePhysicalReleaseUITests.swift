@@ -299,7 +299,7 @@ private nonisolated struct PhysicalGuestCompletionReceipt: Codable {
 }
 
 private nonisolated enum PhysicalGuestCredentialFields {
-    static func isEmpty(value: String?) -> Bool { value == nil || value == "" }
+    static func isEmpty(value: String?) -> Bool { value == "" }
 }
 
 private nonisolated enum PhysicalMicrophonePrompt {
@@ -1094,7 +1094,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
     }
 
     func testPhysicalGuestCredentialAdmissionRejectsEnteredOrUnknownValuesWithoutExposingThem() {
-        XCTAssertTrue(PhysicalGuestCredentialFields.isEmpty(value: nil))
+        XCTAssertFalse(PhysicalGuestCredentialFields.isEmpty(value: nil))
         XCTAssertTrue(PhysicalGuestCredentialFields.isEmpty(value: ""))
         XCTAssertFalse(PhysicalGuestCredentialFields.isEmpty(value: "Email"))
         for value in ["synthetic@example.test", "••••", "unknown"] {
