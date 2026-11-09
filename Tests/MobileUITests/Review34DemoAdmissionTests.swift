@@ -23,9 +23,11 @@ final class Review34DemoAdmissionTests: XCTestCase {
         XCTAssertFalse(owner.matches(openedSessionID: added, paragraphID: "transcript.paragraph.other", audioID: "transcript.audio.a", paragraphCount: 1, audioCount: 1))
     }
     private func proof(revision: String = Review34DemoAdmission.coreRevision, build: String = "35", idiom: String = "phone",
-                       latest: Bool = true, backup: Bool = true, ids: [String]? = nil) throws -> Data {
-        try JSONEncoder().encode(Review34DemoAdmission.CoreVideoProof(schemaVersion: 1, revision: revision, build: build,
-            deviceID: "synthetic-device", idiom: idiom, osVersion: "synthetic-latest", latestOSVerified: latest,
+                       latest: Bool = true, backup: Bool = true, ids: [String]? = nil,
+                       purpose: Review34DemoAdmission.CoreVideoPurpose = .betaObservedOS, schemaVersion: Int = 2,
+                       osVersion: String = "synthetic-latest") throws -> Data {
+        try JSONEncoder().encode(Review34DemoAdmission.CoreVideoProof(schemaVersion: schemaVersion, purpose: purpose, revision: revision, build: build,
+            deviceID: "synthetic-device", idiom: idiom, osVersion: osVersion, latestOSVerified: latest,
             backupVerified: backup, backupSHA256: String(repeating: "a", count: 64),
             appExecutableSHA256: String(repeating: "b", count: 64), baselineIDs: ids ?? [baselineID]))
     }
@@ -40,12 +42,32 @@ final class Review34DemoAdmissionTests: XCTestCase {
     func testAtomicReleaseBindingsRejectCrossMixAndUnknown() throws {
         let review = Review34DemoAdmission.reviewRevision
         let beta = Review34DemoAdmission.coreRevision
-        XCTAssertTrue(admitted(try proof(revision: review, build: "34"), revision: review))
+        XCTAssertTrue(admitted(try proof(revision: review, build: "34", purpose: .appleReviewLatestStable), revision: review))
         XCTAssertTrue(admitted(try proof(revision: beta, build: "35"), revision: beta))
         XCTAssertFalse(admitted(try proof(revision: review, build: "35"), revision: review))
         XCTAssertFalse(admitted(try proof(revision: beta, build: "34"), revision: beta))
         XCTAssertFalse(admitted(try proof(revision: "unknown", build: "34"), revision: "unknown"))
-        XCTAssertFalse(admitted(try proof(revision: review, build: "34"), revision: beta))
+        XCTAssertFalse(admitted(try proof(revision: review, build: "34", purpose: .appleReviewLatestStable), revision: beta))
+    }
+    func testSchema2PurposesKeepLatestReviewSeparateFromObservedBetaOS() throws {
+        let review = Review34DemoAdmission.reviewRevision
+        XCTAssertTrue(admitted(try proof(revision: review, build: "34", purpose: .appleReviewLatestStable), revision: review))
+        XCTAssertFalse(admitted(try proof(revision: review, build: "34", latest: false, purpose: .appleReviewLatestStable), revision: review))
+        XCTAssertTrue(admitted(try proof(idiom: "pad", latest: false, osVersion: "17.7.11"), idiom: "pad", os: "17.7.11"))
+        XCTAssertTrue(admitted(try proof(idiom: "pad", latest: true, osVersion: "17.7.11"), idiom: "pad", os: "17.7.11"))
+        XCTAssertFalse(admitted(try proof(purpose: .appleReviewLatestStable)))
+        XCTAssertFalse(admitted(try proof(revision: review, build: "34", purpose: .betaObservedOS), revision: review))
+    }
+    func testSchema1UnknownOrMissingPurposeCannotFallback() throws {
+        XCTAssertFalse(admitted(try proof(schemaVersion: 1)))
+        let original = try proof()
+        var unknown = try XCTUnwrap(JSONSerialization.jsonObject(with: original) as? [String: Any])
+        unknown["purpose"] = "unknownPurpose"
+        XCTAssertFalse(admitted(try JSONSerialization.data(withJSONObject: unknown)))
+        unknown.removeValue(forKey: "purpose")
+        XCTAssertFalse(admitted(try JSONSerialization.data(withJSONObject: unknown)))
+        unknown["purpose"] = "betaObservedOS"; unknown.removeValue(forKey: "schemaVersion")
+        XCTAssertFalse(admitted(try JSONSerialization.data(withJSONObject: unknown)))
     }
     func testCoreVideoAcceptsPinnedPhoneAndPadProof() throws {
         XCTAssertTrue(admitted(try proof()))
@@ -54,7 +76,8 @@ final class Review34DemoAdmissionTests: XCTestCase {
     func testCoreVideoRejectsWrongBuildSourceOSBackupAndChangedHistory() throws {
         XCTAssertFalse(admitted(try proof(build: "34")))
         XCTAssertFalse(admitted(try proof(revision: "older")))
-        XCTAssertFalse(admitted(try proof(latest: false)))
+        XCTAssertFalse(admitted(try proof(revision: Review34DemoAdmission.reviewRevision, build: "34", latest: false,
+            purpose: .appleReviewLatestStable), revision: Review34DemoAdmission.reviewRevision))
         XCTAssertFalse(admitted(try proof(backup: false)))
         XCTAssertFalse(admitted(try proof(), os: "other"))
         XCTAssertFalse(admitted(try proof(), backup: String(repeating: "c", count: 64)))

@@ -12,8 +12,13 @@ nonisolated enum Review34DemoAdmission {
         }
     }
     static let fixtureSHA = "81998993976a2804d414b261d3af679d49a1b1e08d952bace5ffc31291a392c8"
+    enum CoreVideoPurpose: String, Codable {
+        case appleReviewLatestStable
+        case betaObservedOS
+    }
     struct CoreVideoProof: Codable {
         let schemaVersion: Int
+        let purpose: CoreVideoPurpose
         let revision: String
         let build: String
         let deviceID: String
@@ -31,15 +36,24 @@ nonisolated enum Review34DemoAdmission {
         guard data.count <= 65_536, let expectedSHA, validSHA(expectedSHA),
               SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == expectedSHA.lowercased(),
               let proof = try? JSONDecoder().decode(CoreVideoProof.self, from: data),
-              proof.schemaVersion == 1, revision == proof.revision, let expectedBuild = releaseBuild(for: proof.revision),
+              proof.schemaVersion == 2, revision == proof.revision, let expectedBuild = releaseBuild(for: proof.revision),
               proof.build == expectedBuild, let deviceID, !deviceID.isEmpty, proof.deviceID == deviceID,
+              purposeMatchesRelease(proof),
               ["phone", "pad"].contains(idiom), proof.idiom == idiom,
-              !osVersion.isEmpty, proof.osVersion == osVersion, proof.latestOSVerified,
+              !osVersion.isEmpty, proof.osVersion == osVersion,
               proof.backupVerified, validSHA(proof.backupSHA256), proof.backupSHA256 == expectedBackupSHA,
               validSHA(proof.appExecutableSHA256),
               uniqueIDs(proof.baselineIDs), uniqueIDs(baselineIDs), Set(proof.baselineIDs) == Set(baselineIDs)
         else { return false }
         return true
+    }
+    private static func purposeMatchesRelease(_ proof: CoreVideoProof) -> Bool {
+        switch proof.purpose {
+        case .appleReviewLatestStable:
+            return proof.revision == reviewRevision && proof.build == "34" && proof.latestOSVerified
+        case .betaObservedOS:
+            return proof.revision == coreRevision && proof.build == "35"
+        }
     }
     static func coreReady(idle: Bool, saveAudio: String?, automaticDelivery: String?, noExistingPlayer: Bool) -> Bool {
         recordingPoliciesReady(idle: idle, saveAudio: saveAudio, automaticDelivery: automaticDelivery,

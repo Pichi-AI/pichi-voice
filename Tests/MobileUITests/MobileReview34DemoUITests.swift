@@ -65,6 +65,9 @@ final class MobileReview34DemoUITests: XCTestCase {
             guard Review34DemoAdmission.coreVideoProof(proof, expectedSHA: env["PICHI_CORE_FLOW_PROOF_SHA"],
                 revision: env["PICHI_TEST_REVISION"], deviceID: env["PICHI_CORE_FLOW_DEVICE_ID"],
                 idiom: idiom, osVersion: UIDevice.current.systemVersion, baselineIDs: baselineIDs, expectedBackupSHA: backupHash) else { throw Unverified() }
+            let admitted = try JSONDecoder().decode(Review34DemoAdmission.CoreVideoProof.self, from: proof)
+            let latestStatus = admitted.latestOSVerified ? "verified" : "not_verified"
+            print("[PICHI_CORE_FLOW_PURPOSE] purpose=\(admitted.purpose.rawValue) os=\(UIDevice.current.systemVersion) latestStatus=\(latestStatus)")
         }
 
         let closeLabels = ["Close audio player", "Закрыть аудиоплеер"]

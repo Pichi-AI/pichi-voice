@@ -7,26 +7,36 @@ short demo driver on an explicitly leased physical iPhone or iPad. Its source
 profile admits only atomic release bindings: review build 34 with source
 `1a245d0447b08e3fc681d439ea4ef3b392e034c2`, or beta build 35 with source
 `62d9d54450a8612a8c9bbbeb348baf41214de63b`. Cross-pairs and unknown releases fail.
-Apple review-34 video must show exact build 34; a later beta-35 clip is separate.
+Apple review-34 video must show exact build 34 and purpose `appleReviewLatestStable`
+with latestOSVerified true. Beta-35 acceptance uses only purpose `betaObservedOS`:
+latestOSVerified is a required truthful boolean and may be false or true. It never
+turns beta acceptance into the Apple latest-stable video. No bypass flag exists.
 It is a prepared runner, not device acceptance or a replacement for a new phone
 video. Do not repeat an installation, recording or delivery merely to refresh status.
 
 After independent source review, build/sign/freeze the runner separately. The AUT
 must be the exact verified ordinary Release product. Before a device window, the
 parent verifies the full backup, exact target device, installed executable hash,
-source/build and current latest iOS version. It stages the existing approved public
+source/build and exact observed iOS version. For `appleReviewLatestStable`, the
+parent additionally verifies that this is the current stable iOS release; for
+`betaObservedOS`, it records the actual latest status without requiring an OS update. It stages the existing approved public
 WAV in the runner at `Library/Application Support/BackgroundRecordingUI/speech.wav`
 (424586 bytes, SHA-256 `81998993976a2804d414b261d3af679d49a1b1e08d952bace5ffc31291a392c8`).
 The validly signed runner must declare its normal public audio background mode.
 
 The parent also stages a public metadata-only `CoreFlowVideo/backup-proof.json`
 under that same Application Support directory, then pins its SHA-256 in
-`PICHI_CORE_FLOW_PROOF_SHA`. Its `CoreVideoProof` schema contains schemaVersion 1,
+`PICHI_CORE_FLOW_PROOF_SHA`. Its `CoreVideoProof` schema requires schemaVersion 2 and a decoded `purpose` enum,
 revision, build, deviceID, idiom (`phone` or `pad`), exact osVersion, latestOSVerified,
 backupVerified, backupSHA256, appExecutableSHA256 and baselineIDs. This is an
 operator attestation bound to actual runner-observed idiom/OS/history, not an
 independent verification of the host backup or installed binary. Never substitute
 syntactically valid hashes for the parent's actual verified backup and product.
+Schema 1, absent/unknown purpose and mismatched source/build/purpose combinations
+fail closed. In both purposes, proof.osVersion must exactly equal the runner-observed
+UIDevice.systemVersion; backup/device/history/hash and local-only policy gates are
+unchanged. The driver emits only the fixed purpose, observed OS and verified/not_verified
+latest status at the purpose checkpoint, without credential/account/backup contents.
 
 Runner-only gates: `PICHI_CORE_FLOW_VIDEO=owned-core-flow`,
 `PICHI_PHYSICAL_RELEASE_UI_AUDIO=1`, `PICHI_TEST_REVISION=<pinned source>`,
