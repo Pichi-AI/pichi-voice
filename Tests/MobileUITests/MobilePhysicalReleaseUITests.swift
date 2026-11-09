@@ -3042,15 +3042,24 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         ownsPlayback = false
         capture("owned-playback-04-stopped", revision: revision)
         try openNavigation(app, "meetings", titles: ["Recordings", "Записи"], revision: revision)
-        try requireOwnedRow()
         // A partial native drag reveals the exact action without a destructive full swipe.
-        rows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).press(forDuration: 0.1,
-            thenDragTo: rows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5)))
+        let ownedRow = rows.firstMatch
+        let swipeStart = ownedRow.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+        let swipeEnd = ownedRow.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5))
+        try PhysicalOwnedMutation.run(verify: { try requireOwnedRow() }, mutate: {
+            swipeStart.press(forDuration: 0.1, thenDragTo: swipeEnd)
+        })
         let delete = app.buttons.matching(identifier: "history.delete.\(sessionID)")
         try require(delete.count == 1 && app.alerts.count == 0 && app.sheets.count == 0,
                     "The exact owned row must expose its own ordinary Delete action")
         capture("owned-playback-05-exact-delete-action", revision: revision)
-        try tap(delete.firstMatch, "Delete only the independently backed-up synthetic session")
+        let deleteButton = delete.firstMatch
+        try PhysicalOwnedMutation.run(verify: {
+            try require(delete.count == 1 && app.alerts.count == 0 && app.sheets.count == 0,
+                        "The exact owned row must still expose only its own Delete action")
+            try require(deleteButton.waitForExistence(timeout: 5) && deleteButton.isHittable && deleteButton.isEnabled,
+                        "Delete only the independently backed-up synthetic session")
+        }, mutate: { deleteButton.tap() })
         try await PhysicalUITransitionWait.until(timeout: 10, condition: {
             rows.count == 0 || app.alerts.count > 0 || app.sheets.count > 0
         })
@@ -3062,7 +3071,15 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                 "Only the known recording-deletion confirmation from the owned action may be accepted")
             let confirm = dialog.buttons.matching(NSPredicate(format: "label IN %@", ["Delete", "Удалить"]))
             try require(confirm.count == 1, "The owned recording confirmation must have one exact destructive action")
-            try tap(confirm.firstMatch, "Confirm only the owned synthetic recording deletion")
+            let confirmButton = confirm.firstMatch
+            try PhysicalOwnedMutation.run(verify: {
+                try require(dialogs.count == 1 && confirm.count == 1
+                            && dialog.staticTexts.matching(NSPredicate(format: "label IN %@",
+                                ["Delete this recording with its transcript and audio?", "Удалить эту запись вместе с расшифровкой и аудио?"])).count == 1,
+                            "The same owned recording confirmation must remain unique")
+                try require(confirmButton.waitForExistence(timeout: 5) && confirmButton.isHittable && confirmButton.isEnabled,
+                            "Confirm only the owned synthetic recording deletion")
+            }, mutate: { confirmButton.tap() })
         }
         try await PhysicalUITransitionWait.until(timeout: 10, condition: {
             app.state == .runningForeground && app.alerts.count == 0 && app.sheets.count == 0 && rows.count == 0

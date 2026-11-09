@@ -1,5 +1,16 @@
 import Foundation
 
+/// Non-cleanup UI mutations must recheck cancellation after their final native query.
+/// The mutation closure contains only the already-bound event, with no more queries.
+@MainActor enum PhysicalOwnedMutation {
+    static func run(verify: () throws -> Void, mutate: () -> Void) throws {
+        try Task.checkCancellation()
+        try verify()
+        try Task.checkCancellation()
+        mutate()
+    }
+}
+
 // Shared test-only policies. Native drivers supply already-owned controls and clocks.
 @MainActor enum PhysicalControlReveal {
     struct NotVisible: Error {}

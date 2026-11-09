@@ -5,6 +5,69 @@ final class PhysicalOwnedCleanupTests: XCTestCase {
     private enum Failure: Error, Equatable { case operation, stop, join }
 
     @MainActor
+    func testOwnedMutationVerifiesBeforeDispatchingExactlyOneEvent() throws {
+        var calls: [String] = []
+        try PhysicalOwnedMutation.run(verify: { calls.append("verify") }, mutate: { calls.append("event") })
+        XCTAssertEqual(calls, ["verify", "event"])
+    }
+
+    @MainActor
+    func testOwnedMutationRejectsFailedOwnershipWithoutDispatch() {
+        var events = 0
+        XCTAssertThrowsError(try PhysicalOwnedMutation.run(verify: { throw Failure.operation }, mutate: { events += 1 })) {
+            XCTAssertEqual($0 as? Failure, .operation)
+        }
+        XCTAssertEqual(events, 0)
+    }
+
+    @MainActor
+    func testOwnedMutationCancelledBeforeVerificationDoesNotQueryOrDispatch() async throws {
+        var queries = 0, events = 0
+        let task = Task { @MainActor in
+            try PhysicalOwnedMutation.run(verify: { queries += 1 }, mutate: { events += 1 })
+        }
+        task.cancel()
+        do { try await task.value; XCTFail("Cancelled mutation must be denied") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(queries, 0)
+        XCTAssertEqual(events, 0)
+    }
+
+    @MainActor
+    func testOwnedMutationCancelledDuringLastEligibilityQueryDoesNotDispatch() async throws {
+        var queries = 0, events = 0
+        let task = Task { @MainActor in
+            try PhysicalOwnedMutation.run(verify: {
+                queries += 1
+                // Model cancellation delivered while the final native query returns true.
+                withUnsafeCurrentTask { $0?.cancel() }
+            }, mutate: { events += 1 })
+        }
+        do { try await task.value; XCTFail("Late cancellation must prevent the native event") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(queries, 1)
+        XCTAssertEqual(events, 0)
+    }
+
+    @MainActor
+    func testDeniedOwnedMutationStillRunsIndependentJoinedCleanup() async throws {
+        var events = 0, cleaned = false
+        let task = Task { @MainActor in
+            try await PhysicalOwnedRecordingCleanup.withJoinedCleanup(operation: {
+                try PhysicalOwnedMutation.run(verify: { withUnsafeCurrentTask { $0?.cancel() } },
+                                              mutate: { events += 1 })
+            }, cleanup: {
+                XCTAssertFalse(Task.isCancelled)
+                cleaned = true
+            })
+        }
+        do { try await task.value; XCTFail("Cancellation must propagate after cleanup") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(events, 0)
+        XCTAssertTrue(cleaned)
+    }
+
+    @MainActor
     func testSharedRevealSupportsBothFrozenAndLegacyDirections() throws {
         for (upward, target) in [(true, 3), (false, -3), (true, -3), (false, 3)] {
             var position = 0
