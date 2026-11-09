@@ -1421,8 +1421,12 @@ final class MeetingRecoveryTests: XCTestCase {
         var attributedFirst = first
         attributedFirst.speakerID = speaker.id
         let firstRevision = MeetingPCMTranscriptBatch.SpeakerRevision(attributedFirst)
-        XCTAssertEqual(coordinator.liveTranscript.utterances.first?.participant?.label, .unknown,
-            "Protected PCM rows use product speaker presentation even before attribution")
+        if case let .estimated(name)? = coordinator.liveTranscript.utterances.first?.participant?.label {
+            XCTAssertTrue(name.isProvisional,
+                "The common reading policy supplies a provisional participant until acoustic attribution arrives")
+        } else {
+            XCTFail("Protected PCM speech must retain its provisional participant before attribution")
+        }
         capture.onStop = { [weak coordinator] in
             let coordinator = try XCTUnwrap(coordinator)
             let elapsedAtStop = await coordinator.elapsedTime
