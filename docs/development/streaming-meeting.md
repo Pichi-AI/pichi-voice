@@ -7,6 +7,12 @@ topology before capture; unsupported requests never silently become after-record
 Recognition, text privacy and speaker attribution share the existing meeting pipeline,
 resource owners, session store and native capture engines.
 
+Every model offered for meetings must register the same live input contract: bounded microphone
+and multi-track PCM, progressive ASR observations and continuous speaker processing. Provider
+adapters own language, artifact and inference differences. New providers must not introduce a
+separate capture loop, caption-only model substitution or a hidden full-recording pass at Stop.
+Explicit retained-file retries continue to use the saved recording's processing recipe.
+
 ## Why continuous speaker state
 
 Nemotron uses an arrival-order speaker cache and a recent-frame FIFO. Resetting its state for
