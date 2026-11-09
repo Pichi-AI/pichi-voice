@@ -312,3 +312,41 @@ idle preflight and exact AUT revision, rotates through XCTest's public orientati
 API, visits models/privacy/recording/participants across section switches, checks the original
 model/audio/PII profile and returns to idle Recordings in landscape. It never
 starts capture or changes those settings; run it before the acoustic cases.
+
+## Bounded App Review demonstration on ordinary build 34
+
+`MobileReview34DemoUITests` drives the unchanged installed app at source
+`1a245d0447b08e3fc681d439ea4ef3b392e034c2`. It is an opt-in physical iPad
+demonstration, separate from the longer background/soak acceptance. Use an
+exclusive device/audio lease, destination artifacts, no AUT arguments or
+environment overrides, and native capture throughout.
+
+The prepared final-page case uses `PICHI_REVIEW34_DEMO=prepared-final-page-only`.
+It requires the exact signed-out account page with known empty credential
+fields. Unknown values are not empty. It finishes setup without credentials or
+microphone capture. Its admission tests can run without a device or account.
+
+The acoustic case uses `PICHI_REVIEW34_DEMO=fresh-empty-guest-recording` and the
+same full `PICHI_TEST_REVISION`. Despite that historical flag name, existing
+recordings are preserved through a pinned baseline: the parent first copies and
+hashes all existing sessions, supplies their exact UUIDs as the comma-separated
+`PICHI_REVIEW34_BASELINE_IDS`, and supplies that manifest's SHA256 as
+`PICHI_REVIEW34_BASELINE_BACKUP_SHA`. Empty history requires an explicitly empty
+ID string, not an absent field. The case compares actual row identities before
+any cold launch or recording and never opens or deletes baseline recordings.
+
+The only audio input is the previously approved generated synthetic WAV, staged
+in the runner's own `BackgroundRecordingUI/speech.wav`: 424586 bytes, SHA256
+`81998993976a2804d414b261d3af679d49a1b1e08d952bace5ffc31291a392c8`.
+The parent verifies a device readback before enabling the case; the case checks
+the bytes again. This private physical input is not an AUT resource or a default
+test fixture. Keep it with its approval/provenance evidence outside Git.
+
+The case records 18 seconds, stops its own recording, observes saved committed
+text, opens/closes available paragraph audio and presents JSON in the native
+share sheet. It makes no external delivery. Player and audio-session cleanup
+are owned; pre-existing capture, prompts, a different baseline or an unexpected
+microphone request deny admission. Check the new terminal session and unchanged
+baseline files independently afterward; the shared history index is expected to
+gain one entry. UI assertions, actual ASR/storage evidence, video privacy review
+and native account sign-in remain separate results.
