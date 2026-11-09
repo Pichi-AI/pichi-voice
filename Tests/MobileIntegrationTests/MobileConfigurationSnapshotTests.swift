@@ -7,7 +7,7 @@ import XCTest
 /// microphone lookup is controlled; the settings, coordinator, pipeline and store are real.
 @MainActor
 final class MobileConfigurationSnapshotTests: XCTestCase {
-    func testNewInRoomRequestsPreferRegisteredStreamingWithoutChangingLegacyChoices() throws {
+    func testNewRequestsUseStreamingIndependentlyOfModelAndLegacyTimingPreference() throws {
         let suite = "StreamingCapabilityDefaults.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -15,14 +15,14 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         settings.selectedSpeechModel = .gigaam
         XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
-        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .streaming)
         XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode),
                      "Reading a capability default must not write or migrate a preference")
         settings.selectedSpeechModel = .whisperTiny
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
         settings.selectedSpeechModel = .gigaam
         settings.meetingSpeakerProcessingMode = .afterRecording
-        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
         settings.meetingSpeakerProcessingMode = .streaming
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .streaming,
                        "An explicit unsupported request is rejected by admission, not silently rewritten")
@@ -30,9 +30,9 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
         defaults.set("future-mode", forKey: SettingsStore.Keys.meetingSpeakerProcessingMode)
         settings.selectedSpeechModel = .gigaam
-        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
         defaults.set(7, forKey: SettingsStore.Keys.meetingSpeakerProcessingMode)
-        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
         XCTAssertEqual(MeetingFinalProcessingConfiguration().effectiveSpeakerProcessingMode, .afterRecording)
     }
 
@@ -138,7 +138,7 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         let configuration = try await services.meetingSessionCoordinator.defaultConfiguration(mode: .inRoom, title: "Synthetic stream")
         XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, .streaming)
         XCTAssertEqual(configuration.audioStorageMode, .retainedFiles)
-        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
         XCTAssertFalse(settings.meetingSaveAudio)
         let session = MeetingSession(configuration: configuration,
             timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))

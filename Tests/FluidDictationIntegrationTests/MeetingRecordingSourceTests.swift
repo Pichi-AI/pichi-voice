@@ -100,7 +100,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode))
     }
 
-    func testSourceSnapshotPreservesExplicitSpeakerPreferencesAndLanguageFallback() throws {
+    func testSourceSnapshotUsesLivePolicyDespiteLegacyPreferencesAndPreservesLanguageFallback() throws {
         let suite = "SourceExplicitPolicy.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -116,7 +116,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
             for mode in MeetingCaptureMode.allCases {
                 snapshot.defaults.mode = mode
                 let configuration = try snapshot.configuration(applications: snapshot.applications, microphones: [self.mic])
-                XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, preference)
+                XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, .streaming)
                 XCTAssertEqual(configuration.languageCode, MeetingFinalProcessingConfiguration.defaultLanguageCode)
             }
         }
@@ -146,7 +146,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
                             let configured = settings.applyingMeetingRecordingPreferences(to: selected)
                             XCTAssertEqual(configured.audioStorageMode, saveAudio ? .retainedFiles : .memoryOnly)
                             XCTAssertEqual(configured.speakerLabelsEnabled, labels)
-                            XCTAssertEqual(configured.speakerProcessingMode, labels && preference == .streaming ? .streaming : nil)
+                            XCTAssertEqual(configured.speakerProcessingMode, labels ? .streaming : nil)
                             XCTAssertEqual(configured.piiRedactionEnabled, privacy)
                             var identity = configured
                             identity.audioStorageMode = selected.audioStorageMode
@@ -162,7 +162,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
                             XCTAssertEqual(configured.audioStorageMode, saveAudio ? .retainedFiles : .memoryOnly)
                             XCTAssertEqual(configured.speakerLabelsEnabled, labels)
                             XCTAssertEqual(configured.piiRedactionEnabled, privacy)
-                            XCTAssertEqual(configured.speakerProcessingMode, labels && preference == .streaming ? .streaming : nil)
+                            XCTAssertEqual(configured.speakerProcessingMode, labels ? .streaming : nil)
                         }
                     }
                 }

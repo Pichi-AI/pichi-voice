@@ -539,7 +539,7 @@ final class MeetingRecoveryTests: XCTestCase {
         self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
         XCTAssertEqual(session.languageCode, "en")
-        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.productionDefault.rawValue)
+        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.parakeetV2.rawValue)
         XCTAssertEqual(session.state, .recording)
         XCTAssertEqual(capture.startCount, 1)
         XCTAssertEqual(arbiter.acquireCount, 1)
@@ -594,8 +594,8 @@ final class MeetingRecoveryTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = SettingsStore(defaults: defaults)
-        // Tiny and registered Parakeet v3 support streaming. The inherited v2 composite
-        // remains an actual after-recording-only backend for both storage policies.
+        // An explicit legacy backend remains after-recording-only. Selecting Parakeet v2
+        // normally uses its new live registration instead of this saved compatibility route.
         settings.selectedSpeechModel = .parakeetTDTv2
         settings.meetingTranscriptionBackendID = .parakeetNemotron
         let dir = self.makeTempDirectory()
@@ -617,6 +617,7 @@ final class MeetingRecoveryTests: XCTestCase {
             configuration.audioStorageMode = storage
             configuration.speakerLabelsEnabled = true
             configuration.speakerProcessingMode = .streaming
+            configuration.transcriptionBackendID = MeetingBackendID.parakeetNemotron.rawValue
             do {
                 _ = try await coordinator.startRecording(configuration: configuration)
                 XCTFail("A saved recording must not silently downgrade unsupported streaming")
@@ -1016,6 +1017,71 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(saved.transcriptSegments, [segment], "Fractional media times and every other transcript field remain exact")
     }
 
+    func testEveryMeetingModelPublishesLiveSpeakersAndReleasesDictationAfterStop() async throws {
+        for model in PichiMeetingProviderFactory.retranscriptionModels {
+            let suite = "LiveMeetingModel.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let directory = self.makeTempDirectory()
+            defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+            let settings = SettingsStore(defaults: defaults, initializeDesktop: false)
+            settings.fluidMeetEnabled = true
+            settings.selectedSpeechModel = model
+            settings.meetingSaveAudio = true
+            settings.meetingSpeakerProcessingMode = .afterRecording
+            settings.meetingAudioRetentionPolicy = .never
+            let microphone = self.makeMicrophoneTrack(chunks: [])
+            var application = self.makeMicrophoneTrack(chunks: [])
+            application.kind = .applicationAudio
+            let capture = StubCaptureController()
+            capture.startResult = .init(tracks: [microphone, application], firstPresentationTime: nil)
+            let store = MeetingSessionStore(rootDirectory: directory)
+            let processing = MemoryCheckpointProcessingController()
+            let leasing = FakeASRActivityLeasing()
+            let arbiter = AudioActivityArbiter { leasing }
+            var preparedConfigurations: [MeetingFinalProcessingConfiguration] = []
+            let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
+                audioArbiter: arbiter, settings: settings,
+                prepareRegisteredSpeakerResources: { preparedConfigurations.append($0) })
+            self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+            var requested = self.makeConfiguration()
+            requested.mode = .onlineCall
+            requested.application = .init(bundleIdentifier: "com.google.Chrome", displayName: "Synthetic browser")
+            requested.languageCode = try XCTUnwrap(PichiMeetingProviderFactory.defaultLanguageCode(for: model.rawValue))
+            let configuration = settings.applyingMeetingRecordingPreferences(to: requested)
+            XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, .streaming)
+            let recording = try await coordinator.startRecording(configuration: configuration)
+            XCTAssertEqual(recording.recordingASRModel, model.rawValue)
+            XCTAssertEqual(recording.effectiveSpeakerProcessingMode, .streaming)
+            XCTAssertEqual(processing.preparedSession?.id, recording.id)
+            XCTAssertFalse(preparedConfigurations.isEmpty)
+            XCTAssertTrue(preparedConfigurations.allSatisfy { $0.asrModel == model.rawValue && $0.effectiveSpeakerProcessingMode == .streaming })
+            capture.stopResult = .init(tracks: [microphone, application], stoppedAt: recording.startedAt.addingTimeInterval(2))
+            for track in [microphone, application] {
+                let speaker = MeetingSessionSpeaker(id: UUID(), displayName: "Participant",
+                    diarizationClusterID: "synthetic-\(track.kind.rawValue)", trackKind: track.kind,
+                    isLocalUser: false, identityCandidates: [])
+                let segment = MeetingTranscriptSegment(id: UUID(), start: .init(value: 0, timescale: 1),
+                    end: .init(value: 1, timescale: 1), sourceTrackID: track.id, speakerID: speaker.id,
+                    text: "Live protected phrase", revision: 0, status: .final, overlap: .none, completeness: .complete)
+                try await processing.checkpoint(.init(segments: [segment], speakers: [speaker]))
+            }
+            let live = try XCTUnwrap(coordinator.activeSession)
+            XCTAssertEqual(live.state, .recording)
+            XCTAssertEqual(live.transcriptSegments.count, 2)
+            XCTAssertTrue(live.transcriptSegments.allSatisfy { $0.speakerID != nil })
+            XCTAssertEqual(coordinator.liveTranscript.utterances.count, 2)
+            let completed = try await coordinator.stopAndTranscribe()
+            XCTAssertEqual(completed.state, .completed)
+            XCTAssertEqual(completed.transcriptSegments, live.transcriptSegments)
+            XCTAssertEqual(leasing.handbackCount, 1)
+            let dictation = try leasing.acquireExclusiveActivity(.dictation)
+            leasing.releaseExclusiveActivity(dictation)
+            let saved = try await store.load(id: recording.id)
+            XCTAssertEqual(saved?.transcriptSegments, completed.transcriptSegments)
+            await coordinator.shutdownForTermination()
+        }
+    }
+
     func testCompletedPCMAllowsAliasUndoAndNewCaptureBeforeTermination() async throws {
         let suite = "CompletedPCMLifecycle.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -1355,8 +1421,12 @@ final class MeetingRecoveryTests: XCTestCase {
         var attributedFirst = first
         attributedFirst.speakerID = speaker.id
         let firstRevision = MeetingPCMTranscriptBatch.SpeakerRevision(attributedFirst)
-        XCTAssertEqual(coordinator.liveTranscript.utterances.first?.participant?.label, .unknown,
-            "Protected PCM rows use product speaker presentation even before attribution")
+        if case let .estimated(name)? = coordinator.liveTranscript.utterances.first?.participant?.label {
+            XCTAssertTrue(name.isProvisional,
+                "The common reading policy supplies a provisional participant until acoustic attribution arrives")
+        } else {
+            XCTFail("Protected PCM speech must retain its provisional participant before attribution")
+        }
         capture.onStop = { [weak coordinator] in
             let coordinator = try XCTUnwrap(coordinator)
             let elapsedAtStop = await coordinator.elapsedTime

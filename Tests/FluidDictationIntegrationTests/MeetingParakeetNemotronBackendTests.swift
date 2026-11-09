@@ -753,17 +753,11 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(descriptor.supportedLanguageCodes, ["ru"])
         XCTAssertEqual(PichiMeetingProviderFactory.registeredLanguageCodes(for: registered), ["ru"])
         XCTAssertEqual(PichiMeetingProviderFactory.defaultLanguageCode(for: registered), "ru")
-        // Legacy v2 keeps its original default composite. Mobile v3 is an explicit
-        // capability registration backed by that same original provider/runtime.
-        for (modelID, language) in [("parakeet-tdt-v2", "en")] {
-            XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: modelID))
-            XCTAssertNil(PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID))
-            XCTAssertNil(PichiMeetingProviderFactory.defaultLanguageCode(for: modelID))
-            let options = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
-                asrModel: modelID, languageCode: language
-            ))
-            XCTAssertEqual(options.model.id, modelID)
-        }
+        XCTAssertEqual(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "parakeet-tdt-v2")?.id, .parakeetV2)
+        XCTAssertEqual(PichiMeetingProviderFactory.registeredLanguageCodes(for: "parakeet-tdt-v2"), ["en"])
+        XCTAssertEqual(PichiMeetingProviderFactory.defaultLanguageCode(for: "parakeet-tdt-v2"), "en")
+        XCTAssertEqual(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "fluid-parakeet-pro")?.id, .fluidParakeetPro)
+        XCTAssertTrue(PichiMeetingProviderFactory.registeredLanguageCodes(for: "fluid-parakeet-pro")?.isSuperset(of: ["ru", "en", "auto"]) == true)
         XCTAssertEqual(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "parakeet-tdt")?.id, .parakeetV3)
         XCTAssertTrue(PichiMeetingProviderFactory.registeredLanguageCodes(for: "parakeet-tdt")?.isSuperset(of: ["ru", "en", "auto"]) == true)
         XCTAssertEqual(PichiMeetingProviderFactory.defaultLanguageCode(for: "parakeet-tdt"), "auto")
@@ -3444,9 +3438,16 @@ extension MeetingParakeetNemotronBackendTests {
     }
 
     func testOnlineStreamingPipelineAccumulatesBothSourcesAndFinishesWithoutReplay() async throws {
+        for model in PichiMeetingProviderFactory.retranscriptionModels {
+        let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue))
+        let language = try XCTUnwrap(PichiMeetingProviderFactory.defaultLanguageCode(for: model.rawValue))
+        let configuration = PichiMeetingProviderFactory.configuration(asrModel: model.rawValue,
+            languageCode: language, artifactFingerprintOverride: "synthetic-export", speakerProcessingMode: .streaming)
+        try descriptor.validatePCMInput(configuration: configuration, mode: .onlineCall)
         let service = OnlinePipelineService()
         let runtime = OnlinePipelineRuntime()
-        let fixture = try self.onlinePipelineFixture(service: service, runtime: runtime)
+        let fixture = try self.onlinePipelineFixture(service: service, runtime: runtime,
+            configuration: configuration, descriptor: descriptor)
         let microphone = try await fixture.pipeline.memoryConsumer(for: fixture.session.id,
             track: fixture.session.audioTracks[0], eventHandler: { _ in })
         let application = try await fixture.pipeline.memoryConsumer(for: fixture.session.id,
@@ -3484,6 +3485,7 @@ extension MeetingParakeetNemotronBackendTests {
         XCTAssertEqual(runtime.evidence.count("scope-cleaned"), 1)
         XCTAssertEqual(runtime.evidence.count("replay"), 0)
         XCTAssertNil(fixture.pipeline.memoryAttempts[fixture.session.id])
+        }
     }
 
     func testOnlineStreamingPipelineCancellationJoinsTheOtherPhysicalSource() async throws {

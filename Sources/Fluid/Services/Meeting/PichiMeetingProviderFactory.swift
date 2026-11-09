@@ -129,21 +129,33 @@ enum PichiMeetingProviderFactory {
                     directory: PichiMeetingProviderFactory.whisperArtifactDirectory)
             }
         ),
-        PichiMeetingProviderFactory.parakeetV3ModelID: Registration(
+        PichiMeetingProviderFactory.parakeetV3ModelID: parakeetRegistration(
+            ParakeetSpeechModelCatalog.v3, backendID: .parakeetV3, onboardingPriority: 1),
+        SettingsStore.SpeechModel.parakeetTDTv2.rawValue: parakeetRegistration(
+            ParakeetSpeechModelCatalog.v2, backendID: .parakeetV2, onboardingPriority: 3),
+        SettingsStore.SpeechModel.fluidParakeetPro.rawValue: parakeetRegistration(
+            ParakeetSpeechModelCatalog.pro, backendID: .fluidParakeetPro, onboardingPriority: 4),
+    ]
+
+    /// Catalog variants share the same meeting pipeline and resource scopes. Only the
+    /// registered model identity, artifact metadata and languages differ.
+    private nonisolated static func parakeetRegistration(
+        _ catalog: ParakeetSpeechModelCatalog.Descriptor,
+        backendID: MeetingBackendID,
+        onboardingPriority: Int
+    ) -> Registration {
+        let profiles: [MeetingSpeakerProcessingMode: MeetingNemotronModelProfile] = [
+            .afterRecording: .fast32SplitW8A8, .streaming: .experimentalFast128FP16CPU,
+        ]
+        let languages = Set(catalog.supportedLanguageCodes).union(catalog.isEnglishOnly ? [] : ["auto"])
+        return Registration(
             descriptor: MeetingBackendDescriptor(
-                id: .parakeetV3,
-                version: "1",
-                execution: .local,
-                supportedLanguageCodes: VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.union(["auto"]),
+                id: backendID, version: "1", execution: .local,
+                supportedLanguageCodes: languages,
                 supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
-                supportedFinalPrecisions: [.word, .utterance],
-                resultContract: .canonicalEvidence,
+                supportedFinalPrecisions: [.word, .utterance], resultContract: .canonicalEvidence,
                 knownLimits: [
-                    "Parakeet v3 supports 25 languages, including Russian and English.",
-                    "Fast multilingual transcription. Supports Bulgarian, Croatian, Czech, Danish, " +
-                        "Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, " +
-                        "Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak, " +
-                        "Slovenian, Spanish, Swedish, and Ukrainian.",
+                    catalog.cardDescription,
                     "Live text updates in fragments. Speaker labels can be uncertain in short or overlapping speech.",
                     "Speaker resources prepare automatically. Finish setup before an offline meeting.",
                     "Battery use and recognition speed depend on the device. Test longer meetings on your iPad.",
@@ -154,36 +166,31 @@ enum PichiMeetingProviderFactory {
                 supportedInputs: [.recordedChunks, .boundedMicrophonePCM, .boundedMultiTrackPCM],
                 supportedSpeakerProcessingModes: [.afterRecording, .streaming]
             ),
-            onboardingPriority: 1,
-            defaultLanguageCode: "auto",
+            onboardingPriority: onboardingPriority,
+            defaultLanguageCode: catalog.isEnglishOnly ? "en" : "auto",
             providerFactory: { try FluidAudioProvider(meetingConfiguration: $0) },
             configurationSnapshot: { languageCode, fingerprint, diarizationEnabled, processingMode in
-                let descriptor = ParakeetSpeechModelCatalog.v3
-                let directory = descriptor.cacheDirectory(in: AppBrand.modelsDirectory)
-                let installed = descriptor.artifactsAreComplete(at: directory)
+                let directory = catalog.cacheDirectory(in: AppBrand.modelsDirectory)
                 return MeetingFinalProcessingConfiguration(
-                    asrModel: PichiMeetingProviderFactory.parakeetV3ModelID,
-                    asrArtifactFingerprint: fingerprint,
-                    asrArtifactDirectory: installed ? directory : nil,
+                    asrModel: catalog.modelID, asrArtifactFingerprint: fingerprint,
+                    asrArtifactDirectory: catalog.artifactsAreComplete(at: directory) ? directory : nil,
                     languageCode: languageCode,
-                    diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled,
-                        profile: PichiMeetingProviderFactory.registrations[PichiMeetingProviderFactory.parakeetV3ModelID]?.speakerProcessingProfiles[processingMode] ?? .fast32SplitW8A8,
+                    diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(
+                        enabled: diarizationEnabled, profile: profiles[processingMode] ?? .fast32SplitW8A8,
                         speakerProcessingMode: processingMode),
                     speakerLabelsEnabled: diarizationEnabled, speakerProcessingMode: processingMode
                 )
             },
-            speakerProcessingProfiles: [.afterRecording: .fast32SplitW8A8, .streaming: .experimentalFast128FP16CPU],
-            modelsExistOnDisk: { SettingsStore.SpeechModel.parakeetTDT.isInstalled },
+            speakerProcessingProfiles: profiles,
+            modelsExistOnDisk: { SettingsStore.SpeechModel(rawValue: catalog.modelID)?.isInstalled == true },
             liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 4 * 1_073_741_824, maximumTrackCount: 2),
             admissionArtifactFingerprint: { nil }, supportsInstalledIdlePreparation: false,
             installedArtifactFingerprint: {
-                let descriptor = ParakeetSpeechModelCatalog.v3
-                let directory = descriptor.cacheDirectory(in: AppBrand.modelsDirectory)
-                // The digest validates completeness first and returns nil for a partial export.
-                return { try descriptor.installedArtifactFingerprint(at: directory) }
+                let directory = catalog.cacheDirectory(in: AppBrand.modelsDirectory)
+                return { try catalog.installedArtifactFingerprint(at: directory) }
             }
-        ),
-    ]
+        )
+    }
 
     nonisolated static func onboardingPriority(for modelID: String) -> Int {
         registrations[modelID]?.onboardingPriority ?? Int.max
@@ -501,4 +508,6 @@ extension MeetingBackendID {
     nonisolated static let gigaam = MeetingBackendID(rawValue: "local-gigaam-v3-eou-v1")
     nonisolated static let whisperTiny = MeetingBackendID(rawValue: "local-whisper-tiny-multilingual-v1")
     nonisolated static let parakeetV3 = MeetingBackendID(rawValue: "local-parakeet-tdt-v3-v1")
+    nonisolated static let parakeetV2 = MeetingBackendID(rawValue: "local-parakeet-tdt-v2-v1")
+    nonisolated static let fluidParakeetPro = MeetingBackendID(rawValue: "local-fluid-parakeet-pro-v1")
 }
