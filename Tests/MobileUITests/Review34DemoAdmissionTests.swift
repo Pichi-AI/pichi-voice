@@ -1,9 +1,120 @@
 import XCTest
+import Foundation
+import CryptoKit
 #if canImport(Review34DemoAdmissionSupport)
 @testable import Review34DemoAdmissionSupport
 #endif
 
 final class Review34DemoAdmissionTests: XCTestCase {
+    private let baselineID = "E0000000-0000-4000-8000-000000000001"
+    func testOwnedRecordingRequiresExactlyOneNewUUIDAndPreservedBaseline() {
+        let added = "E0000000-0000-4000-8000-000000000002"
+        XCTAssertEqual(Review34DemoAdmission.newOwnedSessionID(baselineIDs: [baselineID], historyIDs: [baselineID, added]), added)
+        XCTAssertNil(Review34DemoAdmission.newOwnedSessionID(baselineIDs: [baselineID], historyIDs: [added]))
+        XCTAssertNil(Review34DemoAdmission.newOwnedSessionID(baselineIDs: [baselineID], historyIDs: [baselineID]))
+        XCTAssertNil(Review34DemoAdmission.newOwnedSessionID(baselineIDs: [baselineID], historyIDs: [baselineID, added, added]))
+    }
+    func testPlaybackCannotBindBaselineOrForeignParagraphControls() throws {
+        let added = "E0000000-0000-4000-8000-000000000002"
+        XCTAssertNil(Review34DemoAdmission.PlaybackOwner(sessionID: baselineID, baselineIDs: [baselineID], paragraphID: "transcript.paragraph.a", audioID: "transcript.audio.a"))
+        let owner = try XCTUnwrap(Review34DemoAdmission.PlaybackOwner(sessionID: added, baselineIDs: [baselineID], paragraphID: "transcript.paragraph.a", audioID: "transcript.audio.a"))
+        XCTAssertTrue(owner.matches(openedSessionID: added, paragraphID: "transcript.paragraph.a", audioID: "transcript.audio.a", paragraphCount: 1, audioCount: 1))
+        XCTAssertFalse(owner.matches(openedSessionID: baselineID, paragraphID: "transcript.paragraph.a", audioID: "transcript.audio.a", paragraphCount: 1, audioCount: 1))
+        XCTAssertFalse(owner.matches(openedSessionID: added, paragraphID: "transcript.paragraph.other", audioID: "transcript.audio.a", paragraphCount: 1, audioCount: 1))
+    }
+    private func proof(revision: String = Review34DemoAdmission.coreRevision, build: String = "35", idiom: String = "phone",
+                       latest: Bool = true, backup: Bool = true, ids: [String]? = nil) throws -> Data {
+        try JSONEncoder().encode(Review34DemoAdmission.CoreVideoProof(schemaVersion: 1, revision: revision, build: build,
+            deviceID: "synthetic-device", idiom: idiom, osVersion: "synthetic-latest", latestOSVerified: latest,
+            backupVerified: backup, backupSHA256: String(repeating: "a", count: 64),
+            appExecutableSHA256: String(repeating: "b", count: 64), baselineIDs: ids ?? [baselineID]))
+    }
+    private func admitted(_ data: Data, sha: String? = nil, idiom: String = "phone", os: String = "synthetic-latest",
+                          revision: String = Review34DemoAdmission.coreRevision,
+                          ids: [String]? = nil, backup: String = String(repeating: "a", count: 64)) -> Bool {
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        return Review34DemoAdmission.coreVideoProof(data, expectedSHA: sha ?? digest,
+            revision: revision, deviceID: "synthetic-device", idiom: idiom,
+            osVersion: os, baselineIDs: ids ?? [baselineID], expectedBackupSHA: backup)
+    }
+    func testAtomicReleaseBindingsRejectCrossMixAndUnknown() throws {
+        let review = Review34DemoAdmission.reviewRevision
+        let beta = Review34DemoAdmission.coreRevision
+        XCTAssertTrue(admitted(try proof(revision: review, build: "34"), revision: review))
+        XCTAssertTrue(admitted(try proof(revision: beta, build: "35"), revision: beta))
+        XCTAssertFalse(admitted(try proof(revision: review, build: "35"), revision: review))
+        XCTAssertFalse(admitted(try proof(revision: beta, build: "34"), revision: beta))
+        XCTAssertFalse(admitted(try proof(revision: "unknown", build: "34"), revision: "unknown"))
+        XCTAssertFalse(admitted(try proof(revision: review, build: "34"), revision: beta))
+    }
+    func testCoreVideoAcceptsPinnedPhoneAndPadProof() throws {
+        XCTAssertTrue(admitted(try proof()))
+        XCTAssertTrue(admitted(try proof(idiom: "pad"), idiom: "pad"))
+    }
+    func testCoreVideoRejectsWrongBuildSourceOSBackupAndChangedHistory() throws {
+        XCTAssertFalse(admitted(try proof(build: "34")))
+        XCTAssertFalse(admitted(try proof(revision: "older")))
+        XCTAssertFalse(admitted(try proof(latest: false)))
+        XCTAssertFalse(admitted(try proof(backup: false)))
+        XCTAssertFalse(admitted(try proof(), os: "other"))
+        XCTAssertFalse(admitted(try proof(), backup: String(repeating: "c", count: 64)))
+        XCTAssertFalse(admitted(try proof(), ids: []))
+        XCTAssertFalse(admitted(try proof(ids: [baselineID, baselineID])))
+    }
+    func testCoreVideoRejectsTamperedOrMissingAttestation() throws {
+        XCTAssertFalse(admitted(try proof(), sha: String(repeating: "0", count: 64)))
+        XCTAssertFalse(admitted(Data("{}".utf8)))
+        XCTAssertFalse(admitted(try proof(), idiom: "unsupported"))
+    }
+    func testAllRecordingProfilesRequireActualAutomaticDeliveryOff() {
+        for retained in [false, true] {
+            XCTAssertTrue(Review34DemoAdmission.recordingPoliciesReady(idle: true, saveAudio: "1", automaticDelivery: "0", noExistingPlayer: true, requireRetainedAudio: retained))
+            XCTAssertFalse(Review34DemoAdmission.recordingPoliciesReady(idle: true, saveAudio: "1", automaticDelivery: "1", noExistingPlayer: true, requireRetainedAudio: retained))
+            XCTAssertFalse(Review34DemoAdmission.recordingPoliciesReady(idle: true, saveAudio: "1", automaticDelivery: nil, noExistingPlayer: true, requireRetainedAudio: retained))
+        }
+    }
+    private func guest(conflict: Bool = false, emailCount: Int = 1, secureCount: Int = 1,
+                       destination: String? = "app.pichi.ai", ready: Bool = true, noPrompts: Bool = true) -> Bool {
+        Review34DemoAdmission.GuestEvidence(emailCount: emailCount, secureFieldCount: secureCount, signInCount: 1,
+            destination: destination, fieldsEnabled: ready, signInVisible: ready,
+            conflictingAccountState: conflict, foregroundWithoutPrompts: noPrompts).verifiedSignedOut
+    }
+    func testPositiveGuestCanHaveNoCloudToggleButUnknownCannot() {
+        XCTAssertTrue(guest())
+        XCTAssertTrue(Review34DemoAdmission.recordingPoliciesReady(idle: true, saveAudio: "1", automaticDelivery: nil,
+            noExistingPlayer: true, requireRetainedAudio: true, automaticDeliveryPresent: false, verifiedSignedOut: guest()))
+        XCTAssertFalse(Review34DemoAdmission.recordingPoliciesReady(idle: true, saveAudio: "1", automaticDelivery: nil,
+            noExistingPlayer: true, requireRetainedAudio: true, automaticDeliveryPresent: false, verifiedSignedOut: false))
+        XCTAssertFalse(Review34DemoAdmission.recordingPoliciesReady(idle: true, saveAudio: "1", automaticDelivery: nil,
+            noExistingPlayer: true, requireRetainedAudio: true, automaticDeliveryPresent: true, verifiedSignedOut: guest()))
+        XCTAssertFalse(Review34DemoAdmission.recordingPoliciesReady(idle: true, saveAudio: "1", automaticDelivery: "1",
+            noExistingPlayer: true, requireRetainedAudio: true, automaticDeliveryPresent: true, verifiedSignedOut: guest()))
+    }
+    func testLoadingHiddenDuplicateOrForeignGuestEvidenceIsRejected() {
+        XCTAssertFalse(guest(conflict: true))
+        XCTAssertFalse(guest(emailCount: 0))
+        XCTAssertFalse(guest(secureCount: 2))
+        XCTAssertFalse(guest(destination: nil))
+        XCTAssertFalse(guest(destination: "other.example"))
+        XCTAssertFalse(guest(ready: false))
+        XCTAssertFalse(guest(noPrompts: false))
+    }
+    func testCancelledEligibilityNeverAdmitsOwnedMutation() {
+        XCTAssertFalse(Review34DemoAdmission.recordingPoliciesReady(idle: true, saveAudio: "1", automaticDelivery: "0",
+            noExistingPlayer: true, requireRetainedAudio: true, cancelled: true))
+        XCTAssertFalse(Review34DemoAdmission.recordingPoliciesReady(idle: true, saveAudio: "1", automaticDelivery: nil,
+            noExistingPlayer: true, requireRetainedAudio: true, automaticDeliveryPresent: false,
+            verifiedSignedOut: guest(), cancelled: true))
+    }
+    func testCoreVideoPolicyGatesNeverChangeSettingsOrAdmitUnknownValues() {
+        XCTAssertTrue(Review34DemoAdmission.coreReady(idle: true, saveAudio: "1", automaticDelivery: "0", noExistingPlayer: true))
+        XCTAssertFalse(Review34DemoAdmission.coreReady(idle: false, saveAudio: "1", automaticDelivery: "0", noExistingPlayer: true))
+        XCTAssertFalse(Review34DemoAdmission.coreReady(idle: true, saveAudio: nil, automaticDelivery: "0", noExistingPlayer: true))
+        XCTAssertFalse(Review34DemoAdmission.coreReady(idle: true, saveAudio: "0", automaticDelivery: "0", noExistingPlayer: true))
+        XCTAssertFalse(Review34DemoAdmission.coreReady(idle: true, saveAudio: "1", automaticDelivery: "1", noExistingPlayer: true))
+        XCTAssertFalse(Review34DemoAdmission.coreReady(idle: true, saveAudio: "1", automaticDelivery: nil, noExistingPlayer: true))
+        XCTAssertFalse(Review34DemoAdmission.coreReady(idle: true, saveAudio: "1", automaticDelivery: "0", noExistingPlayer: false))
+    }
     func testPreparedGuestAdmissionRejectsWrongRevisionAndOccupiedState() {
         let sha = "1a245d0447b08e3fc681d439ea4ef3b392e034c2"
         func check(_ revision: String? = sha, _ flag: String? = "prepared-final-page-only",

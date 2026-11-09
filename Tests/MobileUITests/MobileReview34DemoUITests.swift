@@ -25,8 +25,24 @@ final class MobileReview34DemoUITests: XCTestCase {
 
     @MainActor
     func testPhysicalFreshGuestRecordingStopPlaybackAndJSONShare() async throws {
+        try await recordingDemo(coreVideo: false)
+    }
+
+    @MainActor
+    func testPhysicalOwnedCoreFlowVideo() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Physical phone/pad video and explicit audio window required")
+        #else
+        try await recordingDemo(coreVideo: true)
+        #endif
+    }
+
+    @MainActor private func recordingDemo(coreVideo: Bool) async throws {
         let env = ProcessInfo.processInfo.environment
-        guard env["PICHI_REVIEW34_DEMO"] == "fresh-empty-guest-recording" else { throw XCTSkip("Fresh empty guest recording opt-in required") }
+        guard coreVideo ? (env["PICHI_CORE_FLOW_VIDEO"] == "owned-core-flow" && env["PICHI_PHYSICAL_RELEASE_UI_AUDIO"] == "1")
+            : env["PICHI_REVIEW34_DEMO"] == "fresh-empty-guest-recording" else {
+            throw XCTSkip("Explicit owned recording/video audio window required")
+        }
         continueAfterFailure = true
         // Reserve bounded cleanup time in addition to the normal short demonstration.
         executionTimeAllowance = 300
@@ -42,19 +58,29 @@ final class MobileReview34DemoUITests: XCTestCase {
                 .map { String($0.identifier.dropFirst("history.session.".count)) }
         }
         let currentIDs = historyIDs()
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+        if coreVideo {
+            let proof = try Data(contentsOf: support.appendingPathComponent("CoreFlowVideo/backup-proof.json"))
+            let idiom = UIDevice.current.userInterfaceIdiom == .phone ? "phone" : UIDevice.current.userInterfaceIdiom == .pad ? "pad" : "unsupported"
+            guard Review34DemoAdmission.coreVideoProof(proof, expectedSHA: env["PICHI_CORE_FLOW_PROOF_SHA"],
+                revision: env["PICHI_TEST_REVISION"], deviceID: env["PICHI_CORE_FLOW_DEVICE_ID"],
+                idiom: idiom, osVersion: UIDevice.current.systemVersion, baselineIDs: baselineIDs, expectedBackupSHA: backupHash) else { throw Unverified() }
+        }
+
         let closeLabels = ["Close audio player", "Закрыть аудиоплеер"]
         let transportLabels = ["Pause audio chunk", "Приостановить воспроизведение фрагмента",
                                "Play audio chunk", "Воспроизвести аудиофрагмент"]
         guard Set(currentIDs) == Set(baselineIDs),
-              Self.recordingAdmission(revision: env["PICHI_TEST_REVISION"], optIn: env["PICHI_REVIEW34_DEMO"],
+              app.state == .runningForeground, app.alerts.count == 0, app.sheets.count == 0,
+              !app.buttons["meeting.stop"].exists, !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+              (coreVideo || Self.recordingAdmission(revision: env["PICHI_TEST_REVISION"], optIn: env["PICHI_REVIEW34_DEMO"],
                 isPad: UIDevice.current.userInterfaceIdiom == .pad,
                 idle: app.state == .runningForeground && app.alerts.count == 0 && app.sheets.count == 0
                     && !app.buttons["meeting.stop"].exists && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
-                historyCount: currentIDs.count, expectedHistoryCount: baselineIDs.count),
+                historyCount: currentIDs.count, expectedHistoryCount: baselineIDs.count)),
               app.buttons["meeting.start"].isEnabled && app.buttons["meeting.start"].isHittable,
               app.sliders.count == 0,
               app.buttons.matching(NSPredicate(format: "label IN %@", closeLabels)).count == 0 else { throw Unverified() }
-        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
         let fixture = support.appendingPathComponent("BackgroundRecordingUI/speech.wav")
         let bytes = try Data(contentsOf: fixture)
         guard bytes.count == 424586,
@@ -62,21 +88,21 @@ final class MobileReview34DemoUITests: XCTestCase {
         let audio = AVAudioSession.sharedInstance()
         let category = audio.category, mode = audio.mode, options = audio.categoryOptions
         var ownedPlayer: AVAudioPlayer?
+        var changedPlaybackCategory = false
+        var ownsPlaybackSession = false
         var ownsRecording = false
         var observedOwnedRecording = false
         var openedSessionID: String?
         var openedTitle: String?
         var playbackOwner: Review34DemoAdmission.PlaybackOwner?
         var observedOwnedPlayback = false
+        var ownsShare = false
         let stop = app.buttons["meeting.stop"]
         let transcript = app.scrollViews.matching(identifier: "meeting.transcript")
-        defer {
-            ownedPlayer?.stop()
-            try? audio.setActive(false, options: .notifyOthersOnDeactivation)
-            try? audio.setCategory(category, mode: mode, options: options)
-        }
+        defer { ownedPlayer?.stop() }
         func foregroundIdle() -> Bool {
             app.state == .runningForeground && app.alerts.count == 0 && app.sheets.count == 0
+                && XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.count == 0
         }
         func completedTranscript() -> Bool {
             foregroundIdle() && transcript.count == 1 && app.buttons["transcript.more"].exists
@@ -109,16 +135,73 @@ final class MobileReview34DemoUITests: XCTestCase {
         func openHistory() async throws {
             guard foregroundIdle(), !stop.exists else { throw Unverified() }
             openedSessionID = nil; openedTitle = nil
-            let sidebar = app.buttons["navigation.meetings"]
-            if sidebar.exists && sidebar.isHittable { sidebar.tap() }
-            else {
-                let tabs = app.tabBars.buttons.matching(NSPredicate(format: "label IN %@", ["Recordings", "Записи"]))
-                guard tabs.count == 1, tabs.firstMatch.isEnabled, tabs.firstMatch.isHittable else { throw Unverified() }
-                tabs.firstMatch.tap()
-            }
+            try openTopLevel("meetings", labels: ["Recordings", "Записи"])
             try await PhysicalUITransitionWait.until(timeout: 15, condition: {
                 foregroundIdle() && app.descendants(matching: .any)["history.list"].firstMatch.exists && transcript.count == 0
             })
+        }
+        func openTopLevel(_ name: String, labels: [String]) throws {
+            guard foregroundIdle(), !stop.exists else { throw Unverified() }
+            let sidebar = app.buttons["navigation." + name]
+            if sidebar.exists && sidebar.isHittable { sidebar.tap() }
+            else {
+                let tabs = app.tabBars.buttons.matching(NSPredicate(format: "label IN %@", labels))
+                guard tabs.count == 1, tabs.firstMatch.isEnabled, tabs.firstMatch.isHittable else { throw Unverified() }
+                tabs.firstMatch.tap()
+            }
+        }
+        func revealPolicyControl(_ element: XCUIElement, container: XCUIElement) throws {
+            try PhysicalControlReveal.run(startingUpward: true, ready: {
+                foregroundIdle() && element.exists && element.isEnabled && element.isHittable
+            }, scroll: { upward, _ in
+                guard foregroundIdle(), container.exists, container.isHittable else { throw Unverified() }
+                if upward { container.swipeUp() } else { container.swipeDown() }
+            })
+        }
+        func verifyRecordingPolicies() async throws {
+            try openTopLevel("settings", labels: ["Settings", "Настройки"])
+            let root = app.descendants(matching: .any)["settings.root"].firstMatch
+            if !root.waitForExistence(timeout: 2) || !root.isHittable {
+                try openTopLevel("settings", labels: ["Settings", "Настройки"])
+            }
+            guard root.waitForExistence(timeout: 5), root.isHittable else { throw Unverified() }
+            let privacy = app.buttons["settings.privacy"]
+            try revealPolicyControl(privacy, container: root)
+            guard privacy.exists, privacy.isEnabled, privacy.isHittable else { throw Unverified() }
+            privacy.tap()
+            let save = app.switches["privacy.saveAudio"]
+            guard save.waitForExistence(timeout: 5), !coreVideo || save.value as? String == "1" else { throw Unverified() }
+            let saveValue = save.value as? String
+            try openTopLevel("settings", labels: ["Settings", "Настройки"])
+            let account = app.buttons["settings.account"]
+            if !root.exists || !root.isHittable { try openTopLevel("settings", labels: ["Settings", "Настройки"]) }
+            try revealPolicyControl(account, container: root)
+            guard account.waitForExistence(timeout: 5), account.isEnabled, account.isHittable else { throw Unverified() }
+            account.tap()
+            let delivery = app.switches["cloud.sync.toggle"]
+            _ = delivery.waitForExistence(timeout: 5)
+            let emails = app.textFields.matching(identifier: "account.legacy.email")
+            let passwords = app.secureTextFields.matching(identifier: "account.legacy.password")
+            let signIn = app.buttons.matching(identifier: "account.signIn")
+            let destination = app.staticTexts.matching(identifier: "account.legacy.destination")
+            let transient = ["account.signingIn", "account.updating", "account.protectedDataUnavailable", "account.profile.hidden"]
+                .contains { app.descendants(matching: .any)[$0].firstMatch.exists }
+            let conflicts = transient || app.buttons["account.signOut"].exists || app.buttons["app.account.signOut"].exists
+                || app.descendants(matching: .any)["account.displayName"].firstMatch.exists
+                || app.descendants(matching: .any)["app.account.displayName"].firstMatch.exists
+            let guest = Review34DemoAdmission.GuestEvidence(emailCount: emails.count, secureFieldCount: passwords.count,
+                signInCount: signIn.count, destination: destination.count == 1 ? destination.element.label : nil,
+                fieldsEnabled: emails.count == 1 && passwords.count == 1 && emails.element.isEnabled && passwords.element.isEnabled,
+                signInVisible: signIn.count == 1 && !signIn.element.frame.isEmpty && app.frame.intersects(signIn.element.frame),
+                conflictingAccountState: conflicts, foregroundWithoutPrompts: foregroundIdle()).verifiedSignedOut
+            guard !transient, Review34DemoAdmission.recordingPoliciesReady(idle: foregroundIdle() && !stop.exists,
+                saveAudio: saveValue, automaticDelivery: delivery.exists ? delivery.value as? String : nil,
+                noExistingPlayer: app.sliders.count == 0 && app.buttons.matching(NSPredicate(format: "label IN %@", closeLabels)).count == 0,
+                requireRetainedAudio: coreVideo, automaticDeliveryPresent: delivery.exists,
+                verifiedSignedOut: guest, cancelled: Task.isCancelled)
+            else { throw Unverified() }
+            try await openHistory()
+            guard Set(historyIDs()) == Set(baselineIDs) else { throw Unverified() }
         }
         func paragraph(_ owner: Review34DemoAdmission.PlaybackOwner) -> XCUIElementQuery {
             transcript.firstMatch.descendants(matching: .any).matching(identifier: owner.paragraphID)
@@ -166,23 +249,41 @@ final class MobileReview34DemoUITests: XCTestCase {
         }
         try await PhysicalOwnedRecordingCleanup.withJoinedCleanup(operation: {
             try Task.checkCancellation()
-            // Capture a normal cold launch without arguments or environment overrides.
+            try await verifyRecordingPolicies()
+            // Cancellation boundary follows the last eligibility read, never cleanup Stop/Close.
+            try Task.checkCancellation()
             app.terminate()
-            XCUIApplication(bundleIdentifier: "ai.pichi.voice.uitests.xctrunner").activate()
+            guard let runnerID = Bundle.main.bundleIdentifier, runnerID.hasSuffix(".xctrunner"),
+                  (Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String])?.contains("audio") == true else { throw Unverified() }
+            try Task.checkCancellation()
+            XCUIApplication(bundleIdentifier: runnerID).activate()
+            try Task.checkCancellation()
             try audio.setCategory(.playback, mode: .default, options: .mixWithOthers)
+            changedPlaybackCategory = true
+            try Task.checkCancellation()
             try audio.setActive(true)
+            ownsPlaybackSession = true
+            try Task.checkCancellation()
             let player = try AVAudioPlayer(contentsOf: fixture); ownedPlayer = player
             player.numberOfLoops = -1; player.volume = 0.2
-            guard player.prepareToPlay(), player.play() else { throw Unverified() }
-            app.launchArguments = []; app.launchEnvironment = [:]; app.launch()
+            try Task.checkCancellation()
+            guard player.prepareToPlay() else { throw Unverified() }
+            try Task.checkCancellation()
+            guard player.play() else { throw Unverified() }
+            app.launchArguments = []; app.launchEnvironment = [:]
+            try Task.checkCancellation()
+            app.launch()
+            // Re-read actual OFF in both legacy and phone/pad core paths after cold launch.
+            try await verifyRecordingPolicies()
             let start = app.buttons["meeting.start"]
             guard start.waitForExistence(timeout: 20), start.isEnabled, start.isHittable,
                   Set(historyIDs()) == Set(baselineIDs), app.sliders.count == 0,
                   app.buttons.matching(NSPredicate(format: "label IN %@", closeLabels)).count == 0 else { throw Unverified() }
+            try Task.checkCancellation()
             ownsRecording = true; start.tap()
             let deadline = ProcessInfo.processInfo.systemUptime + 40
             var granted = false
-            while !stop.exists {
+            while !stop.exists || !stop.isEnabled {
                 let alerts = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts
                 if alerts.count > 0 {
                     guard alerts.count == 1, !granted else { throw Unverified() }
@@ -198,7 +299,7 @@ final class MobileReview34DemoUITests: XCTestCase {
             }
             observedOwnedRecording = true
             print("[PICHI_REVIEW34_DEMO] recording_ready=true")
-            try await Task.sleep(nanoseconds: 18_000_000_000)
+            try await Task.sleep(nanoseconds: coreVideo ? 20_000_000_000 : 18_000_000_000)
             player.stop()
             try await finishOwnedRecording()
             XCTAssertTrue(app.staticTexts["transcript.metadata.duration"].exists)
@@ -236,13 +337,13 @@ final class MobileReview34DemoUITests: XCTestCase {
                 })
                 try await Task.sleep(nanoseconds: 3_000_000_000)
                 try await closeOwnedPlayback()
-            }
+            } else if coreVideo { throw Unverified() }
             let more = app.buttons["transcript.more"]
             guard completedTranscript(), more.isEnabled, more.isHittable else { throw Unverified() }
             more.tap()
             let json = app.buttons.matching(NSPredicate(format: "label IN %@", ["Export as JSON", "Экспортировать как JSON"]))
             guard json.count == 1, json.element.isHittable else { throw Unverified() }
-            json.element.tap()
+            ownsShare = true; json.element.tap()
             XCTAssertTrue(app.otherElements["ActivityListView"].waitForExistence(timeout: 15), "The actual generated JSON must enter the native share sheet")
             guard app.otherElements["ActivityListView"].exists else { throw Unverified() }
             let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
@@ -250,18 +351,43 @@ final class MobileReview34DemoUITests: XCTestCase {
             try await Task.sleep(nanoseconds: 3_000_000_000)
             let close = app.buttons.matching(NSPredicate(format: "label IN %@", ["Close", "Закрыть"]))
             if close.count == 1, close.element.isHittable { close.element.tap() }
+            if coreVideo {
+                guard app.otherElements["ActivityListView"].waitForNonExistence(timeout: 10), completedTranscript() else { throw Unverified() }
+            }
+            ownsShare = app.otherElements["ActivityListView"].exists
             print("[PICHI_REVIEW34_DEMO] json_share_presented=true external_delivery=false")
         }, cleanup: {
             ownedPlayer?.stop()
+            var cleanupFailure: Error?
             do {
                 try await finishOwnedRecording()
                 try await closeOwnedPlayback()
-                print("[PICHI_REVIEW34_DEMO] owned_recording_playback_cleanup_joined=true")
-            } catch {
-                let failure = error as NSError
+                if ownsShare && app.otherElements["ActivityListView"].exists {
+                    guard openedSessionID != nil, openedTitle != nil else { throw Unverified() }
+                    let close = app.buttons.matching(NSPredicate(format: "label IN %@", ["Close", "Закрыть", "Cancel", "Отмена"]))
+                    guard close.count == 1, close.element.isHittable else { throw Unverified() }
+                    close.element.tap()
+                    guard app.otherElements["ActivityListView"].waitForNonExistence(timeout: 10) else { throw Unverified() }
+                    ownsShare = false
+                }
+            } catch { cleanupFailure = error }
+            do {
+                if ownsPlaybackSession {
+                    try audio.setActive(false, options: .notifyOthersOnDeactivation)
+                    ownsPlaybackSession = false
+                }
+                if changedPlaybackCategory {
+                    try audio.setCategory(category, mode: mode, options: options)
+                    guard audio.category == category, audio.mode == mode, audio.categoryOptions == options else { throw Unverified() }
+                    changedPlaybackCategory = false
+                }
+            } catch { if cleanupFailure == nil { cleanupFailure = error } }
+            if let cleanupFailure {
+                let failure = cleanupFailure as NSError
                 print("[PICHI_REVIEW34_DEMO] owned_cleanup_requires_parent_inspection=true domain=\(failure.domain) code=\(failure.code)")
-                throw error
+                throw cleanupFailure
             }
+            print("[PICHI_REVIEW34_DEMO] owned_recording_playback_cleanup_joined=true")
         })
     }
 
