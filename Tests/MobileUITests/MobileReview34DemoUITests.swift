@@ -23,12 +23,13 @@ final class MobileReview34DemoUITests: XCTestCase {
         XCTAssertFalse(Self.microphonePrompt(["Another App Would Like to Access the Microphone", "Record audio and transcribe speech on this device."]))
     }
 
-    func testPhysicalFreshGuestRecordingStopPlaybackAndJSONShare() throws {
+    @MainActor
+    func testPhysicalFreshGuestRecordingStopPlaybackAndJSONShare() async throws {
         let env = ProcessInfo.processInfo.environment
         guard env["PICHI_REVIEW34_DEMO"] == "fresh-empty-guest-recording" else { throw XCTSkip("Fresh empty guest recording opt-in required") }
-        // Explicit Swift guards below keep owned cleanup on the failure path.
         continueAfterFailure = true
-        executionTimeAllowance = 150
+        // Reserve bounded cleanup time in addition to the normal short demonstration.
+        executionTimeAllowance = 300
         let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice")
         app.activate()
         guard let rawBaseline = env["PICHI_REVIEW34_BASELINE_IDS"],
@@ -36,15 +37,23 @@ final class MobileReview34DemoUITests: XCTestCase {
               backupHash.allSatisfy({ $0.isHexDigit }) else { throw Unverified() }
         let baselineIDs = rawBaseline.isEmpty ? [] : rawBaseline.split(separator: ",").map(String.init)
         guard baselineIDs.allSatisfy({ UUID(uuidString: $0) != nil }), Set(baselineIDs).count == baselineIDs.count else { throw Unverified() }
-        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "history.session.")).allElementsBoundByIndex
-        let currentIDs = Set(rows.map { String($0.identifier.dropFirst("history.session.".count)) })
-        guard currentIDs == Set(baselineIDs) else { throw Unverified() }
-        guard Self.recordingAdmission(revision: env["PICHI_TEST_REVISION"], optIn: env["PICHI_REVIEW34_DEMO"],
-            isPad: UIDevice.current.userInterfaceIdiom == .pad,
-            idle: app.state == .runningForeground && app.alerts.count == 0 && app.sheets.count == 0
-                && !app.buttons["meeting.stop"].exists && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
-            historyCount: rows.count, expectedHistoryCount: baselineIDs.count),
-              app.buttons["meeting.start"].isEnabled && app.buttons["meeting.start"].isHittable else { throw Unverified() }
+        func historyIDs() -> [String] {
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "history.session.")).allElementsBoundByIndex
+                .map { String($0.identifier.dropFirst("history.session.".count)) }
+        }
+        let currentIDs = historyIDs()
+        let closeLabels = ["Close audio player", "Закрыть аудиоплеер"]
+        let transportLabels = ["Pause audio chunk", "Приостановить воспроизведение фрагмента",
+                               "Play audio chunk", "Воспроизвести аудиофрагмент"]
+        guard Set(currentIDs) == Set(baselineIDs),
+              Self.recordingAdmission(revision: env["PICHI_TEST_REVISION"], optIn: env["PICHI_REVIEW34_DEMO"],
+                isPad: UIDevice.current.userInterfaceIdiom == .pad,
+                idle: app.state == .runningForeground && app.alerts.count == 0 && app.sheets.count == 0
+                    && !app.buttons["meeting.stop"].exists && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                historyCount: currentIDs.count, expectedHistoryCount: baselineIDs.count),
+              app.buttons["meeting.start"].isEnabled && app.buttons["meeting.start"].isHittable,
+              app.sliders.count == 0,
+              app.buttons.matching(NSPredicate(format: "label IN %@", closeLabels)).count == 0 else { throw Unverified() }
         let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
         let fixture = support.appendingPathComponent("BackgroundRecordingUI/speech.wav")
         let bytes = try Data(contentsOf: fixture)
@@ -54,77 +63,206 @@ final class MobileReview34DemoUITests: XCTestCase {
         let category = audio.category, mode = audio.mode, options = audio.categoryOptions
         var ownedPlayer: AVAudioPlayer?
         var ownsRecording = false
+        var observedOwnedRecording = false
+        var openedSessionID: String?
+        var openedTitle: String?
+        var playbackOwner: Review34DemoAdmission.PlaybackOwner?
+        var observedOwnedPlayback = false
+        let stop = app.buttons["meeting.stop"]
+        let transcript = app.scrollViews.matching(identifier: "meeting.transcript")
         defer {
             ownedPlayer?.stop()
-            if ownsRecording && app.buttons["meeting.stop"].exists && app.buttons["meeting.stop"].isHittable {
-                app.buttons["meeting.stop"].tap()
-                _ = app.buttons["meeting.stop"].waitForNonExistence(timeout: 30)
-            }
             try? audio.setActive(false, options: .notifyOthersOnDeactivation)
             try? audio.setCategory(category, mode: mode, options: options)
         }
-        // Capture a normal cold launch without arguments or environment overrides.
-        app.terminate()
-        XCUIApplication(bundleIdentifier: "ai.pichi.voice.uitests.xctrunner").activate()
-        try audio.setCategory(.playback, mode: .default, options: .mixWithOthers)
-        try audio.setActive(true)
-        let player = try AVAudioPlayer(contentsOf: fixture); ownedPlayer = player
-        player.numberOfLoops = -1; player.volume = 0.2
-        guard player.prepareToPlay(), player.play() else { throw Unverified() }
-        app.launchArguments = []; app.launchEnvironment = [:]; app.launch()
-        let start = app.buttons["meeting.start"]
-        guard start.waitForExistence(timeout: 20), start.isEnabled, start.isHittable else { throw Unverified() }
-        start.tap(); ownsRecording = true
-        let stop = app.buttons["meeting.stop"]
-        let deadline = ProcessInfo.processInfo.systemUptime + 40
-        var granted = false
-        while !stop.exists {
-            let alerts = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts
-            if alerts.count > 0 {
-                guard alerts.count == 1, !granted else { throw Unverified() }
-                let alert = alerts.element
-                guard Self.microphonePrompt(alert.staticTexts.allElementsBoundByIndex.map(\.label)) else { throw Unverified() }
-                let allow = alert.buttons.matching(NSPredicate(format: "label IN %@", ["OK", "ОК", "Allow", "Разрешить"]))
-                guard allow.count == 1, allow.element.isEnabled, allow.element.isHittable else { throw Unverified() }
-                allow.element.tap(); granted = true
+        func foregroundIdle() -> Bool {
+            app.state == .runningForeground && app.alerts.count == 0 && app.sheets.count == 0
+        }
+        func completedTranscript() -> Bool {
+            foregroundIdle() && transcript.count == 1 && app.buttons["transcript.more"].exists
+                && !stop.exists && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists
+                && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+                && !app.buttons["meeting.retry"].exists && !app.buttons["meeting.restartProcessing"].exists
+        }
+        func finishOwnedRecording() async throws {
+            guard ownsRecording else { return }
+            app.activate()
+            try await PhysicalOwnedRecordingCleanup.run(observe: {
+                guard foregroundIdle() else { return nil }
+                if stop.exists || app.descendants(matching: .any)["meeting.recording"].firstMatch.exists {
+                    observedOwnedRecording = true
+                }
+                return PhysicalUITransitionWait.ownedRecordingAction(
+                    stopReady: stop.exists && stop.isEnabled && stop.isHittable,
+                    processing: observedOwnedRecording && app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                    completed: observedOwnedRecording && completedTranscript())
+            }, stop: {
+                guard foregroundIdle(), stop.exists, stop.isEnabled, stop.isHittable else { throw Unverified() }
+                stop.tap()
+            }, join: {
+                try await PhysicalUITransitionWait.until(timeout: 70, condition: {
+                    observedOwnedRecording && completedTranscript()
+                })
+            })
+            ownsRecording = false
+        }
+        func openHistory() async throws {
+            guard foregroundIdle(), !stop.exists else { throw Unverified() }
+            openedSessionID = nil; openedTitle = nil
+            let sidebar = app.buttons["navigation.meetings"]
+            if sidebar.exists && sidebar.isHittable { sidebar.tap() }
+            else {
+                let tabs = app.tabBars.buttons.matching(NSPredicate(format: "label IN %@", ["Recordings", "Записи"]))
+                guard tabs.count == 1, tabs.firstMatch.isEnabled, tabs.firstMatch.isHittable else { throw Unverified() }
+                tabs.firstMatch.tap()
             }
-            guard ProcessInfo.processInfo.systemUptime < deadline else { throw Unverified() }
-            Thread.sleep(forTimeInterval: 0.25)
+            try await PhysicalUITransitionWait.until(timeout: 15, condition: {
+                foregroundIdle() && app.descendants(matching: .any)["history.list"].firstMatch.exists && transcript.count == 0
+            })
         }
-        print("[PICHI_REVIEW34_DEMO] recording_ready=true")
-        Thread.sleep(forTimeInterval: 18)
-        guard stop.isEnabled, stop.isHittable else { throw Unverified() }
-        player.stop(); stop.tap()
-        let transcript = app.scrollViews["meeting.transcript"]
-        XCTAssertTrue(transcript.waitForExistence(timeout: 70), "Owned recording must finish into its saved transcript")
-        guard transcript.exists, !stop.exists else { throw Unverified() }
-        ownsRecording = false
-        XCTAssertTrue(app.staticTexts["transcript.metadata.duration"].exists)
-        let paragraphs = transcript.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.paragraph."))
-        XCTAssertGreaterThan(paragraphs.count, 0, "The actual microphone fixture must produce committed text")
-        guard paragraphs.count > 0 else { throw Unverified() }
-        print("[PICHI_REVIEW34_DEMO] saved_transcript_visible=true")
-        let audioButtons = transcript.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.audio."))
-        if audioButtons.count > 0, audioButtons.firstMatch.isEnabled, audioButtons.firstMatch.isHittable {
-            let owned = audioButtons.firstMatch
-            owned.tap(); Thread.sleep(forTimeInterval: 3)
-            guard owned.exists, owned.isEnabled, owned.isHittable else { throw Unverified() }
-            owned.tap(); Thread.sleep(forTimeInterval: 1)
+        func paragraph(_ owner: Review34DemoAdmission.PlaybackOwner) -> XCUIElementQuery {
+            transcript.firstMatch.descendants(matching: .any).matching(identifier: owner.paragraphID)
         }
-        let more = app.buttons["transcript.more"]
-        guard more.isEnabled, more.isHittable else { throw Unverified() }
-        more.tap()
-        let json = app.buttons.matching(NSPredicate(format: "label IN %@", ["Export as JSON", "Экспортировать как JSON"]))
-        guard json.count == 1, json.element.isHittable else { throw Unverified() }
-        json.element.tap()
-        XCTAssertTrue(app.otherElements["ActivityListView"].waitForExistence(timeout: 15), "The actual generated JSON must enter the native share sheet")
-        guard app.otherElements["ActivityListView"].exists else { throw Unverified() }
-        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        screenshot.name = "review34-owned-json-share"; screenshot.lifetime = .keepAlways; add(screenshot)
-        Thread.sleep(forTimeInterval: 3)
-        let close = app.buttons.matching(NSPredicate(format: "label IN %@", ["Close", "Закрыть"]))
-        if close.count == 1, close.element.isHittable { close.element.tap() }
-        print("[PICHI_REVIEW34_DEMO] json_share_presented=true external_delivery=false")
+        func hasPlaybackScope(_ owner: Review34DemoAdmission.PlaybackOwner) -> Bool {
+            guard completedTranscript(), app.staticTexts["transcript.title"].label == openedTitle else { return false }
+            let matches = paragraph(owner)
+            guard matches.count == 1 else { return false }
+            let controls = matches.firstMatch.buttons.matching(identifier: owner.audioID)
+            guard controls.count == 1 else { return false }
+            return owner.matches(openedSessionID: openedSessionID, paragraphID: matches.firstMatch.identifier,
+                audioID: controls.firstMatch.identifier, paragraphCount: matches.count, audioCount: controls.count)
+        }
+        func closeOwnedPlayback() async throws {
+            guard let owner = playbackOwner else { return }
+            let matches = paragraph(owner)
+            let control = matches.firstMatch.buttons.matching(identifier: owner.audioID).firstMatch
+            func joined() -> Bool {
+                hasPlaybackScope(owner) && !closeLabels.contains(control.label)
+                    && matches.firstMatch.sliders.count == 0
+                    && matches.firstMatch.buttons.matching(NSPredicate(format: "label IN %@", transportLabels)).count == 0
+            }
+            try await PhysicalOwnedRecordingCleanup.run(observe: {
+                guard hasPlaybackScope(owner) else { return nil }
+                if closeLabels.contains(control.label) || matches.firstMatch.sliders.count > 0
+                    || matches.firstMatch.buttons.matching(NSPredicate(format: "label IN %@", transportLabels)).count > 0 {
+                    observedOwnedPlayback = true
+                }
+                return PhysicalUITransitionWait.ownedRecordingAction(
+                    stopReady: control.isEnabled && closeLabels.contains(control.label), processing: false,
+                    completed: observedOwnedPlayback && joined())
+            }, stop: {
+                try PhysicalControlReveal.run(startingUpward: false, ready: {
+                    hasPlaybackScope(owner) && control.isEnabled && control.isHittable && closeLabels.contains(control.label)
+                }, scroll: { upward, _ in
+                    guard hasPlaybackScope(owner), transcript.firstMatch.isHittable else { throw Unverified() }
+                    if upward { transcript.firstMatch.swipeUp() } else { transcript.firstMatch.swipeDown() }
+                })
+                guard hasPlaybackScope(owner), closeLabels.contains(control.label), control.isEnabled, control.isHittable else { throw Unverified() }
+                control.tap()
+            }, join: {
+                try await PhysicalUITransitionWait.until(timeout: 10, condition: { observedOwnedPlayback && joined() })
+            })
+            playbackOwner = nil
+        }
+        try await PhysicalOwnedRecordingCleanup.withJoinedCleanup(operation: {
+            try Task.checkCancellation()
+            // Capture a normal cold launch without arguments or environment overrides.
+            app.terminate()
+            XCUIApplication(bundleIdentifier: "ai.pichi.voice.uitests.xctrunner").activate()
+            try audio.setCategory(.playback, mode: .default, options: .mixWithOthers)
+            try audio.setActive(true)
+            let player = try AVAudioPlayer(contentsOf: fixture); ownedPlayer = player
+            player.numberOfLoops = -1; player.volume = 0.2
+            guard player.prepareToPlay(), player.play() else { throw Unverified() }
+            app.launchArguments = []; app.launchEnvironment = [:]; app.launch()
+            let start = app.buttons["meeting.start"]
+            guard start.waitForExistence(timeout: 20), start.isEnabled, start.isHittable,
+                  Set(historyIDs()) == Set(baselineIDs), app.sliders.count == 0,
+                  app.buttons.matching(NSPredicate(format: "label IN %@", closeLabels)).count == 0 else { throw Unverified() }
+            ownsRecording = true; start.tap()
+            let deadline = ProcessInfo.processInfo.systemUptime + 40
+            var granted = false
+            while !stop.exists {
+                let alerts = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts
+                if alerts.count > 0 {
+                    guard alerts.count == 1, !granted else { throw Unverified() }
+                    let alert = alerts.element
+                    guard Self.microphonePrompt(alert.staticTexts.allElementsBoundByIndex.map(\.label)) else { throw Unverified() }
+                    let allow = alert.buttons.matching(NSPredicate(format: "label IN %@", ["OK", "ОК", "Allow", "Разрешить"]))
+                    guard allow.count == 1, allow.element.isEnabled, allow.element.isHittable else { throw Unverified() }
+                    allow.element.tap(); granted = true
+                }
+                try Task.checkCancellation()
+                guard ProcessInfo.processInfo.systemUptime < deadline else { throw Unverified() }
+                try await Task.sleep(nanoseconds: 250_000_000)
+            }
+            observedOwnedRecording = true
+            print("[PICHI_REVIEW34_DEMO] recording_ready=true")
+            try await Task.sleep(nanoseconds: 18_000_000_000)
+            player.stop()
+            try await finishOwnedRecording()
+            XCTAssertTrue(app.staticTexts["transcript.metadata.duration"].exists)
+            let paragraphs = transcript.firstMatch.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.paragraph."))
+            XCTAssertGreaterThan(paragraphs.count, 0, "The actual microphone fixture must produce committed text")
+            guard paragraphs.count > 0 else { throw Unverified() }
+            print("[PICHI_REVIEW34_DEMO] saved_transcript_visible=true")
+            // Resolve the single new UUID, then reopen exactly that row before binding controls.
+            try await openHistory()
+            guard let id = Review34DemoAdmission.newOwnedSessionID(baselineIDs: baselineIDs, historyIDs: historyIDs()) else { throw Unverified() }
+            let rows = app.buttons.matching(identifier: "history.session.\(id)")
+            let title = rows.firstMatch.staticTexts.matching(identifier: "history.title.\(id)")
+            guard rows.count == 1, rows.firstMatch.isEnabled, rows.firstMatch.isHittable, title.count == 1 else { throw Unverified() }
+            let expectedTitle = title.firstMatch.label
+            rows.firstMatch.tap()
+            try await PhysicalUITransitionWait.until(timeout: 15, condition: {
+                completedTranscript() && app.staticTexts["transcript.title"].label == expectedTitle
+            })
+            openedSessionID = id; openedTitle = expectedTitle
+            let audioButtons = transcript.firstMatch.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.audio."))
+            if let control = audioButtons.allElementsBoundByIndex.first(where: { $0.isEnabled && $0.isHittable }) {
+                let owners = transcript.firstMatch.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.paragraph."))
+                    .allElementsBoundByIndex.filter { $0.buttons.matching(identifier: control.identifier).count == 1 }
+                guard owners.count == 1,
+                      let owner = Review34DemoAdmission.PlaybackOwner(sessionID: id, baselineIDs: baselineIDs,
+                        paragraphID: owners[0].identifier, audioID: control.identifier), hasPlaybackScope(owner),
+                      !closeLabels.contains(control.label), owners[0].sliders.count == 0,
+                      owners[0].buttons.matching(NSPredicate(format: "label IN %@", transportLabels)).count == 0 else { throw Unverified() }
+                playbackOwner = owner
+                control.tap()
+                try await PhysicalUITransitionWait.until(timeout: 10, condition: {
+                    guard hasPlaybackScope(owner), closeLabels.contains(control.label) else { return false }
+                    observedOwnedPlayback = true
+                    return true
+                })
+                try await Task.sleep(nanoseconds: 3_000_000_000)
+                try await closeOwnedPlayback()
+            }
+            let more = app.buttons["transcript.more"]
+            guard completedTranscript(), more.isEnabled, more.isHittable else { throw Unverified() }
+            more.tap()
+            let json = app.buttons.matching(NSPredicate(format: "label IN %@", ["Export as JSON", "Экспортировать как JSON"]))
+            guard json.count == 1, json.element.isHittable else { throw Unverified() }
+            json.element.tap()
+            XCTAssertTrue(app.otherElements["ActivityListView"].waitForExistence(timeout: 15), "The actual generated JSON must enter the native share sheet")
+            guard app.otherElements["ActivityListView"].exists else { throw Unverified() }
+            let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            screenshot.name = "review34-owned-json-share"; screenshot.lifetime = .keepAlways; add(screenshot)
+            try await Task.sleep(nanoseconds: 3_000_000_000)
+            let close = app.buttons.matching(NSPredicate(format: "label IN %@", ["Close", "Закрыть"]))
+            if close.count == 1, close.element.isHittable { close.element.tap() }
+            print("[PICHI_REVIEW34_DEMO] json_share_presented=true external_delivery=false")
+        }, cleanup: {
+            ownedPlayer?.stop()
+            do {
+                try await finishOwnedRecording()
+                try await closeOwnedPlayback()
+                print("[PICHI_REVIEW34_DEMO] owned_recording_playback_cleanup_joined=true")
+            } catch {
+                let failure = error as NSError
+                print("[PICHI_REVIEW34_DEMO] owned_cleanup_requires_parent_inspection=true domain=\(failure.domain) code=\(failure.code)")
+                throw error
+            }
+        })
     }
 
     private static let revision = "1a245d0447b08e3fc681d439ea4ef3b392e034c2"

@@ -350,3 +350,28 @@ microphone request deny admission. Check the new terminal session and unchanged
 baseline files independently afterward; the shared history index is expected to
 gain one entry. UI assertions, actual ASR/storage evidence, video privacy review
 and native account sign-in remain separate results.
+
+The demonstration and the main physical harness share the same test-only
+`PhysicalControlReveal`, `PhysicalUITransitionWait` and
+`PhysicalOwnedRecordingCleanup` policies. Failure cleanup runs in a joined task
+with its own cancellation lifetime. It waits for an owned ready Stop or an
+already admitted completion, attempts completion join even after Stop/close
+failure, and retains operation and cleanup errors separately. An unavailable
+control or failed join is unresolved cleanup, never a passing teardown. The
+300-second execution allowance includes a bounded cleanup reserve; it is not a
+longer recording fixture.
+
+Before recording, any existing inline player denies admission. After completion
+the baseline must gain exactly one UUID without losing an old one. The test
+reopens that exact new history row before pinning its paragraph and audio-control
+IDs; inline close and join use only that immutable owner. It never adopts a
+baseline recording or another paragraph during cleanup. No live session UUID is
+exposed by the ordinary recording screen: live capture ownership remains the
+admitted Start plus observed recording under the parent's exclusive lease.
+
+Host-only policy tests exercise unavailable-to-ready, Stop/close errors, failed
+joins, cancellation and exact session/control ownership. They do not run UIKit,
+record audio or establish native failure-path acceptance. The earlier successful
+core demonstration remains evidence at its recorded pre-refactor source and
+run receipt. This changed driver and cleanup require a future exact-runner
+native check by the physical owner; ordinary app build 34 is unchanged.

@@ -15,44 +15,6 @@ private nonisolated enum PhysicalSpeakerLabelsPreflight {
     }
 }
 
-@MainActor private enum PhysicalControlReveal {
-    struct NotVisible: Error {}
-
-    static func run(ready: () -> Bool, scroll: (Bool, Int) throws -> Void) throws {
-        // The reverse leg first covers the outbound travel, then searches above
-        // the original position even when the first leg never reached an edge.
-        for (upward, limit) in [(true, 5), (false, 10)] {
-            for step in 0..<limit {
-                if ready() { return }
-                try scroll(upward, step)
-            }
-        }
-        guard ready() else { throw NotVisible() }
-    }
-}
-
-@MainActor private enum PhysicalUITransitionWait {
-    struct TimedOut: Error {}
-    enum OwnedRecordingAction: Equatable { case requestStop, join }
-
-    static func ownedRecordingAction(stopReady: Bool, processing: Bool, completed: Bool) -> OwnedRecordingAction? {
-        if processing || completed { return .join }
-        return stopReady ? .requestStop : nil
-    }
-
-    static func until(timeout: TimeInterval, condition: () -> Bool,
-                      now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
-                      pause: () async throws -> Void = { try await Task.sleep(nanoseconds: 250_000_000) }) async throws {
-        let deadline = now() + timeout
-        while true {
-            try Task.checkCancellation()
-            if condition() { return }
-            guard now() < deadline else { throw TimedOut() }
-            try await pause()
-        }
-    }
-}
-
 private nonisolated enum PhysicalCaptionGeometry {
     struct Sample: Equatable {
         let identifier: String
@@ -116,41 +78,6 @@ private nonisolated struct PhysicalPostSoakReceipt: Codable {
     func validate(_ expected: PhysicalPostSoakAuthorization) throws {
         guard version == 1, authorization == expected, state == "completed", audioStorageMode == "memoryOnly",
               piiRedactionEnabled, exclusiveIdleAttested else { throw PhysicalPostSoakAuthorization.Unverified() }
-    }
-}
-
-@MainActor private enum PhysicalOwnedRecordingCleanup {
-    struct StopAndJoinFailure: Error {
-        let stopError: Error
-        let joinError: Error
-    }
-
-    static func run(observe: () -> PhysicalUITransitionWait.OwnedRecordingAction?,
-                    stop: () async throws -> Void, join: () async throws -> Void,
-                    now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
-                    pause: () async throws -> Void = { try await Task.sleep(nanoseconds: 250_000_000) }) async throws {
-        var action: PhysicalUITransitionWait.OwnedRecordingAction?
-        try await PhysicalUITransitionWait.until(timeout: 30, condition: {
-            action = observe()
-            return action != nil
-        }, now: now, pause: pause)
-        var stopError: Error?
-        if action == .requestStop {
-            do { try await stop() }
-            catch {
-                stopError = error
-                let failure = error as NSError
-                print("[PHYSICAL_RECORDING_UI] stop_failed_before_join domain=\(failure.domain) code=\(failure.code)")
-            }
-        }
-        do { try await join() }
-        catch {
-            let failure = error as NSError
-            print("[PHYSICAL_RECORDING_UI] join_failed domain=\(failure.domain) code=\(failure.code)")
-            if let stopError { throw StopAndJoinFailure(stopError: stopError, joinError: error) }
-            throw error
-        }
-        if let stopError { throw stopError }
     }
 }
 
