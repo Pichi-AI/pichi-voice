@@ -24,16 +24,16 @@ Compatible speech models support Russian and English. Other languages, speed and
 
 | Platform | Requirements | Download |
 | --- | --- | --- |
-| macOS | macOS 15 or later; Apple Silicon | [Download Mac DMG](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B66-public.1/Pichi-Voice-0.1.0-66-macos-arm64.dmg) |
+| macOS | macOS 15 or later; Apple Silicon | [Download Mac installer](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B66-public.1/Pichi-Voice-0.1.0-66-macos-arm64.pkg) |
 | Windows | - | Coming Soon |
 | iOS (iPhone / iPad) | iOS / iPadOS 17 or later; memory and storage for the selected model | Coming Soon |
 | Android | - | Coming Soon |
 
 ## Get started
 
-1. [Download the Mac DMG](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B66-public.1/Pichi-Voice-0.1.0-66-macos-arm64.dmg) for Apple Silicon and macOS 15 or later.
-2. Open the DMG disk image and drag Pichi Voice to Applications.
-3. Open Pichi Voice from Applications for initial setup. Grant microphone access, Accessibility for typing into other apps, and screen/system-audio access for computer-audio recording.
+1. [Download the Mac installer](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B66-public.1/Pichi-Voice-0.1.0-66-macos-arm64.pkg) for Apple Silicon and macOS 15 or later.
+2. Open the installer and follow the steps. It installs Pichi Voice in Applications and opens it for you.
+3. Complete the guided setup when Pichi Voice opens. Grant microphone access, Accessibility for typing into other apps, and screen/system-audio access for computer-audio recording.
 4. Select and download a speech model for your language while online.
 5. Try a short dictation or recording and review the result.
 

@@ -38,3 +38,9 @@
 [data-reveal][data-reveal-state="waiting"]{opacity:0;transform:translateY(18px)}
 [data-reveal][data-reveal-state="visible"],[data-reveal]:focus-within{opacity:1;transform:none}
 @media(prefers-reduced-motion:reduce){[data-reveal]{opacity:1!important;transform:none!important;transition:none!important}}
+
+.install-steps{list-style:none;padding:0;margin:28px 0}
+.install-steps li{position:relative;padding-left:42px;margin:19px 0;line-height:1.65;font-size:.91rem}
+.step-number{position:absolute;left:0;top:0;width:28px;height:28px;display:grid;place-items:center;border:1px solid #d9cfeb;border-radius:50%;background:#eee8f8;color:var(--purple);font-weight:700;font-size:.8rem}
+.privacy-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;margin-right:10px;border:1px solid #cfc1e3;border-radius:9px;color:var(--purple);vertical-align:middle;background:#f9f6fd}
+.privacy-icon svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
