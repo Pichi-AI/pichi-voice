@@ -14,6 +14,7 @@ nonisolated enum Review34DemoAdmission {
     static let fixtureSHA = "81998993976a2804d414b261d3af679d49a1b1e08d952bace5ffc31291a392c8"
     enum CoreVideoPurpose: String, Codable {
         case appleReviewLatestStable
+        case appleReviewObservedBeta
         case betaObservedOS
     }
     struct CoreVideoProof: Codable {
@@ -51,6 +52,8 @@ nonisolated enum Review34DemoAdmission {
         switch proof.purpose {
         case .appleReviewLatestStable:
             return proof.revision == reviewRevision && proof.build == "34" && proof.latestOSVerified
+        case .appleReviewObservedBeta:
+            return proof.revision == reviewRevision && proof.build == "34" && !proof.latestOSVerified
         case .betaObservedOS:
             return proof.revision == coreRevision && proof.build == "35"
         }

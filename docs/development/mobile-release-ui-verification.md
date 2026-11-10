@@ -7,10 +7,16 @@ short demo driver on an explicitly leased physical iPhone or iPad. Its source
 profile admits only atomic release bindings: review build 34 with source
 `1a245d0447b08e3fc681d439ea4ef3b392e034c2`, or beta build 35 with source
 `62d9d54450a8612a8c9bbbeb348baf41214de63b`. Cross-pairs and unknown releases fail.
-Apple review-34 video must show exact build 34 and purpose `appleReviewLatestStable`
+The latest-stable review-34 video must show exact build 34 and purpose `appleReviewLatestStable`
 with latestOSVerified true. Beta-35 acceptance uses only purpose `betaObservedOS`:
 latestOSVerified is a required truthful boolean and may be false or true. It never
 turns beta acceptance into the Apple latest-stable video. No bypass flag exists.
+When the owner explicitly requests a supplemental review-34 demonstration on an
+observed beta OS, purpose `appleReviewObservedBeta` admits only the same 34/source
+binding with latestOSVerified false. The parent verifies the beta release type,
+labels the delivered video and review notes with its actual version, and preserves
+the unresolved latest-public-OS acceptance gap. It cannot use the beta-35 binding
+or claim latest stable. This choice changes no app or recording policy.
 It is a prepared runner, not device acceptance or a replacement for a new phone
 video. Do not repeat an installation, recording or delivery merely to refresh status.
 
@@ -19,7 +25,9 @@ must be the exact verified ordinary Release product. Before a device window, the
 parent verifies the full backup, exact target device, installed executable hash,
 source/build and exact observed iOS version. For `appleReviewLatestStable`, the
 parent additionally verifies that this is the current stable iOS release; for
-`betaObservedOS`, it records the actual latest status without requiring an OS update. It stages the existing approved public
+`betaObservedOS`, it records the actual latest status without requiring an OS update.
+For `appleReviewObservedBeta`, it verifies the owner's supplemental-video request
+and the observed beta release type, with latestOSVerified false. It stages the approved public
 WAV in the runner at `Library/Application Support/BackgroundRecordingUI/speech.wav`
 (424586 bytes, SHA-256 `81998993976a2804d414b261d3af679d49a1b1e08d952bace5ffc31291a392c8`).
 The validly signed runner must declare its normal public audio background mode.
@@ -33,7 +41,7 @@ operator attestation bound to actual runner-observed idiom/OS/history, not an
 independent verification of the host backup or installed binary. Never substitute
 syntactically valid hashes for the parent's actual verified backup and product.
 Schema 1, absent/unknown purpose and mismatched source/build/purpose combinations
-fail closed. In both purposes, proof.osVersion must exactly equal the runner-observed
+fail closed. For every purpose, proof.osVersion must exactly equal the runner-observed
 UIDevice.systemVersion; backup/device/history/hash and local-only policy gates are
 unchanged. The driver emits only the fixed purpose, observed OS and verified/not_verified
 latest status at the purpose checkpoint, without credential/account/backup contents.

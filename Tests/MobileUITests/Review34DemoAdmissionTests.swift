@@ -69,6 +69,20 @@ final class Review34DemoAdmissionTests: XCTestCase {
         unknown["purpose"] = "betaObservedOS"; unknown.removeValue(forKey: "schemaVersion")
         XCTAssertFalse(admitted(try JSONSerialization.data(withJSONObject: unknown)))
     }
+    func testSupplementalReviewBetaCannotClaimLatestStableOrUseBeta35Binding() throws {
+        let review = Review34DemoAdmission.reviewRevision
+        let beta = Review34DemoAdmission.coreRevision
+        XCTAssertTrue(admitted(try proof(revision: review, build: "34", latest: false,
+            purpose: .appleReviewObservedBeta, osVersion: "27.3"), revision: review, os: "27.3"))
+        XCTAssertFalse(admitted(try proof(revision: review, build: "34", latest: true,
+            purpose: .appleReviewObservedBeta), revision: review))
+        XCTAssertFalse(admitted(try proof(revision: beta, build: "35", latest: false,
+            purpose: .appleReviewObservedBeta), revision: beta))
+        XCTAssertFalse(admitted(try proof(revision: review, build: "35", latest: false,
+            purpose: .appleReviewObservedBeta), revision: review))
+        XCTAssertFalse(admitted(try proof(revision: review, build: "34", latest: false,
+            purpose: .appleReviewObservedBeta, osVersion: "27.3"), revision: review, os: "27.2.1"))
+    }
     func testCoreVideoAcceptsPinnedPhoneAndPadProof() throws {
         XCTAssertTrue(admitted(try proof()))
         XCTAssertTrue(admitted(try proof(idiom: "pad"), idiom: "pad"))
