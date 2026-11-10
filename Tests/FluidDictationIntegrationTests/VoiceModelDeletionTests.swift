@@ -261,6 +261,9 @@ final class VoiceModelDeletionTests: XCTestCase {
                 asr.isAsrReady = ready
                 asr.isRunning = true
                 manager.showRecordingOverlayImmediately()
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.main.async { continuation.resume() }
+                }
                 let stop = view.prepareStoppedOverlayForTesting()
                 XCTAssertFalse(stop.didRequestHide, "Turning AI off must not dismiss final ASR feedback")
                 XCTAssertEqual(stop.onFinalTranscriptionStarted != nil, ready)
