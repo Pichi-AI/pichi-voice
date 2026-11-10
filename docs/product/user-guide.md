@@ -4,7 +4,7 @@
 
 ## Prepare
 
-Get a compatible package from [official releases](https://github.com/Pichi-AI/pichi-voice/releases). Check its availability, requirements and signing information. Development and TestFlight packages differ from a public release.
+[Download Pichi Voice for Mac](https://pichi.ai/voice#download), open the installer and follow its steps. After installation, Pichi Voice opens for initial setup. Existing recordings and settings are preserved.
 
 The current Mac package targets Apple Silicon and macOS 15 or later. Mobile builds target iOS/iPadOS 17 or later. Models have additional memory, storage and language requirements. Complete model downloads while online and try a short recording before relying on offline use.
 
@@ -19,7 +19,7 @@ Use the personal dictionary for names and terminology. Review learned correction
 
 ## Meetings on Mac
 
-Start recording in Pichi Meet. Grant screen/system-audio access for computer-audio recording and check your selected sources.
+Start a recording from Recordings. Grant screen/system-audio access for computer-audio recording and check your selected sources.
 
 Microphone capture is separately controlled. Pausing, switching off Pichi's microphone and muting inside a conferencing app have different meanings. Automatic conference mute observation depends on client support and permissions. Use Pichi Voice's own control for direct microphone admission.
 
@@ -33,7 +33,7 @@ Finish setup and downloads before going offline. Core local recording and compat
 
 ## Review and export
 
-Open a session in history to read its transcript and play retained audio. Correct automatic speaker labels and verify generated summaries against the transcript. Review which content you export; destination apps and services have their own access and retention controls. See [data handling](privacy.md).
+Open a saved session in Recordings to read its transcript and play retained audio. Correct automatic speaker labels and verify generated summaries against the transcript. Review which content you export; destination apps and services have their own access and retention controls. See [data handling](privacy.md).
 
 ## Troubleshooting
 

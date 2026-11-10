@@ -310,6 +310,10 @@ builds/
 !/scripts/dev/standalone-regression.py
 !/scripts/dev/local-api-live.py
 !/scripts/dev/verify-published-upstream-release.py
+!/scripts/dev/package-macos-dmg.py
+!/scripts/dev/package-macos-pkg.py
+!/scripts/dev/macos-pkg-resources/
+!/docs/development/macos-distribution.md
 
 # Keep future public history free of personal data and local model artifacts
 /private_assets/
@@ -333,3 +337,8 @@ builds/
 /website/dist/voice/assets/*
 !/website/dist/voice/assets/pichi.png
 !/website/dist/voice/assets/site.css
+!/website/dist/voice/assets/voice-demo.mjs
+
+# Official service marks used only to identify conferencing applications
+!/website/dist/voice/assets/services/
+!/website/dist/voice/assets/services/*
