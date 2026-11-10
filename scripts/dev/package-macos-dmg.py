@@ -12,14 +12,14 @@ import subprocess
 import tempfile
 
 
-def validate_input(app, output, team):
+def validate_input(app, output, team, output_suffix=".dmg"):
     app, output = Path(app).absolute(), Path(output).resolve()
     if app.is_symlink() or not app.is_dir() or app.suffix != ".app":
         raise ValueError("Input must be a real .app directory")
     if output.exists() or output.is_symlink():
         raise ValueError("Output already exists")
-    if output.suffix != ".dmg" or output.is_relative_to(app.resolve()):
-        raise ValueError("Output must be a new .dmg outside the input app")
+    if output.suffix != output_suffix or output.is_relative_to(app.resolve()):
+        raise ValueError(f"Output must be a new {output_suffix} outside the input app")
     info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
     if info.get("CFBundleIdentifier") != "ai.pichi.voice":
         raise ValueError("Expected the Pichi Voice distribution identity")

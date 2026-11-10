@@ -2,7 +2,7 @@
 
 This document owns setup and command details. [AGENTS.md](../../AGENTS.md) defines shared principles; [Testing](testing.md) owns coverage and test storage, and [Agent workflow](agent-workflow.md) owns coordination, native acceptance and cleanup. Read the relevant guide before using the commands below.
 
-For public Mac packaging, see [macOS disk-image distribution](macos-distribution.md).
+For public Mac packaging, see [macOS distribution](macos-distribution.md).
 
 ## Repository and checkout
 

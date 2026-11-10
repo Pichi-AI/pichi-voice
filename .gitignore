@@ -311,6 +311,8 @@ builds/
 !/scripts/dev/local-api-live.py
 !/scripts/dev/verify-published-upstream-release.py
 !/scripts/dev/package-macos-dmg.py
+!/scripts/dev/package-macos-pkg.py
+!/scripts/dev/macos-pkg-resources/
 !/docs/development/macos-distribution.md
 
 # Keep future public history free of personal data and local model artifacts
