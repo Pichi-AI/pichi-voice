@@ -26,6 +26,30 @@ private struct SyntheticFailingRedactor: TranscriptTextRedacting {
 
 @MainActor
 final class MeetingPrivacyPublicationTests: XCTestCase {
+    func testProtectedPreviewPreservesExactPCMEnvelopeAcrossPrivacyAdmission() async throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let start = 9.0 / 16_000, end = 16_009.0 / 16_000
+        let unit = MeetingFinalTextUnit(id: "fractional-private-word", trackID: epoch.trackID, analysisEpochID: epoch,
+            precision: .utterance, text: "Анна Тестова", analysisStart: start, analysisEnd: end,
+            speaker: .unassigned, analysisSpanIDs: [], confidence: nil)
+        var batch = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: UUID(), epoch: epoch,
+            offset: 0, duration: end, units: [unit])
+        batch.speechObservationIsFinal = true
+        let redactor = SyntheticPersonRedactor(approvesPreview: true)
+        let context = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let protected = try await context.previewSpeech(batch)
+        let preview = try XCTUnwrap(protected)
+        XCTAssertEqual(preview.text, "[PERSON]")
+        XCTAssertEqual(preview.start, start)
+        XCTAssertEqual(preview.end, end)
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: 0)
+        try timeline.record(sourceStartSample: 0, frameCount: 16_009, presentationTime: 0)
+        XCTAssertNotNil(timeline.mapTime(preview.start))
+        XCTAssertNotNil(preview.end.flatMap { timeline.mapEndTime($0) })
+        XCTAssertNil(timeline.mapEndTime(try XCTUnwrap(batch.segments.first).end.seconds))
+        XCTAssertEqual(batch.segments.first?.text, "Анна Тестова", "Only the protected copy is published")
+    }
+
     func testLivePartialUsesPriorPhraseContextWithoutChangingIdentityOrTiming() async throws {
         let utterance = MeetingLiveUtterance(id: UUID(), speaker: .you, text: "Анна", start: 0, end: 1)
         var partial = MeetingLivePartial(id: UUID(), text: "Тестова просит копию.", start: 1, end: 3)

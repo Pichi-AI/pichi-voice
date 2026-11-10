@@ -11,7 +11,7 @@ final nonisolated class MeetingPCMSourceTimeline: @unchecked Sendable {
     // packets can split each calibration span again, unlike a single packet/chunk mapping.
     // This remains a fixed bound (about 2.5 MiB of scalar spans per source).
     static let maximumRetainedSpans = 65_536
-    enum Failure: Error, Equatable { case invalidConfiguration, invalidTimestamp, nonContiguousInput, spanBudgetExceeded }
+    enum Failure: String, Error, Equatable { case invalidConfiguration, invalidTimestamp, nonContiguousInput, spanBudgetExceeded }
     enum BoundarySide { case start, end }
     private struct Span {
         var compactStart: Double

@@ -3198,6 +3198,88 @@ private func XCTAssertAsyncThrowsError<T>(
 // Only native ASR/diarization and application resource participants are synthetic here.
 @MainActor
 extension MeetingParakeetNemotronBackendTests {
+    func testTimelineFailureDiagnosticIdentifiesTheScalarReason() async throws {
+        let evidence = OnlinePipelineEvidence()
+        let timeline = try MeetingPCMSourceTimeline(maximumSpans: 1)
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(sourceTimeline: timeline,
+            recognize: { _, _ in .init(segments: []) }, checkpoint: { _ in }, diagnostic: { message in
+                if message.contains("errorKind=source_timeline_spanBudgetExceeded") { evidence.record("timeline-reason") }
+            }, failure: { _ in })
+        XCTAssertTrue(consumer.enqueue(try Self.onlinePCM(frames: 160, startFrame: 0)))
+        XCTAssertFalse(consumer.enqueue(try Self.onlinePCM(frames: 160, startFrame: 16_000)))
+        do { try await consumer.finish(); XCTFail("The genuine invalid source admission must still fail") }
+        catch { XCTAssertEqual(error as? MeetingPCMSourceTimeline.Failure, .spanBudgetExceeded) }
+        XCTAssertEqual(evidence.count("timeline-reason"), 1)
+    }
+
+    func testStreamingPreviewMapsNativeBoundsInsteadOfRoundedPresentationTimes() async throws {
+        let fixture = try self.onlinePipelineFixture(service: OnlinePipelineService(), runtime: OnlinePipelineRuntime())
+        let track = fixture.session.audioTracks[0]
+        let epoch = MeetingAnalysisEpochID(trackID: track.id, ordinal: 0)
+        let frames = 16_009
+        let start = 9.0 / 16_000, end = Double(frames) / 16_000
+        let units = [MeetingFinalTextUnit(id: "fractional-word", trackID: track.id, analysisEpochID: epoch,
+            precision: .word, text: "Synthetic", analysisStart: start, analysisEnd: end,
+            speaker: .unassigned, analysisSpanIDs: [], confidence: nil)]
+        let batch = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: fixture.attempt.request.attemptID,
+            epoch: epoch, offset: 0, duration: end, units: units)
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: 100)
+        try timeline.record(sourceStartSample: 0, frameCount: frames, presentationTime: 110)
+        fixture.attempt.sourceTimelines[track.id] = timeline
+        let segment = try XCTUnwrap(batch.segments.first)
+        XCTAssertEqual(segment.end.seconds, 1.001)
+        XCTAssertNil(timeline.mapEndTime(segment.end.seconds), "Rounded UI time exceeds the last measured PCM frame")
+        let partial = try XCTUnwrap(batch.speechPreview(id: UUID()))
+        XCTAssertEqual(partial.start, start)
+        XCTAssertEqual(partial.end, end)
+        let projected = try XCTUnwrap(fixture.attempt.projectedPreview(partial, trackID: track.id))
+        XCTAssertEqual(projected.start, 10 + start, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(projected.end), 10 + end, accuracy: 1e-9)
+
+        let state = try MeetingStreamingTranscriptState(attemptID: fixture.attempt.request.attemptID, track: track,
+            configuration: fixture.attempt.request.configuration, privacyContext: nil)
+        let pending = try await state.observe(.init(batch: batch, activity: [], acceptedThroughSample: frames,
+            processedThroughSample: 0, retainedFromSample: 0, isFinal: false, asrStableThroughSample: frames))
+        XCTAssertTrue(pending.safeBatch.segments.isEmpty, "Delayed attribution still owns this word")
+        let pendingPreview = try XCTUnwrap(pending.safeBatch.livePreview)
+        XCTAssertEqual(pendingPreview.start, start)
+        XCTAssertEqual(pendingPreview.end, end)
+        XCTAssertNoThrow(try fixture.attempt.projectedBatch(pending.safeBatch))
+        await state.cancel()
+
+        var legacy = batch
+        legacy.segments[0].nativeTiming = nil
+        XCTAssertEqual(legacy.speechPreview(id: UUID())?.end, segment.end.seconds,
+            "Legacy observations retain their presentation-time fallback")
+    }
+
+    func testOnlineStreamingFractionalEndpointsFinishBothSourcesWithoutReplay() async throws {
+        let runtime = OnlinePipelineRuntime(usesProductionAssembly: true)
+        let service = OnlinePipelineService()
+        let fixture = try self.onlinePipelineFixture(service: service, runtime: runtime)
+        let tracks = fixture.session.audioTracks
+        let consumers = try await tracks.asyncOnlineMap { track in
+            try await fixture.pipeline.memoryConsumer(for: fixture.session.id, track: track, eventHandler: { _ in })
+        }
+        for consumer in consumers {
+            XCTAssertTrue(consumer.enqueue(try Self.onlinePCM(frames: 16_009, startFrame: 0)))
+        }
+        async let first: Void = consumers[0].finish()
+        async let second: Void = consumers[1].finish()
+        _ = try await (first, second)
+        let result = try await fixture.pipeline.process(session: fixture.publication.session,
+            sessionDirectory: fixture.directory, progress: { _ in })
+        XCTAssertTrue(result.isComplete)
+        XCTAssertEqual(result.segments.count, 6)
+        for track in tracks {
+            let words = result.segments.filter { $0.sourceTrackID == track.id }
+            XCTAssertEqual(try XCTUnwrap(words.last?.nativeTiming?.end), 16_009.0 / 16_000, accuracy: 1e-9)
+        }
+        XCTAssertEqual(service.residencyEntries, service.residencyExits)
+        XCTAssertEqual(runtime.evidence.count("scope-cleaned"), 1)
+        XCTAssertEqual(runtime.evidence.count("replay"), 0)
+    }
+
     func testInRoomStreamingUsesMeasuredCoverageAcrossAResumedSource() async throws {
         let fixture = try self.onlinePipelineFixture(service: OnlinePipelineService(), runtime: OnlinePipelineRuntime(), mode: .inRoom)
         fixture.publication.collectBatches = true
@@ -3770,6 +3852,8 @@ private final nonisolated class OnlinePipelineEvidence: @unchecked Sendable {
 
 private final nonisolated class OnlinePipelineRuntime: MeetingParakeetNemotronRunning, @unchecked Sendable {
     let evidence = OnlinePipelineEvidence()
+    let usesProductionAssembly: Bool
+    init(usesProductionAssembly: Bool = false) { self.usesProductionAssembly = usesProductionAssembly }
     var supportsStreamingPCMProcessing: Bool { true }
     var supportsMultiTrackStreamingPCMProcessing: Bool { true }
     func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws { evidence.record("prepare") }
@@ -3778,7 +3862,8 @@ private final nonisolated class OnlinePipelineRuntime: MeetingParakeetNemotronRu
         body: nonisolated(nonsending) @escaping @Sendable (any MeetingPreparedStreamingPCMProcessing) async throws -> Void) async throws {
         evidence.record("scope-open")
         defer { evidence.record("scope-cleaned") }
-        try await body(OnlinePipelinePrepared(track: trackID, attempt: attemptID, evidence: evidence, progress: onProgress))
+        try await body(OnlinePipelinePrepared(track: trackID, attempt: attemptID, evidence: evidence,
+            usesProductionAssembly: usesProductionAssembly, progress: onProgress))
     }
     func withPreparedStreamingPCMTracks(trackIDs: [UUID], attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
         onProgress: nonisolated(nonsending) @escaping @Sendable (UUID, MeetingStreamingPCMObservation) async throws -> Void,
@@ -3787,6 +3872,7 @@ private final nonisolated class OnlinePipelineRuntime: MeetingParakeetNemotronRu
         defer { evidence.record("scope-cleaned") }
         let sessions = Dictionary(uniqueKeysWithValues: trackIDs.map { track in
             (track, OnlinePipelinePrepared(track: track, attempt: attemptID, evidence: evidence,
+                usesProductionAssembly: usesProductionAssembly,
                 progress: { try await onProgress(track, $0) }) as any MeetingPreparedStreamingPCMProcessing)
         })
         try await body(sessions)
@@ -3805,11 +3891,13 @@ private actor OnlinePipelinePrepared: MeetingPreparedStreamingPCMProcessing {
     let track: UUID
     let attempt: UUID
     let evidence: OnlinePipelineEvidence
+    let usesProductionAssembly: Bool
     let progress: @Sendable (MeetingStreamingPCMObservation) async throws -> Void
     var accepted = 0
-    init(track: UUID, attempt: UUID, evidence: OnlinePipelineEvidence,
+    init(track: UUID, attempt: UUID, evidence: OnlinePipelineEvidence, usesProductionAssembly: Bool,
         progress: @escaping @Sendable (MeetingStreamingPCMObservation) async throws -> Void) {
-        self.track = track; self.attempt = attempt; self.evidence = evidence; self.progress = progress
+        self.track = track; self.attempt = attempt; self.evidence = evidence
+        self.usesProductionAssembly = usesProductionAssembly; self.progress = progress
     }
     func recognize(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
         preview: (nonisolated(nonsending) @Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingStreamingPCMObservation {
@@ -3827,7 +3915,17 @@ private actor OnlinePipelinePrepared: MeetingPreparedStreamingPCMProcessing {
                 attributionState: .unassigned, nativePrecision: .word, nativeUnitID: "\(track)-\(frame)",
                 nativeSpeakerAssignment: .unassigned, nativeTiming: .init(start: start, end: end))
         }
-        let batch = MeetingPCMTranscriptBatch(segments: words)
+        let batch: MeetingPCMTranscriptBatch
+        if usesProductionAssembly {
+            let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+            let units = words.map { word in
+                MeetingFinalTextUnit(id: word.nativeUnitID ?? word.id.uuidString, trackID: track, analysisEpochID: epoch,
+                    precision: .word, text: word.text, analysisStart: word.start.seconds - offset,
+                    analysisEnd: word.end.seconds - offset, speaker: .unassigned, analysisSpanIDs: [], confidence: nil)
+            }
+            batch = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: attempt, epoch: epoch,
+                offset: offset, duration: Double(accepted - start) / 16_000, units: units)
+        } else { batch = MeetingPCMTranscriptBatch(segments: words) }
         if let preview { try await preview(batch) }
         return observation(batch: batch, final: false, asrStable: accepted)
     }
