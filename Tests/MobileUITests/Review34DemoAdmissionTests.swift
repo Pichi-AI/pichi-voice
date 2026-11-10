@@ -73,7 +73,7 @@ final class Review34DemoAdmissionTests: XCTestCase {
         let review = Review34DemoAdmission.reviewRevision
         let beta = Review34DemoAdmission.coreRevision
         XCTAssertTrue(admitted(try proof(revision: review, build: "34", latest: false,
-            purpose: .appleReviewObservedBeta, osVersion: "27.3"), revision: review, os: "27.3"))
+            purpose: .appleReviewObservedBeta, osVersion: "27.3"), os: "27.3", revision: review))
         XCTAssertFalse(admitted(try proof(revision: review, build: "34", latest: true,
             purpose: .appleReviewObservedBeta), revision: review))
         XCTAssertFalse(admitted(try proof(revision: beta, build: "35", latest: false,
@@ -81,7 +81,7 @@ final class Review34DemoAdmissionTests: XCTestCase {
         XCTAssertFalse(admitted(try proof(revision: review, build: "35", latest: false,
             purpose: .appleReviewObservedBeta), revision: review))
         XCTAssertFalse(admitted(try proof(revision: review, build: "34", latest: false,
-            purpose: .appleReviewObservedBeta, osVersion: "27.3"), revision: review, os: "27.2.1"))
+            purpose: .appleReviewObservedBeta, osVersion: "27.3"), os: "27.2.1", revision: review))
     }
     func testCoreVideoAcceptsPinnedPhoneAndPadProof() throws {
         XCTAssertTrue(admitted(try proof()))
