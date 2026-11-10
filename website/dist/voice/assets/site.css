@@ -15,3 +15,20 @@
 
 @media(max-width:1000px) and (min-width:761px){.download-grid{grid-template-columns:1fr}.download-box{gap:20px}}
 @media(max-width:560px){.download-box{grid-template-columns:1fr}}
+
+/* Local synthetic hero demo. Other waveforms and product sections stay static. */
+.product-art[data-voice-demo]{padding-bottom:84px}
+[data-voice-demo] .dictation-pill{bottom:48px}
+[data-voice-demo] .dictation-pill p{display:grid;min-width:0;flex:1}
+[data-voice-demo] [data-demo-full],[data-voice-demo] [data-demo-text]{grid-area:1/1}
+[data-voice-demo] [data-demo-text]{display:none}
+[data-voice-demo][data-demo-ready] [data-demo-full]{opacity:0}
+[data-voice-demo][data-demo-ready] [data-demo-text]{display:block}
+[data-voice-demo] .dictation-pill .wave i{transform-origin:center}
+[data-voice-demo] .art-caption{bottom:0;display:flex;align-items:center;justify-content:center;gap:10px}
+[data-voice-demo] .art-caption>span{min-width:0}
+[data-voice-demo] .demo-toggle{flex-shrink:0;min-height:36px;padding:6px 9px;border:1px solid #cfc5e0;border-radius:7px;background:var(--paper);color:var(--ink);font:inherit;cursor:pointer}
+[data-voice-demo] .demo-toggle[hidden]{display:none}
+[data-voice-demo] .demo-toggle:focus-visible{outline:3px solid #9a7ee4;outline-offset:3px}
+[data-voice-demo] .demo-toggle:disabled{cursor:default;color:var(--muted)}
+@media(prefers-reduced-motion:reduce){[data-voice-demo] .dictation-pill .wave i{transform:none!important}}
