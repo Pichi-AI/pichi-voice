@@ -43,6 +43,18 @@ class PackagingTests(unittest.TestCase):
         self.assertTrue(self.output.exists())
         self.assertEqual(plistlib.loads((self.app / "Contents/Info.plist").read_bytes()), self.info)
 
+    def test_complete_artwork_fits_when_finder_bars_reduce_content_height(self):
+        settings = module.image_settings(self.app, self.root / "background.png")
+        _, (width, height) = settings["window_rect"]
+        # Actual macOS 27 Finder tabs, path and status bars consumed 124 points
+        # and clipped the last installation instruction in the 420-point frame.
+        self.assertGreaterEqual(height - 124, 420)
+        self.assertEqual(width, 640)
+        self.assertEqual(settings["icon_locations"], {
+            "Pichi Voice.app": (160, 205), "Applications": (480, 205),
+        })
+        self.assertEqual(settings["hide_extensions"], [])
+
     def test_never_overwrites_output_or_writes_into_app(self):
         self.output.write_bytes(b"keep")
         with self.assertRaises(ValueError): module.build(self.app, self.output)

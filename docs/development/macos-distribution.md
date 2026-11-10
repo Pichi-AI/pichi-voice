@@ -151,7 +151,9 @@ deep signature, stapled ticket and Gatekeeper assessment before packaging. It
 refuses an existing output, generates a bilingual Retina background, and checks
 the finished image with `hdiutil`. It uses
 [dmgbuild](https://github.com/dmgbuild/dmgbuild) to configure the Finder layout
-without scripting Finder. Dependencies and generated images stay outside Git.
+without scripting Finder. The window reserves 124 points for Finder tabs, path
+and status bars so the complete installation instructions remain visible.
+Dependencies and generated images stay outside Git.
 
 The signed app's file data and metadata must remain unchanged. Do not set
 `hide_extensions` for the app: dmgbuild writes FinderInfo onto the bundle,
