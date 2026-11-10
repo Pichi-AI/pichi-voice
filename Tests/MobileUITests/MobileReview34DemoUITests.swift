@@ -58,6 +58,10 @@ final class MobileReview34DemoUITests: XCTestCase {
                 .map { String($0.identifier.dropFirst("history.session.".count)) }
         }
         let currentIDs = historyIDs()
+        func expectedExistingHistory(_ ids: [String]) -> Bool {
+            coreVideo ? Review34DemoAdmission.knownVisibleHistory(baselineIDs: baselineIDs, visibleIDs: ids)
+                : Set(ids) == Set(baselineIDs)
+        }
         let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
         if coreVideo {
             let proof = try Data(contentsOf: support.appendingPathComponent("CoreFlowVideo/backup-proof.json"))
@@ -73,7 +77,7 @@ final class MobileReview34DemoUITests: XCTestCase {
         let closeLabels = ["Close audio player", "Закрыть аудиоплеер"]
         let transportLabels = ["Pause audio chunk", "Приостановить воспроизведение фрагмента",
                                "Play audio chunk", "Воспроизвести аудиофрагмент"]
-        guard Set(currentIDs) == Set(baselineIDs),
+        guard expectedExistingHistory(currentIDs),
               app.state == .runningForeground, app.alerts.count == 0, app.sheets.count == 0,
               !app.buttons["meeting.stop"].exists, !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
               (coreVideo || Self.recordingAdmission(revision: env["PICHI_TEST_REVISION"], optIn: env["PICHI_REVIEW34_DEMO"],
@@ -204,7 +208,7 @@ final class MobileReview34DemoUITests: XCTestCase {
                 verifiedSignedOut: guest, cancelled: Task.isCancelled)
             else { throw Unverified() }
             try await openHistory()
-            guard Set(historyIDs()) == Set(baselineIDs) else { throw Unverified() }
+            guard expectedExistingHistory(historyIDs()) else { throw Unverified() }
         }
         func paragraph(_ owner: Review34DemoAdmission.PlaybackOwner) -> XCUIElementQuery {
             transcript.firstMatch.descendants(matching: .any).matching(identifier: owner.paragraphID)
@@ -280,7 +284,7 @@ final class MobileReview34DemoUITests: XCTestCase {
             try await verifyRecordingPolicies()
             let start = app.buttons["meeting.start"]
             guard start.waitForExistence(timeout: 20), start.isEnabled, start.isHittable,
-                  Set(historyIDs()) == Set(baselineIDs), app.sliders.count == 0,
+                  expectedExistingHistory(historyIDs()), app.sliders.count == 0,
                   app.buttons.matching(NSPredicate(format: "label IN %@", closeLabels)).count == 0 else { throw Unverified() }
             try Task.checkCancellation()
             ownsRecording = true; start.tap()
@@ -312,7 +316,12 @@ final class MobileReview34DemoUITests: XCTestCase {
             print("[PICHI_REVIEW34_DEMO] saved_transcript_visible=true")
             // Resolve the single new UUID, then reopen exactly that row before binding controls.
             try await openHistory()
-            guard let id = Review34DemoAdmission.newOwnedSessionID(baselineIDs: baselineIDs, historyIDs: historyIDs()) else { throw Unverified() }
+            let visibleIDs = historyIDs()
+            let ownedID = coreVideo
+                ? Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: baselineIDs, visibleIDs: visibleIDs)
+                : Review34DemoAdmission.newOwnedSessionID(baselineIDs: baselineIDs, historyIDs: visibleIDs)
+            guard let id = ownedID else { throw Unverified() }
+            print("[PICHI_REVIEW34_DEMO] owned_session_id=\(id)")
             let rows = app.buttons.matching(identifier: "history.session.\(id)")
             let title = rows.firstMatch.staticTexts.matching(identifier: "history.title.\(id)")
             guard rows.count == 1, rows.firstMatch.isEnabled, rows.firstMatch.isHittable, title.count == 1 else { throw Unverified() }

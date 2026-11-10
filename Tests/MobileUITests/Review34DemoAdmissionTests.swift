@@ -14,6 +14,28 @@ final class Review34DemoAdmissionTests: XCTestCase {
         XCTAssertNil(Review34DemoAdmission.newOwnedSessionID(baselineIDs: [baselineID], historyIDs: [baselineID]))
         XCTAssertNil(Review34DemoAdmission.newOwnedSessionID(baselineIDs: [baselineID], historyIDs: [baselineID, added, added]))
     }
+    func testVirtualizedExistingHistoryAcceptsOnlyUniqueKnownVisibleRows() {
+        let other = "E0000000-0000-4000-8000-000000000003"
+        XCTAssertTrue(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [baselineID, other], visibleIDs: [baselineID]))
+        XCTAssertTrue(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [], visibleIDs: []))
+        XCTAssertFalse(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [baselineID], visibleIDs: []))
+        XCTAssertFalse(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [baselineID], visibleIDs: [other]))
+        XCTAssertFalse(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [baselineID], visibleIDs: [baselineID, baselineID]))
+        XCTAssertFalse(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [baselineID, baselineID], visibleIDs: [baselineID]))
+        XCTAssertFalse(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [baselineID], visibleIDs: ["bad"]))
+    }
+    func testVirtualizedOwnedRecordingRequiresOneNewUUIDAgainstFullBackup() {
+        let added = "E0000000-0000-4000-8000-000000000002"
+        let hidden = "E0000000-0000-4000-8000-000000000003"
+        let foreign = "E0000000-0000-4000-8000-000000000004"
+        XCTAssertEqual(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID, hidden], visibleIDs: [baselineID, added]), added)
+        XCTAssertEqual(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID], visibleIDs: [added]), added)
+        XCTAssertNil(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID], visibleIDs: [baselineID]))
+        XCTAssertNil(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID], visibleIDs: [added, added]))
+        XCTAssertNil(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID], visibleIDs: [added, foreign]))
+        XCTAssertNil(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID, baselineID], visibleIDs: [added]))
+        XCTAssertNil(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID], visibleIDs: ["bad"]))
+    }
     func testPlaybackCannotBindBaselineOrForeignParagraphControls() throws {
         let added = "E0000000-0000-4000-8000-000000000002"
         XCTAssertNil(Review34DemoAdmission.PlaybackOwner(sessionID: baselineID, baselineIDs: [baselineID], paragraphID: "transcript.paragraph.a", audioID: "transcript.audio.a"))
@@ -68,6 +90,20 @@ final class Review34DemoAdmissionTests: XCTestCase {
         XCTAssertFalse(admitted(try JSONSerialization.data(withJSONObject: unknown)))
         unknown["purpose"] = "betaObservedOS"; unknown.removeValue(forKey: "schemaVersion")
         XCTAssertFalse(admitted(try JSONSerialization.data(withJSONObject: unknown)))
+    }
+    func testSupplementalReviewBetaCannotClaimLatestStableOrUseBeta35Binding() throws {
+        let review = Review34DemoAdmission.reviewRevision
+        let beta = Review34DemoAdmission.coreRevision
+        XCTAssertTrue(admitted(try proof(revision: review, build: "34", latest: false,
+            purpose: .appleReviewObservedBeta, osVersion: "27.3"), os: "27.3", revision: review))
+        XCTAssertFalse(admitted(try proof(revision: review, build: "34", latest: true,
+            purpose: .appleReviewObservedBeta), revision: review))
+        XCTAssertFalse(admitted(try proof(revision: beta, build: "35", latest: false,
+            purpose: .appleReviewObservedBeta), revision: beta))
+        XCTAssertFalse(admitted(try proof(revision: review, build: "35", latest: false,
+            purpose: .appleReviewObservedBeta), revision: review))
+        XCTAssertFalse(admitted(try proof(revision: review, build: "34", latest: false,
+            purpose: .appleReviewObservedBeta, osVersion: "27.3"), os: "27.2.1", revision: review))
     }
     func testCoreVideoAcceptsPinnedPhoneAndPadProof() throws {
         XCTAssertTrue(admitted(try proof()))
