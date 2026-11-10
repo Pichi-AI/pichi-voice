@@ -14,6 +14,7 @@ nonisolated enum Review34DemoAdmission {
     static let fixtureSHA = "81998993976a2804d414b261d3af679d49a1b1e08d952bace5ffc31291a392c8"
     enum CoreVideoPurpose: String, Codable {
         case appleReviewLatestStable
+        case appleReviewObservedBeta
         case betaObservedOS
     }
     struct CoreVideoProof: Codable {
@@ -51,6 +52,8 @@ nonisolated enum Review34DemoAdmission {
         switch proof.purpose {
         case .appleReviewLatestStable:
             return proof.revision == reviewRevision && proof.build == "34" && proof.latestOSVerified
+        case .appleReviewObservedBeta:
+            return proof.revision == reviewRevision && proof.build == "34" && !proof.latestOSVerified
         case .betaObservedOS:
             return proof.revision == coreRevision && proof.build == "35"
         }
@@ -94,6 +97,21 @@ nonisolated enum Review34DemoAdmission {
     static func credentialsAreEmpty(value: String?, placeholder: String?) -> Bool {
         guard let value else { return false }
         return value.isEmpty || (placeholder?.isEmpty == false && value == placeholder)
+    }
+
+    static func knownVisibleHistory(baselineIDs: [String], visibleIDs: [String]) -> Bool {
+        guard uniqueIDs(baselineIDs), uniqueIDs(visibleIDs) else { return false }
+        let baseline = Set(baselineIDs.compactMap(UUID.init(uuidString:)))
+        let visible = Set(visibleIDs.compactMap(UUID.init(uuidString:)))
+        return visible.isSubset(of: baseline) && (baseline.isEmpty || !visible.isEmpty)
+    }
+    // A virtualized List need not expose every baseline row. The parent must
+    // verify all persisted baseline IDs/files independently after the owned run.
+    static func newOwnedVisibleSessionID(baselineIDs: [String], visibleIDs: [String]) -> String? {
+        guard uniqueIDs(baselineIDs), uniqueIDs(visibleIDs) else { return nil }
+        let added = Set(visibleIDs.compactMap(UUID.init(uuidString:)))
+            .subtracting(baselineIDs.compactMap(UUID.init(uuidString:)))
+        return added.count == 1 ? added.first?.uuidString : nil
     }
 
     /// A saved recording is owned only after the unchanged baseline gains exactly one UUID.
