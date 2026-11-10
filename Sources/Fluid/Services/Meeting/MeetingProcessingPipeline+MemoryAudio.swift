@@ -642,7 +642,10 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
             case .invalidPCM: kind = "invalid_pcm"
             case .invalidBudget: kind = "invalid_budget"
             case .timelineDiscontinuity: kind = "timeline_discontinuity"
-            case nil: kind = String(reflecting: type(of: error))
+            case nil:
+                if let timelineFailure = error as? MeetingPCMSourceTimeline.Failure {
+                    kind = "source_timeline_\(timelineFailure.rawValue)"
+                } else { kind = String(reflecting: type(of: error)) }
             }
             self.diagnostic("stopped errorKind=\(kind) pendingFrames=\(pending.0) queuedWindows=\(pending.1) budgetFrames=\(self.maximumPendingFrames)")
             self.failure(error)

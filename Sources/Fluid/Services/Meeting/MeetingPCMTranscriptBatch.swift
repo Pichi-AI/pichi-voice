@@ -95,8 +95,10 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
         let ordered = segments.sorted { $0.start < $1.start }
         return ordered.first.map {
             MeetingLivePartial(id: id, text: ordered.map(\.text).joined(separator: " "),
-                start: $0.start.seconds,
-                end: permitsSpeechPreviewCoverage ? ordered.map { $0.end.seconds }.max() : nil)
+                // This still belongs to the compact inference clock. Presentation
+                // timestamps can be rounded outside the last admitted PCM frame.
+                start: $0.nativeTiming?.start ?? $0.start.seconds,
+                end: permitsSpeechPreviewCoverage ? ordered.map { $0.nativeTiming?.end ?? $0.end.seconds }.max() : nil)
         }
     }
 
