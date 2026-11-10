@@ -53,7 +53,8 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
         copy.livePreview = nil
         if let id = provisionalPreviewID, let text = projection.provisionalText, !text.isEmpty,
            let first = batch.segments.filter({ provisionalSegmentIDs.contains($0.id) }).min(by: { $0.start < $1.start }) {
-            copy.livePreview = .init(id: id, text: text, start: first.start.seconds, end: projection.provisionalEnd)
+            copy.livePreview = .init(id: id, text: text,
+                start: first.nativeTiming?.start ?? first.start.seconds, end: projection.provisionalEnd)
             copy.livePreview?.containsPrivacyReplacement = projection.segments.contains {
                 provisionalSegmentIDs.contains($0.id) && $0.containsPrivacyReplacement == true
             }
@@ -219,7 +220,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                     provisionalSegmentIDs.contains(segments[$0].id)
                         && projected.provisionalCompleteKeys.contains($0)
                         && !(preview[$0] ?? "").isEmpty
-                }.map { segments[$0].end.seconds }.max()
+                }.map { segments[$0].nativeTiming?.end ?? segments[$0].end.seconds }.max()
             }
         }
         return .init(segments: copy, provisionalText: provisionalText, provisionalEnd: provisionalEnd)
@@ -967,7 +968,7 @@ actor MeetingTranscriptPrivacyContext {
         var admitted: [MeetingTranscriptSegment] = []
         var position = 0
         var clippedAudioCoverage = false
-        var completeSourceEnd = pending.filter { !$0.text.isEmpty }.map { $0.end.seconds }.max()
+        var completeSourceEnd = pending.filter { !$0.text.isEmpty }.map { $0.nativeTiming?.end ?? $0.end.seconds }.max()
         for segment in ordered {
             let count = segment.text.utf16.count
             if position < stableCount {
@@ -978,7 +979,9 @@ actor MeetingTranscriptPrivacyContext {
                 copy.originalText = nil
                 if !copy.text.isEmpty {
                     admitted.append(copy)
-                    if admittedCount == count { completeSourceEnd = max(completeSourceEnd ?? 0, segment.end.seconds) }
+                    if admittedCount == count {
+                        completeSourceEnd = max(completeSourceEnd ?? 0, segment.nativeTiming?.end ?? segment.end.seconds)
+                    }
                 }
                 if admittedCount < count { clippedAudioCoverage = true }
             }

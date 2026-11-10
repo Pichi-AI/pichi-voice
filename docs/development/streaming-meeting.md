@@ -50,6 +50,9 @@ flowchart TD
 
 * Capture uses one monotonic sample clock. Native word timestamps retain their original
   values and identities. An ASR window identity differs from the continuous speaker epoch.
+  Transient previews, including privacy-approved and attribution-held words, use those
+  native bounds until source-clock projection. Rounded presentation timestamps can lie
+  outside admitted PCM at a pause and must not feed the source timeline.
 * The logical stages run concurrently with capture, while expensive inference operations
   run cooperatively in sequence. Two independent tasks must not compete for model residency.
 * A prepared ASR session and one diarizer remain inside their original resource scopes.
