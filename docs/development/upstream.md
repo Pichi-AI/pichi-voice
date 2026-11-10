@@ -2,13 +2,13 @@
 
 ## Starting point
 
-Pichi Voice starts from FluidVoice commit `7daffb529fb9f7c8d075f686a2d3da34695a66e4`, dated October 6, 2026. Development begins in a private, independent repository. It can later become public without discarding the commit history or the upstream relationship maintained by Git.
+Pichi Voice started from FluidVoice commit `7daffb529fb9f7c8d075f686a2d3da34695a66e4`, dated October 6, 2026, in an independent development repository. Public packaging preserves the commit history and the upstream relationship maintained by Git. Product-facing instructions live in the [Pichi Voice README](../../README.md) and [user guide](../product/user-guide.md).
 
 The repository preserves [GPL-3.0](../../LICENSE) and upstream copyright notices. A private development repository does not change the source license. Before distribution, review the obligations for the app and the separate licenses for weights, runtimes, and datasets. The public FluidVoice repository does not contain the private Fluid Intelligence runtime described in its README.
 
 ## Small downstream changes
 
-The target is FluidVoice with Pichi branding, additional Russian speech models, custom dictionaries, and selected features. Keep the downstream changes narrow so upstream fixes remain practical to merge.
+Pichi Voice extends the upstream contracts with its product identity, mobile and local meeting workflows, additional Russian speech models and custom dictionaries. Keep the downstream changes narrow so upstream fixes remain practical to merge.
 
 ```mermaid
 flowchart LR
