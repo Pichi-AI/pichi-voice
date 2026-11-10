@@ -24,11 +24,11 @@ Compatible speech models support Russian and English. Other languages, speed and
 
 | Platform | Requirements | Distribution |
 | --- | --- | --- |
-| Mac | macOS 15 or later; the current packaged build targets Apple Silicon | Public installer preparation is in progress. See [release availability](https://github.com/Pichi-AI/pichi-voice/releases) |
+| Mac | macOS 15 or later; the current packaged build targets Apple Silicon | [Download the notarized Mac ZIP](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B65-public.1/Pichi-Voice-0.1.0-65-macos-arm64.zip) |
 | iPhone | iOS 17 or later; memory and storage for the selected model | Public App Store release is awaiting Apple review |
 | iPad | iPadOS 17 or later; memory and storage for the selected model | Public App Store release is awaiting Apple review |
 
-TestFlight and development packages are separate from a public App Store release or a notarized Mac installer. Download links will be enabled on the product page as each public package becomes available.
+TestFlight and development packages are separate from a public App Store release or a notarized Mac installer. The Mac download is available now. Public mobile download links will appear after Apple release approval.
 
 ## Get started
 
