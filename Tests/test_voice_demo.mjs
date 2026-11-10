@@ -448,3 +448,23 @@ test('incomplete markup safely retains the static example with no scheduled work
 test('English root remains identical to the voice route', () => {
   assert.equal(readHero('index.html').html, readHero('voice/index.html').html);
 });
+
+test('manual navigation before the first intersection wins over autoplay', () => {
+  let state = createController(0);
+  state = advanceController(state, { type: 'list' }, 10);
+  assert.equal(state.view, 'list');
+  state = advanceController(state, { type: 'viewport', value: true }, 20);
+  assert.equal(state.view, 'list');
+  assert.equal(isRunning(state), false);
+});
+
+test('a clicked replay waits for the first viewport observation instead of being discarded', () => {
+  let state = createController(0);
+  state = advanceController(state, { type: 'replay' }, 10);
+  assert.equal(state.elapsed, 0);
+  assert.equal(isRunning(state), false);
+  state = advanceController(state, { type: 'viewport', value: true }, 100);
+  assert.equal(isRunning(state), true);
+  state = advanceController(state, { type: 'tick' }, 200);
+  assert.equal(state.elapsed, 100);
+});

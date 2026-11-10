@@ -39,7 +39,7 @@ export function advanceController(state, event, now) {
     next.view = 'transcript';
     next.elapsed = 0;
     next.playing = true;
-    if (next.hidden || next.reducedMotion || !next.pageActive || !next.inViewport) finish();
+    if (next.hidden || next.reducedMotion || !next.pageActive) finish();
   };
   if (event.type === 'visibility') { next.hidden = event.value; if (event.value) finish(); }
   if (event.type === 'page') { next.pageActive = event.value; if (!event.value) finish(); }
@@ -48,7 +48,7 @@ export function advanceController(state, event, now) {
     next.inViewport = event.value;
     if (!event.value) finish();
   }
-  if (event.type === 'list') { next.view = 'list'; finish(); }
+  if (event.type === 'list') { next.played = true; next.view = 'list'; finish(); }
   if (event.type === 'select') { next.selected = event.index; start(); }
   if (event.type === 'replay') start();
   if (!next.played && next.inViewport && !next.hidden && next.pageActive) start();
