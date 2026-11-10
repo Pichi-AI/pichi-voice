@@ -88,6 +88,12 @@ class Element extends Target {
   }
   setAttribute(key, value) { this.attrs[key] = value; }
   removeAttribute(key) { delete this.attrs[key]; }
+  focus(options) {
+    if (!('tabindex' in this.attrs) && !['button', 'input', 'a'].includes(this.tag)) return;
+    for (let node = this; node; node = node.parentElement) assert.equal(node.hidden, false, 'Focus destination must be visible');
+    this.ownerDocument.activeElement = this;
+    this.focusOptions = options;
+  }
   get textContent() { return this.children.map(child => typeof child === 'string' ? child : child.textContent).join(''); }
   set textContent(text) { this.children = [text]; }
   replaceChildren(...children) { this.children = children; }
@@ -127,6 +133,7 @@ function readHero(route) {
     const attrs = Object.fromEntries([...token.matchAll(/([\w-]+)(?:="([^"]*)")?/gu)].slice(1)
       .map(([, key, value]) => [key, value ?? '']));
     const node = new Element(tag, attrs);
+    node.parentElement = stack.at(-1);
     stack.at(-1).children.push(node);
     if (!['img', 'br'].includes(tag)) stack.push(node);
   }
@@ -139,6 +146,11 @@ function browser(route = 'voice/index.html', { reduced = false, hidden = false, 
   document.hidden = hidden;
   document.createElement = tag => new Element(tag);
   root.ownerDocument = document;
+  const bindDocument = node => {
+    node.ownerDocument = document;
+    node.children.filter(child => typeof child !== 'string').forEach(bindDocument);
+  };
+  bindDocument(root);
   const window = new Target();
   const motion = new Target();
   motion.matches = reduced;
@@ -327,11 +339,16 @@ for (const route of ['index.html', 'voice/index.html', 'ru/voice/index.html']) {
     assert.equal(b.transcript.hidden, true);
     assert.equal(b.frames.size, 0);
     b.choices.forEach((choice, index) => {
+      choice.focus();
+      assert.equal(b.document.activeElement, choice);
       choice.emit('click');
       assert.equal(b.list.hidden, true);
       assert.equal(b.transcript.hidden, false);
       assert.equal(b.conversations[index].hidden, false);
       assert.equal(b.conversations[1 - index].hidden, true);
+      const heading = b.conversations[index].querySelector('h3');
+      assert.equal(b.document.activeElement, heading);
+      assert.deepEqual(heading.focusOptions, { preventScroll: true });
       b.step((index + 1) * 5000);
       assert.deepEqual(b.shown(index), b.full(index));
       assert.equal(b.frames.size, 0);

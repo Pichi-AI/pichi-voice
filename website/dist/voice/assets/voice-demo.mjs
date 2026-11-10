@@ -152,7 +152,10 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
 
   listen(play, 'click', () => update({ type: 'replay' }));
   listen(recordings, 'click', () => update({ type: 'list' }));
-  choices.forEach((choice, index) => listen(choice, 'click', () => update({ type: 'select', index })));
+  choices.forEach((choice, index) => listen(choice, 'click', () => {
+    update({ type: 'select', index });
+    conversations[index].querySelector('h3')?.focus({ preventScroll: true });
+  }));
   listen(document, 'visibilitychange', () => update({ type: 'visibility', value: document.hidden }));
   listen(motion, 'change', event => update({ type: 'motion', value: event.matches }));
   listen(window, 'pagehide', event => { if (event.persisted) update({ type: 'page', value: false }); else destroy(); });
