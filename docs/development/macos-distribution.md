@@ -1,19 +1,23 @@
 # macOS distribution
 
-The primary Mac download is a standard native macOS PKG installer. Its normal
-Installer steps, administrator authorization, progress and summary install
-Pichi Voice into `/Applications/Pichi Voice.app`, then attempt to open it for
-the current console user. Native English/Russian welcome and conclusion pages
-use Pichi purple `#6749c1`, cream and the genuine website Pichi icon. The system
-owns navigation, keyboard access and accessibility; instructions are selectable
-HTML text, not text painted into the decorative background.
+The primary Mac download is a standard drag-install DMG. Open the image, drag
+Pichi Voice to Applications, and open the app. The Finder layout uses a quiet
+light background, Pichi colors, the genuine app icon and the standard
+Applications icon. There is no separate Installer wizard or installation script.
+macOS controls access to the destination folder; do not promise that every
+machine can write to Applications without authorization.
 
-The existing app's first-run onboarding owns permissions, local model setup and
+The app's existing onboarding owns permissions, local model setup and
 configuration. Packaging never resets onboarding or settings, writes user data,
-downloads models, or adds credentials to the payload. A drag-install DMG remains
-an optional alternative.
+downloads models, or adds credentials to the payload. Existing installations can
+replay setup through Help > Replay onboarding without deleting their data or
+resetting macOS permissions. Keep a verified backup before reinstall acceptance.
 
-## Create the primary PKG
+A signed PKG remains an optional distribution format. It requires administrator
+authorization and uses the native Installer steps. Its resources and scripts
+remain maintained below for that separate use case.
+
+## Create an optional PKG
 
 Start with the frozen Developer ID Application-signed, notarized and stapled
 app. Do not rebuild, re-sign or modify it merely to change the download
@@ -107,7 +111,7 @@ installation and first-run acceptance in an isolated environment, plus outer
 PKG signing/notarization, remain separate release checks. Archive inspection and
 offline script tests do not establish those outcomes.
 
-## Create an optional disk image
+## Create the primary disk image
 
 Start with the frozen Developer ID-signed, notarized and stapled app. Do not
 rebuild or re-sign it merely to change the download container.

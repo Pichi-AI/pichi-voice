@@ -24,15 +24,15 @@
 
 | Платформа | Требования | Загрузка |
 | --- | --- | --- |
-| macOS | macOS 15 или новее; Apple Silicon | [Скачать установщик для Mac](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B66-public.1/Pichi-Voice-0.1.0-66-macos-arm64.pkg) |
+| macOS | macOS 15 или новее; Apple Silicon | [Скачать установщик для Mac](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B66-public.1/Pichi-Voice-0.1.0-66-macos-arm64.dmg) |
 | Windows | - | Coming Soon |
 | iOS (iPhone / iPad) | iOS / iPadOS 17 или новее; память и место для выбранной модели | Coming Soon |
 | Android | - | Coming Soon |
 
 ## Начало работы
 
-1. [Скачайте установщик для Mac](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B66-public.1/Pichi-Voice-0.1.0-66-macos-arm64.pkg) для Apple Silicon и macOS 15 или новее.
-2. Откройте установщик и следуйте подсказкам. Он установит Pichi Voice в «Программы» и откроет приложение.
+1. [Скачайте установщик для Mac](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B66-public.1/Pichi-Voice-0.1.0-66-macos-arm64.dmg) для Apple Silicon и macOS 15 или новее.
+2. Откройте образ диска и перетащите Pichi Voice в «Программы». Запустите Pichi Voice из «Программ».
 3. Пройдите первоначальную настройку, когда Pichi Voice откроется. Разрешите микрофон, Accessibility для ввода в другие приложения и запись экрана/системного аудио для компьютерного звука.
 4. Выберите и загрузите модель для своего языка, пока есть интернет.
 5. Сделайте короткую диктовку или запись и проверьте результат.

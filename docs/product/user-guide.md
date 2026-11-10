@@ -4,7 +4,7 @@
 
 ## Prepare
 
-[Download Pichi Voice for Mac](https://pichi.ai/voice#download), open the installer and follow its steps. After installation, Pichi Voice opens for initial setup. Existing recordings and settings are preserved.
+[Download Pichi Voice for Mac](https://pichi.ai/voice#download), open the disk image, and drag Pichi Voice to Applications. Open it from Applications to start guided setup. Existing recordings and settings are preserved.
 
 The current Mac package targets Apple Silicon and macOS 15 or later. Mobile builds target iOS/iPadOS 17 or later. Models have additional memory, storage and language requirements. Complete model downloads while online and try a short recording before relying on offline use.
 
@@ -47,3 +47,9 @@ Open a saved session in Recordings to read its transcript and play retained audi
 | Wrong word or speaker | Correct the result and check model/language selection |
 
 Follow the [support guide](../../SUPPORT.md) if the problem remains. Do not post private audio or unredacted diagnostics.
+
+## Repeat the initial setup
+
+Open Help at the bottom of the sidebar and choose Replay onboarding. The setup steps appear again. Recordings, dictionary, voice profile, downloaded models and other preferences stay in place. Existing macOS permissions remain granted.
+
+To check reinstallation, quit the app, drag it from the DMG to Applications again, and open it. Then replay onboarding from Help. You do not need to remove data folders or run a cleanup script. Keep a backup of your data before this check.
