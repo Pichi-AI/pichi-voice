@@ -338,3 +338,7 @@ builds/
 !/website/dist/voice/assets/pichi.png
 !/website/dist/voice/assets/site.css
 !/website/dist/voice/assets/voice-demo.mjs
+
+# Official service marks used only to identify conferencing applications
+!/website/dist/voice/assets/services/
+!/website/dist/voice/assets/services/*

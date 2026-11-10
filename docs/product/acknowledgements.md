@@ -22,3 +22,7 @@ Model weights are obtained separately. Their publisher names, licenses and sourc
 Use the exact source revision and source archive identified in each binary release's notes. The development branch may have changed since that binary was built. Source packages include applicable license files, dependency lockfiles and build instructions; they exclude personal data, signing keys and model weights.
 
 Inherited technical names remain where they form build, storage, localization or compatibility contracts. They are not a claim that the Pichi distribution is the upstream product.
+
+## Conferencing service marks
+
+Service logos on the product website identify the applications discussed. They remain the property of their respective owners and do not imply endorsement. [Image provenance](../../website/dist/voice/assets/services/NOTICE.json) records the official pages, original assets and verification hashes. The website code license does not relicense these marks.

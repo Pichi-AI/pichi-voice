@@ -60,3 +60,5 @@
 [data-voice-demo] .utterance{padding-top:10px;margin-top:10px}
 [data-voice-demo] .art-caption{display:block}
 @media(max-width:420px){[data-voice-demo] .window-body{grid-template-columns:88px 1fr}[data-voice-demo] .transcript{padding-inline:12px}[data-voice-demo] .demo-toolbar{margin-bottom:14px}[data-voice-demo] .side-logo{font-size:.58rem}}
+
+.service{display:inline-flex;align-items:center;gap:9px}.service img{width:24px;height:24px;object-fit:contain;border-radius:4px;flex-shrink:0}
