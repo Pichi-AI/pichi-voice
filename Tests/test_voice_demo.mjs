@@ -511,3 +511,40 @@ test('restoring one lifecycle condition never bypasses another suspension', () =
   assert.deepEqual(b.shown(0), ['', '', '']);
   b.destroy();
 });
+
+
+function exposedToAssistiveReading(element) {
+  for (let node = element; node; node = node.parentElement) {
+    if (node.hidden || node.style.visibility === 'hidden' || node.attrs['aria-hidden'] === 'true') return false;
+  }
+  return true;
+}
+
+for (const route of ['index.html', 'voice/index.html', 'ru/voice/index.html']) {
+  test(`${route}: complete accessible transcript stays stable across loops and selection`, () => {
+    const b = browser(route);
+    const accessible = b.conversations.map(conversation => conversation.querySelector('[data-demo-accessible]'));
+    const expected = accessible.map(node => node.textContent);
+    const assertReading = selected => {
+      accessible.forEach((node, index) => {
+        assert.equal(exposedToAssistiveReading(node), index === selected);
+        assert.equal(node.textContent, expected[index]);
+        b.full(index).forEach(text => assert.ok(node.textContent.includes(text)));
+      });
+      b.conversations[selected].querySelectorAll('[data-demo-turn]').forEach(row => {
+        assert.equal(exposedToAssistiveReading(row), false, 'Animated words and participants are decorative');
+      });
+      assert.equal(exposedToAssistiveReading(b.pill), false);
+    };
+    assertReading(0);
+    b.enter(); assertReading(0);
+    b.step(DEMO_DURATION); assertReading(0);
+    b.step(DEMO_DURATION + COMPLETED_PAUSE); assertReading(0);
+    b.recordings.emit('click');
+    assert.ok(accessible.every(node => !exposedToAssistiveReading(node)));
+    b.choices[1].emit('click'); assertReading(1);
+    b.step(2 * DEMO_DURATION + COMPLETED_PAUSE); assertReading(1);
+    b.step(2 * (DEMO_DURATION + COMPLETED_PAUSE)); assertReading(1);
+    b.destroy(); assertReading(0);
+  });
+}

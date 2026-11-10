@@ -18,7 +18,7 @@ The illustrated meeting text is synthetic and is not a screenshot or performance
 
 ## Hero animation and focused checks
 
-The EN preview entry point stays byte-identical to `/voice/`. EN and RU use the same local demo adapter. The hero automatically streams a selected recording, holds the completed text for three seconds, then resets and repeats. The completed hold uses a timer instead of animation frames. Recordings opens the two synthetic entries; selection resets the loop and moves keyboard focus to the visible transcript heading. Settings is static. There are no replay or pause controls.
+The EN preview entry point stays byte-identical to `/voice/`. EN and RU use the same local demo adapter. The hero automatically streams a selected recording, holds the completed text for three seconds, then resets and repeats. The completed hold uses a timer instead of animation frames. Recordings opens the two synthetic entries; selection resets the loop and moves keyboard focus to the visible transcript heading. Settings is static. There are no replay or pause controls. Each selected conversation has a complete, stable visually hidden transcript for assistive reading; animated rows and the duplicate floating text are decorative.
 
 Viewport exit, hidden documents and persisted `pagehide` cancel pending work and show the complete transcript. Returning to a visible, active viewport starts the selected recording again. Reduced motion and missing or failed viewport observation keep complete static transcripts. Unmount and terminal `pagehide` release the timer, frame, observer and listeners and restore static HTML. Nothing accesses a microphone, audio device or network.
 
