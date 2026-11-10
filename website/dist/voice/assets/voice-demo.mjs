@@ -1,42 +1,58 @@
-// Synthetic, local-only hero animation. No audio input or external services.
-export function createTimeline(text, barCount = 19) {
-  let cursor = 450;
-  const words = text.trim().split(/\s+/u).filter(Boolean).map(text => {
-    const duration = 260 + Math.min(text.length, 10) * 18;
-    const word = { text, at: cursor, duration };
-    cursor += duration + (/[.!?]$/u.test(text) ? 420 : /[,;:]$/u.test(text) ? 230 : 90);
-    return word;
-  });
-  return { words, barCount, speechEnd: cursor, cycle: cursor + 2500 };
+// Synthetic local examples only. No microphone, audio, network or user data.
+export const DEMO_DURATION = 4800;
+
+export function createTimeline(turns, barCount = 19) {
+  const texts = Array.isArray(turns) ? turns : [turns];
+  const tokens = texts.flatMap((text, turn) => text.trim().split(/\s+/u).filter(Boolean).map(text => ({ text, turn })));
+  const slot = 4000 / Math.max(1, tokens.length);
+  const words = tokens.map((word, index) => ({ ...word, at: 200 + index * slot, duration: slot * 0.85 }));
+  return { words, texts, barCount, duration: DEMO_DURATION };
 }
 
 export function sampleDemo(timeline, elapsed, reducedMotion = false) {
-  const time = Math.max(0, Number.isFinite(elapsed) ? elapsed : 0) % timeline.cycle;
-  const visibleWords = reducedMotion ? timeline.words.length : timeline.words.filter(word => time >= word.at).length;
+  const time = reducedMotion ? timeline.duration : Math.max(0, Number.isFinite(elapsed) ? elapsed : 0);
+  const visibleWords = timeline.words.filter(word => time >= word.at).length;
   const speaking = timeline.words.find(word => time >= word.at && time < word.at + word.duration);
-  const envelope = speaking && !reducedMotion
-    ? Math.sin(Math.PI * (time - speaking.at) / speaking.duration) ** 2 : 0;
-  const scales = Array.from({ length: timeline.barCount }, (_, index) => reducedMotion ? 1
-    : 0.14 + 0.86 * envelope * (0.35 + 0.65 * Math.sin(time / 115 + index * 0.83) ** 2));
-  return { visibleWords, scales };
-}
-
-export function isRunning(state) {
-  return !state.paused && !state.hidden && !state.reducedMotion && state.pageActive;
+  const envelope = speaking ? Math.sin(Math.PI * (time - speaking.at) / speaking.duration) ** 2 : 0;
+  const scales = Array.from({ length: timeline.barCount }, (_, index) =>
+    0.14 + 0.86 * envelope * (0.35 + 0.65 * Math.sin(time / 115 + index * 0.83) ** 2));
+  const turn = timeline.words[Math.max(0, visibleWords - 1)]?.turn ?? 0;
+  return { visibleWords, turn, scales,
+    turns: timeline.texts.map((_, index) => timeline.words.slice(0, visibleWords).filter(word => word.turn === index).length) };
 }
 
 export function createController(now, { hidden = false, reducedMotion = false } = {}) {
-  return { elapsed: 0, last: now, paused: false, hidden, reducedMotion, pageActive: true };
+  return { elapsed: DEMO_DURATION, last: now, hidden, reducedMotion, pageActive: true,
+    inViewport: false, played: reducedMotion, playing: false, selected: 0, view: 'transcript' };
 }
 
-// Pure transition: account for time under the previous state before changing it.
+export function isRunning(state) {
+  return state.playing && !state.hidden && !state.reducedMotion && state.pageActive && state.inViewport;
+}
+
 export function advanceController(state, event, now) {
-  const elapsed = state.elapsed + (isRunning(state) ? Math.max(0, now - state.last) : 0);
-  const next = { ...state, elapsed, last: now };
-  if (event.type === 'pause') next.paused = event.value;
-  if (event.type === 'visibility') next.hidden = event.value;
-  if (event.type === 'motion') next.reducedMotion = event.value;
-  if (event.type === 'page') next.pageActive = event.value;
+  const next = { ...state, last: now,
+    elapsed: Math.min(DEMO_DURATION, state.elapsed + (isRunning(state) ? Math.max(0, now - state.last) : 0)) };
+  const finish = () => { next.elapsed = DEMO_DURATION; next.playing = false; };
+  const start = () => {
+    next.played = true;
+    next.view = 'transcript';
+    next.elapsed = 0;
+    next.playing = true;
+    if (next.hidden || next.reducedMotion || !next.pageActive || !next.inViewport) finish();
+  };
+  if (event.type === 'visibility') { next.hidden = event.value; if (event.value) finish(); }
+  if (event.type === 'page') { next.pageActive = event.value; if (!event.value) finish(); }
+  if (event.type === 'motion') { next.reducedMotion = event.value; if (event.value) { next.played = true; finish(); } }
+  if (event.type === 'viewport') {
+    next.inViewport = event.value;
+    if (!event.value) finish();
+  }
+  if (event.type === 'list') { next.view = 'list'; finish(); }
+  if (event.type === 'select') { next.selected = event.index; start(); }
+  if (event.type === 'replay') start();
+  if (!next.played && next.inViewport && !next.hidden && next.pageActive) start();
+  if (next.elapsed >= DEMO_DURATION) finish();
   return next;
 }
 
@@ -44,45 +60,61 @@ const mounted = new WeakMap();
 
 export function mountVoiceDemo(root, { window = globalThis.window, document = root.ownerDocument } = {}) {
   if (mounted.has(root)) return mounted.get(root);
-  const full = root.querySelector('[data-demo-full]');
-  const visual = root.querySelector('[data-demo-text]');
-  const button = root.querySelector('[data-demo-toggle]');
+  const conversations = [...root.querySelectorAll('[data-demo-conversation]')];
+  const play = root.querySelector('[data-demo-play]');
+  const recordings = root.querySelector('[data-demo-recordings]');
+  const choices = [...root.querySelectorAll('[data-demo-recording]')];
+  const transcript = root.querySelector('[data-demo-transcript]');
+  const list = root.querySelector('[data-demo-list]');
+  const pill = root.querySelector('[data-demo-pill]');
   const bars = [...root.querySelectorAll('.dictation-pill .wave i')];
-  if (!full || !visual || !button || !bars.length || !window?.requestAnimationFrame) return () => {};
-
-  const timeline = createTimeline(full.textContent, bars.length);
-  const words = timeline.words.map(({ text }) => {
-    const span = document.createElement('span');
-    span.textContent = `${text} `;
-    return span;
-  });
-  visual.replaceChildren(...words);
+  if (!conversations.length || !play || !recordings || choices.length !== conversations.length || !transcript || !list || !pill || !bars.length || !window?.requestAnimationFrame) return () => {};
+  const groups = conversations.map(conversation => [...conversation.querySelectorAll('[data-demo-turn]')].map(row => ({
+    row, full: row.querySelector('[data-demo-full]'), visual: row.querySelector('[data-demo-text]'),
+  })));
+  if (groups.some(group => !group.length || group.some(row => !row.full || !row.visual))) return () => {};
+  const timelines = groups.map(group => createTimeline(group.map(({ full }) => full.textContent), bars.length));
+  groups.forEach((group, index) => group.forEach((row, turn) => {
+    row.words = timelines[index].words.filter(word => word.turn === turn).map(({ text }) => {
+      const span = document.createElement('span');
+      span.textContent = `${text} `;
+      return span;
+    });
+    row.visual.replaceChildren(...row.words);
+  }));
   const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const now = () => window.performance.now();
   let state = createController(now(), { hidden: document.hidden, reducedMotion: motion.matches });
   let frame = null;
+  let observer = null;
   let destroyed = false;
-  let previousCount = -1;
+  const originalPill = pill.textContent;
   const originalTransforms = bars.map(bar => bar.style.transform);
+  const listeners = [];
+  const listen = (target, type, listener) => {
+    target.addEventListener(type, listener);
+    listeners.push(() => target.removeEventListener(type, listener));
+  };
 
   function render() {
+    const timeline = timelines[state.selected];
     const sample = sampleDemo(timeline, state.elapsed, state.reducedMotion);
-    if (sample.visibleWords !== previousCount) {
-      words.forEach((word, index) => { word.style.visibility = index < sample.visibleWords ? 'visible' : 'hidden'; });
-      previousCount = sample.visibleWords;
-    }
+    conversations.forEach((conversation, index) => { conversation.hidden = index !== state.selected; });
+    groups[state.selected].forEach(({ row, words }, index) => {
+      row.style.visibility = sample.turns[index] ? 'visible' : 'hidden';
+      words.forEach((word, at) => { word.style.visibility = at < sample.turns[index] ? 'visible' : 'hidden'; });
+    });
+    pill.textContent = timeline.words.slice(0, sample.visibleWords).filter(word => word.turn === sample.turn).map(word => word.text).join(' ') || '\u00a0';
     bars.forEach((bar, index) => { bar.style.transform = `scaleY(${sample.scales[index]})`; });
-    button.disabled = state.reducedMotion;
-    button.textContent = state.reducedMotion ? button.dataset.staticLabel
-      : state.paused ? button.dataset.resumeLabel : button.dataset.pauseLabel;
-    button.setAttribute('aria-pressed', String(state.paused));
-    root.dataset.demoMotion = state.reducedMotion ? 'static' : 'animated';
+    transcript.hidden = state.view !== 'transcript';
+    list.hidden = state.view !== 'list';
+    recordings.setAttribute('aria-expanded', String(state.view === 'list'));
+    root.dataset.demoMotion = isRunning(state) ? 'animated' : 'static';
   }
 
   function schedule() {
     if (!destroyed && isRunning(state) && frame === null) frame = window.requestAnimationFrame(tick);
   }
-
   function tick(time) {
     frame = null;
     if (destroyed) return;
@@ -90,7 +122,6 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
     render();
     schedule();
   }
-
   function update(event) {
     if (destroyed) return;
     state = advanceController(state, event, now());
@@ -99,46 +130,53 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
     render();
     schedule();
   }
-
-  const onToggle = () => update({ type: 'pause', value: !state.paused });
-  const onVisibility = () => update({ type: 'visibility', value: document.hidden });
-  const onMotion = event => update({ type: 'motion', value: event.matches });
-  const onPageHide = event => {
-    if (!event.persisted) destroy();
-    else update({ type: 'page', value: false });
-  };
-  const onPageShow = () => update({ type: 'page', value: true });
-
   function destroy() {
     if (destroyed) return;
     destroyed = true;
     if (frame !== null) window.cancelAnimationFrame(frame);
     frame = null;
-    button.removeEventListener('click', onToggle);
-    document.removeEventListener('visibilitychange', onVisibility);
-    motion.removeEventListener('change', onMotion);
-    window.removeEventListener('pagehide', onPageHide);
-    window.removeEventListener('pageshow', onPageShow);
+    observer?.disconnect();
+    listeners.forEach(remove => remove());
     delete root.dataset.demoReady;
     delete root.dataset.demoMotion;
-    button.hidden = true;
-    button.disabled = false;
-    button.removeAttribute('aria-pressed');
+    play.hidden = recordings.hidden = true;
+    recordings.removeAttribute('aria-expanded');
+    transcript.hidden = false;
+    list.hidden = true;
+    conversations.forEach((conversation, index) => { conversation.hidden = index !== 0; });
+    groups.forEach(group => group.forEach(({ row, visual }) => { row.style.visibility = ''; visual.replaceChildren(); }));
     bars.forEach((bar, index) => { bar.style.transform = originalTransforms[index]; });
-    visual.replaceChildren();
+    pill.textContent = originalPill;
     mounted.delete(root);
   }
 
-  button.addEventListener('click', onToggle);
-  document.addEventListener('visibilitychange', onVisibility);
-  motion.addEventListener('change', onMotion);
-  window.addEventListener('pagehide', onPageHide);
-  window.addEventListener('pageshow', onPageShow);
+  listen(play, 'click', () => update({ type: 'replay' }));
+  listen(recordings, 'click', () => update({ type: 'list' }));
+  choices.forEach((choice, index) => listen(choice, 'click', () => update({ type: 'select', index })));
+  listen(document, 'visibilitychange', () => update({ type: 'visibility', value: document.hidden }));
+  listen(motion, 'change', event => update({ type: 'motion', value: event.matches }));
+  listen(window, 'pagehide', event => { if (event.persisted) update({ type: 'page', value: false }); else destroy(); });
+  listen(window, 'pageshow', () => update({ type: 'page', value: true }));
   root.dataset.demoReady = '';
-  button.hidden = false;
+  play.hidden = recordings.hidden = false;
   render();
-  schedule();
   mounted.set(root, destroy);
+  // Missing or failed observation keeps a complete static example. Explicit
+  // clicks can replay without enabling automatic playback.
+  try {
+    if (window.IntersectionObserver) {
+      observer = new window.IntersectionObserver(entries => {
+        for (const entry of entries) if (entry.target === root) update({ type: 'viewport', value: entry.isIntersecting });
+      }, { threshold: 0.15 });
+      observer.observe(root);
+    } else state = { ...state, played: true, inViewport: true };
+  } catch {
+    observer?.disconnect();
+    observer = null;
+    state = { ...state, played: true };
+    update({ type: 'viewport', value: false });
+    state = { ...state, inViewport: true };
+  }
   return destroy;
 }
 

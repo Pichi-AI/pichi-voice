@@ -2,11 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  createTimeline, sampleDemo, createController, advanceController, isRunning, mountVoiceDemo, mountScrollReveals,
+  DEMO_DURATION, createTimeline, sampleDemo, createController, advanceController, isRunning, mountVoiceDemo, mountScrollReveals,
 } from '../website/dist/voice/assets/voice-demo.mjs';
-
-const en = 'The idea is clear. Let’s put it into words.';
-const ru = 'Мысль уже есть. Осталось превратить её в текст.';
 
 function revealEnvironment({ reduced = false, unsupported = false, fail = false } = {}) {
   const targets = Array.from({ length: 3 }, () => ({ dataset: {} }));
@@ -62,86 +59,7 @@ test('a changed motion preference reveals remaining cards and page teardown rele
   assert.equal(env.calls.disconnected, count);
 });
 
-test('words reveal in order, punctuation gives a breath, complete text holds then repeats', () => {
-  for (const sentence of [en, ru]) {
-    const timeline = createTimeline(sentence);
-    assert.equal(sampleDemo(timeline, 0).visibleWords, 0);
-    timeline.words.forEach((word, index) => {
-      assert.equal(sampleDemo(timeline, word.at - 1).visibleWords, index);
-      assert.equal(sampleDemo(timeline, word.at).visibleWords, index + 1);
-    });
-    const last = timeline.words.at(-1);
-    assert.equal(sampleDemo(timeline, last.at + last.duration + 1700).visibleWords, timeline.words.length);
-    assert.equal(sampleDemo(timeline, timeline.cycle).visibleWords, 0);
-    assert.deepEqual(sampleDemo(timeline, timeline.cycle + 700), sampleDemo(timeline, 700));
-    const endOfSentence = timeline.words.findIndex(word => word.text.endsWith('.'));
-    const word = timeline.words[endOfSentence];
-    assert.ok(timeline.words[endOfSentence + 1].at - word.at - word.duration >= 400);
-  }
-});
-
-test('speech waveform is continuous, bounded and settles between words', () => {
-  const timeline = createTimeline(en);
-  const first = timeline.words[0];
-  const peak = sampleDemo(timeline, first.at + first.duration / 2).scales;
-  assert.ok(Math.max(...peak) > 0.7);
-  assert.ok(new Set(peak).size > 5);
-  const settled = sampleDemo(timeline, first.at + first.duration + 40).scales;
-  assert.ok(settled.every(scale => scale === 0.14));
-  for (let time = 0; time < timeline.cycle; time += 8) {
-    const current = sampleDemo(timeline, time).scales;
-    const next = sampleDemo(timeline, time + 1).scales;
-    current.forEach((scale, index) => {
-      assert.ok(scale >= 0.14 && scale <= 1);
-      assert.ok(Math.abs(scale - next[index]) < 0.02);
-    });
-  }
-});
-
-test('reduced motion always has complete text and a static waveform', () => {
-  const timeline = createTimeline(ru);
-  for (const time of [0, 700, timeline.cycle, timeline.cycle * 4]) {
-    assert.deepEqual(sampleDemo(timeline, time, true), {
-      visibleWords: timeline.words.length, scales: Array(19).fill(1),
-    });
-  }
-});
-
-test('controller preserves speaking position through pause, visibility, motion and page suspension', () => {
-  let state = createController(100);
-  for (const type of ['pause', 'visibility', 'motion', 'page']) {
-    const key = { pause: 'paused', visibility: 'hidden', motion: 'reducedMotion', page: 'pageActive' }[type];
-    const suspendValue = type !== 'page';
-    state = advanceController(state, { type, value: suspendValue }, state.last + 100);
-    const frozen = state.elapsed;
-    assert.equal(state[key], suspendValue);
-    assert.equal(isRunning(state), false);
-    state = advanceController(state, { type: 'tick' }, state.last + 50000);
-    assert.equal(state.elapsed, frozen);
-    state = advanceController(state, { type, value: !suspendValue }, state.last + 50000);
-    assert.equal(state.elapsed, frozen);
-    assert.equal(isRunning(state), true);
-  }
-  const original = state;
-  const next = advanceController(state, { type: 'tick' }, state.last + 100);
-  assert.equal(next.elapsed, state.elapsed + 100);
-  assert.notEqual(next, original);
-  assert.equal(original.elapsed, 400);
-});
-
-test('independent suspension reasons do not undo an explicit user pause', () => {
-  let state = createController(0);
-  state = advanceController(state, { type: 'pause', value: true }, 100);
-  state = advanceController(state, { type: 'visibility', value: true }, 200);
-  state = advanceController(state, { type: 'visibility', value: false }, 900);
-  state = advanceController(state, { type: 'motion', value: true }, 1000);
-  state = advanceController(state, { type: 'motion', value: false }, 2000);
-  assert.equal(isRunning(state), false);
-  assert.equal(state.elapsed, 100);
-});
-
-// Small deterministic DOM boundary doubles. Hero elements and attributes come
-// from the shipped HTML; the controller, adapter and event handlers are real.
+// Deterministic DOM boundary doubles; parse and mount the shipped hero.
 class Target extends EventTarget {
   listeners = new Map();
   addEventListener(type, listener) {
@@ -215,7 +133,7 @@ function readHero(route) {
   return { html, root: parent.children[0] };
 }
 
-function browser(route = 'voice/index.html', { reduced = false, hidden = false } = {}) {
+function browser(route = 'voice/index.html', { reduced = false, hidden = false, observer = 'ok' } = {}) {
   const { root, html } = readHero(route);
   const document = new Target();
   document.hidden = hidden;
@@ -227,14 +145,30 @@ function browser(route = 'voice/index.html', { reduced = false, hidden = false }
   let now = 0;
   let serial = 0;
   const frames = new Map();
+  const observation = { callback: null, disconnected: 0 };
   window.performance = { now: () => now };
   window.matchMedia = query => { assert.equal(query, '(prefers-reduced-motion: reduce)'); return motion; };
   window.requestAnimationFrame = callback => { frames.set(++serial, callback); return serial; };
   window.cancelAnimationFrame = id => frames.delete(id);
-  const button = root.querySelector('[data-demo-toggle]');
-  const visual = root.querySelector('[data-demo-text]');
-  const bars = root.querySelectorAll('.dictation-pill .wave i');
-  const shown = () => visual.children.filter(word => word.style.visibility === 'visible').map(word => word.textContent).join('').trim();
+  // Any accidental device/network/audio admission fails the real adapter tests.
+  const forbidden = () => { assert.fail('example must never access devices, audio or network'); };
+  window.fetch = window.Audio = window.AudioContext = window.WebSocket = forbidden;
+  window.navigator = { mediaDevices: { getUserMedia: forbidden } };
+  if (observer !== 'missing') window.IntersectionObserver = class {
+    constructor(callback) {
+      if (observer === 'constructor-failure') throw new Error('observer unavailable');
+      observation.callback = callback;
+    }
+    observe(target) {
+      assert.equal(target, root);
+      if (observer === 'partial-failure') {
+        observation.callback([{ target, isIntersecting: true }]);
+        throw new Error('observer failed after admission');
+      }
+      if (observer === 'observe-failure') throw new Error('observation unavailable');
+    }
+    disconnect() { observation.disconnected++; }
+  };
   const step = time => {
     now = time;
     const callbacks = [...frames.values()];
@@ -242,118 +176,275 @@ function browser(route = 'voice/index.html', { reduced = false, hidden = false }
     callbacks.forEach(callback => callback(time));
   };
   const destroy = mountVoiceDemo(root, { window, document });
-  return { root, html, window, document, motion, frames, button, bars, visual, shown, step, destroy };
+  const conversations = root.querySelectorAll('[data-demo-conversation]');
+  const shown = index => conversations[index].querySelectorAll('[data-demo-text]').map(visual => visual.children
+    .filter(word => word.style.visibility === 'visible').map(word => word.textContent).join('').trim());
+  const full = index => conversations[index].querySelectorAll('[data-demo-full]').map(el => el.textContent);
+  return { root, html, window, document, motion, frames, step, destroy, shown, full, conversations, observation,
+    enter: (value = true) => observation.callback([{ target: root, isIntersecting: value }]),
+    play: root.querySelector('[data-demo-play]'), recordings: root.querySelector('[data-demo-recordings]'),
+    choices: root.querySelectorAll('[data-demo-recording]'), list: root.querySelector('[data-demo-list]'),
+    transcript: root.querySelector('[data-demo-transcript]'), bars: root.querySelectorAll('.dictation-pill .wave i'),
+    pill: root.querySelector('[data-demo-pill]') };
 }
 
+const turns = ['Let’s share the idea.', 'I’ll prepare a draft today.', 'I’ll send it on Friday.'];
+
+test('timeline streams words and speaker turns once, holds complete text forever', () => {
+  for (const texts of [turns, ['Давайте поделимся идеей.', 'Подготовлю текст сегодня.', 'Отправлю в пятницу.']]) {
+    const timeline = createTimeline(texts);
+    assert.equal(timeline.duration, DEMO_DURATION);
+    assert.ok(timeline.duration <= 5000);
+    assert.equal(sampleDemo(timeline, 0).visibleWords, 0);
+    timeline.words.forEach((word, index) => {
+      assert.equal(sampleDemo(timeline, word.at - 0.01).visibleWords, index);
+      assert.equal(sampleDemo(timeline, word.at).visibleWords, index + 1);
+    });
+    const final = sampleDemo(timeline, DEMO_DURATION);
+    assert.equal(final.visibleWords, timeline.words.length);
+    assert.equal(final.turn, 2);
+    assert.ok(final.turns.every(count => count > 0));
+    for (const elapsed of [DEMO_DURATION * 2, 900000]) assert.deepEqual(sampleDemo(timeline, elapsed), final);
+    assert.deepEqual(sampleDemo(timeline, 0, true), final);
+  }
+  assert.equal(sampleDemo(createTimeline(''), 5000).visibleWords, 0);
+});
+
+test('speech wave is smooth, bounded, varied, and rests between words and after completion', () => {
+  const timeline = createTimeline(turns);
+  const first = timeline.words[0];
+  const peak = sampleDemo(timeline, first.at + first.duration / 2).scales;
+  assert.ok(Math.max(...peak) > 0.7);
+  assert.ok(new Set(peak).size > 5);
+  assert.ok(sampleDemo(timeline, first.at + first.duration + 1).scales.every(value => value === 0.14));
+  assert.ok(sampleDemo(timeline, DEMO_DURATION).scales.every(value => value === 0.14));
+  for (let time = 0; time <= DEMO_DURATION; time += 8) {
+    const current = sampleDemo(timeline, time).scales;
+    const next = sampleDemo(timeline, time + 1).scales;
+    current.forEach((scale, index) => {
+      assert.ok(scale >= 0.14 && scale <= 1);
+      assert.ok(Math.abs(scale - next[index]) < 0.03);
+    });
+  }
+});
+
+test('controller admits autoplay only once in viewport and clamps every replay', () => {
+  let state = createController(0);
+  assert.equal(isRunning(state), false);
+  state = advanceController(state, { type: 'tick' }, 10000);
+  state = advanceController(state, { type: 'viewport', value: false }, 11000);
+  assert.equal(state.played, false);
+  state = advanceController(state, { type: 'viewport', value: true }, 12000);
+  assert.equal(isRunning(state), true);
+  assert.equal(state.elapsed, 0);
+  const previous = state;
+  state = advanceController(state, { type: 'tick' }, 19000);
+  assert.equal(previous.elapsed, 0);
+  assert.equal(state.elapsed, DEMO_DURATION);
+  assert.equal(isRunning(state), false);
+  state = advanceController(state, { type: 'viewport', value: false }, 20000);
+  state = advanceController(state, { type: 'viewport', value: true }, 21000);
+  assert.equal(isRunning(state), false);
+  for (let index = 0; index < 3; index++) {
+    state = advanceController(state, { type: 'replay' }, 22000 + index * 10000);
+    assert.equal(state.elapsed, 0);
+    assert.equal(isRunning(state), true);
+    state = advanceController(state, { type: 'tick' }, 27000 + index * 10000);
+    assert.equal(state.elapsed, DEMO_DURATION);
+    assert.equal(isRunning(state), false);
+  }
+});
+
+test('controller finishes on suspension, reduced motion and list, without automatic restart', () => {
+  for (const event of [{ type: 'visibility', value: true }, { type: 'page', value: false },
+    { type: 'motion', value: true }, { type: 'viewport', value: false }, { type: 'list' }]) {
+    let state = advanceController(createController(0), { type: 'viewport', value: true }, 0);
+    state = advanceController(state, event, 700);
+    assert.equal(state.elapsed, DEMO_DURATION);
+    assert.equal(isRunning(state), false);
+    state = advanceController(state, { ...event, value: !event.value }, 9000);
+    assert.equal(isRunning(state), false);
+  }
+  let state = advanceController(createController(0), { type: 'viewport', value: true }, 0);
+  state = advanceController(state, { type: 'select', index: 1 }, 900);
+  assert.equal(state.selected, 1);
+  assert.equal(state.view, 'transcript');
+  assert.equal(state.elapsed, 0);
+  state = advanceController(state, { type: 'motion', value: true }, 1000);
+  state = advanceController(state, { type: 'replay' }, 1100);
+  assert.equal(state.elapsed, DEMO_DURATION);
+  assert.equal(isRunning(state), false);
+});
+
 for (const route of ['index.html', 'voice/index.html', 'ru/voice/index.html']) {
-  test(`${route}: shipped hero mounts, reveals speech, pauses and resumes through the real button`, () => {
+  test(`${route}: real hero streams speaker turns including You and replays inside the app`, () => {
     const b = browser(route);
-    assert.equal(b.button.hidden, false);
-    assert.equal(b.button.textContent, b.button.dataset.pauseLabel);
-    assert.equal(b.root.querySelector('[data-demo-full]').textContent, route.startsWith('ru') ? ru : en);
-    assert.equal(b.visual.attrs['aria-hidden'], 'true');
-    assert.equal(b.shown(), '');
-    b.step(700);
-    assert.ok(b.shown().length > 0);
-    const words = b.shown();
-    const transforms = b.bars.map(bar => bar.style.transform);
-    b.button.emit('click');
-    assert.equal(b.button.attrs['aria-pressed'], 'true');
-    assert.equal(b.button.textContent, b.button.dataset.resumeLabel);
+    const ru = route.startsWith('ru');
     assert.equal(b.frames.size, 0);
-    b.step(50000);
-    assert.equal(b.shown(), words);
-    assert.deepEqual(b.bars.map(bar => bar.style.transform), transforms);
-    b.button.emit('click');
+    assert.deepEqual(b.shown(0), b.full(0));
+    assert.equal(b.play.hidden, false);
+    assert.equal(b.choices.length, 2);
+    assert.ok(b.root.textContent.includes(ru ? 'Пример разговора' : 'Example conversation'));
+    assert.equal(b.root.querySelector('.demo-settings').listenerCount, 0);
+    b.enter(false);
+    b.step(10000);
+    assert.equal(b.frames.size, 0);
+    b.enter();
     assert.equal(b.frames.size, 1);
-    assert.equal(b.button.attrs['aria-pressed'], 'false');
-    b.step(50700);
-    assert.ok(b.shown().length > words.length);
+    assert.deepEqual(b.shown(0), ['', '', '']);
+    b.step(10700);
+    assert.ok(b.shown(0)[0].length > 0);
+    assert.equal(b.shown(0)[1], '');
+    assert.equal(b.conversations[0].querySelectorAll('[data-demo-turn]')[1].style.visibility, 'hidden');
+    b.step(12500);
+    assert.ok(b.shown(0)[1].length > 0);
+    b.step(14000);
+    assert.ok(b.shown(0)[2].length > 0);
+    assert.ok(b.conversations[0].querySelectorAll('.speaker')[2].textContent.includes(ru ? 'Вы' : 'You'));
+    b.step(14800);
+    assert.deepEqual(b.shown(0), b.full(0));
+    assert.equal(b.pill.textContent, b.full(0)[2]);
+    assert.equal(b.frames.size, 0);
+    assert.equal(b.root.dataset.demoMotion, 'static');
+    b.enter(false); b.enter(); b.step(90000);
+    assert.equal(b.frames.size, 0);
+    for (let index = 0; index < 2; index++) {
+      b.play.emit('click');
+      assert.deepEqual(b.shown(0), ['', '', '']);
+      assert.equal(b.frames.size, 1);
+      b.step(95000 + index * 5000);
+      assert.deepEqual(b.shown(0), b.full(0));
+      assert.equal(b.frames.size, 0);
+    }
+    b.destroy();
+  });
+
+  test(`${route}: Recordings opens exactly two synthetic entries, each routes to a short example`, () => {
+    const b = browser(route);
+    b.enter();
+    b.recordings.emit('click');
+    assert.equal(b.list.hidden, false);
+    assert.equal(b.transcript.hidden, true);
+    assert.equal(b.frames.size, 0);
+    b.choices.forEach((choice, index) => {
+      choice.emit('click');
+      assert.equal(b.list.hidden, true);
+      assert.equal(b.transcript.hidden, false);
+      assert.equal(b.conversations[index].hidden, false);
+      assert.equal(b.conversations[1 - index].hidden, true);
+      b.step((index + 1) * 5000);
+      assert.deepEqual(b.shown(index), b.full(index));
+      assert.equal(b.frames.size, 0);
+      b.recordings.emit('click');
+    });
+    b.play.emit('click');
+    assert.equal(b.list.hidden, true);
+    assert.equal(b.conversations[1].hidden, false);
     b.destroy();
   });
 }
 
-test('visibility and bfcache pagehide stop frames and resume without catching up', () => {
-  const b = browser();
-  b.step(700);
-  const words = b.shown();
-  b.document.hidden = true;
-  b.document.emit('visibilitychange');
-  assert.equal(b.frames.size, 0);
-  b.step(100000);
-  b.document.hidden = false;
-  b.document.emit('visibilitychange');
-  assert.equal(b.shown(), words);
-  assert.equal(b.frames.size, 1);
-  b.window.emit('pagehide', { persisted: true });
-  assert.equal(b.frames.size, 0);
-  b.step(200000);
-  b.window.emit('pageshow', { persisted: true });
-  assert.equal(b.shown(), words);
-  assert.equal(b.frames.size, 1);
-  b.destroy();
-});
-
-test('reduced motion mounts fully static, responds to preference changes and preserves pause', () => {
-  const b = browser('ru/voice/index.html', { reduced: true });
-  assert.equal(b.shown(), ru);
-  assert.equal(b.frames.size, 0);
-  assert.equal(b.button.disabled, true);
-  assert.equal(b.button.textContent, 'Анимация отключена');
-  assert.equal(b.root.dataset.demoMotion, 'static');
-  b.motion.emit('change', { matches: false });
-  assert.equal(b.frames.size, 1);
-  b.step(700);
-  b.button.emit('click');
-  const partial = b.shown();
-  b.motion.emit('change', { matches: true });
-  assert.equal(b.shown(), ru);
-  assert.equal(b.frames.size, 0);
-  b.motion.emit('change', { matches: false });
-  assert.equal(b.shown(), partial);
-  assert.equal(b.button.attrs['aria-pressed'], 'true');
-  assert.equal(b.frames.size, 0);
-  b.destroy();
-});
-
-test('initially hidden pages own no frame and start only when visible', () => {
+test('hidden pages wait for visibility and intersection before their first autoplay', () => {
   const b = browser('voice/index.html', { hidden: true });
+  b.enter();
+  b.step(10000);
   assert.equal(b.frames.size, 0);
-  b.step(200000);
   b.document.hidden = false;
   b.document.emit('visibilitychange');
-  assert.equal(b.shown(), '');
   assert.equal(b.frames.size, 1);
-  b.step(200700);
-  assert.ok(b.shown().length > 0);
+  assert.deepEqual(b.shown(0), ['', '', '']);
+  b.step(14800);
+  assert.equal(b.frames.size, 0);
   b.destroy();
 });
 
-test('unmount and non-persisted pagehide cancel frames, remove listeners and restore static fallback', () => {
+test('visibility, viewport exit and persisted pagehide stop motion and never resume a loop', () => {
+  for (const reason of ['visibility', 'viewport', 'pagehide']) {
+    const b = browser();
+    b.enter(); b.step(700);
+    if (reason === 'visibility') { b.document.hidden = true; b.document.emit('visibilitychange'); }
+    if (reason === 'viewport') b.enter(false);
+    if (reason === 'pagehide') b.window.emit('pagehide', { persisted: true });
+    assert.equal(b.frames.size, 0);
+    assert.deepEqual(b.shown(0), b.full(0));
+    b.step(100000);
+    if (reason === 'visibility') { b.document.hidden = false; b.document.emit('visibilitychange'); }
+    if (reason === 'viewport') b.enter();
+    if (reason === 'pagehide') b.window.emit('pageshow', { persisted: true });
+    assert.equal(b.frames.size, 0);
+    b.play.emit('click');
+    assert.equal(b.frames.size, 1);
+    b.destroy();
+  }
+});
+
+test('reduced motion shows final words and speakers immediately, even on recording selection or replay', () => {
+  const b = browser('ru/voice/index.html', { reduced: true });
+  b.enter();
+  assert.deepEqual(b.shown(0), b.full(0));
+  assert.equal(b.frames.size, 0);
+  b.play.emit('click');
+  assert.deepEqual(b.shown(0), b.full(0));
+  b.recordings.emit('click'); b.choices[1].emit('click');
+  assert.deepEqual(b.shown(1), b.full(1));
+  assert.equal(b.frames.size, 0);
+  b.motion.emit('change', { matches: false });
+  assert.equal(b.frames.size, 0);
+  b.play.emit('click'); b.step(700);
+  assert.equal(b.frames.size, 1);
+  b.motion.emit('change', { matches: true });
+  assert.deepEqual(b.shown(1), b.full(1));
+  assert.equal(b.frames.size, 0);
+  b.destroy();
+});
+
+test('missing or failed observer keeps static content and allows bounded explicit replay', () => {
+  for (const observer of ['missing', 'constructor-failure', 'observe-failure', 'partial-failure']) {
+    const b = browser('voice/index.html', { observer });
+    assert.equal(b.frames.size, 0);
+    assert.deepEqual(b.shown(0), b.full(0));
+    b.play.emit('click');
+    assert.equal(b.frames.size, 1);
+    b.step(5000);
+    assert.deepEqual(b.shown(0), b.full(0));
+    assert.equal(b.frames.size, 0);
+    b.destroy();
+  }
+});
+
+test('unmount and terminal pagehide release frames, observer and every listener; stale callbacks are harmless', () => {
   for (const pagehide of [false, true]) {
     const b = browser();
     assert.equal(mountVoiceDemo(b.root, { window: b.window, document: b.document }), b.destroy);
+    b.enter();
     const staleFrame = [...b.frames.values()][0];
     if (pagehide) b.window.emit('pagehide', { persisted: false });
     else b.destroy();
-    b.destroy();
-    staleFrame(800);
+    b.destroy(); staleFrame(800); b.enter();
     assert.equal(b.frames.size, 0);
-    assert.equal(b.window.listenerCount + b.document.listenerCount + b.motion.listenerCount + b.button.listenerCount, 0);
+    assert.equal(b.observation.disconnected, 1);
+    assert.equal(b.window.listenerCount + b.document.listenerCount + b.motion.listenerCount + b.play.listenerCount
+      + b.recordings.listenerCount + b.choices.reduce((sum, choice) => sum + choice.listenerCount, 0), 0);
     assert.equal(b.root.dataset.demoReady, undefined);
     assert.equal(b.root.dataset.demoMotion, undefined);
-    assert.equal(b.button.hidden, true);
+    assert.equal(b.play.hidden, true);
+    assert.equal(b.recordings.hidden, true);
+    assert.equal(b.list.hidden, true);
+    assert.equal(b.transcript.hidden, false);
+    assert.equal(b.conversations[0].hidden, false);
     assert.ok(b.bars.every(bar => bar.style.transform === ''));
-    b.button.emit('click');
-    b.document.emit('visibilitychange');
-    assert.equal(b.frames.size, 0);
+    assert.equal(b.root.querySelectorAll('[data-demo-text]').every(visual => visual.children.length === 0), true);
     const cleanup = mountVoiceDemo(b.root, { window: b.window, document: b.document });
-    assert.equal(b.frames.size, 1);
+    assert.equal(b.frames.size, 0);
+    b.enter(); assert.equal(b.frames.size, 1);
     cleanup();
   }
 });
 
-test('incomplete markup safely remains a static example with no scheduled work', () => {
-  const root = new Element('figure');
-  assert.doesNotThrow(() => mountVoiceDemo(root, { window: {}, document: new Target() })());
+test('incomplete markup safely retains the static example with no scheduled work', () => {
+  assert.doesNotThrow(() => mountVoiceDemo(new Element('figure'), { window: {}, document: new Target() })());
+});
+
+test('English root remains identical to the voice route', () => {
+  assert.equal(readHero('index.html').html, readHero('voice/index.html').html);
 });

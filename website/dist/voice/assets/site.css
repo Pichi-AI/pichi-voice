@@ -39,3 +39,24 @@
 
 .privacy-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;margin-right:10px;border:1px solid #cfc1e3;border-radius:9px;color:var(--purple);vertical-align:middle;background:#f9f6fd}
 .privacy-icon svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+
+/* Clickable synthetic hero. Keep controls within the simplified app. */
+[data-voice-demo] [hidden]{display:none!important}
+[data-voice-demo] .window-body{min-height:360px}
+[data-voice-demo] .transcript{min-width:0;padding:20px 20px 48px}
+[data-voice-demo] .app-sidebar button,[data-voice-demo] .demo-settings{display:block;width:100%;padding:8px 7px;margin:4px 0;text-align:left;font:inherit;line-height:1.5}
+[data-voice-demo] .app-sidebar button{border:0;cursor:pointer}
+[data-voice-demo] .demo-settings{color:var(--muted)}
+[data-voice-demo] .demo-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:20px;flex-wrap:wrap}
+[data-voice-demo] .demo-play{display:inline-flex;align-items:center;gap:5px;min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:7px;background:var(--white);color:var(--purple);font:inherit;font-size:.62rem;cursor:pointer}
+[data-voice-demo] button:focus-visible{outline:3px solid #9a7ee4;outline-offset:3px}
+[data-voice-demo] [data-demo-list] button{display:block;width:100%;min-height:64px;padding:12px 0;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);font:inherit;font-size:.78rem;color:var(--ink);cursor:pointer}
+[data-voice-demo] [data-demo-list] small{display:block;font-size:.6rem;color:var(--muted);margin-top:4px}
+[data-voice-demo] [data-demo-full]{display:block}
+[data-voice-demo][data-demo-ready] [data-demo-full]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);opacity:1}
+[data-voice-demo][data-demo-ready] [data-demo-text]{display:block}
+[data-voice-demo] .dictation-pill{background:#17131f;border-radius:28px;min-height:58px}
+[data-voice-demo] .dictation-pill p{display:block;min-height:2.1em}
+[data-voice-demo] .utterance{padding-top:10px;margin-top:10px}
+[data-voice-demo] .art-caption{display:block}
+@media(max-width:420px){[data-voice-demo] .window-body{grid-template-columns:88px 1fr}[data-voice-demo] .transcript{padding-inline:12px}[data-voice-demo] .demo-toolbar{margin-bottom:14px}[data-voice-demo] .side-logo{font-size:.58rem}}
