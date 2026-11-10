@@ -99,6 +99,21 @@ nonisolated enum Review34DemoAdmission {
         return value.isEmpty || (placeholder?.isEmpty == false && value == placeholder)
     }
 
+    static func knownVisibleHistory(baselineIDs: [String], visibleIDs: [String]) -> Bool {
+        guard uniqueIDs(baselineIDs), uniqueIDs(visibleIDs) else { return false }
+        let baseline = Set(baselineIDs.compactMap(UUID.init(uuidString:)))
+        let visible = Set(visibleIDs.compactMap(UUID.init(uuidString:)))
+        return visible.isSubset(of: baseline) && (baseline.isEmpty || !visible.isEmpty)
+    }
+    // A virtualized List need not expose every baseline row. The parent must
+    // verify all persisted baseline IDs/files independently after the owned run.
+    static func newOwnedVisibleSessionID(baselineIDs: [String], visibleIDs: [String]) -> String? {
+        guard uniqueIDs(baselineIDs), uniqueIDs(visibleIDs) else { return nil }
+        let added = Set(visibleIDs.compactMap(UUID.init(uuidString:)))
+            .subtracting(baselineIDs.compactMap(UUID.init(uuidString:)))
+        return added.count == 1 ? added.first?.uuidString : nil
+    }
+
     /// A saved recording is owned only after the unchanged baseline gains exactly one UUID.
     static func newOwnedSessionID(baselineIDs: [String], historyIDs: [String]) -> String? {
         let baseline = baselineIDs.compactMap(UUID.init(uuidString:))

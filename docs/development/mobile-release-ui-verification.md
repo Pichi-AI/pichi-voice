@@ -69,6 +69,17 @@ The core path records about 20 seconds only after enabled Stop confirms readines
 joins Stop/completion, requires nonempty transcript, identifies exactly one added
 UUID relative to the unchanged baseline, reopens only that row, requires its bound
 audio player, plays briefly, closes playback and presents/cancels native JSON share.
+SwiftUI List virtualizes long history: the core selector requires every observed
+pre-recording UUID to belong to the complete backed-up baseline, with no duplicate
+or malformed IDs and no empty observation for a nonempty baseline. After recording
+it binds exactly one new visible UUID against that same complete baseline. The
+legacy selector retains its full-list equality rule. UI visibility does not prove
+persisted data preservation: before accepting or sharing a core result, the parent
+must independently re-inventory the complete active-profile store, require all
+baseline IDs plus exactly the emitted owned_session_id, and rehash every preserved
+baseline data file. Missing, changed, extra or unverified persisted records fail
+acceptance even when the UI test passes. Runtime logs contain the owned UUID only,
+without recording titles or text. No baseline row is opened, changed or deleted.
 No Save-to-Files or external recipient is selected. No recording is deleted.
 Task cancellation is rechecked after final eligibility reads immediately before
 cold termination/launch, audio activation/player preparation/play and Start. These

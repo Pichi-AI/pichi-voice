@@ -14,6 +14,28 @@ final class Review34DemoAdmissionTests: XCTestCase {
         XCTAssertNil(Review34DemoAdmission.newOwnedSessionID(baselineIDs: [baselineID], historyIDs: [baselineID]))
         XCTAssertNil(Review34DemoAdmission.newOwnedSessionID(baselineIDs: [baselineID], historyIDs: [baselineID, added, added]))
     }
+    func testVirtualizedExistingHistoryAcceptsOnlyUniqueKnownVisibleRows() {
+        let other = "E0000000-0000-4000-8000-000000000003"
+        XCTAssertTrue(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [baselineID, other], visibleIDs: [baselineID]))
+        XCTAssertTrue(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [], visibleIDs: []))
+        XCTAssertFalse(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [baselineID], visibleIDs: []))
+        XCTAssertFalse(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [baselineID], visibleIDs: [other]))
+        XCTAssertFalse(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [baselineID], visibleIDs: [baselineID, baselineID]))
+        XCTAssertFalse(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [baselineID, baselineID], visibleIDs: [baselineID]))
+        XCTAssertFalse(Review34DemoAdmission.knownVisibleHistory(baselineIDs: [baselineID], visibleIDs: ["bad"]))
+    }
+    func testVirtualizedOwnedRecordingRequiresOneNewUUIDAgainstFullBackup() {
+        let added = "E0000000-0000-4000-8000-000000000002"
+        let hidden = "E0000000-0000-4000-8000-000000000003"
+        let foreign = "E0000000-0000-4000-8000-000000000004"
+        XCTAssertEqual(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID, hidden], visibleIDs: [baselineID, added]), added)
+        XCTAssertEqual(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID], visibleIDs: [added]), added)
+        XCTAssertNil(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID], visibleIDs: [baselineID]))
+        XCTAssertNil(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID], visibleIDs: [added, added]))
+        XCTAssertNil(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID], visibleIDs: [added, foreign]))
+        XCTAssertNil(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID, baselineID], visibleIDs: [added]))
+        XCTAssertNil(Review34DemoAdmission.newOwnedVisibleSessionID(baselineIDs: [baselineID], visibleIDs: ["bad"]))
+    }
     func testPlaybackCannotBindBaselineOrForeignParagraphControls() throws {
         let added = "E0000000-0000-4000-8000-000000000002"
         XCTAssertNil(Review34DemoAdmission.PlaybackOwner(sessionID: baselineID, baselineIDs: [baselineID], paragraphID: "transcript.paragraph.a", audioID: "transcript.audio.a"))
