@@ -327,3 +327,9 @@ builds/
 !/docs/development/onboarding-integration-2026-10-22.md
 !docs/development/upstream-sync-1.6.13-beta1.md
 !docs/development/pichi-native-account-core.md
+
+# Reviewed public Pichi Voice landing assets
+!/website/dist/voice/assets/
+/website/dist/voice/assets/*
+!/website/dist/voice/assets/pichi.png
+!/website/dist/voice/assets/site.css
