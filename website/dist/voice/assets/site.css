@@ -32,3 +32,9 @@
 [data-voice-demo] .demo-toggle:focus-visible{outline:3px solid #9a7ee4;outline-offset:3px}
 [data-voice-demo] .demo-toggle:disabled{cursor:default;color:var(--muted)}
 @media(prefers-reduced-motion:reduce){[data-voice-demo] .dictation-pill .wave i{transform:none!important}}
+
+/* Reveals are an enhancement: content stays visible without JavaScript. */
+[data-reveal]{transition:opacity .55s ease,transform .55s cubic-bezier(.2,.7,.2,1)}
+[data-reveal][data-reveal-state="waiting"]{opacity:0;transform:translateY(18px)}
+[data-reveal][data-reveal-state="visible"],[data-reveal]:focus-within{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){[data-reveal]{opacity:1!important;transform:none!important;transition:none!important}}

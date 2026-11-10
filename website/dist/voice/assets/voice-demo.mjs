@@ -142,6 +142,48 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
   return destroy;
 }
 
+export function mountScrollReveals(document, window) {
+  const targets = [...document.querySelectorAll('[data-reveal]')];
+  const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let observer = null;
+  let destroyed = false;
+  const showAll = () => targets.forEach(target => { target.dataset.revealState = 'visible'; });
+  const reveal = entries => {
+    if (destroyed) return;
+    entries.filter(entry => entry.isIntersecting).forEach(({ target }) => {
+      target.dataset.revealState = 'visible';
+      observer?.unobserve(target);
+    });
+  };
+  const onMotion = event => {
+    if (event.matches) { observer?.disconnect(); showAll(); }
+  };
+  function destroy() {
+    if (destroyed) return;
+    destroyed = true;
+    observer?.disconnect();
+    motion.removeEventListener('change', onMotion);
+    window.removeEventListener('pagehide', onPageHide);
+    showAll();
+  }
+  const onPageHide = event => { if (!event.persisted) destroy(); };
+  if (motion.matches || !window.IntersectionObserver) {
+    showAll();
+    return destroy;
+  }
+  try {
+    observer = new window.IntersectionObserver(reveal, { threshold: 0.1 });
+    targets.forEach(target => { target.dataset.revealState = 'waiting'; observer.observe(target); });
+  } catch {
+    observer?.disconnect(); showAll();
+    return destroy;
+  }
+  motion.addEventListener('change', onMotion);
+  window.addEventListener('pagehide', onPageHide);
+  return destroy;
+}
+
 if (typeof document !== 'undefined') {
   document.querySelectorAll('[data-voice-demo]').forEach(root => mountVoiceDemo(root));
+  mountScrollReveals(document, window);
 }

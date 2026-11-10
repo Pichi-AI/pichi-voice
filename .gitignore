@@ -335,3 +335,4 @@ builds/
 /website/dist/voice/assets/*
 !/website/dist/voice/assets/pichi.png
 !/website/dist/voice/assets/site.css
+!/website/dist/voice/assets/voice-demo.mjs

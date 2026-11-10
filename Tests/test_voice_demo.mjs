@@ -2,11 +2,65 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  createTimeline, sampleDemo, createController, advanceController, isRunning, mountVoiceDemo,
+  createTimeline, sampleDemo, createController, advanceController, isRunning, mountVoiceDemo, mountScrollReveals,
 } from '../website/dist/voice/assets/voice-demo.mjs';
 
 const en = 'The idea is clear. Let’s put it into words.';
 const ru = 'Мысль уже есть. Осталось превратить её в текст.';
+
+function revealEnvironment({ reduced = false, unsupported = false, fail = false } = {}) {
+  const targets = Array.from({ length: 3 }, () => ({ dataset: {} }));
+  const motion = Object.assign(new EventTarget(), { matches: reduced });
+  const window = new EventTarget();
+  window.matchMedia = () => motion;
+  const calls = { observed: [], unobserved: [], disconnected: 0 };
+  let callback;
+  if (!unsupported) window.IntersectionObserver = class {
+    constructor(fn) { if (fail) throw new Error('unavailable'); callback = fn; }
+    observe(target) { calls.observed.push(target); }
+    unobserve(target) { calls.unobserved.push(target); }
+    disconnect() { calls.disconnected++; }
+  };
+  return { targets, motion, window, calls, document: { querySelectorAll: () => targets },
+    intersect: entries => callback(entries) };
+}
+
+test('scroll reveals each visible card once without changing offscreen content', () => {
+  const env = revealEnvironment();
+  const destroy = mountScrollReveals(env.document, env.window);
+  assert.equal(env.calls.observed.length, 3);
+  assert.ok(env.targets.every(target => target.dataset.revealState === 'waiting'));
+  env.intersect([{ target: env.targets[0], isIntersecting: true }, { target: env.targets[1], isIntersecting: false }]);
+  assert.equal(env.targets[0].dataset.revealState, 'visible');
+  assert.equal(env.targets[1].dataset.revealState, 'waiting');
+  assert.deepEqual(env.calls.unobserved, [env.targets[0]]);
+  destroy();
+  assert.equal(env.calls.disconnected, 1);
+  assert.ok(env.targets.every(target => target.dataset.revealState === 'visible'));
+});
+
+test('reduced motion, missing observer and observer failure preserve full static content', () => {
+  for (const options of [{ reduced: true }, { unsupported: true }, { fail: true }]) {
+    const env = revealEnvironment(options);
+    const destroy = mountScrollReveals(env.document, env.window);
+    assert.ok(env.targets.every(target => target.dataset.revealState === 'visible'));
+    assert.equal(env.calls.observed.length, 0);
+    destroy();
+  }
+});
+
+test('a changed motion preference reveals remaining cards and page teardown releases observer', () => {
+  const env = revealEnvironment();
+  const destroy = mountScrollReveals(env.document, env.window);
+  env.motion.dispatchEvent(Object.assign(new Event('change'), { matches: true }));
+  assert.ok(env.targets.every(target => target.dataset.revealState === 'visible'));
+  assert.equal(env.calls.disconnected, 1);
+  env.window.dispatchEvent(Object.assign(new Event('pagehide'), { persisted: false }));
+  const count = env.calls.disconnected;
+  env.motion.dispatchEvent(Object.assign(new Event('change'), { matches: true }));
+  destroy();
+  assert.equal(env.calls.disconnected, count);
+});
 
 test('words reveal in order, punctuation gives a breath, complete text holds then repeats', () => {
   for (const sentence of [en, ru]) {
