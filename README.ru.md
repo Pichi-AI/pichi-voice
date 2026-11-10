@@ -24,7 +24,7 @@
 
 | Платформа | Требования | Публикация |
 | --- | --- | --- |
-| Mac | macOS 15 или новее; текущий пакет предназначен для Apple Silicon | [Скачать нотариализованный ZIP для Mac](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B65-public.1/Pichi-Voice-0.1.0-65-macos-arm64.zip) |
+| Mac | macOS 15 или новее; текущий пакет предназначен для Apple Silicon | [Скачать нотариализованный ZIP для Mac](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B66-public.1/Pichi-Voice-0.1.0-66-macos-arm64.zip) |
 | iPhone | iOS 17 или новее; память и место для выбранной модели | Публичная версия ожидает ревью Apple |
 | iPad | iPadOS 17 или новее; память и место для выбранной модели | Публичная версия ожидает ревью Apple |
 
