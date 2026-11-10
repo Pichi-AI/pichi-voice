@@ -255,6 +255,11 @@ struct ContentView: View {
         var savesHistory: Bool { self != .onboardingSandbox }
         var deliversText: Bool { self == .normal }
         var publishesEditorResult: Bool { self != .historyOnly }
+
+        /// Final transcription needs visible feedback even when AI enhancement is off.
+        func hidesOverlayOnStop(isCancelled: Bool) -> Bool {
+            self == .historyOnly || isCancelled
+        }
     }
 
     @EnvironmentObject private var appServices: AppServices
@@ -455,6 +460,14 @@ struct ContentView: View {
 
     func beginRewriteModeSwitchForTesting() async {
         await self.beginRewriteRecording()
+    }
+
+    func prepareStoppedOverlayForTesting(route: DictationOutputRoute = .normal, isCancelled: Bool = false)
+        -> (didRequestHide: Bool, onFinalTranscriptionStarted: (@MainActor () -> Void)?) {
+        self.prepareOverlayForASRStop(
+            shouldHideOverlayOnStop: route.hidesOverlayOnStop(isCancelled: isCancelled),
+            lifecycleID: self.overlayLifecycleID
+        )
     }
 
     func blockDictationModeSwitchForTesting(savingCancellation: Bool = false, processing: Bool = false) {
@@ -3289,11 +3302,9 @@ struct ContentView: View {
         let promptTestSessionID = promptTest.isActive ? promptTest.sessionID : nil
         var stopSnapshot = route.savesHistory && !wasRewriteMode && !wasCommandMode && !promptTest.isActive
             ? self.captureDictationStopSnapshot(slot: activeDictationSlot ?? .primary) : nil
-        let shouldUseAIOnStop = stopSnapshot?.usesAI ?? activeDictationSlot.map {
-            DictationAIPostProcessingGate.isConfigured(for: $0, appBundleID: self.recordingAppInfo?.bundleId)
-        } ?? DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: self.recordingAppInfo?.bundleId)
-        let shouldHideOverlayOnStop = route == .historyOnly || self.cancelledOutputLifecycleID == expectedOverlayLifecycleID || (route == .normal && !wasRewriteMode && !wasCommandMode
-            && !promptTest.isActive && !shouldUseAIOnStop && !self.settings.spokenSendEnabled)
+        let shouldHideOverlayOnStop = route.hidesOverlayOnStop(
+            isCancelled: self.cancelledOutputLifecycleID == expectedOverlayLifecycleID
+        )
         DebugLogger.shared.info(
             "Routing decision snapshot | activeMode=\(modeAtStop.rawValue) | rewrite=\(wasRewriteMode) | command=\(wasCommandMode) | overlay=\(NotchContentState.shared.mode.rawValue)",
             source: "ContentView"

@@ -169,6 +169,7 @@ final class VoiceModelDeletionTests: XCTestCase {
     private func withDictationModeSwitchFixture(
         asr: ASRService,
         hasActiveMode: Bool = true,
+        overlayManager: MenuBarManager? = nil,
         body: (ContentView) async throws -> Void
     ) async throws {
         var ready: ContentView?
@@ -178,7 +179,7 @@ final class VoiceModelDeletionTests: XCTestCase {
         let oldProfileName = NotchContentState.shared.promptModeOverrideProfileName
         let oldProfileID = NotchContentState.shared.promptModeOverrideProfileID
         let oldStopLabel = NotchContentState.shared.stopSnapshotLabel
-        let manager = MenuBarManager()
+        let manager = overlayManager ?? MenuBarManager()
         let view = ContentView.dictationModeSwitchFixture(asr: asr, hasActiveMode: hasActiveMode) { ready = $0 }
             .environmentObject(manager)
         let host = NSHostingView(rootView: view)
@@ -213,6 +214,72 @@ final class VoiceModelDeletionTests: XCTestCase {
             event.type = type
             event.flags = [.maskControl, .maskCommand]
             _ = manager.handleKeyEvent(type: type, event: event)
+        }
+    }
+
+    func testStopOverlayPolicyKeepsVisibleOutputUntilCompletion() {
+        for route: ContentView.DictationOutputRoute in [.normal, .onboardingSandbox] {
+            XCTAssertFalse(route.hidesOverlayOnStop(isCancelled: false))
+            XCTAssertTrue(route.hidesOverlayOnStop(isCancelled: true))
+        }
+        XCTAssertTrue(ContentView.DictationOutputRoute.historyOnly.hidesOverlayOnStop(isCancelled: false))
+    }
+
+    func testDictationWithoutAIKeepsProcessingOverlayThroughASRStop() async throws {
+        let settings = SettingsStore.shared
+        let state = NotchContentState.shared
+        let previousPrompt = settings.dictationPromptSelection(for: .primary)
+        let previousPosition = settings.overlayPosition
+        let previousClosing = settings.overlayClosingAnimationEnabled
+        let previousText = state.transcriptionText
+        let previousProcessing = state.isProcessing
+        let previousSpokenSend = settings.spokenSendEnabled
+        let asr = ASRService()
+        let manager = MenuBarManager()
+        let provider = DeletionFixtureProvider()
+        asr.modelProvidersForTesting[settings.selectedSpeechModel] = provider
+        settings.setDictationPromptSelection(.off, for: .primary)
+        settings.spokenSendEnabled = false
+        settings.overlayPosition = .bottom
+        settings.overlayClosingAnimationEnabled = false
+        manager.configure(asrService: asr)
+        defer {
+            asr.isRunning = false
+            manager.hideRecordingOverlayImmediately(reason: "test_cleanup")
+            settings.setDictationPromptSelection(previousPrompt, for: .primary)
+            settings.spokenSendEnabled = previousSpokenSend
+            settings.overlayPosition = previousPosition
+            settings.overlayClosingAnimationEnabled = previousClosing
+            state.updateTranscription(previousText)
+            state.isProcessing = previousProcessing
+        }
+
+        try await self.withDictationModeSwitchFixture(asr: asr, hasActiveMode: false, overlayManager: manager) { view in
+            manager.setOverlayMode(.dictation)
+            // Exercise both immediate feedback and the warm final-executor callback.
+            for ready in [false, true] {
+                asr.isAsrReady = ready
+                asr.isRunning = true
+                manager.showRecordingOverlayImmediately()
+                let stop = view.prepareStoppedOverlayForTesting()
+                XCTAssertFalse(stop.didRequestHide, "Turning AI off must not dismiss final ASR feedback")
+                XCTAssertEqual(stop.onFinalTranscriptionStarted != nil, ready)
+                asr.isRunning = false
+                stop.onFinalTranscriptionStarted?()
+                // Drain the same main queue used by ASR's recording-state subscription.
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.main.async { continuation.resume() }
+                }
+                XCTAssertTrue(state.isProcessing)
+                XCTAssertEqual(state.transcriptionText, "Transcribing")
+                XCTAssertTrue(NotchOverlayManager.shared.isBottomOverlayVisible)
+                XCTAssertTrue(state.isBottomOverlayPresented)
+                await manager.finishProcessingAndHideOverlay()
+                XCTAssertFalse(NotchOverlayManager.shared.isBottomOverlayVisible)
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.main.async { continuation.resume() }
+                }
+            }
         }
     }
 
