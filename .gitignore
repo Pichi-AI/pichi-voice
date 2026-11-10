@@ -232,6 +232,8 @@ builds/
 # Internal Markdown plans and reports stay local by default
 *.md
 !README.md
+!README.ru.md
+!SUPPORT.md
 !CONTRIBUTING.md
 !.github/pull_request_template.md
 
@@ -248,6 +250,12 @@ builds/
 !/.codex/hooks/session-start.py
 !/docs/
 /docs/*
+!/docs/product/
+/docs/product/*
+!/docs/product/user-guide.md
+!/docs/product/user-guide.ru.md
+!/docs/product/privacy.md
+!/docs/product/acknowledgements.md
 !/docs/development/
 /docs/development/*
 !/docs/development/automatic-recording-titles.md
@@ -319,3 +327,9 @@ builds/
 !/docs/development/onboarding-integration-2026-10-22.md
 !docs/development/upstream-sync-1.6.13-beta1.md
 !docs/development/pichi-native-account-core.md
+
+# Reviewed public Pichi Voice landing assets
+!/website/dist/voice/assets/
+/website/dist/voice/assets/*
+!/website/dist/voice/assets/pichi.png
+!/website/dist/voice/assets/site.css

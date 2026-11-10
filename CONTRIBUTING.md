@@ -1,6 +1,6 @@
 # Contributing to Pichi Voice
 
-This repository is [Pichi-AI/pichi-voice](https://github.com/Pichi-AI/pichi-voice), a downstream of FluidVoice. The shared development policy is [AGENTS.md](AGENTS.md). It applies to human and AI-assisted contributions; detailed procedures have one owning guide rather than separate rules for each contributor.
+This is the [Pichi Voice repository](https://github.com/Pichi-AI/pichi-voice). The shared development policy is [AGENTS.md](AGENTS.md). It applies to human and AI-assisted contributions; detailed procedures have one owning guide rather than separate rules for each contributor. See [acknowledgements](docs/product/acknowledgements.md) for the project's origin and license.
 
 ## Propose a useful, reviewable change
 
