@@ -1,5 +1,6 @@
 // Synthetic local examples only. No microphone, audio, network or user data.
 export const DEMO_DURATION = 4800;
+export const COMPLETED_PAUSE = 3000;
 
 export function createTimeline(turns, barCount = 19) {
   const texts = Array.isArray(turns) ? turns : [turns];
@@ -22,37 +23,49 @@ export function sampleDemo(timeline, elapsed, reducedMotion = false) {
 }
 
 export function createController(now, { hidden = false, reducedMotion = false } = {}) {
-  return { elapsed: DEMO_DURATION, last: now, hidden, reducedMotion, pageActive: true,
-    inViewport: false, played: reducedMotion, playing: false, selected: 0, view: 'transcript' };
+  return { elapsed: DEMO_DURATION, completedAt: null, last: now, hidden, reducedMotion, pageActive: true,
+    inViewport: false, playing: false, selected: 0, view: 'transcript' };
 }
 
 export function isRunning(state) {
-  return state.playing && !state.hidden && !state.reducedMotion && state.pageActive && state.inViewport;
+  return state.playing && state.view === 'transcript' && !state.hidden && !state.reducedMotion && state.pageActive && state.inViewport;
 }
 
 export function advanceController(state, event, now) {
-  const next = { ...state, last: now,
-    elapsed: Math.min(DEMO_DURATION, state.elapsed + (isRunning(state) ? Math.max(0, now - state.last) : 0)) };
-  const finish = () => { next.elapsed = DEMO_DURATION; next.playing = false; };
-  const start = () => {
-    next.played = true;
-    next.view = 'transcript';
-    next.elapsed = 0;
-    next.playing = true;
-    if (next.hidden || next.reducedMotion || !next.pageActive) finish();
-  };
-  if (event.type === 'visibility') { next.hidden = event.value; if (event.value) finish(); }
-  if (event.type === 'page') { next.pageActive = event.value; if (!event.value) finish(); }
-  if (event.type === 'motion') { next.reducedMotion = event.value; if (event.value) { next.played = true; finish(); } }
-  if (event.type === 'viewport') {
-    next.inViewport = event.value;
-    if (!event.value) finish();
+  const next = { ...state, last: now };
+  if (isRunning(state)) {
+    if (state.completedAt !== null) {
+      if (now - state.completedAt >= COMPLETED_PAUSE) {
+        next.elapsed = 0;
+        next.completedAt = null;
+      }
+    } else {
+      next.elapsed = Math.min(DEMO_DURATION, state.elapsed + Math.max(0, now - state.last));
+      // Start the full pause when the completed text is actually rendered,
+      // even if the browser delivers a delayed animation frame.
+      if (next.elapsed === DEMO_DURATION) next.completedAt = now;
+    }
   }
-  if (event.type === 'list') { next.played = true; next.view = 'list'; finish(); }
-  if (event.type === 'select') { next.selected = event.index; start(); }
-  if (event.type === 'replay') start();
-  if (!next.played && next.inViewport && !next.hidden && next.pageActive) start();
-  if (next.elapsed >= DEMO_DURATION) finish();
+  if (event.type === 'visibility') next.hidden = event.value;
+  if (event.type === 'page') next.pageActive = event.value;
+  if (event.type === 'motion') next.reducedMotion = event.value;
+  if (event.type === 'viewport') next.inViewport = event.value;
+  if (event.type === 'list') next.view = 'list';
+  if (event.type === 'select') {
+    next.selected = event.index;
+    next.view = 'transcript';
+    next.playing = false;
+  }
+  const eligible = next.view === 'transcript' && !next.hidden && !next.reducedMotion && next.pageActive && next.inViewport;
+  if (!eligible) {
+    next.elapsed = DEMO_DURATION;
+    next.completedAt = null;
+    next.playing = false;
+  } else if (!next.playing) {
+    next.elapsed = 0;
+    next.completedAt = null;
+    next.playing = true;
+  }
   return next;
 }
 
@@ -61,14 +74,13 @@ const mounted = new WeakMap();
 export function mountVoiceDemo(root, { window = globalThis.window, document = root.ownerDocument } = {}) {
   if (mounted.has(root)) return mounted.get(root);
   const conversations = [...root.querySelectorAll('[data-demo-conversation]')];
-  const play = root.querySelector('[data-demo-play]');
   const recordings = root.querySelector('[data-demo-recordings]');
   const choices = [...root.querySelectorAll('[data-demo-recording]')];
   const transcript = root.querySelector('[data-demo-transcript]');
   const list = root.querySelector('[data-demo-list]');
   const pill = root.querySelector('[data-demo-pill]');
   const bars = [...root.querySelectorAll('.dictation-pill .wave i')];
-  if (!conversations.length || !play || !recordings || choices.length !== conversations.length || !transcript || !list || !pill || !bars.length || !window?.requestAnimationFrame) return () => {};
+  if (!conversations.length || !recordings || choices.length !== conversations.length || !transcript || !list || !pill || !bars.length || !window?.requestAnimationFrame) return () => {};
   const groups = conversations.map(conversation => [...conversation.querySelectorAll('[data-demo-turn]')].map(row => ({
     row, full: row.querySelector('[data-demo-full]'), visual: row.querySelector('[data-demo-text]'),
   })));
@@ -86,6 +98,7 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
   const now = () => window.performance.now();
   let state = createController(now(), { hidden: document.hidden, reducedMotion: motion.matches });
   let frame = null;
+  let timer = null;
   let observer = null;
   let destroyed = false;
   const originalPill = pill.textContent;
@@ -113,7 +126,11 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
   }
 
   function schedule() {
-    if (!destroyed && isRunning(state) && frame === null) frame = window.requestAnimationFrame(tick);
+    if (destroyed || !isRunning(state) || frame !== null || timer !== null) return;
+    if (state.completedAt !== null) {
+      timer = window.setTimeout(() => { timer = null; tick(now()); },
+        Math.max(0, COMPLETED_PAUSE - (now() - state.completedAt)));
+    } else frame = window.requestAnimationFrame(tick);
   }
   function tick(time) {
     frame = null;
@@ -126,7 +143,8 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
     if (destroyed) return;
     state = advanceController(state, event, now());
     if (frame !== null) window.cancelAnimationFrame(frame);
-    frame = null;
+    if (timer !== null) window.clearTimeout(timer);
+    frame = timer = null;
     render();
     schedule();
   }
@@ -134,12 +152,13 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
     if (destroyed) return;
     destroyed = true;
     if (frame !== null) window.cancelAnimationFrame(frame);
-    frame = null;
+    if (timer !== null) window.clearTimeout(timer);
+    frame = timer = null;
     observer?.disconnect();
     listeners.forEach(remove => remove());
     delete root.dataset.demoReady;
     delete root.dataset.demoMotion;
-    play.hidden = recordings.hidden = true;
+    recordings.hidden = true;
     recordings.removeAttribute('aria-expanded');
     transcript.hidden = false;
     list.hidden = true;
@@ -150,7 +169,6 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
     mounted.delete(root);
   }
 
-  listen(play, 'click', () => update({ type: 'replay' }));
   listen(recordings, 'click', () => update({ type: 'list' }));
   choices.forEach((choice, index) => listen(choice, 'click', () => {
     update({ type: 'select', index });
@@ -161,24 +179,23 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
   listen(window, 'pagehide', event => { if (event.persisted) update({ type: 'page', value: false }); else destroy(); });
   listen(window, 'pageshow', () => update({ type: 'page', value: true }));
   root.dataset.demoReady = '';
-  play.hidden = recordings.hidden = false;
+  recordings.hidden = false;
   render();
   mounted.set(root, destroy);
-  // Missing or failed observation keeps a complete static example. Explicit
-  // clicks can replay without enabling automatic playback.
+  // Without reliable viewport observation, keep complete static content,
+  // including recording selection. Never animate an unobserved hero.
   try {
     if (window.IntersectionObserver) {
       observer = new window.IntersectionObserver(entries => {
+        if (!observer) return;
         for (const entry of entries) if (entry.target === root) update({ type: 'viewport', value: entry.isIntersecting });
       }, { threshold: 0.15 });
       observer.observe(root);
-    } else state = { ...state, played: true, inViewport: true };
+    }
   } catch {
     observer?.disconnect();
     observer = null;
-    state = { ...state, played: true };
     update({ type: 'viewport', value: false });
-    state = { ...state, inViewport: true };
   }
   return destroy;
 }

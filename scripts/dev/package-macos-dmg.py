@@ -11,6 +11,10 @@ import plistlib
 import subprocess
 import tempfile
 
+# Keep the complete 420-point installation artwork visible even with Finder
+# tabs, path and status bars consuming up to 124 points of the window frame.
+WINDOW_SIZE = (640, 544)
+
 
 def validate_input(app, output, team, output_suffix=".dmg"):
     app, output = Path(app).absolute(), Path(output).resolve()
@@ -47,7 +51,7 @@ def image_settings(app, background):
         "icon_locations": {app.name: (160, 205), "Applications": (480, 205)},
         # Hiding the app extension writes FinderInfo onto the signed bundle.
         # Keep bundle metadata unchanged so strict signature verification passes.
-        "hide_extensions": [], "window_rect": ((150, 150), (640, 420)),
+        "hide_extensions": [], "window_rect": ((150, 150), WINDOW_SIZE),
         "default_view": "icon-view", "icon_size": 96, "text_size": 13,
         "show_status_bar": False, "show_tab_view": False,
         "show_toolbar": False, "show_pathbar": False, "show_sidebar": False,
@@ -58,7 +62,7 @@ def draw_background(path):
     from PIL import Image, ImageDraw, ImageFont
 
     scale = 2
-    image = Image.new("RGB", (640 * scale, 420 * scale), "#f8f6fc")
+    image = Image.new("RGB", tuple(value * scale for value in WINDOW_SIZE), "#f8f6fc")
     draw = ImageDraw.Draw(image)
     font_root = Path("/System/Library/Fonts/Supplemental")
 
@@ -74,7 +78,7 @@ def draw_background(path):
     text(307, "Then open Pichi Voice from Applications", 15, "#201a2f")
     text(335, "Откройте приложение и пройдите первоначальную настройку", 13, "#766d83")
     text(389, "pichi.ai/voice", 12, "#6749c1")
-    image.resize((640, 420), Image.Resampling.LANCZOS).save(path)
+    image.resize(WINDOW_SIZE, Image.Resampling.LANCZOS).save(path)
     image.save(path.with_name(path.stem + "@2x.png"))
 
 

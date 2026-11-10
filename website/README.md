@@ -12,6 +12,14 @@ The `.openai/hosting.json` identifies the optional Sites preview publication. Ke
 
 ## Release links and copy
 
-Enable a direct download only for an actually published compatible package. Show platform icons and Coming Soon for unavailable downloads. The public copy describes a native PKG installation; keep internal submission, build and signing details in development records. Preserve local-model download requirements, optional-cloud disclosures and the dated compatibility limits for conference clients.
+Enable a direct download only for an actually published compatible package. Show platform icons and Coming Soon for unavailable downloads. The active macOS link targets `Pichi-Voice-0.1.0-67-macos-arm64.dmg` in release `v0.1.0+67-public.1`. The release owner must publish and verify that exact DMG before deploying this change. No release asset is published by this website change. Keep compatibility, installation, build and signing details in the release and development records. Public copy retains local setup requirements, optional-cloud disclosure and the mobile distinction between offline in-person meetings and unavailable phone-call audio access.
 
 The illustrated meeting text is synthetic and is not a screenshot or performance measurement. Application source and website assets remain subject to the repository's GPL-3.0 license; the static directory includes `voice/LICENSE.txt`.
+
+## Hero animation and focused checks
+
+The EN preview entry point stays byte-identical to `/voice/`. EN and RU use the same local demo adapter. The hero automatically streams a selected recording, holds the completed text for three seconds, then resets and repeats. The completed hold uses a timer instead of animation frames. Recordings opens the two synthetic entries; selection resets the loop and moves keyboard focus to the visible transcript heading. Settings is static. There are no replay or pause controls. Each selected conversation has a complete, stable visually hidden transcript for assistive reading; animated rows and the duplicate floating text are decorative.
+
+Viewport exit, hidden documents and persisted `pagehide` cancel pending work and show the complete transcript. Returning to a visible, active viewport starts the selected recording again. Reduced motion and missing or failed viewport observation keep complete static transcripts. Unmount and terminal `pagehide` release the timer, frame, observer and listeners and restore static HTML. Nothing accesses a microphone, audio device or network.
+
+Run `node --test Tests/test_voice_demo.mjs` from the repository root. The suite covers timeline/controller behavior and mounts the real shipped HTML through the production DOM adapter with deterministic browser boundaries. It does not establish browser visual acceptance or release-asset availability.
