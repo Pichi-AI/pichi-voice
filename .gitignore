@@ -310,6 +310,8 @@ builds/
 !/scripts/dev/standalone-regression.py
 !/scripts/dev/local-api-live.py
 !/scripts/dev/verify-published-upstream-release.py
+!/scripts/dev/package-macos-dmg.py
+!/docs/development/macos-distribution.md
 
 # Keep future public history free of personal data and local model artifacts
 /private_assets/

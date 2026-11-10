@@ -2,6 +2,8 @@
 
 This document owns setup and command details. [AGENTS.md](../../AGENTS.md) defines shared principles; [Testing](testing.md) owns coverage and test storage, and [Agent workflow](agent-workflow.md) owns coordination, native acceptance and cleanup. Read the relevant guide before using the commands below.
 
+For public Mac packaging, see [macOS disk-image distribution](macos-distribution.md).
+
 ## Repository and checkout
 
 The primary checkout is a normal clone of [Pichi-AI/pichi-voice](https://github.com/Pichi-AI/pichi-voice). The code descends from [FluidVoice](https://github.com/altic-dev/FluidVoice), with its main history retained.
