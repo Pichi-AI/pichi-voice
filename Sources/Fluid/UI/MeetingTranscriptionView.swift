@@ -399,6 +399,7 @@ struct MeetingTranscriptionView: View {
     @State private var isRetrying = false
     @State private var cachedMicrophoneStatus: AVAuthorizationStatus = .notDetermined
     @State private var cachedScreenCaptureAccess = false
+    @State private var screenPermissionGuideID: UUID?
     @State private var cachedModelReady = false
     @State private var cachedSpeakerModelReady = false
     @State private var modelReadinessRevision = 0
@@ -442,6 +443,12 @@ struct MeetingTranscriptionView: View {
             self.deleteAudioActions(projection: projection)
         } message: {
             Text("The transcript stays; the audio files are deleted from this Mac.")
+        }
+        .onDisappear {
+            if let requestID = self.screenPermissionGuideID {
+                PermissionDragGuideController.shared.dismiss(requestID: requestID)
+                self.screenPermissionGuideID = nil
+            }
         }
     }
 
@@ -1682,11 +1689,12 @@ struct MeetingTranscriptionView: View {
     private func openScreenRecordingSettings() {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
         else { return }
-        PermissionDragGuideController.shared.present(
+        self.screenPermissionGuideID = PermissionDragGuideController.shared.present(
             instruction: PichiLocalization.format("Drag %@ into the Screen & System Audio Recording list as shown", Bundle.main.fluidAppDisplayName),
             settingsPaneURL: url,
             isGranted: { CGPreflightScreenCaptureAccess() },
             onGranted: { [self] in
+                self.screenPermissionGuideID = nil
                 self.refreshCachedReadiness()
                 self.privateState.run { _ in await self.refreshSources(requestPermissions: false) }
             }

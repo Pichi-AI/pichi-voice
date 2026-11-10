@@ -1,34 +1,69 @@
 import AppKit
 import SwiftUI
 
+@MainActor
+protocol PermissionDragGuidePresenting: AnyObject {
+    func present(
+        instruction: String,
+        settingsPaneURL: URL,
+        isGranted: @escaping @Sendable () -> Bool,
+        onGranted: @escaping @MainActor () -> Void
+    ) -> UUID
+    func dismiss(requestID: UUID)
+}
+
 /// Floating "drag the app into the list" guide shown next to System Settings, generalized from
 /// the Accessibility onboarding flow so any TCC pane (Screen Recording, etc.) can reuse it.
 @MainActor
-final class PermissionDragGuideController {
+final class PermissionDragGuideController: PermissionDragGuidePresenting {
     static let shared = PermissionDragGuideController()
 
     private var panel: NSPanel?
     private var monitorTask: Task<Void, Never>?
     private var requestID: UUID?
+    private let openSettings: (URL) -> Void
+    private let schedulePresentation: (@escaping @MainActor () -> Void) -> Void
 
-    private init() {}
+    init(
+        openSettings: @escaping (URL) -> Void = { NSWorkspace.shared.open($0) },
+        schedulePresentation: @escaping (@escaping @MainActor () -> Void) -> Void = { action in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { action() }
+        }
+    ) {
+        self.openSettings = openSettings
+        self.schedulePresentation = schedulePresentation
+    }
 
+    @discardableResult
     func present(
         instruction: String,
         settingsPaneURL: URL,
         isGranted: @escaping @Sendable () -> Bool,
         onGranted: @escaping @MainActor () -> Void = {}
-    ) {
+    ) -> UUID {
+        self.dismiss()
         let requestID = UUID()
         self.requestID = requestID
-        NSWorkspace.shared.open(settingsPaneURL)
+        self.openSettings(settingsPaneURL)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+        self.schedulePresentation { [weak self] in
             guard let self, self.requestID == requestID else { return }
+            guard !isGranted() else {
+                self.dismiss()
+                onGranted()
+                return
+            }
             self.showPanel(instruction: instruction)
             self.startMonitor(requestID: requestID, isGranted: isGranted, onGranted: onGranted)
             self.activateSystemSettingsSoon(requestID: requestID)
         }
+        return requestID
+    }
+
+    /// A departing view must not dismiss a newer guide owned by another view.
+    func dismiss(requestID: UUID) {
+        guard self.requestID == requestID else { return }
+        self.dismiss()
     }
 
     func dismiss() {
@@ -99,21 +134,19 @@ final class PermissionDragGuideController {
             var missingSettingsCount = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 900_000_000)
-                guard let self, await self.requestID == requestID else { return }
+                guard !Task.isCancelled, let self, self.requestID == requestID else { return }
 
                 if isGranted() {
-                    await MainActor.run {
-                        self.dismiss()
-                        onGranted()
-                        NSApp.activate(ignoringOtherApps: true)
-                    }
+                    self.dismiss(requestID: requestID)
+                    onGranted()
+                    NSApp.activate(ignoringOtherApps: true)
                     return
                 }
 
-                let settingsFrame = await MainActor.run { Self.systemSettingsWindowFrame() }
+                let settingsFrame = Self.systemSettingsWindowFrame()
                 missingSettingsCount = settingsFrame == nil ? missingSettingsCount + 1 : 0
                 if missingSettingsCount >= 3 {
-                    await MainActor.run { self.returnToApp() }
+                    self.returnToApp()
                     return
                 }
             }

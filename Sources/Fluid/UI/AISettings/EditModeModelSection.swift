@@ -108,7 +108,7 @@ struct EditModeScreenContextSettings: View {
             HStack(spacing: 12) {
                 if self.settings.editModeReadsScreen, self.permission.hasChecked, !self.permission.isAllowed {
                     Button(PichiLocalization.text(self.permission.requiresSettings ? "Open System Settings" : "Allow Screen Capture")) {
-                        self.requestScreenAccess()
+                        self.beginScreenPermissionRequest()
                     }
                     .fluidGlassAction()
                     .disabled(self.permission.isRequesting)
@@ -123,9 +123,9 @@ struct EditModeScreenContextSettings: View {
             Task { await self.permission.refresh() }
         }
         .onChange(of: self.settings.editModeReadsScreen) { _, enabled in
-            if !enabled { self.permissionRequestTask?.cancel() }
+            if !enabled { self.cancelScreenPermissionRequest() }
         }
-        .onDisappear { self.permissionRequestTask?.cancel() }
+        .onDisappear { self.cancelScreenPermissionRequest() }
     }
 
     /// Changing the feature preference never prompts or changes dictation's context setting.
@@ -136,18 +136,23 @@ struct EditModeScreenContextSettings: View {
         )
     }
 
-    private func requestScreenAccess() {
+    private func beginScreenPermissionRequest() {
         guard self.settings.editModeReadsScreen, self.permissionRequestTask == nil else { return }
-        if self.permission.requiresSettings {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                NSWorkspace.shared.open(url)
-            }
-            return
-        }
         self.permissionRequestTask = Task {
             defer { self.permissionRequestTask = nil }
-            await self.permission.requestIfNeeded { self.settings.editModeReadsScreen && !Task.isCancelled }
+            await self.requestScreenAccess()
         }
+    }
+
+    /// The permission button's UI-to-service boundary. Refresh/toggles never call it.
+    func requestScreenAccess() async {
+        guard self.settings.editModeReadsScreen else { return }
+        await self.permission.requestIfNeeded { self.settings.editModeReadsScreen && !Task.isCancelled }
+    }
+
+    func cancelScreenPermissionRequest() {
+        self.permissionRequestTask?.cancel()
+        self.permission.cancel()
     }
 }
 
