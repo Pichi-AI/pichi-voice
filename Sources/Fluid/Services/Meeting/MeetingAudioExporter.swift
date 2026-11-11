@@ -1,94 +1,157 @@
+@preconcurrency import AVFoundation
 import Foundation
 
-/// Shared existing audio export operation; platforms choose the destination and presentation.
+/// One portable AAC/M4A file. Platforms own destination selection and presentation.
 nonisolated enum MeetingAudioExporter {
-    private static let audioExportLock = NSLock()
+    private static let publicationLock = NSLock()
 
+    @discardableResult
     static func exportAudioFiles(
-        of session: MeetingSession,
-        from sourceDirectory: URL,
-        into destinationFolder: URL,
-        copyItem: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }
-    ) async throws {
-        _ = try await self.export(of: session, from: sourceDirectory, into: destinationFolder, copyItem: copyItem)
+        of session: MeetingSession, from sourceDirectory: URL, into destinationFolder: URL,
+        copyItem: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) },
+        validatePublication: @escaping @Sendable () throws -> Void = {}
+    ) async throws -> URL {
+        try await export(of: session, from: sourceDirectory, into: destinationFolder,
+                         copyItem: copyItem, validatePublication: validatePublication)
     }
 
     static func export(
         of session: MeetingSession, from sourceDirectory: URL, into destinationFolder: URL,
-        copyItem: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }
+        copyItem: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) },
+        validatePublication: @escaping @Sendable () throws -> Void = {}
     ) async throws -> URL {
         try Task.checkCancellation()
-        guard session.retention.audioDeletedAt == nil, session.hasFinalizedAudio else {
+        guard !session.isLocalContentConcealed, session.retention.audioDeletedAt == nil, session.hasFinalizedAudio else {
             throw CocoaError(.fileNoSuchFile)
         }
-        // The session and URLs are immutable snapshots; no view state crosses to the worker.
+        // Immutable source snapshot; synchronous disk work and encoding stay off the UI actor.
         let worker = Task.detached(priority: .utility) {
-            try Task.checkCancellation()
             let accessing = destinationFolder.startAccessingSecurityScopedResource()
             defer { if accessing { destinationFolder.stopAccessingSecurityScopedResource() } }
-            // Preserve the old serial export semantics when users request another export
-            // while copying. The lock and all filesystem work stay off the main actor.
-            return try Self.audioExportLock.withLock {
-                try Self.stageExport(of: session, from: sourceDirectory, into: destinationFolder, copyItem: copyItem)
-            }
+            return try await stageExport(of: session, from: sourceDirectory, into: destinationFolder,
+                                         copyItem: copyItem, validatePublication: validatePublication)
         }
-        // copyItem is synchronous and may not be interruptible. Cancellation reaches
-        // the concrete worker, but the caller still joins its retirement and cleanup.
+        // A synchronous copy may not be interruptible. Always join worker retirement and cleanup.
         return try await withTaskCancellationHandler {
             try await worker.value
-        } onCancel: {
-            worker.cancel()
-        }
+        } onCancel: { worker.cancel() }
     }
 
     private static func stageExport(
-        of session: MeetingSession,
-        from sourceDirectory: URL,
-        into destinationFolder: URL,
-        copyItem: (URL, URL) throws -> Void
-    ) throws -> URL {
+        of session: MeetingSession, from sourceDirectory: URL, into destinationFolder: URL,
+        copyItem: (URL, URL) throws -> Void,
+        validatePublication: () throws -> Void
+    ) async throws -> URL {
         try Task.checkCancellation()
-        let fileManager = FileManager.default
-        let baseName = Self.sanitizedExportName(session.displayTitle)
-        let name = Self.uniqueExportName(baseName, in: destinationFolder, fileManager: fileManager)
-        let stagingDirectory = destinationFolder.appendingPathComponent(".\(name).\(UUID().uuidString).export-tmp", isDirectory: true)
-        try fileManager.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
-
-        do {
-            for track in session.audioTracks {
-                for chunk in track.chunks where chunk.finalizationState == .finalized && chunk.byteCount > 0 {
-                    try Task.checkCancellation()
-                    let sourceURL = chunk.fileURL(relativeTo: sourceDirectory).standardizedFileURL
-                    let root = sourceDirectory.standardizedFileURL.resolvingSymlinksInPath().path + "/"
-                    guard sourceURL.resolvingSymlinksInPath().path.hasPrefix(root) else {
-                        throw CocoaError(.fileReadInvalidFileName)
-                    }
-                    let ext = sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension
-                    let fileName = "\(track.kind.rawValue)-\(String(format: "%03d", chunk.sequence)).\(ext)"
-                    try copyItem(sourceURL, stagingDirectory.appendingPathComponent(fileName, isDirectory: false))
-                    try Task.checkCancellation()
+        let manager = FileManager.default
+        let staging = destinationFolder.appendingPathComponent(".\(UUID().uuidString).export-tmp", isDirectory: true)
+        try manager.createDirectory(at: staging, withIntermediateDirectories: false,
+                                    attributes: [.posixPermissions: 0o700])
+        defer { try? manager.removeItem(at: staging) }
+        let composition = AVMutableComposition()
+        let origin = MeetingAnalysisManifest.presentationOrigin(of: session)
+        guard origin.isFinite else { throw CocoaError(.fileReadCorruptFile) }
+        var inserted = false
+        var mixParameters: [AVAudioMixInputParameters] = []
+        let audibleTracks = session.audioTracks.filter { $0.chunks.contains { $0.finalizationState == .finalized && $0.byteCount > 0 } }
+        for track in audibleTracks {
+            guard let output = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+            else { throw CocoaError(.fileReadCorruptFile) }
+            var previousEnd = CMTime.zero
+            for chunk in track.chunks.sorted(by: { $0.presentationStart < $1.presentationStart })
+                where chunk.finalizationState == .finalized && chunk.byteCount > 0 {
+                try Task.checkCancellation()
+                let hostClock = session.timebase.recordingTimePolicy == .hostMonotonicV1
+                let path = hostClock ? chunk.captureAnalysisAsset?.relativeFilePath : MeetingAudioPresentation.relativePlaybackPath(for: chunk)
+                guard let path, chunk.presentationStart.timescale > 0, chunk.presentationEnd.timescale > 0,
+                      chunk.presentationEnd > chunk.presentationStart else { throw CocoaError(.fileReadCorruptFile) }
+                let source = try MeetingChunkPathConfinement.containedURL(sessionDirectory: sourceDirectory, relativePath: path)
+                let local = staging.appendingPathComponent(UUID().uuidString).appendingPathExtension(source.pathExtension)
+                // Retain a private snapshot so deletion cannot produce a successful partial export.
+                try copyItem(source, local)
+                try Task.checkCancellation()
+                let asset = AVURLAsset(url: local)
+                let tracks = try await withTaskCancellationHandler {
+                    try await asset.loadTracks(withMediaType: .audio)
+                } onCancel: { asset.cancelLoading() }
+                guard let input = tracks.first else { throw CocoaError(.fileReadCorruptFile) }
+                let available = try await input.load(.timeRange)
+                guard available.isValid, available.duration.isNumeric, available.duration > .zero else {
+                    throw CocoaError(.fileReadCorruptFile)
                 }
+                if hostClock {
+                    let mapping = try MeetingHostClockMapping.validated(chunk: chunk)
+                    let decoded = try AVAudioFile(forReading: local)
+                    guard let metadata = chunk.captureAnalysisAsset, let sampleRate = metadata.sampleRate,
+                          decoded.length == mapping.frameCount, decoded.processingFormat.sampleRate == sampleRate,
+                          Int(decoded.processingFormat.channelCount) == metadata.channelCount else {
+                        throw CocoaError(.fileReadCorruptFile)
+                    }
+                    for span in mapping.spans {
+                        let range = CMTimeRange(start: time(span.frameStart / sampleRate),
+                                                duration: time((span.frameEnd - span.frameStart) / sampleRate))
+                        try insert(range, of: input, into: output, start: span.hostStart.seconds - origin,
+                                   duration: span.hostEnd.seconds - span.hostStart.seconds, previousEnd: &previousEnd)
+                    }
+                } else {
+                    // Legacy sample-clock chunks have no persisted frame mapping. AVFoundation
+                    // supplies the actual playable range, including the container's codec trim.
+                    try insert(available, of: input, into: output, start: chunk.presentationStart.seconds - origin,
+                               duration: chunk.presentationEnd.seconds - chunk.presentationStart.seconds, previousEnd: &previousEnd)
+                }
+                inserted = true
             }
-            try Task.checkCancellation()
-            var destinationName = name
-            // Publication commits when moveItem successfully returns. Cancellation
-            // checks cannot be atomic with a filesystem move: a request racing that
-            // move may still commit. Keep committed output and return its URL; never
-            // delete a user's published export because cancellation arrived late.
-            do {
-                try fileManager.moveItem(at: stagingDirectory, to: destinationFolder.appendingPathComponent(destinationName, isDirectory: true))
-            } catch CocoaError.fileWriteFileExists {
-                // Destination appeared between the uniqueness check and the move; retry once with a fresh name.
-                try Task.checkCancellation()
-                destinationName = Self.uniqueExportName(baseName, in: destinationFolder, fileManager: fileManager)
-                try Task.checkCancellation()
-                try fileManager.moveItem(at: stagingDirectory, to: destinationFolder.appendingPathComponent(destinationName, isDirectory: true))
-            }
-            return destinationFolder.appendingPathComponent(destinationName, isDirectory: true)
-        } catch {
-            try? fileManager.removeItem(at: stagingDirectory)
-            throw error
+            let parameters = AVMutableAudioMixInputParameters(track: output)
+            // Leave headroom when microphone and system audio speak together.
+            parameters.setVolume(1 / Float(audibleTracks.count), at: .zero)
+            mixParameters.append(parameters)
         }
+        guard inserted, composition.duration > .zero else { throw CocoaError(.fileNoSuchFile) }
+        let encoded = staging.appendingPathComponent("audio.m4a")
+        guard let encoder = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        let mix = AVMutableAudioMix(); mix.inputParameters = mixParameters
+        encoder.audioMix = mix
+        encoder.shouldOptimizeForNetworkUse = true
+        try Task.checkCancellation()
+        // The native async API cancels its encoder and waits for the terminal callback.
+        try await encoder.export(to: encoded, as: .m4a)
+        try Task.checkCancellation()
+        try validatePublication()
+        try Task.checkCancellation()
+        // Only final publication is serialized. Concurrent encoders use distinct private staging.
+        return try publicationLock.withLock {
+            try validatePublication()
+            try Task.checkCancellation()
+            let baseName = sanitizedExportName(session.displayTitle)
+            while true {
+                let name = uniqueExportName(baseName, in: destinationFolder, fileManager: manager)
+                let destination = destinationFolder.appendingPathComponent(name)
+                do {
+                    // Successful move is the commit point. Late cancellation preserves output.
+                    try manager.moveItem(at: encoded, to: destination)
+                    return destination
+                } catch CocoaError.fileWriteFileExists { try Task.checkCancellation() }
+            }
+        }
+    }
+
+    private static func time(_ seconds: Double) -> CMTime {
+        CMTime(seconds: seconds, preferredTimescale: 1_000_000_000)
+    }
+
+    private static func insert(_ source: CMTimeRange, of input: AVAssetTrack, into output: AVMutableCompositionTrack,
+                               start: Double, duration: Double, previousEnd: inout CMTime) throws {
+        guard start.isFinite, duration.isFinite, start >= -0.001, duration > 0 else { throw CocoaError(.fileReadCorruptFile) }
+        let position = time(max(0, start))
+        // Inserting an overlapping chunk on the same track would shift the remaining timeline.
+        // Permit timestamp quantization only; different tracks are mixed independently.
+        guard CMTimeGetSeconds(CMTimeSubtract(previousEnd, position)) <= 0.001 else { throw CocoaError(.fileReadCorruptFile) }
+        let target = CMTimeMaximum(position, previousEnd)
+        try output.insertTimeRange(source, of: input, at: target)
+        output.scaleTimeRange(CMTimeRange(start: target, duration: source.duration), toDuration: time(duration))
+        previousEnd = CMTimeAdd(target, time(duration))
     }
 
     static func sanitizedExportName(_ title: String) -> String {
@@ -111,10 +174,10 @@ nonisolated enum MeetingAudioExporter {
     }
 
     private static func uniqueExportName(_ baseName: String, in folder: URL, fileManager: FileManager) -> String {
-        var candidate = baseName
+        var candidate = baseName + ".m4a"
         var suffix = 2
         while fileManager.fileExists(atPath: folder.appendingPathComponent(candidate).path) {
-            candidate = "\(baseName) \(suffix)"
+            candidate = "\(baseName) \(suffix).m4a"
             suffix += 1
         }
         return candidate

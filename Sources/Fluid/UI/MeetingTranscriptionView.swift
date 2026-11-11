@@ -1461,12 +1461,18 @@ struct MeetingTranscriptionView: View {
                 }
                 let sourceDirectory = source.directory
                 let profile = stamp.profile
-                // The shared exporter is joined, including its detached worker. Its final move
-                // currently has no cancellation gate; per-file reads still refuse a concealed owner.
-                try await Self.exportAudioFiles(of: freshSession, from: sourceDirectory, into: destinationFolder) { source, destination in
-                    guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.current == profile else { throw CancellationError() }
-                    try FileManager.default.copyItem(at: source, to: destination)
-                }
+                let exported = try await Self.exportAudioFiles(
+                    of: freshSession, from: sourceDirectory, into: destinationFolder,
+                    copyItem: { source, destination in
+                        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.current == profile else { throw CancellationError() }
+                        try FileManager.default.copyItem(at: source, to: destination)
+                    },
+                    validatePublication: {
+                        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.current == profile else { throw CancellationError() }
+                    }
+                )
+                guard self.privateState.accepts(stamp) else { return }
+                NSWorkspace.shared.activateFileViewerSelecting([exported])
             } catch {
                 guard self.privateState.accepts(stamp) else { return }
                 self.privateState.actionErrorMessage = PichiLocalization.format("Export failed: %@", error.localizedDescription)
@@ -1474,11 +1480,14 @@ struct MeetingTranscriptionView: View {
         }
     }
 
+    @discardableResult
     nonisolated static func exportAudioFiles(
         of session: MeetingSession, from sourceDirectory: URL, into destinationFolder: URL,
-        copyItem: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }
-    ) async throws {
-        try await MeetingAudioExporter.exportAudioFiles(of: session, from: sourceDirectory, into: destinationFolder, copyItem: copyItem)
+        copyItem: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) },
+        validatePublication: @escaping @Sendable () throws -> Void = {}
+    ) async throws -> URL {
+        try await MeetingAudioExporter.exportAudioFiles(of: session, from: sourceDirectory, into: destinationFolder,
+                                                       copyItem: copyItem, validatePublication: validatePublication)
     }
 
     private nonisolated static func sanitizedExportName(_ title: String) -> String {

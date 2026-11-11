@@ -24,9 +24,7 @@ struct MeetingSharePayload: Identifiable {
         let directory = try makePrivateDirectory()
         do {
             let exported = try await MeetingAudioExporter.export(of: session, from: source, into: directory)
-            let urls = try FileManager.default.contentsOfDirectory(at: exported, includingPropertiesForKeys: nil)
-            guard !urls.isEmpty else { throw CocoaError(.fileNoSuchFile) }
-            return Self(items: urls, directory: directory, includesAudio: true)
+            return Self(items: [exported], directory: directory, includesAudio: true)
         } catch { try? FileManager.default.removeItem(at: directory); throw error }
     }
 
