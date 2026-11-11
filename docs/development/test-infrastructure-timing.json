@@ -66,7 +66,7 @@
    "TranscribeCpp": 12
   },
   "xctestMacOSSerialNewMain": {
-   "revision": "68b935b4 plus pilot tests",
+   "revision": "68b935b4 plus pilot tests (claude/xctest-pilot at 916e4c0484454bfa988b9918c8a21156405fc430)",
    "seconds": 383,
    "passed": 3472,
    "failed": 0,
@@ -74,7 +74,7 @@
    "location": "outside ~/Documents"
   },
   "xctestMacOSParallel": {
-   "revision": "68b935b4 plus pilot tests",
+   "revision": "68b935b4 plus pilot tests (claude/xctest-pilot at 916e4c0484454bfa988b9918c8a21156405fc430)",
    "workers": {
     "4": {
      "seconds": 96,
@@ -100,7 +100,7 @@
    "raceLocation": "test double Gate in PichiGigaAMSourceSelectionTests only"
   },
   "compilerWarnings": {
-   "revision": "68b935b4 plus pilot tests",
+   "revision": "68b935b4 plus pilot tests (claude/xctest-pilot at 916e4c0484454bfa988b9918c8a21156405fc430)",
    "unique": 541,
    "sources": 246,
    "tests": 292,

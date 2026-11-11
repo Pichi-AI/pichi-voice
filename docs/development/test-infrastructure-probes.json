@@ -5494,7 +5494,7 @@
   "risk": "concurrency",
   "protects": "Резервная копия и восстановление настроек не должны перекрываться с диктовкой и друг с другом, терять провайдеров или оставлять API-ключи открытым текстом.",
   "productionFiles": [
-   "Sources/Fluid/Services/BackupService.swift",
+   "Sources/Fluid/Persistence/BackupService.swift",
    "Sources/Fluid/Persistence/SettingsStore.swift",
    "Sources/Fluid/Persistence/KeychainService.swift",
    "Sources/Fluid/Account/PrivateProfileStorage.swift"
