@@ -148,7 +148,7 @@ root = pathlib.Path(os.environ["SYNTHETIC_ROOT"])
 with (root / "calls.txt").open("a") as out: out.write(" ".join(sys.argv[1:]) + "\\n")
 if "build-for-testing" in sys.argv:
     if int(os.environ["SYNTHETIC_BUILD_STATUS"]): sys.exit(int(os.environ["SYNTHETIC_BUILD_STATUS"]))
-    products = root / ".build/Xcode/Build/Products"
+    products = root / ".build/XcodeRegression/Build/Products"
     products.mkdir(parents=True)
     (products / "Fluid_macosx-synthetic.xctestrun").write_bytes(plistlib.dumps({"TestConfigurations": [{"TestTargets": [{"TestBundlePath": "__TESTROOT__/Synthetic.xctest"}]}]}))
 else:
@@ -192,6 +192,16 @@ print(json.dumps(dict(result="Failed" if failed else "Passed", totalTestCount=3,
         self.assertIn("-skip-testing:FluidDictationIntegrationTests/DictationE2ETests/testDictationEndToEnd_whisperTiny_transcribesFixture", calls)
         self.assertEqual(json.loads((run / "summary.json").read_text())["skippedTests"], 1)
         self.assertIn("3 total, 2 passed, 0 failed, 1 skipped", (run / "summary.txt").read_text())
+
+    def test_regression_uses_its_own_identity_and_derived_data(self):
+        _, _, calls = self.run_command()
+        build, run = calls.splitlines()[:2]
+        self.assertIn("PICHI_BUNDLE_IDENTIFIER=ai.pichi.voice.regression", build)
+        self.assertIn("build-for-testing", build)
+        self.assertIn("test-without-building", run)
+        for call in (build, run):
+            self.assertIn(".build/XcodeRegression", call)
+            self.assertNotIn(".build/Xcode ", call)
 
     def test_test_failure_still_extracts_actual_summary_and_preserves_exit(self):
         result, run, calls = self.run_command(test_status=65)

@@ -154,6 +154,8 @@ Optional `-only-testing:target/class/test` and `-skip-testing:target/class/test`
 bash scripts/dev/macos.sh regression -only-testing:FluidDictationIntegrationTests/PichiGigaAMIntegrationTests
 ```
 
+`macos.sh regression` builds with the separate identity `ai.pichi.voice.regression` and its own derived data directory `.build/XcodeRegression`. That costs about 2 GB more per worktree but leaves the product of `macos.sh build` untouched. The first run under this identity downloads about 1 GB of models into `~/Library/Application Support/ai.pichi.voice.regression.debug`, and later runs reuse them. Tests still leave UUID-named preference files in `~/Library/Preferences`, which this script does not remove because it cannot tell its own files from another process's files. `macos.sh test`, which CI uses, has no separate identity.
+
 Each run prints its artifact directory under `.build/regression/`. It keeps the revision and working-tree state, build/test logs, both `.xcresult` bundles, and the test report's JSON and concise summary. Counts come from `xcresulttool`, including skipped and expected-failure tests. Build failures, test failures, empty/all-skipped runs, and absent or malformed reports return failure. The configured `.xctestrun` stays beside its build products because Xcode resolves `__TESTROOT__` relative to that file. Python 3 and Xcode with `xcresulttool get test-results summary` are required. Do not run concurrent builds in one worktree.
 
 ## Initial verification on October 9, 2026
