@@ -96,6 +96,7 @@ class LayerTests(unittest.TestCase):
                      "Vendor/PichiGigaAM/A.swift", "Fluid.xcodeproj/project.pbxproj", "Package.swift",
                      "Sources/Fluid/Localization/Localizable.xcstrings", "Sources/Fluid/Branding/brand-package.json",
                      "scripts/dev/stage-sensitive-topic-model.py", "tools/sensitive_topic_classifier.py",
+                     "Sources/MobileActivity/MobileRecordingActivityWidget.swift",
                      "Tests/Fixtures/SensitiveTopics/synthetic-exploratory-v1.jsonl"):
             self.assertTrue(VERIFY.touches_mobile([path], shared), path)
         self.assertFalse(VERIFY.touches_mobile(["Sources/Fluid/ContentView.swift", "docs/a.md"], shared))
@@ -197,9 +198,10 @@ class SideBySideTests(unittest.TestCase):
         self.assertEqual(receipt.value["result"], "failed")
 
     def test_quarantined_tests_do_not_run(self):
-        name = BROKEN[:-2]
-        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None)], VERIFY.Quarantine(tests={name}, probes=set()))
+        name, mobile = BROKEN[:-2], f"{VERIFY.MOBILE_BUNDLE}/AClass/testOne"
+        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None)], VERIFY.Quarantine(tests={name, mobile}, probes=set()))
         self.assertIn(f"-skip-testing:{name}", receipt.calls[0][1])
+        self.assertNotIn(f"-skip-testing:{mobile}", receipt.calls[0][1])
 
 
 class ProbeTests(unittest.TestCase):
@@ -244,9 +246,39 @@ class SimulatorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             receipt = FakeReceipt(Path(temporary), [])
             with patch.object(VERIFY, "disposable_simulator", side_effect=OSError("no runtime")), contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(VERIFY.run_ios(receipt), {})
+                self.assertEqual(VERIFY.run_ios(receipt, NOTHING), {})
             receipt.finish()
             self.assertEqual(receipt.value["result"], "failed")
+
+    def test_a_missing_runtime_is_a_gap_and_not_a_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = FakeReceipt(Path(temporary), [])
+            with patch.object(VERIFY.subprocess, "check_output", return_value=b'{"runtimes": [{"platform": "iOS", "isAvailable": false}]}'):
+                self.assertEqual(VERIFY.run_ios(receipt, NOTHING), {})
+            receipt.finish()
+            self.assertEqual(receipt.value["result"], "incomplete")
+            self.assertEqual(receipt.value["steps"], [])
+            self.assertIn("no iOS simulator runtime", receipt.value["skipped"][0]["reason"])
+
+    def test_a_red_step_outranks_a_gap(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = FakeReceipt(Path(temporary), [(1, None)])
+            receipt.step("check", ["false"])
+            receipt.unavailable("ios", "no runtime")
+            receipt.finish()
+            self.assertEqual(receipt.value["result"], "failed")
+
+    def test_ios_leaves_out_its_own_quarantined_tests(self):
+        mobile = f"{VERIFY.MOBILE_BUNDLE}/AClass/testOne"
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = FakeReceipt(Path(temporary), [(0, None)])
+            with patch.object(VERIFY, "disposable_simulator", return_value="UDID"), \
+                    patch.object(VERIFY.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), \
+                    patch.object(VERIFY, "bundle_results", return_value={PASSING: "Passed"}):
+                VERIFY.run_ios(receipt, VERIFY.Quarantine(tests={mobile, BROKEN[:-2]}, probes=set()))
+            command = receipt.calls[0][1]
+            self.assertIn(f"-skip-testing:{mobile}", command)
+            self.assertNotIn(f"-skip-testing:{BROKEN[:-2]}", command)
 
     def test_the_simulator_is_recorded_and_its_deletion_reported(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -254,7 +286,7 @@ class SimulatorTests(unittest.TestCase):
             with patch.object(VERIFY, "disposable_simulator", return_value="UDID"), \
                     patch.object(VERIFY.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)), \
                     patch.object(VERIFY, "bundle_results", return_value=None):
-                VERIFY.run_ios(receipt)
+                VERIFY.run_ios(receipt, NOTHING)
             receipt.finish()
             self.assertEqual(receipt.value["simulator"], {"udid": "UDID", "deleted": False})
             self.assertEqual(receipt.value["result"], "failed")
@@ -349,7 +381,7 @@ class ReceiptTests(unittest.TestCase):
     def test_the_probe_runner_gets_time_to_stop_its_probes(self):
         self.assertEqual(VERIFY.RUNNER.CANCEL_GRACE_SECONDS, VERIFY.STEP_STOP_GRACE_SECONDS)
 
-    def test_term_stops_the_step_and_leaves_a_finished_receipt(self):
+    def test_a_signal_stops_both_steps_and_finishes_the_receipt(self):
         script = f"""
 import importlib.machinery, importlib.util, os, signal, sys, threading, time
 from pathlib import Path
@@ -358,21 +390,71 @@ loader = importlib.machinery.SourceFileLoader("verify", {str(ROOT / "scripts/dev
 spec = importlib.util.spec_from_loader("verify", loader)
 verify = importlib.util.module_from_spec(spec)
 loader.exec_module(verify)
-receipt = verify.Receipt(Path(sys.argv[1]))
-threading.Timer(0.3, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
-with verify.RUNNER.suite_signal_handlers() as protect:
-    receipt.protect_creation = protect
-    try:
-        receipt.step("long", ["sh", "-c", "echo $$ > " + sys.argv[1] + "/pid; sleep 30"])
-    except verify.RUNNER.RunTermination:
-        receipt.finish("interrupted")
+verify.RUNNER.CANCEL_GRACE_SECONDS = 0.3
+root = Path(sys.argv[1])
+receipt = verify.Receipt(root)
+def send():
+    while not ((root / "a.pid").exists() and (root / "b.pid").exists()):
+        time.sleep(0.01)
+    os.kill(os.getpid(), int(sys.argv[2]))
+threading.Thread(target=send, daemon=True).start()
+def work():
+    a = receipt.begin("a", ["sh", "-c", f"echo $$ > {{root}}/a.pid; sleep 30"])
+    b = receipt.begin("b", ["sh", "-c", f"echo $$ > {{root}}/b.pid; sleep 30"])
+    receipt.join(a, b)
+verify.run_guarded(receipt, work)
 """
+        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            with tempfile.TemporaryDirectory() as temporary:
+                completed = subprocess.run([sys.executable, "-B", "-S", "-c", script, temporary, str(int(number))],
+                                           capture_output=True, text=True, timeout=30)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(json.loads((Path(temporary) / "receipt.json").read_text())["result"], "interrupted", number)
+                for name in ("a", "b"):
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(int((Path(temporary) / f"{name}.pid").read_text()), 0)
+
+    def test_cleanup_reaches_every_step_even_when_one_stop_fails(self):
         with tempfile.TemporaryDirectory() as temporary:
-            completed = subprocess.run([sys.executable, "-B", "-S", "-c", script, temporary], capture_output=True, text=True, timeout=20)
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual(json.loads((Path(temporary) / "receipt.json").read_text())["result"], "interrupted")
-            with self.assertRaises(ProcessLookupError):
-                os.kill(int((Path(temporary) / "pid").read_text()), 0)
+            receipt = VERIFY.Receipt(Path(temporary))
+            first = receipt.begin("first", ["sleep", "30"], hosts="/first/")
+            second = receipt.begin("second", ["sleep", "30"])
+            real_stop = VERIFY.RUNNER.stop_process_group
+
+            def fail_on_first(process):
+                real_stop(process)
+                if process is first["process"]:
+                    raise OSError("synthetic stop failure")
+
+            with patch.object(VERIFY.RUNNER, "stop_process_group", side_effect=fail_on_first), \
+                    patch.object(VERIFY, "stop_test_hosts") as hosts, patch.object(VERIFY.RUNNER, "CANCEL_GRACE_SECONDS", 0.2):
+                errors = receipt.stop_running()
+            self.assertEqual([str(error) for error in errors], ["synthetic stop failure"])
+            hosts.assert_called_once_with("/first/")
+            self.assertIsNotNone(second["process"].poll())
+            self.assertEqual(receipt.running, [])
+            self.assertTrue(first["stream"].closed and second["stream"].closed)
+
+    def test_any_error_still_finishes_the_receipt_as_failed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = VERIFY.Receipt(Path(temporary))
+
+            def work():
+                raise KeyError("unexpected shape")
+
+            VERIFY.run_guarded(receipt, work)
+            self.assertEqual(receipt.value["result"], "failed")
+            self.assertIn("unexpected shape", receipt.value["error"])
+
+    def test_a_step_that_ends_first_keeps_its_own_duration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = VERIFY.Receipt(Path(temporary))
+            with contextlib.redirect_stdout(io.StringIO()):
+                quick = receipt.begin("quick", ["true"])
+                slow = receipt.begin("slow", ["sleep", "1"])
+                rows = receipt.join(quick, slow)
+            self.assertLess(rows[0]["seconds"], 0.7)
+            self.assertGreaterEqual(rows[1]["seconds"], 0.9)
 
     def test_l0_says_why_each_heavy_step_did_not_run(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -413,17 +495,55 @@ with verify.RUNNER.suite_signal_handlers() as protect:
         with tempfile.TemporaryDirectory() as temporary:
             receipt = FakeReceipt(Path(temporary), [(0, None)])
             receipt.step("check", ["true"])
-            with patch.object(VERIFY, "git", return_value="moved"):
-                VERIFY.finish(receipt, None, "movedbefore")
+            with patch.object(VERIFY, "tree_fingerprint", return_value="after"):
+                VERIFY.finish(receipt, None, "before")
             self.assertEqual(receipt.value["result"], "incomplete")
 
     def test_a_still_tree_finishes_on_the_step_results(self):
         with tempfile.TemporaryDirectory() as temporary:
             receipt = FakeReceipt(Path(temporary), [(0, None)])
             receipt.step("check", ["true"])
-            with patch.object(VERIFY, "git", return_value="same"):
-                VERIFY.finish(receipt, None, "samesame")
+            with patch.object(VERIFY, "tree_fingerprint", return_value="same"):
+                VERIFY.finish(receipt, None, "same")
             self.assertEqual(receipt.value["result"], "passed")
+
+    def test_missing_lint_is_a_gap_only_when_swift_changed(self):
+        for paths, expected in ((["Sources/A.swift"], "incomplete"), (["docs/a.md"], "passed")):
+            with tempfile.TemporaryDirectory() as temporary:
+                receipt = FakeReceipt(Path(temporary), [(0, None)])
+                with patch.object(VERIFY.shutil, "which", return_value=None):
+                    receipt.finish(VERIFY.execute(receipt, "L0", paths, "origin/main", 4))
+                self.assertEqual(receipt.value["result"], expected, paths)
+
+    def test_a_failed_build_is_named(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "summary.txt").write_text("Build failed (exit 65); tests were not run.\n")
+            row = {"status": "failed"}
+            with patch.object(VERIFY, "artifact_directory", return_value=directory), patch.object(VERIFY, "bundle_results", return_value=None):
+                self.assertEqual(VERIFY.xctest_results(row), {})
+            self.assertEqual(row["note"], "the build failed, so no test ran")
+
+    def test_the_fingerprint_follows_content_and_not_only_status(self):
+        def run(*arguments):
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *arguments], cwd=root, check=True, capture_output=True)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run("init", "-q")
+            (root / "tracked.txt").write_text("one\n")
+            run("add", "tracked.txt")
+            run("commit", "-q", "-m", "first")
+            clean = VERIFY.tree_fingerprint(root)
+            self.assertEqual(VERIFY.tree_fingerprint(root), clean)
+            (root / "tracked.txt").write_text("two\n")
+            modified = VERIFY.tree_fingerprint(root)
+            (root / "tracked.txt").write_text("three\n")
+            modified_again = VERIFY.tree_fingerprint(root)
+            (root / "new file.txt").write_text("a\n")
+            untracked = VERIFY.tree_fingerprint(root)
+            (root / "new file.txt").write_text("b\n")
+            self.assertEqual(len({clean, modified, modified_again, untracked, VERIFY.tree_fingerprint(root)}), 5)
 
     def test_summary_names_revision_reason_skips_and_failures(self):
         value = {"layer": "L1", "result": "failed", "seconds": 90.4, "workingTree": "clean", "revision": "a" * 40, "base": "b" * 40,
@@ -434,6 +554,51 @@ with verify.RUNNER.suite_signal_handlers() as protect:
         for expected in ("Verify L1: failed in 90 s", "aaaaaaaa (clean)", "bbbbbbbb", "Sources/A.swift can change the app",
                          "failed xctest: 61 s (no readable test report)", "skipped ios: no mobile", BROKEN, SKIPPED, "/tmp/run/receipt.json"):
             self.assertIn(expected, text)
+
+
+class ExecuteTests(unittest.TestCase):
+    def run_layer(self, layer, paths, quarantine=NOTHING):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        receipt = FakeReceipt(Path(temporary.name), [(0, None), (0, None), (0, None)])
+        ran = []
+
+        class Usage:
+            free = 50 * 2**30
+
+        def ios(_, passed_quarantine):
+            ran.append(passed_quarantine)
+            return {f"{VERIFY.MOBILE_BUNDLE}/AClass/testOne()": "Failed"}
+
+        with patch.object(VERIFY.shutil, "which", return_value="/usr/bin/tool"), patch.object(VERIFY.shutil, "disk_usage", return_value=Usage), \
+                patch.object(VERIFY, "read_quarantine", return_value=quarantine), patch.object(VERIFY, "run_ios", side_effect=ios), \
+                patch.object(VERIFY, "run_xctest_and_probes", return_value={PASSING: "Passed", BROKEN: "Failed"}), \
+                patch.object(VERIFY, "run_vendor") as vendor:
+            outcome = VERIFY.execute(receipt, layer, paths, "origin/main", 4)
+        return receipt, outcome, ran, vendor
+
+    def test_a_mobile_change_runs_ios_and_all_results_reach_the_policy_check(self):
+        receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"])
+        self.assertIsNone(outcome)
+        self.assertEqual(ran, [NOTHING])
+        record = receipt.directory / "results.json"
+        self.assertEqual(set(json.loads(record.read_text())), {PASSING, BROKEN, f"{VERIFY.MOBILE_BUNDLE}/AClass/testOne()"})
+        self.assertEqual(receipt.value["testsFailed"], [BROKEN, f"{VERIFY.MOBILE_BUNDLE}/AClass/testOne()"])
+        self.assertEqual([call[0] for call in receipt.calls], ["check", "lint", "skip-policy"])
+        self.assertEqual(receipt.calls[-1][1][-3:], ["--results", str(record), "--complete"])
+        vendor.assert_called_once()
+
+    def test_a_desktop_change_skips_ios_and_says_why(self):
+        receipt, _, ran, _ = self.run_layer("L1", ["Sources/Fluid/ContentView.swift"])
+        self.assertEqual(ran, [])
+        self.assertEqual({item["name"]: item["reason"] for item in receipt.value["skipped"]}["ios"], "no mobile or shared source changed")
+
+    def test_l2_runs_ios_whatever_changed(self):
+        self.assertEqual(len(self.run_layer("L2", [])[2]), 1)
+
+    def test_quarantined_tests_are_listed_in_the_receipt(self):
+        receipt, _, _, _ = self.run_layer("L1", [], VERIFY.Quarantine(tests={"Bundle/AClass/testOld"}, probes={"ui_contrast"}))
+        self.assertEqual(receipt.value["quarantined"], ["Bundle/AClass/testOld", "probe:ui_contrast"])
 
 
 class MobileScriptTests(unittest.TestCase):

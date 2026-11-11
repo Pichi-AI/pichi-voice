@@ -168,7 +168,7 @@ Feature results and then-open validation gaps are retained in [Initial verificat
 
 ## Test exceptions
 
-`Tests/quarantine.json` lists known failures, each with an owner, a reason and an expiry date at most 90 days away. `Tests/skip-registry.json` gives every skipped test a reason and the layer that should run it. `check.sh` runs `scripts/dev/check-test-policy.py` on the files only (shape, owners, expiry), so an expired entry fails the repository check. The gate script `scripts/dev/verify` leaves quarantined tests out of its runs and passes its results to the checker with `--results <map.json> --complete`. With `--results` a skip without a registry entry fails. Only with `--complete`, which says every bundle in the map ran completely, does a registry entry for a test missing from the map fail as well.
+`Tests/quarantine.json` lists known failures, each with an owner, a reason and an expiry date at most 90 days away. `Tests/skip-registry.json` gives every skipped test a reason and the layer that should run it. `check.sh` runs `scripts/dev/check-test-policy.py` on the files only (shape, owners, expiry), so an expired entry fails the repository check. The gate script `scripts/dev/verify` leaves quarantined XCTest cases and probes out of its runs and passes its results to the checker with `--results <map.json> --complete`. With `--results` a skip without a registry entry fails. Only with `--complete`, which says every bundle in the map ran completely, does a registry entry for a test missing from the map fail as well.
 
 ## CI and cleanup
 

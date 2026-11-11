@@ -76,7 +76,7 @@ The [development command reference](codex.md#reproducible-macos-regression) expl
 | L1 | L0, XCTest and the standalone probes side by side, iOS integration tests when mobile or shared sources changed, tests of a changed `Vendor/` package, the skip registry |
 | L2 | L1 with iOS integration and every `Vendor/` package each time |
 
-A path with no rule takes L1, so a new kind of file cannot skip the app. A red step stays red: nothing retries a test or rewrites a result. XCTest stays serial because about half of its classes change shared settings and parallel workers share one preferences domain, so a parallel run fails at random. L1 and L2 stop when less than 10 GB is free. A heavy layer that cannot run on this machine, or a tree that changes during the run, ends as `incomplete` with exit code 2, never as passed.
+A path with no rule takes L1, so a new kind of file cannot skip the app. A red step stays red: nothing retries a test or rewrites a result. XCTest stays serial because about half of its classes change shared settings and parallel workers share one preferences domain, so a parallel run fails at random. L1 and L2 stop when less than 10 GB is free. A layer or step that cannot run on this machine (no Xcode, no iOS simulator runtime, too little disk), or a tree that changes during the run, ends as `incomplete` with exit code 2, never as passed.
 
 ## CI and review
 
