@@ -504,6 +504,11 @@ def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation, s
                     except (OSError, subprocess.SubprocessError) as cleanup_error:
                         row["cleanupError"] = str(cleanup_error)
                         unjoined.add(process.pid)
+                        try:
+                            # The earlier marker may predate this process, so record the live group now.
+                            publish_ownership()
+                        except (OSError, ValueError) as marker_error:
+                            report["ownershipError"] = str(marker_error)
                 stream.close()
                 row.update(status="FAIL", exitCode=None if process is None else process.returncode,
                            durationSeconds=round(time.monotonic() - started, 3))
@@ -544,7 +549,11 @@ def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation, s
                     except (OSError, subprocess.SubprocessError) as cleanup_error:
                         row["cleanupError"] = str(cleanup_error)
                         unjoined.add(group)
-                    entry["stream"].close()
+                    try:
+                        entry["stream"].close()
+                    except OSError as close_error:
+                        # Later groups must still be stopped, so the error is only recorded.
+                        row["logError"] = str(close_error)
                     row.update(status="FAIL", exitCode=process.returncode, runnerExitCode=code, reason="interrupted",
                                durationSeconds=round(time.monotonic() - entry["started"], 3))
                     del running[group]

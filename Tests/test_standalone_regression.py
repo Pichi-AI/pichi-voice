@@ -865,6 +865,79 @@ sys.exit(status)
         self.assertEqual(report["results"][1]["status"], "SKIP")
         self.assertFalse((self.root / "later-executed").exists())
 
+    def test_parallel_failed_cleanup_after_unrecorded_owner_republishes_the_marker(self):
+        marker = self.root / ".build" / RUNNER.PROCESS_MARKER
+        marker_next = Path(RUNNER.PROCESS_MARKER).with_suffix(".next").name
+        original = RUNNER.owned_file
+        failed = []
+        started = []
+
+        def refuse_first_record(path, flags):
+            if path.name == marker_next and not failed:
+                failed.append(path)
+                raise OSError("synthetic marker failure")
+            return original(path, flags)
+
+        original_popen = RUNNER.subprocess.Popen
+
+        def recording_popen(*args, **options):
+            process = original_popen(*args, **options)
+            started.append(process)
+            return process
+
+        self.addCleanup(lambda: [os.killpg(item.pid, signal.SIGKILL) for item in started if item.poll() is None])
+        with patch.object(RUNNER, "owned_file", side_effect=refuse_first_record), \
+             patch.object(RUNNER.subprocess, "Popen", side_effect=recording_popen), \
+             patch.object(RUNNER, "stop_process_group", side_effect=OSError("synthetic cleanup failure")):
+            status, report, _ = self.run_probes([self.probe("slow", "sleep 30")], jobs=2)
+        self.assertEqual(status, 1)
+        self.assertEqual(report["results"][0]["cleanupError"], "synthetic cleanup failure")
+        self.assertNotIn("ownershipError", report)
+        self.assertIn(started[0].pid, json.loads(marker.read_text())["processGroups"])
+
+    def test_parallel_log_close_failure_does_not_stop_other_groups_from_joining(self):
+        original_open = Path.open
+
+        class FailingLog:
+            def __init__(self, stream):
+                self.stream = stream
+
+            def fileno(self):
+                return self.stream.fileno()
+
+            def write(self, data):
+                return self.stream.write(data)
+
+            def close(self):
+                self.stream.close()
+                raise OSError("synthetic log close failure")
+
+        def open_log(path, *args, **options):
+            stream = original_open(path, *args, **options)
+            return FailingLog(stream) if path.name == "first.log" else stream
+
+        probes = [self.probe("first", "touch first-started\nsleep 30"), self.probe("second", "touch second-started\nsleep 30")]
+
+        def interrupt_when_started():
+            deadline = time.monotonic() + 3
+            while not all((self.root / name).exists() for name in ["first-started", "second-started"]) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            os.kill(os.getpid(), signal.SIGINT)
+
+        sender = threading.Thread(target=interrupt_when_started, daemon=True)
+        sender.start()
+        try:
+            with patch.object(Path, "open", open_log), patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.05):
+                status, report, _ = self.run_probes(probes, jobs=2)
+        finally:
+            sender.join(timeout=4)
+        self.assertEqual(status, 130)
+        self.assertIn("synthetic log close failure", report["results"][0]["logError"])
+        for row in report["results"]:
+            self.assertEqual(row["reason"], "interrupted")
+            self.assertIn(row["exitCode"], [-signal.SIGTERM, -signal.SIGKILL])
+        self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+
     def test_sequential_interrupt_keeps_a_retained_marker(self):
         marker = self.root / ".build" / RUNNER.PROCESS_MARKER
 
