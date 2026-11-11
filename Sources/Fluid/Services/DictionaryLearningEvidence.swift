@@ -130,6 +130,23 @@ nonisolated enum DictionaryLearningAlignmentResolver {
     private static let contextTokenLimit = 8
     private static let maximumContextSamples = 238_080
 
+    /// The same conservative lexical alignment used for audio evidence, without
+    /// needing PCM or inventing timing for a persisted history correction.
+    static func textRange(in source: String, delivered: String, selected: NSRange) -> NSRange? {
+        guard source.utf16.count <= 100_000, delivered.utf16.count <= 100_000,
+              DictionaryCorrectionReplacementPlan.isValid(selected, in: delivered) else { return nil }
+        if source == delivered { return selected }
+        let before = self.tokens(in: source), after = self.tokens(in: delivered)
+        guard before.count + after.count <= 2048,
+              let first = after.firstIndex(where: { NSIntersectionRange($0.range, selected).length > 0 }),
+              let last = after.lastIndex(where: { NSIntersectionRange($0.range, selected).length > 0 }),
+              after[first].range.location == selected.location,
+              NSMaxRange(after[last].range) == NSMaxRange(selected),
+              let mapped = try? self.sourceRange(raw: before.map(\.text), delivered: after.map(\.text), selected: first..<(last + 1)),
+              !mapped.isEmpty, mapped.lowerBound >= 0, mapped.upperBound <= before.count else { return nil }
+        return NSUnionRange(before[mapped.lowerBound].range, before[mapped.upperBound - 1].range)
+    }
+
     static func resolve(
         recording: DictionaryLearningRecording,
         deliveredTextBeforeEdit: String,

@@ -10,6 +10,138 @@ import FluidAudio
 import XCTest
 
 @MainActor
+final class ExternalDictationHistoryCorrectionTests: XCTestCase {
+    private func withHistory(_ body: (TranscriptionHistoryStore, TranscriptionHistoryWriter, URL) async throws -> Void) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ExternalHistory-\(UUID().uuidString)")
+        let suite = "ExternalHistory-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let writer = TranscriptionHistoryWriter(defaults: defaults, url: root.appendingPathComponent("history.sqlite3"))
+        let history = TranscriptionHistoryStore(writer: writer, audioStore: DictationAudioHistoryStore(rootDirectory: root))
+        do {
+            try await history.waitUntilLoaded()
+            try await body(history, writer, root)
+        } catch {
+            await history.finishPendingWrites()
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+            throw error
+        }
+        await history.finishPendingWrites()
+        defaults.removePersistentDomain(forName: suite)
+        try FileManager.default.removeItem(at: root)
+    }
+
+    func testForwardProvenanceSurvivesGrowingShrinkingAndRepeatedRevisions() throws {
+        let original = "Ёжик 🦔 Pech Voice next"
+        let range = (original as NSString).range(of: "Pech")
+        var map = DictionaryCorrectionTextMap(originalText: original)
+        XCTAssertTrue(map.replace(range: range, replacement: "Pichii"))
+        let revised = try XCTUnwrap(map.currentRange(forOriginal: range))
+        XCTAssertEqual((map.text as NSString).substring(with: revised), "Pichii")
+        XCTAssertTrue(map.replace(range: revised, replacement: "Pichi"))
+        let final = try XCTUnwrap(map.currentRange(forOriginal: range))
+        XCTAssertEqual((map.text as NSString).substring(with: final), "Pichi")
+        XCTAssertEqual(map.originalRange(for: final), range)
+        XCTAssertNil(map.currentRange(forOriginal: NSRange(location: range.location + 1, length: 1)))
+    }
+
+    func testTextAlignmentHandlesFormattingAndRejectsAmbiguousRewrites() {
+        let source = "ёжик pech voice сегодня"
+        let delivered = "Ёжик, Pech Voice сегодня!"
+        XCTAssertEqual(DictionaryLearningAlignmentResolver.textRange(in: source, delivered: delivered,
+            selected: (delivered as NSString).range(of: "Pech")), (source as NSString).range(of: "pech"))
+        XCTAssertNil(DictionaryLearningAlignmentResolver.textRange(in: "red term blue red term blue", delivered: "red term blue",
+            selected: NSRange(location: 4, length: 4)))
+        XCTAssertNil(DictionaryLearningAlignmentResolver.textRange(in: source, delivered: delivered,
+            selected: NSRange(location: NSNotFound, length: 4)))
+    }
+
+    func testExternalDetectorCorrectionUpdatesOnlyLinkedRowAndPersistsHistoryMarkers() async throws {
+        try await self.withHistory { history, writer, _ in
+            let raw = "Ёжик 🦔 Pech Voice, Pech Voice."
+            let id = UUID(), other = UUID()
+            history.addEntry(id: id, rawText: raw, processedText: raw, appName: "Fixture", windowTitle: "Fixture")
+            history.addEntry(id: other, rawText: raw, processedText: raw, appName: "Fixture", windowTitle: "Fixture")
+            let session = try XCTUnwrap(DictationHistoryCorrectionSession(history: history, entryID: id,
+                deliveredText: raw, profile: PrivateProfileStorage.current))
+            let prefix = "Existing draft: "
+            let before = prefix + raw
+            let edited = before.replacingOccurrences(of: "Pech", with: "Pichi", options: [], range: before.range(of: "Pech"))
+            let candidate = try XCTUnwrap(AutomaticDictionaryCorrectionDetector.candidate(before: before, after: edited,
+                insertedRange: NSRange(location: prefix.utf16.count, length: raw.utf16.count)))
+            XCTAssertTrue(session.apply(originalDeliveredRange: try XCTUnwrap(candidate.sourceUTF16Range), replacement: candidate.correctedText))
+            let entry = try XCTUnwrap(history.entries.first { $0.id == id })
+            XCTAssertEqual(entry.rawText, raw)
+            XCTAssertEqual(entry.sourceTranscriptText, "Ёжик 🦔 Pichi Voice, Pichi Voice.")
+            XCTAssertEqual(entry.processedText, entry.sourceTranscriptText)
+            XCTAssertEqual(entry.sourceFragments.count, 2)
+            XCTAssertTrue(entry.sourceFragments.allSatisfy { $0.text == "Pichi" && $0.correctionID != nil && $0.originalRange != nil })
+            XCTAssertEqual(entry.originalProcessedText, raw)
+            XCTAssertNotNil(entry.searchRevision)
+            XCTAssertEqual(history.entries.first { $0.id == other }?.processedText, raw)
+            await history.finishPendingWrites()
+            let saved = try await writer.load()
+            XCTAssertEqual(saved.first { $0.id == id }, entry)
+        }
+    }
+
+    func testRepeatedExternalRevisionsReplaceOneCorrectionAndRestoreOriginalSpelling() async throws {
+        try await self.withHistory { history, _, _ in
+            let raw = "Pech then Wrod", id = UUID()
+            history.addEntry(id: id, rawText: raw, processedText: raw, appName: "Fixture", windowTitle: "Fixture")
+            let session = try XCTUnwrap(DictationHistoryCorrectionSession(history: history, entryID: id,
+                deliveredText: raw, profile: PrivateProfileStorage.current))
+            let first = (raw as NSString).range(of: "Pech"), second = (raw as NSString).range(of: "Wrod")
+            XCTAssertTrue(session.apply(originalDeliveredRange: first, replacement: "Pichii"))
+            XCTAssertTrue(session.apply(originalDeliveredRange: first, replacement: "Pichi"))
+            XCTAssertTrue(session.apply(originalDeliveredRange: second, replacement: "Word"))
+            XCTAssertEqual(history.entries[0].sourceTranscriptText, "Pichi then Word")
+            XCTAssertEqual(history.entries[0].sourceFragments.count, 2)
+            XCTAssertFalse(history.entries[0].sourceFragments.contains { $0.text == "Pichii" })
+            XCTAssertTrue(session.apply(originalDeliveredRange: first, replacement: "Pech"))
+            XCTAssertEqual(history.entries[0].sourceTranscriptText, "Pech then Word")
+        }
+    }
+
+    func testSourceCorrectionProjectsThroughFormattingAndAmbiguousAIEditChangesFinalOnly() async throws {
+        try await self.withHistory { history, _, _ in
+            let id = UUID(), raw = "ёжик pech voice сегодня", final = "Ёжик, Pech Voice сегодня!"
+            history.addEntry(id: id, rawText: raw, processedText: final, appName: "Fixture", windowTitle: "Fixture", wasAIProcessed: true)
+            let session = try XCTUnwrap(DictationHistoryCorrectionSession(history: history, entryID: id,
+                deliveredText: final, profile: PrivateProfileStorage.current))
+            XCTAssertTrue(session.apply(originalDeliveredRange: (final as NSString).range(of: "Pech"), replacement: "Pichi"))
+            XCTAssertEqual(history.entries[0].sourceTranscriptText, "ёжик Pichi voice сегодня")
+            XCTAssertEqual(history.entries[0].processedText, "Ёжик, Pichi Voice сегодня!")
+            let rewrittenID = UUID(), rewritten = "Use Wrod now."
+            history.addEntry(id: rewrittenID, rawText: "A completely rewritten utterance", processedText: rewritten,
+                appName: "Fixture", windowTitle: "Fixture", wasAIProcessed: true)
+            let fallback = try XCTUnwrap(DictationHistoryCorrectionSession(history: history, entryID: rewrittenID,
+                deliveredText: rewritten, profile: PrivateProfileStorage.current))
+            XCTAssertTrue(fallback.apply(originalDeliveredRange: (rewritten as NSString).range(of: "Wrod"), replacement: "Word"))
+            XCTAssertEqual(history.entries[0].rawText, "A completely rewritten utterance")
+            XCTAssertNil(history.entries[0].correctedRawText)
+            XCTAssertEqual(history.entries[0].processedText, "Use Word now.")
+        }
+    }
+
+    func testStaleHistoryEditAndDeletedEntryCannotBeOverwrittenByExternalField() async throws {
+        try await self.withHistory { history, _, _ in
+            let id = UUID(), raw = "Pech Voice"
+            history.addEntry(id: id, rawText: raw, processedText: raw, appName: "Fixture", windowTitle: "Fixture")
+            let session = try XCTUnwrap(DictationHistoryCorrectionSession(history: history, entryID: id,
+                deliveredText: raw, profile: PrivateProfileStorage.current))
+            XCTAssertTrue(history.applyWordCorrection(entryID: id, expectedText: raw, range: (raw as NSString).range(of: "Voice"),
+                replacement: "Audio", profile: PrivateProfileStorage.current, isOriginal: true))
+            XCTAssertFalse(session.apply(originalDeliveredRange: (raw as NSString).range(of: "Pech"), replacement: "Pichi"))
+            XCTAssertEqual(history.entries[0].sourceTranscriptText, "Pech Audio")
+            history.deleteEntry(id: id)
+            XCTAssertFalse(session.apply(originalDeliveredRange: (raw as NSString).range(of: "Pech"), replacement: "Pichi"))
+            XCTAssertTrue(history.entries.isEmpty)
+        }
+    }
+}
+
+@MainActor
 final class DictationE2ETests: XCTestCase {
     // Pronunciation features are opt-in in the app; these tests exercise the enabled paths.
     private var priorSharedFeaturesFlag: Any?

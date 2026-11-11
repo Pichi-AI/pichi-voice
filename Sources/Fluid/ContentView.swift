@@ -3789,7 +3789,13 @@ struct ContentView: View {
                 AutomaticDictionaryCorrectionTracker.shared.beginObservingInsertion(
                     finalOutputPlan.plainText,
                     targetPID: typingTarget.pid,
-                    learningRecording: dictionaryLearningRecording
+                    learningRecording: dictionaryLearningRecording,
+                    historyCorrection: privateOutput.flatMap { output in
+                        output.admission.flatMap { admission in
+                            DictationHistoryCorrectionSession(history: output.history, entryID: admission.entryID,
+                                deliveredText: finalOutputPlan.plainText, profile: output.profile)
+                        }
+                    }
                 )
                 self.appBench("dictionary_tracking_scheduled afterDeliveryUI=true")
             }

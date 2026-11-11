@@ -221,6 +221,18 @@ nonisolated struct DictionaryCorrectionTextMap {
 
     init(originalText: String) { self.originalText = originalText; self.text = originalText }
 
+    /// Maps an immutable delivered span through confirmed edits. Partial overlap
+    /// is ambiguous and cannot authorize a later write to another word.
+    func currentRange(forOriginal range: NSRange) -> NSRange? {
+        guard DictionaryCorrectionReplacementPlan.isValid(range, in: self.originalText) else { return nil }
+        var result = range
+        for edit in self.edits {
+            guard let next = DictionaryCorrectionReplacementPlan.project(result, replacing: edit.range, withLength: edit.length) else { return nil }
+            result = next
+        }
+        return DictionaryCorrectionReplacementPlan.isValid(result, in: self.text) ? result : nil
+    }
+
     mutating func replace(range: NSRange, replacement: String) -> Bool {
         guard self.edits.count < 4096, DictionaryCorrectionReplacementPlan.isValid(range, in: self.text),
               let span = Range(range, in: self.text) else { return false }

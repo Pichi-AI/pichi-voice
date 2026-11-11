@@ -218,6 +218,7 @@ final class AutomaticDictionaryCorrectionTracker {
         let observesSelectionChanges: Bool
         let observesFocusChanges: Bool
         let learningRecording: DictionaryLearningRecording?
+        let historyCorrection: DictationHistoryCorrectionSession?
         let knownCanonicalTerms: [String]
         var lastValue: String
         var insertedRange: NSRange
@@ -260,7 +261,8 @@ final class AutomaticDictionaryCorrectionTracker {
     private init() {}
 
     func beginObservingInsertion(
-        _ insertedText: String, targetPID: pid_t?, learningRecording: DictionaryLearningRecording? = nil
+        _ insertedText: String, targetPID: pid_t?, learningRecording: DictionaryLearningRecording? = nil,
+        historyCorrection: DictationHistoryCorrectionSession? = nil
     ) {
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
         self.cancel()
@@ -287,6 +289,7 @@ final class AutomaticDictionaryCorrectionTracker {
                     self.installObserver(
                         for: seed,
                         learningRecording: DictionaryMatcherExperiment.sharedFeaturesEnabled ? learningRecording : nil,
+                        historyCorrection: historyCorrection,
                         knownCanonicalTerms: knownCanonicalTerms
                     )
                     return
@@ -537,6 +540,7 @@ final class AutomaticDictionaryCorrectionTracker {
     private func installObserver(
         for seed: InsertionSeed,
         learningRecording: DictionaryLearningRecording?,
+        historyCorrection: DictationHistoryCorrectionSession?,
         knownCanonicalTerms: [String]
     ) {
         self.verificationTask = nil
@@ -581,6 +585,7 @@ final class AutomaticDictionaryCorrectionTracker {
             observesSelectionChanges: selectionResult == .success,
             observesFocusChanges: focusResult == .success,
             learningRecording: learningRecording,
+            historyCorrection: historyCorrection,
             knownCanonicalTerms: knownCanonicalTerms,
             lastValue: seed.expectedValue,
             insertedRange: seed.insertedRange,
@@ -671,6 +676,14 @@ final class AutomaticDictionaryCorrectionTracker {
         self.debounceTask?.cancel()
         self.debounceTask = nil
         self.session?.pendingCorrection = nil
+
+        // This is the same explicit user edit as History Save. Mirror it before
+        // asynchronous dictionary/audio work, whose failure or Undo must not put
+        // the incorrect text back into history.
+        if let repeated, let range = repeated.sourceUTF16Range,
+           let originalRange = pending.sourceMap.originalRange(for: range) {
+            self.session?.historyCorrection?.apply(originalDeliveredRange: originalRange, replacement: repeated.correctedText)
+        }
 
         if let repeated, let range = repeated.sourceUTF16Range,
            let originalRange = pending.sourceMap.originalRange(for: range) {
