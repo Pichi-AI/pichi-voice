@@ -60,6 +60,8 @@ xcrun swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
 "$task_test_dir/tests"
 xcrun swiftc -parse-as-library -swift-version 6 \
     -module-cache-path "$task_test_dir/ModuleCache" \
+    Sources/Fluid/Services/DictionaryAcousticEvidence.swift Sources/Fluid/Services/DictionaryHistoryReplacement.swift \
+    Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift \
     "$task_test_dir/HistoryValues.swift" "$task_test_dir/AudioValues.swift" \
     "$task_test_dir/HistoryRevealValues.swift" Sources/Fluid/UI/HistoryAudioAvailability.swift \
     Sources/Fluid/UI/HistoryTextDiff.swift Sources/Fluid/UI/ModelDisplayName.swift \

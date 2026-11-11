@@ -630,7 +630,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         let key = usesEncoder ? GigaAMEncoderDictionaryStorage.modelKey(fingerprint: fingerprint)
             : GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint)
         var alignment = DictionaryLearningAlignment(modelKey: key,
-            words: Self.wordTimings(result.words))
+            words: Self.wordTimings(result.words), originalText: result.text)
         if usesEncoder { alignment.featureFrames = Self.learningFrames(result.encoderWindows) }
         var text = result.text
         if usesEncoder, let snapshot = self.dictionarySnapshot, snapshot.enabled, snapshot.modelKey == key {

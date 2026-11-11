@@ -12,6 +12,7 @@ xcrun swiftc -target x86_64-apple-macosx15.0 -parse-as-library -swift-version "$
     Sources/Fluid/Account/AccountDomain.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
     Sources/Fluid/Account/PrivateProfileDefaults.swift \
     Sources/Fluid/Services/PronunciationDictionaryStore.swift Sources/Fluid/Services/DictionaryAudioInspection.swift \
+    Sources/Fluid/Services/DictionaryAcousticEvidence.swift \
     Sources/Fluid/Services/DictionaryLearningEvidence.swift Sources/Fluid/Services/DictionaryNegativeExamples.swift \
     Sources/Fluid/Services/DictionaryExperimentalMatcher.swift Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift \
     Sources/Fluid/Services/AutomaticDictionaryCorrectionDetector.swift \

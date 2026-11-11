@@ -17,6 +17,10 @@ The current Mac package targets Apple Silicon and macOS 15 or later. Mobile buil
 
 Use the personal dictionary for names and terminology. Review learned corrections. Optional text enhancement uses the local or cloud provider you choose.
 
+While correction tracking is active, editing dictated text in its destination field also updates that dictation's History entry. History marks your edits separately from actual dictionary substitutions. Choose **Use model version** beside a substitution to restore only that occurrence to the original recognized wording.
+
+Rejecting a substitution provides negative feedback without deleting the dictionary word or its good pronunciation samples. History reports whether the negative example was saved. Acoustic feedback needs available matching evidence; text-rule feedback prevents the rejected spelling from triggering that rule again. Older entries without recorded substitution details cannot show this origin.
+
 ## Meetings on Mac
 
 Start a recording from Recordings. Grant screen/system-audio access for computer-audio recording and check your selected sources.

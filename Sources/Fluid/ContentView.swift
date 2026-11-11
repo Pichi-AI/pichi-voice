@@ -3338,6 +3338,7 @@ struct ContentView: View {
         }
         let audioSnapshot = self.asr.consumeLastCompletedAudioSnapshot()
         let dictionaryLearningRecording = self.asr.consumeDictionaryLearningRecording()
+        var dictionaryReplacementTrace = self.asr.consumeDictionaryReplacementTrace()
         let transcriptionDurationMilliseconds = self.asr.consumeLastFinalTranscriptionDurationMs()
         let parakeetProcessingDurationMilliseconds = self.asr.consumeLastFinalParakeetProcessingMs()
         DebugLogger.shared.info(
@@ -3610,6 +3611,7 @@ struct ContentView: View {
         // Save to transcription history (transcription mode only, if enabled)
         if shouldPersistOutputs, !sendsExistingDraft, let privateOutput, let admission = privateOutput.admission {
             let historyTimestamp = Date()
+            dictionaryReplacementTrace?.remap(to: outputRoute.deliversText && spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText)
             privateOutput.history.addEntry(
                 timestamp: historyTimestamp,
                 rawText: outputRoute.deliversText && spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText,
@@ -3623,13 +3625,15 @@ struct ContentView: View {
                 aiProcessingDurationMilliseconds: aiProcessingDurationMilliseconds,
                 aiTokensPerSecond: aiTokensPerSecond,
                 aiProcessingError: aiFallbackReason,
-                admission: admission
+                admission: admission,
+                dictionaryReplacements: dictionaryReplacementTrace?.replacements ?? []
             )
             privateOutput.saveAudio(
                 audioSnapshot,
                 timestamp: historyTimestamp,
                 model: transcriptionModelInfo.model
             )
+            privateOutput.saveDictionaryEvidence(dictionaryReplacementTrace?.replacements ?? [])
         }
         // When FluidVoice itself is frontmost, the bound editor already receives `finalText`.
         let shouldCopyToClipboard = shouldDeliverOutputs &&
@@ -3786,10 +3790,18 @@ struct ContentView: View {
             }
             // Delivery UI must complete before correction tracking queries Accessibility.
             if didTypeExternally, !spokenSendAllowed {
+                dictionaryReplacementTrace?.remap(to: finalOutputPlan.plainText)
                 AutomaticDictionaryCorrectionTracker.shared.beginObservingInsertion(
                     finalOutputPlan.plainText,
                     targetPID: typingTarget.pid,
-                    learningRecording: dictionaryLearningRecording
+                    learningRecording: dictionaryLearningRecording,
+                    historyCorrection: privateOutput.flatMap { output in
+                        output.admission.flatMap { admission in
+                            DictationHistoryCorrectionSession(history: output.history, entryID: admission.entryID,
+                                deliveredText: finalOutputPlan.plainText, profile: output.profile)
+                        }
+                    },
+                    dictionaryReplacements: dictionaryReplacementTrace?.replacements ?? []
                 )
                 self.appBench("dictionary_tracking_scheduled afterDeliveryUI=true")
             }

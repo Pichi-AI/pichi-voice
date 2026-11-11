@@ -52,6 +52,8 @@ xcrun swiftc -O -parse-as-library -module-cache-path "$task_test_dir/ModuleCache
     Sources/Fluid/Theme/FluidTypography.swift Sources/Fluid/Theme/AppTheme.swift \
     "$task_test_dir/ThemeEnvironment.swift" Sources/Fluid/Theme/NativeButtonStyles.swift \
     Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift Sources/Fluid/Theme/Components/FluidDropdown.swift \
+    Sources/Fluid/Services/DictionaryAcousticEvidence.swift Sources/Fluid/Services/DictionaryHistoryReplacement.swift \
+    Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift \
     "$task_test_dir/SettingsFixture.swift" "$task_test_dir/HistoryValue.swift" "$task_test_dir/AudioValue.swift" \
     Tests/StatsSnapshotStoreFixtures.swift Sources/Fluid/UI/StatsSnapshot.swift \
     Sources/Fluid/UI/StatsActivityPeriod.swift Sources/Fluid/UI/StatsHeatmapView.swift Sources/Fluid/UI/StatsSnapshotStore.swift \

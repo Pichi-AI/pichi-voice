@@ -11,6 +11,8 @@ nonisolated struct DictionaryLearningFeatureFrames: Equatable, Sendable {
 nonisolated struct DictionaryLearningAlignment: Sendable {
     let modelKey: String
     let words: [ASRWordTiming]
+    /// Exact provider output before any acoustic dictionary substitution.
+    var originalText: String? = nil
     var acousticOutput: String? = nil
     var acousticEvidence: [DictionaryAcousticEvidence] = []
     /// New spellings that voice matching replaced in this dictation, learned unless the user undoes them.
@@ -129,6 +131,33 @@ nonisolated enum DictionaryLearningAlignmentResolver {
     private static let tokenizer = try? NSRegularExpression(pattern: #"[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*"#)
     private static let contextTokenLimit = 8
     private static let maximumContextSamples = 238_080
+
+    /// The same conservative lexical alignment used for audio evidence, without
+    /// needing PCM or inventing timing for a persisted history correction.
+    static func textRange(in source: String, delivered: String, selected: NSRange) -> NSRange? {
+        guard source.utf16.count <= 100_000, delivered.utf16.count <= 100_000,
+              DictionaryCorrectionReplacementPlan.isValid(selected, in: delivered) else { return nil }
+        if source == delivered { return selected }
+        let before = self.tokens(in: source), after = self.tokens(in: delivered)
+        guard before.count + after.count <= 2048,
+              let first = after.firstIndex(where: { NSIntersectionRange($0.range, selected).length > 0 }),
+              let last = after.lastIndex(where: { NSIntersectionRange($0.range, selected).length > 0 }),
+              after[first].range.location >= selected.location,
+              NSMaxRange(after[last].range) <= NSMaxRange(selected),
+              let mapped = try? self.sourceRange(raw: before.map(\.text), delivered: after.map(\.text), selected: first..<(last + 1)),
+              !mapped.isEmpty, mapped.lowerBound >= 0, mapped.upperBound <= before.count else { return nil }
+        let lexical = NSUnionRange(before[mapped.lowerBound].range, before[mapped.upperBound - 1].range)
+        let prefixLength = after[first].range.location - selected.location
+        let suffixLength = NSMaxRange(selected) - NSMaxRange(after[last].range)
+        guard prefixLength <= 8, suffixLength <= 8, lexical.location >= prefixLength,
+              NSMaxRange(lexical) + suffixLength <= source.utf16.count else { return nil }
+        let prefix = (delivered as NSString).substring(with: NSRange(location: selected.location, length: prefixLength))
+        let suffix = (delivered as NSString).substring(with: NSRange(location: NSMaxRange(after[last].range), length: suffixLength))
+        guard !prefix.contains(where: { $0.isWhitespace }), !suffix.contains(where: { $0.isWhitespace }),
+              (source as NSString).substring(with: NSRange(location: lexical.location - prefixLength, length: prefixLength)) == prefix,
+              (source as NSString).substring(with: NSRange(location: NSMaxRange(lexical), length: suffixLength)) == suffix else { return nil }
+        return NSRange(location: lexical.location - prefixLength, length: lexical.length + prefixLength + suffixLength)
+    }
 
     static func resolve(
         recording: DictionaryLearningRecording,

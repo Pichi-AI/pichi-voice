@@ -14689,6 +14689,40 @@
         }
       }
     },
+    "Correction saved. Negative example saved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Correction saved. Negative example saved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исправление сохранено. Отрицательный пример сохранён."
+          }
+        }
+      }
+    },
+    "Correction saved. Negative example unavailable.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Correction saved. Negative example unavailable."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исправление сохранено. Отрицательный пример недоступен."
+          }
+        }
+      }
+    },
     "Corrections": {
       "extractionState": "manual",
       "localizations": {
@@ -17493,6 +17527,23 @@
         }
       }
     },
+    "Dictionary feedback could not be removed. Keep the app open and retry.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dictionary feedback could not be removed. Keep the app open and retry."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось удалить данные словарной обратной связи. Оставьте приложение открытым и повторите попытку."
+          }
+        }
+      }
+    },
     "Dictionary test text": {
       "extractionState": "manual",
       "localizations": {
@@ -17506,6 +17557,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Текст для проверки словаря"
+          }
+        }
+      }
+    },
+    "Dictionary: %@. Model heard: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dictionary: %@. Model heard: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Словарь: %@. Модель услышала: %@"
           }
         }
       }
@@ -23078,6 +23146,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Освобождать память при простое"
+          }
+        }
+      }
+    },
+    "From dictionary": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "From dictionary"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Из словаря"
           }
         }
       }
@@ -31681,6 +31766,23 @@
         }
       }
     },
+    "Model heard: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model heard: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель услышала: %@"
+          }
+        }
+      }
+    },
     "Model input added %.2f s of trailing padding. Playback uses captured audio only.": {
       "extractionState": "manual",
       "localizations": {
@@ -31813,6 +31915,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Модель проверена"
+          }
+        }
+      }
+    },
+    "Model version restored. Negative example saved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model version restored. Negative example saved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вариант модели восстановлен. Отрицательный пример сохранён."
+          }
+        }
+      }
+    },
+    "Model version restored. Negative example unavailable.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model version restored. Negative example unavailable."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вариант модели восстановлен. Отрицательный пример недоступен."
           }
         }
       }
@@ -55034,6 +55170,23 @@
         }
       }
     },
+    "This text changed. Select the replacement again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This text changed. Select the replacement again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст изменился. Выберите замену ещё раз."
+          }
+        }
+      }
+    },
     "This transcript exceeds the portable export limits.": {
       "extractionState": "manual",
       "localizations": {
@@ -57898,6 +58051,23 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "Use model version": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use model version"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вернуть вариант модели"
           }
         }
       }

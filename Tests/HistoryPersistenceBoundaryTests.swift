@@ -3,6 +3,10 @@ import Foundation
 import SQLite3
 
 // These doubles prevent the standalone test executable from touching app audio or settings.
+actor DictionaryNegativeExampleStore {
+    static func scoped(to profile: PrivateProfileSnapshot) -> DictionaryNegativeExampleStore { Self() }
+    func removeRetainedEvidence(ids: Set<UUID>) {}
+}
 struct DictationAudioMetadata: Codable, Equatable, Sendable {
     let fileName: String
     let durationMilliseconds: Int
