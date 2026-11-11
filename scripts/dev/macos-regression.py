@@ -6,8 +6,6 @@ import json
 import os
 from pathlib import Path
 import plistlib
-import re
-import subprocess
 import sys
 
 
@@ -59,52 +57,6 @@ def configure(products, marker, run_id):
     print(destination)
 
 
-# Tests name disposable UserDefaults suites <word><separator><UUID>, a bare UUID, or one of these dotted
-# prefixes. Other dotted names stay, because real apps use them too (com.vendor.app.Flags.<UUID>).
-DISPOSABLE_PREFERENCES = re.compile(
-    r"(?:(?:[A-Za-z][A-Za-z0-9_-]*|ai\.pichi\.fluidserve-fixture|account\.synthetic|synthetic\.[a-z-]+)[.-])?"
-    r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}(?:-[AB])?\.plist")
-# This run's xcodebuild has exited by the sweep, so a live one belongs to someone else.
-TEST_PROCESSES = frozenset({"xcodebuild", "xctest", "Pichi Voice Debug"})
-STANDALONE_MARKERS = ("standalone-regression.py", "Tests/run_", "scripts/dev/test-")
-
-
-def remember_preferences(directory, snapshot):
-    names = sorted(path.name for path in directory.glob("*.plist") if DISPOSABLE_PREFERENCES.fullmatch(path.name))
-    partial = snapshot.with_name(snapshot.name + ".next")
-    partial.write_text("\n".join(names))
-    os.replace(partial, snapshot)
-
-
-def live_test_processes():
-    names = subprocess.check_output(["ps", "-axo", "comm="], text=True).splitlines()
-    alive = {name.rsplit("/", 1)[-1] for name in names} & TEST_PROCESSES
-    # Probes run as interpreters and short-lived binaries, so only their script paths are stable.
-    commands = subprocess.check_output(["ps", "-axo", "command="], text=True)
-    if any(marker in commands for marker in STANDALONE_MARKERS):
-        alive.add("standalone probes")
-    return sorted(alive)
-
-
-def sweep_preferences(directory, snapshot):
-    """Remove disposable suites that appeared during this run, unless another test run could own them."""
-    alive = live_test_processes()
-    if alive:
-        print(f"Warning: kept this run's disposable preference domains while {', '.join(alive)} running.",
-              file=sys.stderr)
-        return
-    known = set(snapshot.read_text().split("\n"))
-    removed = 0
-    for path in directory.glob("*.plist"):
-        if path.name in known or not DISPOSABLE_PREFERENCES.fullmatch(path.name):
-            continue
-        if path.is_symlink() or not path.is_file():
-            continue
-        path.unlink(missing_ok=True)
-        removed += 1
-    print(f"Removed {removed} disposable preference domains left by this run.")
-
-
 def summarize(value, test_status):
     if not isinstance(value, dict):
         raise ValueError("xcresult summary must be an object")
@@ -137,23 +89,13 @@ def main():
     summary = actions.add_parser("summarize")
     summary.add_argument("summary", type=Path)
     summary.add_argument("test_status", type=int)
-    for name in ("remember-preferences", "sweep-preferences"):
-        preferences = actions.add_parser(name)
-        preferences.add_argument("directory", type=Path)
-        preferences.add_argument("snapshot", type=Path)
     args = parser.parse_args()
     try:
         if args.action == "configure":
             configure(args.products, args.marker, args.run_id)
             return 0
-        if args.action == "remember-preferences":
-            remember_preferences(args.directory, args.snapshot)
-            return 0
-        if args.action == "sweep-preferences":
-            sweep_preferences(args.directory, args.snapshot)
-            return 0
         return summarize(json.loads(args.summary.read_text()), args.test_status)
-    except (OSError, ValueError, TypeError, plistlib.InvalidFileException, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, TypeError, plistlib.InvalidFileException) as error:
         print(f"Regression report error: {error}", file=sys.stderr)
         return 1
 

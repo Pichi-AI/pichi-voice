@@ -17,11 +17,16 @@ pichi_destination='platform=macOS,arch=arm64'
 pichi_test_args=(
     -skip-testing:FluidDictationIntegrationTests/DictationE2ETests/testDictationEndToEnd_whisperTiny_transcribesFixture
 )
+# A separate directory keeps the regression identity from replacing the product of macos.sh build.
+pichi_derived_data="$pichi_root/.build/Xcode"
+if [[ "$pichi_action" == "regression" ]]; then
+    pichi_derived_data="$pichi_root/.build/XcodeRegression"
+fi
 pichi_args=(
     -project Fluid.xcodeproj
     -scheme Fluid
     -destination "$pichi_destination"
-    -derivedDataPath "$pichi_root/.build/Xcode"
+    -derivedDataPath "$pichi_derived_data"
     -clonedSourcePackagesDirPath "$pichi_root/.build/SourcePackages"
     CODE_SIGN_IDENTITY=
     CODE_SIGNING_REQUIRED=NO
@@ -68,21 +73,13 @@ if [[ "$pichi_action" == "regression" ]]; then
         exit "$pichi_build_status"
     fi
     pichi_xctestrun="$(python3 -S scripts/dev/macos-regression.py configure \
-        "$pichi_root/.build/Xcode/Build/Products" "$pichi_run/build-start" "$pichi_run_id")"
-    pichi_preferences="$HOME/Library/Preferences"
-    # Without this record the sweep cannot tell this run's files from older ones, so it stays off.
-    python3 -S scripts/dev/macos-regression.py remember-preferences "$pichi_preferences" "$pichi_run/preferences-before.txt" \
-        || printf '%s\n' 'Warning: preference domains were not recorded, so this run removes none.' >&2
+        "$pichi_derived_data/Build/Products" "$pichi_run/build-start" "$pichi_run_id")"
     pichi_test_status=0
     xcodebuild -xctestrun "$pichi_xctestrun" -destination "$pichi_destination" \
-        -derivedDataPath "$pichi_root/.build/Xcode" \
+        -derivedDataPath "$pichi_derived_data" \
         -resultBundlePath "$pichi_run/tests.xcresult" -parallel-testing-enabled NO \
         "${pichi_test_args[@]}" test-without-building 2>&1 | tee "$pichi_run/test.log" \
         || pichi_test_status=$?
-    if [[ -f "$pichi_run/preferences-before.txt" ]]; then
-        python3 -S scripts/dev/macos-regression.py sweep-preferences "$pichi_preferences" "$pichi_run/preferences-before.txt" \
-            || printf '%s\n' 'Warning: disposable preference domains were not removed.' >&2
-    fi
     # Extract the actual report even when xcodebuild failed. Missing results fail closed.
     pichi_summary_status=0
     xcrun xcresulttool get test-results summary --path "$pichi_run/tests.xcresult" \
