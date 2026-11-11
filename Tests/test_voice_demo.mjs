@@ -350,7 +350,7 @@ for (const route of ['index.html', 'voice/index.html', 'ru/voice/index.html']) {
       assert.ok(partial.length < b.full(i)[0].length);
     }
     const accessible = b.root.querySelector('[data-demo-accessible]').textContent;
-    assert.match(accessible, route.startsWith('ru') ? /планшете \(скоро\)/ : /tablet meeting \(Coming Soon\)/);
+    assert.match(accessible, route.startsWith('ru') ? /планшете \(скоро\)/ : /on tablet \(Coming Soon\)/);
     b.destroy();
     assert.equal(b.selectors.hidden, true);
   });
@@ -403,20 +403,41 @@ for (const route of ['index.html', 'voice/index.html', 'ru/voice/index.html']) {
     const b = browser(route);
     const ru = route.startsWith('ru');
     const contact = ru ? 'Анна Морозова' : 'Emma Carter';
+    const colleague = ru ? 'Алексей Соколов' : 'James Miller';
     const speakers = ru ? ['Анна', 'Алексей', 'Вы'] : ['Emma', 'James', 'You'];
     assert.ok(b.conversations[0].querySelector('.recipient-chip').textContent.includes(contact));
-    assert.equal(b.conversations[1].querySelector('.contact-identity').querySelector('strong').textContent, contact);
+    assert.equal(b.conversations[1].querySelector('.contact-identity').querySelector('strong').textContent, colleague);
     for (const index of [2, 3]) {
       assert.deepEqual(b.conversations[index].querySelectorAll('.speaker').map(node => node.textContent), speakers);
     }
     const accessible = b.root.querySelector('[data-demo-accessible]').textContent;
-    assert.ok(accessible.includes(contact));
+    assert.ok(accessible.includes(contact) && accessible.includes(colleague));
     speakers.slice(0, 2).forEach(name => assert.ok(accessible.includes(name + ':')));
     b.enter(); b.choices[2].emit('click'); b.step(DEMO_DURATION);
     assert.deepEqual(b.shown(2), b.full(2));
     assert.deepEqual(b.conversations[2].querySelectorAll('.speaker').map(node => node.textContent), speakers);
     assert.equal(b.conversations[0].querySelectorAll('button').length, 0);
     assert.equal(b.conversations[1].querySelectorAll('button').length, 0);
+    b.destroy();
+  });
+}
+
+
+for (const route of ['index.html', 'voice/index.html', 'ru/voice/index.html']) {
+  test(`${route}: longer business text remains complete while the live caption stays bounded`, () => {
+    const b = browser(route); b.enter();
+    for (let index = 0; index < 4; index++) {
+      const start = index * 10000;
+      b.step(start); b.choices[index].emit('click');
+      b.step(start + 1500);
+      assert.ok(b.pill.textContent.trim().split(/\s+/u).length <= 6);
+      b.step(start + DEMO_DURATION);
+      assert.deepEqual(b.shown(index), b.full(index));
+      assert.equal(b.pill.textContent, b.full(index).at(-1).trim().split(/\s+/u).slice(-6).join(' '));
+    }
+    const accessible = b.root.querySelector('[data-demo-accessible]').textContent;
+    b.full(0).forEach(text => assert.ok(accessible.includes(text)));
+    b.full(1).forEach(text => assert.ok(accessible.includes(text)));
     b.destroy();
   });
 }

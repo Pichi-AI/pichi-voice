@@ -116,7 +116,7 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
       row.style.visibility = sample.turns[index] ? 'visible' : 'hidden';
       words.forEach((word, at) => { word.style.visibility = at < sample.turns[index] ? 'visible' : 'hidden'; });
     });
-    pill.textContent = timeline.words.slice(0, sample.visibleWords).filter(word => word.turn === sample.turn).map(word => word.text).join(' ') || '\u00a0';
+    pill.textContent = timeline.words.slice(0, sample.visibleWords).filter(word => word.turn === sample.turn).slice(-6).map(word => word.text).join(' ') || '\u00a0';
     bars.forEach((bar, index) => { bar.style.transform = `scaleY(${sample.scales[index]})`; });
     root.dataset.demoMotion = isRunning(state) ? 'animated' : 'static';
   }
