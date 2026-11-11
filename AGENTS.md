@@ -9,6 +9,7 @@ This file defines shared principles and non-negotiable boundaries for contributo
 | Topic | Owning guide |
 | --- | --- |
 | Test requirements, locations and verification scope | [Testing](docs/development/testing.md) |
+| Recording continuity, fault isolation and recovery | [Recording reliability](docs/development/recording-reliability.md) |
 | Worktrees, delegation, native acceptance and cleanup | [Agent workflow](docs/development/agent-workflow.md) |
 | Setup, environments and commands | [Development setup](docs/development/codex.md) |
 | Extension contracts and upstream integration | [Upstream strategy](docs/development/upstream.md) |
@@ -32,6 +33,8 @@ Test sources and approved fixtures belong in the versioned locations in [Testing
 **MUST:** Inspect current implementation, neighboring implementations and upstream contracts before choosing an extension point. Extend existing provider and meeting backend registries, settings, storage and resource services. Common orchestration consumes contracts and capabilities; model identity, artifact validation and inference construction belong to the registered descriptor or adapter. Do not add a model-specific switch, factory or constructor parameter to the common pipeline for each provider.
 
 Prefer the smallest coherent change that preserves upstream integration. Justify a new abstraction with a concrete limitation. Avoid duplicated pipelines, parallel provider hierarchies, broad renaming and speculative frameworks. Onboarding, settings, files and API entry points share service operations for preparation, activation, cancellation and cleanup.
+
+**MUST:** Captured audio is authoritative. In file-backed recording, failures or delays in transcription, metadata, indexing, echo analysis or optional publication must never automatically stop the microphone or discard already captured PCM. Bound memory, preserve exact measured time and explicit gaps, keep files recoverable independently of their index, and join optional workers without coupling their success to capture lifetime. A transient buffer overflow must allow later audio to continue. Respect mute/privacy admission and strict no-file policies; never label lost input as complete. See [Recording reliability](docs/development/recording-reliability.md).
 
 Treat each attempt as an immutable selection of model, artifact and configuration. Resource ownership must be explicit, memory bounded, cancellation joined and restoration complete on success, failure and cancellation. Privacy decisions belong at the real admission, persistence and publication boundaries, with tests of those boundaries.
 
