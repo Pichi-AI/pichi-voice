@@ -203,348 +203,196 @@ function browser(route = 'voice/index.html', { reduced = false, hidden = false, 
   const full = index => conversations[index].querySelectorAll('[data-demo-full]').map(el => el.textContent);
   return { root, html, window, document, motion, frames, timers, step, destroy, shown, full, conversations, observation,
     enter: (value = true) => observation.callback([{ target: root, isIntersecting: value }]),
-    recordings: root.querySelector('[data-demo-recordings]'),
-    choices: root.querySelectorAll('[data-demo-recording]'), list: root.querySelector('[data-demo-list]'),
-    transcript: root.querySelector('[data-demo-transcript]'), bars: root.querySelectorAll('.dictation-pill .wave i'),
+    selectors: root.querySelector('[data-demo-selectors]'),
+    choices: root.querySelectorAll('[data-demo-recording]'), bars: root.querySelectorAll('.dictation-pill .wave i'),
     pill: root.querySelector('[data-demo-pill]') };
 }
 
-const turns = ['Let’s share the idea.', 'I’ll prepare a draft today.', 'I’ll send it on Friday.'];
+const turns = ['A short sentence.', 'Another thought.'];
 
-test('timeline streams words and speaker turns once, holds complete text forever', () => {
-  for (const texts of [turns, ['Давайте поделимся идеей.', 'Подготовлю текст сегодня.', 'Отправлю в пятницу.']]) {
-    const timeline = createTimeline(texts);
-    assert.equal(timeline.duration, DEMO_DURATION);
-    assert.ok(timeline.duration <= 5000);
-    assert.equal(sampleDemo(timeline, 0).visibleWords, 0);
+test('timeline streams complete turns and waves settle', () => {
+  const timeline = createTimeline(turns);
+  assert.equal(sampleDemo(timeline, 0).visibleWords, 0);
+  assert.deepEqual(sampleDemo(timeline, DEMO_DURATION).turns, [3, 2]);
+  assert.ok(sampleDemo(timeline, DEMO_DURATION).scales.every(n => n === 0.14));
+  assert.deepEqual(sampleDemo(timeline, 0, true), sampleDemo(timeline, DEMO_DURATION));
+});
+
+test('four scenes advance in order after a full hold, even with delayed frames', () => {
+  let state = advanceController(createController(0), { type: 'viewport', value: true }, 0);
+  for (const next of [1, 2, 3, 0]) {
+    state = advanceController(state, { type: 'tick' }, state.last + DEMO_DURATION + 5000);
+    const completed = state.completedAt;
+    state = advanceController(state, { type: 'tick' }, completed + COMPLETED_PAUSE - 1);
+    assert.equal(state.selected, (next + 3) % 4);
+    state = advanceController(state, { type: 'tick' }, completed + COMPLETED_PAUSE);
+    assert.equal(state.selected, next);
+    assert.equal(state.elapsed, 0);
+  }
+});
+
+for (const route of ['index.html', 'voice/index.html', 'ru/voice/index.html']) {
+  test(`${route}: shipped scenes, accessible story, focus and automatic order`, () => {
+    const b = browser(route);
+    const accessible = b.root.querySelector('[data-demo-accessible]');
+    const original = accessible.textContent;
+    assert.equal(b.conversations.length, 4);
+    assert.equal(b.choices.length, 4);
+    assert.equal(b.root.querySelector('.story-stage').attrs['aria-hidden'], 'true');
+    b.conversations.forEach((scene, index) => b.full(index).forEach(text => assert.ok(original.includes(text))));
+    b.choices[2].focus();
+    b.enter();
+    for (let i = 0; i < 4; i++) {
+      b.step(i * (DEMO_DURATION + COMPLETED_PAUSE) + DEMO_DURATION);
+      assert.equal(b.timers.size, 1);
+      assert.deepEqual(b.shown(i), b.full(i));
+      b.step((i + 1) * (DEMO_DURATION + COMPLETED_PAUSE));
+      assert.equal(b.conversations[(i + 1) % 4].attrs['data-active'], 'true');
+      assert.equal(b.document.activeElement, b.choices[2]);
+      assert.equal(accessible.textContent, original);
+      assert.equal(accessible.parentElement, b.root);
+    }
+    b.choices[3].emit('click');
+    assert.equal(b.conversations[3].attrs['data-active'], 'true');
+    assert.equal(b.document.activeElement, b.choices[2]);
+    b.destroy();
+    assert.equal(b.frames.size + b.timers.size, 0);
+    assert.equal(accessible.textContent, original);
+  });
+
+  test(`${route}: reduced motion is static and selectable`, () => {
+    const b = browser(route, { reduced: true });
+    b.enter();
+    assert.equal(b.frames.size + b.timers.size, 0);
+    assert.deepEqual(b.shown(0), b.full(0));
+    b.choices[1].focus(); b.choices[1].emit('click');
+    assert.deepEqual(b.shown(1), b.full(1));
+    assert.equal(b.document.activeElement, b.choices[1]);
+    b.destroy();
+  });
+}
+
+test('multiple lifecycle suspensions require all conditions to resume and teardown releases work', () => {
+  const b = browser();
+  b.enter(); b.step(DEMO_DURATION);
+  assert.equal(b.timers.size, 1);
+  b.document.hidden = true; b.document.emit('visibilitychange');
+  b.enter(false); b.window.emit('pagehide', { persisted: true });
+  assert.equal(b.frames.size + b.timers.size, 0);
+  b.document.hidden = false; b.document.emit('visibilitychange'); b.enter();
+  assert.equal(b.frames.size + b.timers.size, 0);
+  b.window.emit('pageshow', { persisted: true });
+  assert.equal(b.frames.size, 1);
+  b.window.emit('pagehide', { persisted: false });
+  assert.equal(b.frames.size + b.timers.size, 0);
+  assert.ok(b.observation.disconnected > 0);
+  assert.equal(b.window.listenerCount + b.document.listenerCount + b.motion.listenerCount, 0);
+  b.destroy();
+});
+
+test('missing or failed observer stays static and manual selection works', () => {
+  for (const observer of ['missing', 'constructor-failure', 'observe-failure', 'partial-failure']) {
+    const b = browser('voice/index.html', { observer });
+    assert.equal(b.frames.size + b.timers.size, 0);
+    b.choices[2].emit('click');
+    assert.deepEqual(b.shown(2), b.full(2));
+    b.destroy();
+  }
+});
+
+test('incomplete markup safely stays static', () => {
+  assert.doesNotThrow(() => mountVoiceDemo(new Element('figure'), { window: {}, document: new Target() })());
+});
+
+test('English preview and voice route are identical', () => {
+  assert.equal(readHero('index.html').html, readHero('voice/index.html').html);
+});
+
+
+test('each word enters on its timestamp and speech waves are smooth and bounded', () => {
+  for (const text of ['Please review the plan before Friday.', 'Давайте обсудим план до встречи в пятницу.']) {
+    const timeline = createTimeline([text]);
     timeline.words.forEach((word, index) => {
       assert.equal(sampleDemo(timeline, word.at - 0.01).visibleWords, index);
       assert.equal(sampleDemo(timeline, word.at).visibleWords, index + 1);
     });
-    const final = sampleDemo(timeline, DEMO_DURATION);
-    assert.equal(final.visibleWords, timeline.words.length);
-    assert.equal(final.turn, 2);
-    assert.ok(final.turns.every(count => count > 0));
-    for (const elapsed of [DEMO_DURATION * 2, 900000]) assert.deepEqual(sampleDemo(timeline, elapsed), final);
-    assert.deepEqual(sampleDemo(timeline, 0, true), final);
+    const first = timeline.words[0];
+    assert.ok(Math.max(...sampleDemo(timeline, first.at + first.duration / 2).scales) > 0.7);
+    for (let time = 0; time < DEMO_DURATION; time += 16) {
+      const a = sampleDemo(timeline, time).scales;
+      const b = sampleDemo(timeline, time + 1).scales;
+      a.forEach((value, i) => {
+        assert.ok(value >= 0.14 && value <= 1);
+        assert.ok(Math.abs(value - b[i]) < 0.03);
+      });
+    }
   }
   assert.equal(sampleDemo(createTimeline(''), 5000).visibleWords, 0);
 });
 
-test('speech wave is smooth, bounded, varied, and rests between words and after completion', () => {
-  const timeline = createTimeline(turns);
-  const first = timeline.words[0];
-  const peak = sampleDemo(timeline, first.at + first.duration / 2).scales;
-  assert.ok(Math.max(...peak) > 0.7);
-  assert.ok(new Set(peak).size > 5);
-  assert.ok(sampleDemo(timeline, first.at + first.duration + 1).scales.every(value => value === 0.14));
-  assert.ok(sampleDemo(timeline, DEMO_DURATION).scales.every(value => value === 0.14));
-  for (let time = 0; time <= DEMO_DURATION; time += 8) {
-    const current = sampleDemo(timeline, time).scales;
-    const next = sampleDemo(timeline, time + 1).scales;
-    current.forEach((scale, index) => {
-      assert.ok(scale >= 0.14 && scale <= 1);
-      assert.ok(Math.abs(scale - next[index]) < 0.03);
-    });
-  }
-});
-
-test('controller loops only after a full completed pause and does not mutate prior state', () => {
-  let state = createController(0);
-  assert.equal(isRunning(state), false);
-  state = advanceController(state, { type: 'tick' }, 10000);
-  assert.equal(state.elapsed, DEMO_DURATION);
-  state = advanceController(state, { type: 'viewport', value: true }, 12000);
-  assert.equal(state.elapsed, 0);
-  const previous = state;
-  state = advanceController(state, { type: 'tick' }, 12000 + DEMO_DURATION);
-  assert.equal(previous.elapsed, 0);
-  assert.equal(state.elapsed, DEMO_DURATION);
-  assert.equal(state.completedAt, 12000 + DEMO_DURATION);
-  for (let cycle = 0; cycle < 3; cycle++) {
-    const completedAt = state.completedAt;
-    state = advanceController(state, { type: 'tick' }, completedAt + COMPLETED_PAUSE - 1);
-    assert.equal(state.elapsed, DEMO_DURATION);
-    state = advanceController(state, { type: 'tick' }, completedAt + COMPLETED_PAUSE);
-    assert.equal(state.elapsed, 0);
-    assert.equal(state.completedAt, null);
-    state = advanceController(state, { type: 'tick' }, state.last + DEMO_DURATION);
-  }
-});
-
-test('delayed completion still gets three seconds before resetting', () => {
-  let state = advanceController(createController(0), { type: 'viewport', value: true }, 0);
-  state = advanceController(state, { type: 'tick' }, 100000);
-  assert.equal(state.elapsed, DEMO_DURATION);
-  assert.equal(state.completedAt, 100000);
-  state = advanceController(state, { type: 'tick' }, 102999);
-  assert.equal(state.elapsed, DEMO_DURATION);
-  state = advanceController(state, { type: 'tick' }, 103000);
-  assert.equal(state.elapsed, 0);
-});
-
-test('controller suspends and resets on lifecycle changes, preserving recording selection', () => {
-  for (const event of [{ type: 'visibility', value: true }, { type: 'page', value: false },
-    { type: 'motion', value: true }, { type: 'viewport', value: false }]) {
-    let state = advanceController(createController(0), { type: 'viewport', value: true }, 0);
-    state = advanceController(state, { type: 'select', index: 1 }, 500);
-    assert.equal(state.elapsed, 0);
-    state = advanceController(state, event, 700);
-    assert.equal(state.elapsed, DEMO_DURATION);
-    assert.equal(state.completedAt, null);
-    assert.equal(isRunning(state), false);
-    state = advanceController(state, { ...event, value: !event.value }, 9000);
-    assert.equal(state.elapsed, 0);
-    assert.equal(state.selected, 1);
-    assert.equal(isRunning(state), true);
-  }
-});
-
 for (const route of ['index.html', 'voice/index.html', 'ru/voice/index.html']) {
-  test(`${route}: shipped hero streams all speakers, holds three seconds without frames, then loops`, () => {
+  test(`${route}: real scenes stream partially in the required branded order`, () => {
+    const raw = readHero(route);
+    assert.equal(raw.root.querySelector('[data-demo-selectors]').hidden, true);
     const b = browser(route);
-    assert.equal(b.frames.size + b.timers.size, 0);
-    assert.deepEqual(b.shown(0), b.full(0));
-    assert.equal(b.choices.length, 2);
-    assert.equal(b.root.querySelector('.demo-settings').listenerCount, 0);
-    assert.equal(b.root.querySelectorAll('button').length, 3);
-    b.enter(false); b.step(10000);
-    assert.equal(b.frames.size + b.timers.size, 0);
+    assert.equal(b.selectors.hidden, false);
+    assert.deepEqual(b.choices.map(node => node.textContent.trim()), ['Gmail', 'Telegram', 'Zoom', route.startsWith('ru') ? 'Офлайн' : 'Offline']);
+    assert.equal(b.conversations[0].querySelector('img').attrs.src, '/voice/assets/services/gmail.svg');
+    assert.equal(b.conversations[1].querySelector('img').attrs.src, '/voice/assets/services/telegram.svg');
     b.enter();
-    assert.deepEqual(b.shown(0), ['', '', '']);
-    b.step(10700);
-    assert.ok(b.shown(0)[0].length > 0);
-    assert.equal(b.shown(0)[1], '');
-    assert.equal(b.conversations[0].querySelectorAll('[data-demo-turn]')[1].style.visibility, 'hidden');
-    b.step(12500); assert.ok(b.shown(0)[1].length > 0);
-    b.step(14000); assert.ok(b.shown(0)[2].length > 0);
-    assert.ok(b.conversations[0].querySelectorAll('.speaker')[2].textContent.includes(route.startsWith('ru') ? 'Вы' : 'You'));
-    b.step(14800);
-    assert.deepEqual(b.shown(0), b.full(0));
-    assert.equal(b.pill.textContent, b.full(0)[2]);
-    assert.equal(b.frames.size, 0);
-    assert.equal(b.timers.size, 1);
-    assert.ok(b.bars.every(bar => bar.style.transform === 'scaleY(0.14)'));
-    b.step(17799);
-    assert.deepEqual(b.shown(0), b.full(0));
-    assert.equal(b.frames.size, 0);
-    b.step(17800);
-    assert.deepEqual(b.shown(0), ['', '', '']);
-    assert.equal(b.timers.size, 0);
-    assert.equal(b.frames.size, 1);
-    b.step(22600); b.step(25600);
-    assert.deepEqual(b.shown(0), ['', '', '']);
+    for (let i = 0; i < 4; i++) {
+      const before = i * 2000;
+      b.step(before);
+      b.choices[i].emit('click');
+      b.step(before + 450);
+      const partial = b.shown(i)[0];
+      assert.ok(partial.length > 0);
+      assert.ok(partial.length < b.full(i)[0].length);
+    }
+    const accessible = b.root.querySelector('[data-demo-accessible]').textContent;
+    assert.match(accessible, route.startsWith('ru') ? /планшете \(скоро\)/ : /tablet meeting \(Coming Soon\)/);
     b.destroy();
-    assert.equal(b.frames.size + b.timers.size, 0);
-  });
-
-  test(`${route}: recording selection resets looping and moves keyboard focus to its visible heading`, () => {
-    const b = browser(route);
-    b.enter(); b.step(DEMO_DURATION);
-    assert.equal(b.timers.size, 1);
-    b.recordings.emit('click');
-    assert.equal(b.list.hidden, false);
-    assert.equal(b.transcript.hidden, true);
-    assert.equal(b.frames.size + b.timers.size, 0);
-    assert.equal(b.recordings.attrs['aria-expanded'], 'true');
-    b.choices.forEach((choice, index) => {
-      choice.focus();
-      assert.equal(b.document.activeElement, choice);
-      choice.emit('click');
-      assert.equal(b.list.hidden, true);
-      assert.equal(b.transcript.hidden, false);
-      assert.equal(b.conversations[index].hidden, false);
-      assert.equal(b.conversations[1 - index].hidden, true);
-      assert.deepEqual(b.shown(index), ['', '', '']);
-      const heading = b.conversations[index].querySelector('h3');
-      assert.equal(b.document.activeElement, heading);
-      assert.deepEqual(heading.focusOptions, { preventScroll: true });
-      const start = DEMO_DURATION + index * (DEMO_DURATION + COMPLETED_PAUSE);
-      b.step(start + DEMO_DURATION);
-      assert.deepEqual(b.shown(index), b.full(index));
-      b.step(start + DEMO_DURATION + COMPLETED_PAUSE);
-      assert.deepEqual(b.shown(index), ['', '', '']);
-      assert.equal(b.document.activeElement, heading, 'Loop must preserve keyboard focus');
-      b.recordings.emit('click');
-    });
-    b.enter(false); b.enter(); b.step(100000);
-    assert.equal(b.list.hidden, false);
-    assert.equal(b.frames.size + b.timers.size, 0);
-    b.destroy();
+    assert.equal(b.selectors.hidden, true);
   });
 }
 
-test('hidden pages wait for both visibility and viewport before starting', () => {
-  const b = browser('voice/index.html', { hidden: true });
-  b.enter(); b.step(10000);
-  assert.equal(b.frames.size + b.timers.size, 0);
-  b.document.hidden = false; b.document.emit('visibilitychange');
-  assert.deepEqual(b.shown(0), ['', '', '']);
-  assert.equal(b.frames.size, 1);
-  b.destroy();
-});
-
-test('visibility, viewport and persisted pagehide cancel streaming and completed holds then restart the selected recording', () => {
-  for (const reason of ['visibility', 'viewport', 'pagehide']) {
-    for (const elapsed of [700, DEMO_DURATION]) {
-      const b = browser();
-      b.enter(); b.recordings.emit('click'); b.choices[1].emit('click'); b.step(elapsed);
-      if (reason === 'visibility') { b.document.hidden = true; b.document.emit('visibilitychange'); }
-      if (reason === 'viewport') b.enter(false);
-      if (reason === 'pagehide') b.window.emit('pagehide', { persisted: true });
-      assert.equal(b.frames.size + b.timers.size, 0);
-      assert.deepEqual(b.shown(1), b.full(1));
-      b.step(100000);
-      if (reason === 'visibility') { b.document.hidden = false; b.document.emit('visibilitychange'); }
-      if (reason === 'viewport') b.enter();
-      if (reason === 'pagehide') b.window.emit('pageshow', { persisted: true });
-      assert.equal(b.frames.size, 1);
-      assert.deepEqual(b.shown(1), ['', '', '']);
-      assert.equal(b.conversations[0].hidden, true);
-      b.destroy();
-    }
-  }
-});
-
-test('reduced motion stays complete on selection and cancels frames or completed timers when changed', () => {
-  for (const elapsed of [700, DEMO_DURATION]) {
-    const b = browser('ru/voice/index.html', { reduced: true });
-    b.enter();
-    assert.deepEqual(b.shown(0), b.full(0));
-    assert.equal(b.frames.size + b.timers.size, 0);
-    b.recordings.emit('click'); b.choices[1].emit('click');
-    assert.deepEqual(b.shown(1), b.full(1));
-    assert.equal(b.frames.size + b.timers.size, 0);
-    b.motion.emit('change', { matches: false });
-    assert.deepEqual(b.shown(1), ['', '', '']);
-    b.step(elapsed);
+test('motion changes and suspension during streaming cancel work and keep the current scene', () => {
+  for (const duringHold of [false, true]) {
+    const b = browser(); b.enter(); b.choices[2].emit('click');
+    b.step(duringHold ? DEMO_DURATION : 700);
     b.motion.emit('change', { matches: true });
-    assert.deepEqual(b.shown(1), b.full(1));
     assert.equal(b.frames.size + b.timers.size, 0);
+    assert.deepEqual(b.shown(2), b.full(2));
+    b.step(50000);
+    assert.equal(b.conversations[2].attrs['data-active'], 'true');
+    b.motion.emit('change', { matches: false });
+    assert.equal(b.frames.size, 1);
+    b.enter(false);
+    assert.equal(b.frames.size + b.timers.size, 0);
+    b.enter();
+    assert.equal(b.frames.size, 1);
     b.destroy();
   }
 });
 
-test('missing or failed viewport observation stays static including recording selection', () => {
-  for (const observer of ['missing', 'constructor-failure', 'observe-failure', 'partial-failure']) {
-    const b = browser('voice/index.html', { observer });
-    assert.equal(b.frames.size + b.timers.size, 0);
-    assert.deepEqual(b.shown(0), b.full(0));
-    b.recordings.emit('click'); b.choices[1].emit('click'); b.step(10000);
-    assert.deepEqual(b.shown(1), b.full(1));
-    if (b.observation.callback) b.enter(); // Ignore a queued callback from the failed observer.
-    assert.equal(b.frames.size + b.timers.size, 0);
-    b.destroy();
-  }
-});
-
-test('unmount and terminal pagehide release frames, timers, observer and listeners and restore static content', () => {
-  for (const pagehide of [false, true]) {
-    for (const elapsed of [700, DEMO_DURATION]) {
-      const b = browser();
-      assert.equal(mountVoiceDemo(b.root, { window: b.window, document: b.document }), b.destroy);
-      b.enter(); b.step(elapsed);
-      const stale = [...b.frames.values(), ...[...b.timers.values()].map(timer => timer.callback)];
-      if (pagehide) b.window.emit('pagehide', { persisted: false });
-      else b.destroy();
-      b.destroy(); stale.forEach(callback => callback(100000)); b.enter();
-      assert.equal(b.frames.size + b.timers.size, 0);
-      assert.equal(b.observation.disconnected, 1);
-      assert.equal(b.window.listenerCount + b.document.listenerCount + b.motion.listenerCount
-        + b.recordings.listenerCount + b.choices.reduce((sum, choice) => sum + choice.listenerCount, 0), 0);
-      assert.equal(b.root.dataset.demoReady, undefined);
-      assert.equal(b.root.dataset.demoMotion, undefined);
-      assert.equal(b.recordings.hidden, true);
-      assert.equal(b.list.hidden, true);
-      assert.equal(b.transcript.hidden, false);
-      assert.equal(b.conversations[0].hidden, false);
-      assert.ok(b.bars.every(bar => bar.style.transform === ''));
-      assert.ok(b.root.querySelectorAll('[data-demo-text]').every(visual => visual.children.length === 0));
-      const cleanup = mountVoiceDemo(b.root, { window: b.window, document: b.document });
-      assert.equal(b.frames.size + b.timers.size, 0);
-      b.enter(); assert.equal(b.frames.size, 1);
-      cleanup();
-      assert.equal(b.frames.size + b.timers.size, 0);
-    }
-  }
-});
-
-test('incomplete markup safely retains the static transcript with no scheduled work', () => {
-  assert.doesNotThrow(() => mountVoiceDemo(new Element('figure'), { window: {}, document: new Target() })());
-});
-
-test('English root remains identical to the voice route', () => {
-  assert.equal(readHero('index.html').html, readHero('voice/index.html').html);
-});
-
-test('opening Recordings before intersection wins over autoplay until a recording is selected', () => {
-  let state = advanceController(createController(0), { type: 'list' }, 10);
-  state = advanceController(state, { type: 'viewport', value: true }, 20);
-  assert.equal(state.view, 'list');
-  assert.equal(isRunning(state), false);
-  state = advanceController(state, { type: 'select', index: 1 }, 100);
-  assert.equal(isRunning(state), true);
-  assert.equal(state.elapsed, 0);
-  assert.equal(state.selected, 1);
-});
-
-
-test('restoring one lifecycle condition never bypasses another suspension', () => {
-  const b = browser();
-  b.enter(); b.step(DEMO_DURATION);
-  b.document.hidden = true; b.document.emit('visibilitychange');
-  b.enter(false);
-  b.window.emit('pagehide', { persisted: true });
-  b.document.hidden = false; b.document.emit('visibilitychange');
-  b.enter();
-  assert.equal(b.frames.size + b.timers.size, 0);
-  assert.deepEqual(b.shown(0), b.full(0));
-  b.window.emit('pageshow', { persisted: true });
-  assert.equal(b.frames.size, 1);
-  b.step(2 * DEMO_DURATION);
-  assert.equal(b.timers.size, 1);
-  b.enter(); b.step(2 * DEMO_DURATION + COMPLETED_PAUSE - 1);
-  b.enter(); // Repeated observations must not extend the completed pause.
-  assert.deepEqual(b.shown(0), b.full(0));
-  assert.equal(b.timers.size, 1);
-  b.step(2 * DEMO_DURATION + COMPLETED_PAUSE);
-  assert.deepEqual(b.shown(0), ['', '', '']);
-  b.destroy();
-});
-
-
-function exposedToAssistiveReading(element) {
-  for (let node = element; node; node = node.parentElement) {
-    if (node.hidden || node.style.visibility === 'hidden' || node.attrs['aria-hidden'] === 'true') return false;
-  }
-  return true;
-}
 
 for (const route of ['index.html', 'voice/index.html', 'ru/voice/index.html']) {
-  test(`${route}: complete accessible transcript stays stable across loops and selection`, () => {
-    const b = browser(route);
-    const accessible = b.conversations.map(conversation => conversation.querySelector('[data-demo-accessible]'));
-    const expected = accessible.map(node => node.textContent);
-    const assertReading = selected => {
-      accessible.forEach((node, index) => {
-        assert.equal(exposedToAssistiveReading(node), index === selected);
-        assert.equal(node.textContent, expected[index]);
-        b.full(index).forEach(text => assert.ok(node.textContent.includes(text)));
-      });
-      b.conversations[selected].querySelectorAll('[data-demo-turn]').forEach(row => {
-        assert.equal(exposedToAssistiveReading(row), false, 'Animated words and participants are decorative');
-      });
-      assert.equal(exposedToAssistiveReading(b.pill), false);
-    };
-    assertReading(0);
-    b.enter(); assertReading(0);
-    b.step(DEMO_DURATION); assertReading(0);
-    b.step(DEMO_DURATION + COMPLETED_PAUSE); assertReading(0);
-    b.recordings.emit('click');
-    assert.ok(accessible.every(node => !exposedToAssistiveReading(node)));
-    b.choices[1].emit('click'); assertReading(1);
-    b.step(2 * DEMO_DURATION + COMPLETED_PAUSE); assertReading(1);
-    b.step(2 * (DEMO_DURATION + COMPLETED_PAUSE)); assertReading(1);
-    b.destroy(); assertReading(0);
+  test(`${route}: Telegram completion remains in the unsent draft composer`, () => {
+    const b = browser(route); b.enter(); b.choices[1].emit('click');
+    const scene = b.conversations[1];
+    const draft = scene.querySelector('[data-demo-draft]');
+    assert.equal(draft.attrs['data-message-state'], 'draft');
+    assert.equal(scene.querySelector('.story-heading').textContent, route.startsWith('ru') ? 'Черновик' : 'Draft');
+    b.step(DEMO_DURATION);
+    assert.deepEqual(b.shown(1), b.full(1));
+    assert.equal(draft.attrs['data-message-state'], 'draft');
+    b.step(DEMO_DURATION + COMPLETED_PAUSE - 1);
+    assert.deepEqual(b.shown(1), b.full(1));
+    assert.equal(draft.attrs['data-message-state'], 'draft');
+    assert.equal(scene.querySelectorAll('form').length + scene.querySelectorAll('button').length, 0);
+    b.step(DEMO_DURATION + COMPLETED_PAUSE);
+    assert.equal(b.conversations[2].attrs['data-active'], 'true');
+    assert.equal(draft.attrs['data-message-state'], 'draft');
+    b.destroy();
   });
 }

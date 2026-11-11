@@ -24,11 +24,11 @@ export function sampleDemo(timeline, elapsed, reducedMotion = false) {
 
 export function createController(now, { hidden = false, reducedMotion = false } = {}) {
   return { elapsed: DEMO_DURATION, completedAt: null, last: now, hidden, reducedMotion, pageActive: true,
-    inViewport: false, playing: false, selected: 0, view: 'transcript' };
+    inViewport: false, playing: false, selected: 0, sceneCount: 4 };
 }
 
 export function isRunning(state) {
-  return state.playing && state.view === 'transcript' && !state.hidden && !state.reducedMotion && state.pageActive && state.inViewport;
+  return state.playing && !state.hidden && !state.reducedMotion && state.pageActive && state.inViewport;
 }
 
 export function advanceController(state, event, now) {
@@ -37,6 +37,7 @@ export function advanceController(state, event, now) {
     if (state.completedAt !== null) {
       if (now - state.completedAt >= COMPLETED_PAUSE) {
         next.elapsed = 0;
+        next.selected = (state.selected + 1) % state.sceneCount;
         next.completedAt = null;
       }
     } else {
@@ -50,13 +51,11 @@ export function advanceController(state, event, now) {
   if (event.type === 'page') next.pageActive = event.value;
   if (event.type === 'motion') next.reducedMotion = event.value;
   if (event.type === 'viewport') next.inViewport = event.value;
-  if (event.type === 'list') next.view = 'list';
   if (event.type === 'select') {
     next.selected = event.index;
-    next.view = 'transcript';
     next.playing = false;
   }
-  const eligible = next.view === 'transcript' && !next.hidden && !next.reducedMotion && next.pageActive && next.inViewport;
+  const eligible = !next.hidden && !next.reducedMotion && next.pageActive && next.inViewport;
   if (!eligible) {
     next.elapsed = DEMO_DURATION;
     next.completedAt = null;
@@ -74,13 +73,11 @@ const mounted = new WeakMap();
 export function mountVoiceDemo(root, { window = globalThis.window, document = root.ownerDocument } = {}) {
   if (mounted.has(root)) return mounted.get(root);
   const conversations = [...root.querySelectorAll('[data-demo-conversation]')];
-  const recordings = root.querySelector('[data-demo-recordings]');
   const choices = [...root.querySelectorAll('[data-demo-recording]')];
-  const transcript = root.querySelector('[data-demo-transcript]');
-  const list = root.querySelector('[data-demo-list]');
   const pill = root.querySelector('[data-demo-pill]');
+  const selectors = root.querySelector('[data-demo-selectors]');
   const bars = [...root.querySelectorAll('.dictation-pill .wave i')];
-  if (!conversations.length || !recordings || choices.length !== conversations.length || !transcript || !list || !pill || !bars.length || !window?.requestAnimationFrame) return () => {};
+  if (!conversations.length || choices.length !== conversations.length || !pill || !selectors || !bars.length || !window?.requestAnimationFrame) return () => {};
   const groups = conversations.map(conversation => [...conversation.querySelectorAll('[data-demo-turn]')].map(row => ({
     row, full: row.querySelector('[data-demo-full]'), visual: row.querySelector('[data-demo-text]'),
   })));
@@ -97,6 +94,7 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
   const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const now = () => window.performance.now();
   let state = createController(now(), { hidden: document.hidden, reducedMotion: motion.matches });
+  state.sceneCount = conversations.length;
   let frame = null;
   let timer = null;
   let observer = null;
@@ -112,16 +110,14 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
   function render() {
     const timeline = timelines[state.selected];
     const sample = sampleDemo(timeline, state.elapsed, state.reducedMotion);
-    conversations.forEach((conversation, index) => { conversation.hidden = index !== state.selected; });
+    conversations.forEach((conversation, index) => { conversation.setAttribute('data-active', String(index === state.selected)); });
+    choices.forEach((choice, index) => choice.setAttribute('aria-pressed', String(index === state.selected)));
     groups[state.selected].forEach(({ row, words }, index) => {
       row.style.visibility = sample.turns[index] ? 'visible' : 'hidden';
       words.forEach((word, at) => { word.style.visibility = at < sample.turns[index] ? 'visible' : 'hidden'; });
     });
     pill.textContent = timeline.words.slice(0, sample.visibleWords).filter(word => word.turn === sample.turn).map(word => word.text).join(' ') || '\u00a0';
     bars.forEach((bar, index) => { bar.style.transform = `scaleY(${sample.scales[index]})`; });
-    transcript.hidden = state.view !== 'transcript';
-    list.hidden = state.view !== 'list';
-    recordings.setAttribute('aria-expanded', String(state.view === 'list'));
     root.dataset.demoMotion = isRunning(state) ? 'animated' : 'static';
   }
 
@@ -158,28 +154,24 @@ export function mountVoiceDemo(root, { window = globalThis.window, document = ro
     listeners.forEach(remove => remove());
     delete root.dataset.demoReady;
     delete root.dataset.demoMotion;
-    recordings.hidden = true;
-    recordings.removeAttribute('aria-expanded');
-    transcript.hidden = false;
-    list.hidden = true;
-    conversations.forEach((conversation, index) => { conversation.hidden = index !== 0; });
+    selectors.hidden = true;
+    conversations.forEach((conversation, index) => { conversation.setAttribute('data-active', String(index === 0)); });
+    choices.forEach((choice, index) => choice.setAttribute('aria-pressed', String(index === 0)));
     groups.forEach(group => group.forEach(({ row, visual }) => { row.style.visibility = ''; visual.replaceChildren(); }));
     bars.forEach((bar, index) => { bar.style.transform = originalTransforms[index]; });
     pill.textContent = originalPill;
     mounted.delete(root);
   }
 
-  listen(recordings, 'click', () => update({ type: 'list' }));
   choices.forEach((choice, index) => listen(choice, 'click', () => {
     update({ type: 'select', index });
-    conversations[index].querySelector('h3')?.focus({ preventScroll: true });
   }));
   listen(document, 'visibilitychange', () => update({ type: 'visibility', value: document.hidden }));
   listen(motion, 'change', event => update({ type: 'motion', value: event.matches }));
   listen(window, 'pagehide', event => { if (event.persisted) update({ type: 'page', value: false }); else destroy(); });
   listen(window, 'pageshow', () => update({ type: 'page', value: true }));
   root.dataset.demoReady = '';
-  recordings.hidden = false;
+  selectors.hidden = false;
   render();
   mounted.set(root, destroy);
   // Without reliable viewport observation, keep complete static content,

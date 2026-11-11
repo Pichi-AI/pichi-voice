@@ -1,5 +1,5 @@
 {
-  "purpose": "Genuine service marks identify conferencing applications. No partnership or endorsement is implied. Marks remain the property of their respective owners; website code license does not relicense these marks.",
+  "purpose": "Genuine service marks identify applications shown in illustrative product demos and conferencing examples. No partnership or endorsement is implied. Marks remain the property of their respective owners; website code license does not relicense these marks.",
   "retrievedUTC": "2026-11-10T09:18:02.183499+00:00",
   "sources": [
     {
@@ -64,6 +64,26 @@
       "sha256": "1f23a82984461f710b367c1024bdf341dad16d2f959a94c26ee918a79626ada5",
       "bytes": 20790,
       "contentType": "image/png"
+    },
+    {
+      "name": "gmail",
+      "file": "gmail.svg",
+      "officialPage": "https://workspace.google.com/products/gmail/",
+      "imageSource": "https://www.gstatic.com/images/branding/productlogos/gmail_2026/v2/web/192px.svg",
+      "sha256": "0a242131424b796a26247a8edd41d66fa294da6d177897526a19b7e81aedfdb8",
+      "bytes": 1298,
+      "contentType": "image/svg+xml",
+      "retrievedUTC": "2026-11-10T23:46:13.246307+00:00"
+    },
+    {
+      "name": "telegram",
+      "file": "telegram.svg",
+      "officialPage": "https://telegram.org/tour/screenshots",
+      "imageSource": "https://telegram.org/file/464001088/1/bI7AJLo7oX4.287931.zip/374fe3b0a59dc60005#Logo.svg",
+      "sha256": "54842d414c100f0110f90caf09ff58cd0d229629820e4576bd70befca88befd5",
+      "bytes": 2051,
+      "contentType": "image/svg+xml",
+      "retrievedUTC": "2026-11-10T23:46:13.246319+00:00"
     }
   ]
 }
