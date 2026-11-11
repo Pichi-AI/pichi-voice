@@ -83,8 +83,8 @@ fail closed. Writes use an exclusive 0600 temporary file, file sync, same-direct
 directory sync and exact typed readback. iOS temporary files receive existing file protection
 before text is written. N2 owns the directory's protection and backup policy.
 
-`bash Tests/run_publication_consent_tests.sh` compiles the actual N1 domain/brand types and
-consent actor in Swift 6, with no account service, browser, Keychain, models or network.
+`PichiPublicationConsentXCTests` runs the actual N1 domain/brand types and consent actor in
+the macOS XCTest target, with no account service, browser, Keychain, models or network.
 The first run passed 55 synthetic checks for scoped defaults/persistence, replacement,
 cancellation, oversized/truncated/foreign/versioned records, permissions, symlinks, hard
 links, FIFO rejection and interrupted temporary files. Recreating an actor and generation

@@ -18,7 +18,7 @@ Preserve inherited target names and layout. Do not reorganize existing tests mer
 
 | Code or artifact | Versioned location and ownership |
 | --- | --- |
-| macOS app unit and integration tests | `Tests/FluidDictationIntegrationTests/`, the existing `FluidDictationIntegrationTests` XCTest target. Its inherited name contains both test levels. Group new cases by feature. |
+| macOS app unit and integration tests | `Tests/FluidDictationIntegrationTests/`, the existing `FluidDictationIntegrationTests` XCTest target. Its inherited name contains both test levels. Group new cases by feature. Put new files under `Features/<feature>/`: that folder is synchronized with the target, so a new file needs no project edit. Files outside it are listed in the project one by one. |
 | iOS app unit and hosted integration tests | `Tests/MobileIntegrationTests/`, the existing `PichiVoiceMobileIntegrationTests` target. |
 | iOS native UI automation | `Tests/MobileUITests/`, the existing `PichiVoiceMobileUITests` target. |
 | Shared helpers | `Tests/Support/` where compatible with the owning target, or target-local support. Keep test doubles out of production builds. |

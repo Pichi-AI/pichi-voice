@@ -1126,6 +1126,11 @@
 			path = FluidASRBaselineTests;
 			sourceTree = "<group>";
 		};
+		DD22A0000000000000000001 /* Features */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Features;
+			sourceTree = "<group>";
+		};
 		F5E000000000000000000010 /* Sources/FVServe */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Sources/FVServe;
@@ -1239,6 +1244,7 @@
 		7CDB0A252F3C4D5600FB7CAD /* FluidDictationIntegrationTests */ = {
 			isa = PBXGroup;
 			children = (
+				DD22A0000000000000000001 /* Features */,
 				A5B5E6DADC27DE8E247EC335 /* MeetingCaptureStorageAdmissionTests.swift */,
 				638F1FFFB1312BFC70B34815 /* MeetingPrivacyPublicationTests.swift */,
 				7CDB0A262F3C4D5600FB7CAD /* Helpers */,
@@ -1482,6 +1488,9 @@
 			);
 			dependencies = (
 				7CDB0A312F3C4D5600FB7CAD /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				DD22A0000000000000000001 /* Features */,
 			);
 			name = FluidDictationIntegrationTests;
 			packageProductDependencies = (

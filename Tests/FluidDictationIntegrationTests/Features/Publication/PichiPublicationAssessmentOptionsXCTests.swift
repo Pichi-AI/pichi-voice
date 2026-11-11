@@ -1,10 +1,12 @@
+@testable import FluidVoice_Debug
 import CryptoKit
+import XCTest
 import Foundation
 
-extension PichiPublicationConsentTests {
+extension PichiPublicationConsentXCTests {
     static func checkAssessmentOptions(fixtures: URL) async throws -> Int {
         var checks = 0
-        func check(_ value: Bool, _ message: String) { precondition(value, message); checks += 1 }
+        func check(_ value: Bool, _ message: String, line: UInt = #line) { XCTAssertTrue(value, message, line: line); checks += 1 }
         func bytes(_ name: String) throws -> Data { try Data(contentsOf: fixtures.appendingPathComponent(name)) }
         func object(_ name: String) throws -> [String: Any] {
             try JSONSerialization.jsonObject(with: bytes(name)) as! [String: Any]
