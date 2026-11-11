@@ -166,6 +166,10 @@ Historical results are retained in [Initial verification history](initial-verifi
 
 Feature results and then-open validation gaps are retained in [Initial verification history](initial-verification-2026-10.md#pichi-feature-verification-on-october-9-10-2026). Recheck current sources and artifacts before making a present-tense claim.
 
+## Test exceptions
+
+`Tests/quarantine.json` lists known failures, each with an owner, a reason and an expiry date at most 90 days away. `Tests/skip-registry.json` gives every skipped test a reason and the layer that should run it. This change adds the two files and `scripts/dev/check-test-policy.py`. `check.sh` runs the checker on the files only (shape, owners, expiry), so an expired entry fails the repository check. Nothing here leaves a quarantined test out of a run or produces a result map. The gate script `scripts/dev/verify`, added by a separate change, does that: it leaves quarantined tests out of its runs and passes its results to the checker with `--results <map.json> --complete`. With `--results` a skip without a registry entry fails. Only with `--complete`, which says every bundle in the map ran completely, does a registry entry for a test missing from the map fail as well.
+
 ## CI and cleanup
 
 `python3 -S scripts/dev/lint-changed.py` lints only the Swift lines a branch changed. The repository has a large inherited baseline, so `force_cast`, `force_try` and `force_unwrapping` in `Sources/` block a change and every other rule is a note, including anything in `Vendor/`. The same check runs on each PR in `pichi-ci.yml`.
