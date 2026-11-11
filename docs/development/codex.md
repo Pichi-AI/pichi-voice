@@ -196,7 +196,7 @@ The bounded-context `qwen3.5:4b` adapter was measured at approximately 3.15 GiB 
 
 ## Test exceptions
 
-`Tests/quarantine.json` lists known failures, each with an owner, a reason and an expiry date at most 90 days away. An entry keeps its test out of the run. `Tests/skip-registry.json` gives every skipped test a reason and the layer that should run it. `scripts/dev/check-test-policy.py` runs in `check.sh`, so an expired entry fails the repository check. With `--results <map.json>` it compares a finished run with the registry in both directions: a skip without an entry fails, and so does an entry for a test that no longer exists.
+`Tests/quarantine.json` lists known failures, each with an owner, a reason and an expiry date at most 90 days away. `Tests/skip-registry.json` gives every skipped test a reason and the layer that should run it. This change adds the two files and `scripts/dev/check-test-policy.py`. `check.sh` runs the checker on the files only (shape, owners, expiry), so an expired entry fails the repository check. Nothing here leaves a quarantined test out of a run or produces a result map. The gate script `scripts/dev/verify`, added by a separate change, does that: it leaves quarantined tests out of its runs and passes its results to the checker with `--results <map.json> --complete`. With `--results` a skip without a registry entry fails. Only with `--complete`, which says every bundle in the map ran completely, does a registry entry for a test missing from the map fail as well.
 
 ## CI and cleanup
 
