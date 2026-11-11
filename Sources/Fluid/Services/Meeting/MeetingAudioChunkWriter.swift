@@ -174,8 +174,10 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         guard let reservation = self.reservePCM(sampleBuffer) else {
             self.pendingSlots.signal()
             self.pendingDroppedSampleCount += 1
+            let report = !self.dropReportScheduled
+            self.dropReportScheduled = true
             self.stateLock.unlock()
-            self.queue.async { self.drainDroppedSampleReport() }
+            if report { self.queue.async { self.drainDroppedSampleReport() } }
             return false
         }
         let sampleBox = SampleBox(sampleBuffer, producerEpoch: producerEpoch)
@@ -220,8 +222,10 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         guard let reservation = self.reservePCM(sampleBuffer) else {
             self.pendingSlots.signal()
             self.pendingDroppedSampleCount += 1
+            let report = !self.dropReportScheduled
+            self.dropReportScheduled = true
             self.stateLock.unlock()
-            self.queue.async { self.drainDroppedSampleReport() }
+            if report { self.queue.async { self.drainDroppedSampleReport() } }
             completion(.failure(SequencedCommandError.queueFull))
             return
         }
@@ -263,7 +267,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             return
         }
         guard self.pendingSlots.wait(timeout: .now()) == .success else {
-            self.failOverflowedSequencedCommand(failClosed: failClosed, mutate: mutate, completion: completion)
+            self.failOverflowedSequencedCommand(failClosed: failClosed, recordsAudioLoss: false, mutate: mutate, completion: completion)
             return
         }
 
@@ -292,12 +296,12 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     /// conservative era still reaches the in-memory track (and best-effort the manifest).
     private func failOverflowedSequencedCommand(
         failClosed: Bool,
+        recordsAudioLoss: Bool = true,
         mutate: @escaping @Sendable (inout MeetingAudioTrack) -> Void,
         completion: @escaping @Sendable (Result<Void, Error>) -> Void
     ) {
-        self.pendingDroppedSampleCount += 1
-        let shouldScheduleReport = !self.dropReportScheduled
-        self.dropReportScheduled = true
+        let shouldScheduleReport = recordsAudioLoss && !self.dropReportScheduled
+        if recordsAudioLoss { self.pendingDroppedSampleCount += 1; self.dropReportScheduled = true }
         let enqueueEmergency = failClosed && !self.emergencySafetyCommandPending
         if enqueueEmergency { self.emergencySafetyCommandPending = true }
         self.stateLock.unlock()
@@ -306,9 +310,11 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         }
         if enqueueEmergency {
             self.queue.async { [self] in
+                self.metadataRevision &+= 1
                 var candidate = self.scheduledMetadata ?? self.track
                 mutate(&candidate)
-                self.track = candidate
+                self.applyMetadata(candidate)
+                self.scheduledMetadata = candidate
                 self.publishJournal(track: candidate)
                 self.stateLock.withLock { self.emergencySafetyCommandPending = false }
                 completion(.failure(SequencedCommandError.queueFull))
@@ -715,7 +721,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             let eras = (self.scheduledMetadata ?? self.track).captureEras ?? []
             let first = eras.lastIndex(where: { $0.startSeconds <= record.presentationStart.seconds }) ?? 0
             let relevant = eras.isEmpty ? [] : Array(eras.dropFirst(first).prefix(while: { $0.startSeconds <= record.presentationEnd.seconds }))
-            let capsule = MeetingAudioRecoveryCapsule(trackID: self.track.id, kind: self.track.kind, chunk: record,
+            let capsule = MeetingAudioRecoveryCapsule(trackID: self.track.id, kind: self.track.kind, chunk: record, sessionID: UUID(uuidString: self.sessionDirectory.lastPathComponent),
                 captureEras: relevant.isEmpty ? nil : relevant)
             try chunk.sink.writeRecoveryMetadata(JSONEncoder().encode(capsule))
         } catch {

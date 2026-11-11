@@ -204,7 +204,7 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
         if status != noErr { throw MeetingPCMSinkError.writeFailed(status) }
     }
 
-    static func readRecoveryCapsules(in directory: URL, trackID: MeetingAudioTrackID,
+    static func readRecoveryCapsules(in directory: URL, trackID: MeetingAudioTrackID?,
                                      kind: MeetingAudioTrackKind) throws -> [MeetingAudioRecoveryCapsule] {
         let folder = directory.appendingPathComponent("tracks/\(kind.rawValue)")
         try Self.rejectSymlink(directory); try Self.rejectSymlink(folder)
@@ -228,7 +228,8 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
                 return AudioFileGetUserData(file, Self.recoveryUserData, 0, &size, base)
             }
             guard status == noErr, let capsule = try? JSONDecoder().decode(MeetingAudioRecoveryCapsule.self, from: data),
-                  capsule.trackID == trackID, capsule.kind == kind,
+                  (trackID == nil || capsule.trackID == trackID), capsule.kind == kind,
+                  capsule.sessionID == UUID(uuidString: directory.lastPathComponent),
                   capsule.chunk.relativeFilePath == "tracks/\(kind.rawValue)/\(String(format: "%06d", capsule.chunk.sequence)).caf",
                   let asset = capsule.chunk.captureAnalysisAsset,
                   asset.relativeFilePath == "tracks/\(kind.rawValue)/\(name)" || capsule.chunk.relativeFilePath == "tracks/\(kind.rawValue)/\(name)",

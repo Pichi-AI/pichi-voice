@@ -20,6 +20,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         var runtime: any MeetingCaptureRuntime
         var writers: [MeetingAudioChunkWriter]
         var streamingTee: MeetingMultiTrackCaptureTee?
+        var continuity: MeetingCaptureContinuityState
         var comparisonProbe: MeetingAudioComparisonProbe?
         var privacyGate: MeetingMicrophonePrivacyGate?
         var muteMonitor: MeetingCallMicrophoneObservation?
@@ -49,6 +50,11 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)? = nil
     ) async throws -> MeetingCaptureStartResult {
         try configuration.validate()
+        let continuity = MeetingCaptureContinuityState()
+        let downstream = eventHandler
+        let eventHandler: @Sendable (MeetingCaptureEvent) -> Void = { event in
+            continuity.observe(event); downstream(event)
+        }
         // The desktop runtime currently persists authoritative PCM chunks. It must refuse the
         // new strict policy before constructing any writer until a memory consumer is wired.
         guard configuration.audioStorageMode != .memoryOnly else {
@@ -247,6 +253,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 runtime: runtime,
                 writers: writers,
                 streamingTee: streamingTee,
+                continuity: continuity,
                 comparisonProbe: comparisonProbe,
                 privacyGate: privacyGate,
                 muteMonitor: muteMonitor,
@@ -340,7 +347,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             // closed successfully and must not be reported as a capture-stop failure.
             _ = try? await activeCapture.streamingTee?.finish()
             let result = MeetingCaptureStopResult(tracks: tracks, stoppedAt: stoppedAt,
-                                                 stoppedHostTime: stoppedHostTime)
+                                                 stoppedHostTime: stoppedHostTime,
+                                                 transcriptionDeferred: activeCapture.continuity.transcriptionDeferred)
             if let runtimeFailure {
                 throw MeetingCaptureError.captureStopFailed(
                     runtimeFailure.localizedDescription,
@@ -1104,6 +1112,10 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         for committer in committers {
             await committer.waitForPendingCommits()
         }
+        if committers.contains(where: { $0.hasDeferredLiveAudio }) {
+            self.eventHandler(.interrupted(kind: .liveTranscriptionDeferred, trackID: self.microphoneWriter.trackID,
+                detail: PichiLocalization.text("Transcription can be retried from the saved audio.")))
+        }
         if let stopFailure {
             throw MeetingCaptureRuntimeError.stopFailed(stopFailure)
         }
@@ -1326,6 +1338,10 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private func retireCurrentMicrophoneCommitter() {
         if let committer = self.microphoneCommitter {
             committer.retire()
+            if committer.hasDeferredLiveAudio {
+                self.eventHandler(.interrupted(kind: .liveTranscriptionDeferred, trackID: self.microphoneWriter.trackID,
+                    detail: PichiLocalization.text("Transcription can be retried from the saved audio.")))
+            }
             self.retainRetiredCommitterIfPending(committer)
         }
         self.microphoneCommitter = nil

@@ -668,7 +668,17 @@ actor MeetingSessionStore: MeetingSessionStoring {
             let header = (try? Data(contentsOf: manifestURL, options: .mappedIfSafe)).flatMap {
                 try? self.decoder.decode(MeetingAudioTrack.self, from: $0)
             }
-            guard var track = header ?? session.audioTracks.first(where: { $0.kind == kind }), track.kind == kind else { continue }
+            var recoveredTrack: MeetingAudioTrack?
+            if header == nil, !session.audioTracks.contains(where: { $0.kind == kind }) {
+                let capsules = (try? MeetingAudioFilePCMChunkSink.readRecoveryCapsules(in: sessionDirectory, trackID: nil, kind: kind)) ?? []
+                let identities = Set(capsules.map(\.trackID))
+                if identities.count == 1, let capsule = capsules.first {
+                    recoveredTrack = .init(id: capsule.trackID, kind: kind, sourceIdentifier: "recovered-capture",
+                        sourceDisplayName: kind == .microphone ? PichiLocalization.text("Microphone") : PichiLocalization.text("System Audio"),
+                        format: nil, timebase: session.timebase, health: .waiting, chunks: [])
+                }
+            }
+            guard var track = header ?? session.audioTracks.first(where: { $0.kind == kind }) ?? recoveredTrack, track.kind == kind else { continue }
             if let original = session.audioTracks.first(where: { $0.kind == kind }), original.id != track.id { continue }
             let ledger = MeetingAudioChunkLedgerStore(sessionDirectory: sessionDirectory)
             var byID = Dictionary(track.chunks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })

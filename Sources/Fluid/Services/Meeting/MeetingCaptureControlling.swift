@@ -123,3 +123,14 @@ nonisolated enum MeetingCaptureEvent: Sendable {
     /// `ack` is `nil` for downgrades — the mic is already dead, no race to gate on.
     case captureMethodChanged(trackID: MeetingAudioTrackID, method: MeetingAudioTrackCaptureMethod, ack: MeetingCaptureMethodChangeAck?)
 }
+
+/// Capture-side receipt independent of UI/event-delivery scheduling. Stop must carry a
+/// processing omission even if the MainActor has not consumed the notification yet.
+final nonisolated class MeetingCaptureContinuityState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var deferred = false
+    func observe(_ event: MeetingCaptureEvent) {
+        if case .interrupted(.liveTranscriptionDeferred, _, _) = event { self.lock.withLock { self.deferred = true } }
+    }
+    var transcriptionDeferred: Bool { self.lock.withLock { self.deferred } }
+}

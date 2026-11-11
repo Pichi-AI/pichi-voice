@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Transcription can be retried from the saved audio.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcription can be retried from the saved audio."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Расшифровку можно повторить по сохранённому аудио."
+          }
+        }
+      }
+    },
     "Audio recording continues. Live transcription will be retried later.": {
       "extractionState": "manual",
       "localizations": {

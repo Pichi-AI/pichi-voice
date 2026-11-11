@@ -8,6 +8,7 @@ nonisolated struct MeetingAudioRecoveryCapsule: Codable, Sendable {
     var trackID: MeetingAudioTrackID
     var kind: MeetingAudioTrackKind
     var chunk: MeetingAudioChunk
+    var sessionID: MeetingSessionID? = nil
     var captureEras: [MeetingCaptureEra]? = nil
 }
 

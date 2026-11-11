@@ -49,6 +49,8 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
     private var pendingLiveBytes = 0
     private var readyLiveTokens = Set<UInt64>()
     private var liveDeferred = false
+    private var excludedOwnedLiveAudio = false
+    var hasDeferredLiveAudio: Bool { self.lock.withLock { self.liveDeferred || self.excludedOwnedLiveAudio } }
 
     var hasPendingCommits: Bool {
         self.lock.withLock { self.pendingCommitCount > 0 }
@@ -278,6 +280,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
 
     private func clearPendingLive() {
         self.lock.withLock {
+            if !self.pendingLive.isEmpty { self.excludedOwnedLiveAudio = true }
             self.pendingLive.removeAll(); self.pendingLiveBytes = 0; self.readyLiveTokens.removeAll()
         }
     }
@@ -389,6 +392,9 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
 
     /// Close live delivery without relabelling successfully filtered audio at Stop.
     func finish() {
+        self.lock.withLock {
+            if !self.pendingLive.isEmpty { self.excludedOwnedLiveAudio = true }
+        }
         self.clearPendingLive()
         self.lock.withLock {
             self.generation &+= 1

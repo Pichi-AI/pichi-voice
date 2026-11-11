@@ -2670,6 +2670,21 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(harness.arbiter.acquireCallCount, harness.arbiter.releaseCallCount)
     }
 
+    func testStopReceiptPreservesDeferredTranscriptionWhenNotificationHasNotArrived() async throws {
+        let harness = self.makeHarness()
+        let started = try await harness.coordinator.startRecording(configuration: MeetingModelFixture.makeOnlineConfiguration())
+        await harness.capture.deferTranscriptionOnStop()
+        do { _ = try await harness.coordinator.stopAndTranscribe(); XCTFail("The stop receipt must retain the processing omission") }
+        catch {}
+        XCTAssertEqual(harness.processing.processCallCount, 0)
+        XCTAssertEqual(harness.coordinator.activeSession?.id, started.id)
+        XCTAssertEqual(harness.coordinator.activeSession?.transcriptIsComplete, false)
+        XCTAssertEqual(harness.coordinator.activeSession?.hasRetryableAudio, true)
+        XCTAssertTrue(harness.coordinator.activeSession?.events.contains { $0.kind == .liveTranscriptionDeferred } == true)
+        let restored = try await harness.coordinator.retryProcessing()
+        XCTAssertEqual(restored.state, .completed)
+    }
+
     func testRetainedCaptureCanStartAfterMemoryRecognitionPreparationFails() async throws {
         let harness = self.makeHarness()
         harness.processing.failMemoryPreparation = true
@@ -3012,6 +3027,9 @@ private actor FakeMeetingCaptureController: MeetingCaptureControlling {
         )
     }
 
+    private var transcriptionDeferredOnStop = false
+    func deferTranscriptionOnStop() { self.transcriptionDeferredOnStop = true }
+
     func stop(sessionID _: MeetingSessionID) async throws -> MeetingCaptureStopResult {
         self.stopCallCount += 1
         self.stopObservers.forEach { $0.resume() }
@@ -3021,7 +3039,7 @@ private actor FakeMeetingCaptureController: MeetingCaptureControlling {
         }
         let result = MeetingCaptureStopResult(
             tracks: MeetingModelFixture.makeSession().audioTracks,
-            stoppedAt: Date()
+            stoppedAt: Date(), transcriptionDeferred: self.transcriptionDeferredOnStop
         )
         if self.shouldFailStop {
             throw MeetingCaptureError.captureStopFailed("fixture stop failed", partialResult: result)

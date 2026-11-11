@@ -66,6 +66,62 @@ private final class MeetingRejectedSpeechConsumer: MeetingMemoryAudioConsuming, 
 /// P1a's sink fixtures intentionally use real ready CMSampleBuffers.  These tests stay in the
 /// integration target because the sink is an internal harness type, not a package product.
 final class MeetingAudioChunkSinkTests: XCTestCase {
+    func testDelayedPromotionReceiptCannotUndoEmergencyConservativeMetadata() async throws {
+        let root = try self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let metaEntered = expectation(description: "metadata held"), pcmEntered = expectation(description: "PCM held")
+        let metadata = MeetingCaptureFaultGate(metaEntered), pcm = MeetingCaptureFaultGate(pcmEntered)
+        defer { metadata.release.signal(); pcm.release.signal() }
+        var track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic", sourceDisplayName: "Synthetic",
+            format: nil, timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting, chunks: [])
+        track.captureEras = [.init(method: .screenCaptureKit, deviceUID: nil, deviceName: nil, roleAtElection: .unknown,
+            echoProtection: .unprotected, startSeconds: 0)]
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root, chunkDuration: 60,
+            eventHandler: { _ in }, pendingSlotLimit: 1, diagnosticSampleObserver: { _, _ in pcm.blockOnce() },
+            persistenceHook: { op in if case .manifest = op { metadata.blockOnce() } })
+        await fulfillment(of: [metaEntered], timeout: 2)
+        let receipt = expectation(description: "old promotion acknowledged")
+        writer.enqueueMetadata(failClosed: false, mutate: { $0.captureEras?[0].echoProtection = .acousticallyClosed },
+            completion: { _ in receipt.fulfill() })
+        _ = await writer.snapshot()
+        XCTAssertTrue(try writer.enqueue(self.makeRawSampleBuffer(channelCount: 1, layoutTag: nil, frameCount: 480, pts: 0)))
+        await fulfillment(of: [pcmEntered], timeout: 2)
+        writer.enqueueMetadata(failClosed: true, mutate: { $0.captureEras?[0].echoProtection = .unprotected }, completion: { _ in })
+        pcm.release.signal(); _ = await writer.snapshot()
+        metadata.release.signal()
+        await fulfillment(of: [receipt], timeout: 2)
+        let captured = await writer.stop()
+        XCTAssertEqual(captured.captureEras?.last?.echoProtection, .unprotected)
+        XCTAssertEqual(captured.chunks.first?.captureAnalysisAsset?.frameCount, 480)
+        XCTAssertEqual(captured.health.droppedSampleCount, 0, "An overloaded metadata command is not lost audio")
+    }
+
+    func testStopExcludesDelayedLiveOffersExplicitlyWithoutLosingTheirPCM() async throws {
+        let root = try self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let entered = expectation(description: "promotion receipt held")
+        let held = MeetingCaptureFaultGate(entered)
+        defer { held.release.signal() }
+        let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic", sourceDisplayName: "Synthetic",
+            format: nil, timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting, chunks: [])
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root, chunkDuration: 60,
+            eventHandler: { _ in }, persistenceHook: { op in if case .manifest = op { held.blockOnce() } })
+        await fulfillment(of: [entered], timeout: 2)
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let committer = MeetingAECOutputCommitter(writer: writer, transcriptGate: gate, liveAudioHandler: nil, terminalFailure: { _ in })
+        committer.commitCaptured(try self.makeRawSampleBuffer(channelCount: 1, layoutTag: nil, frameCount: 480, pts: 0),
+            protection: .acousticallyClosed)
+        _ = await writer.snapshot()
+        committer.finish()
+        held.release.signal(); await committer.waitForPendingCommits()
+        let captured = await writer.stop()
+        XCTAssertTrue(committer.hasDeferredLiveAudio, "Stop may not silently call an omitted owned offer complete")
+        XCTAssertFalse(gate.admitsTranscript())
+        XCTAssertEqual(captured.chunks.first?.captureAnalysisAsset?.frameCount, 480)
+    }
+
     func testStopJoinsJournalEvenWhenAllOptionalAcknowledgementSlotsAreOccupied() async throws {
         let root = try self.makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -136,7 +192,7 @@ final class MeetingAudioChunkSinkTests: XCTestCase {
         var session = MeetingSession(configuration: configuration, timebase: timebase)
         let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic", sourceDisplayName: "Synthetic",
             format: nil, timebase: timebase, health: .waiting, chunks: [])
-        session.audioTracks = [track]
+        // Production saves the initial session before the runtime assigns track identities.
         try await store.create(session)
         let directory = try await store.sessionDirectory(for: session.id)
         let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: directory, chunkDuration: 60,

@@ -3590,6 +3590,13 @@ final class MeetingSessionCoordinator: ObservableObject {
     private static func apply(_ stopResult: MeetingCaptureStopResult, to session: inout MeetingSession) {
         session.audioTracks = stopResult.tracks
         session.endedAt = stopResult.stoppedAt
+        if stopResult.transcriptionDeferred {
+            session.transcriptIsComplete = false
+            if !session.events.contains(where: { $0.kind == .liveTranscriptionDeferred }) {
+                session.events.append(.init(id: UUID(), occurredAt: stopResult.stoppedAt, kind: .liveTranscriptionDeferred,
+                    trackID: nil, detail: PichiLocalization.text("Transcription can be retried from the saved audio.")))
+            }
+        }
         if session.timebase.recordingTimePolicy == .hostMonotonicV1 {
             session.timebase.endedHostTime = stopResult.stoppedHostTime ?? mach_absolute_time()
         }
