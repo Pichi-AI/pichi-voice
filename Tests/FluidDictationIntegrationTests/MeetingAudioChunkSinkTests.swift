@@ -29,6 +29,83 @@ private final class MeetingWriterEventRecorder: @unchecked Sendable {
 /// P1a's sink fixtures intentionally use real ready CMSampleBuffers.  These tests stay in the
 /// integration target because the sink is an internal harness type, not a package product.
 final class MeetingAudioChunkSinkTests: XCTestCase {
+    func testFortyFiveMinuteNativeClockRecordingKeepsEveryFrameAndBoundedManifests() async throws {
+        let root = try self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+            machTimebaseDenominator: 1, firstPresentationTime: nil, recordingTimePolicy: .hostMonotonicV1)
+        let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
+            sourceDisplayName: "Synthetic long call", format: nil, timebase: timebase, health: .waiting, chunks: [])
+        let context = try MeetingRecordingClock(timebase: timebase).source(track.id)
+        let events = MeetingWriterEventRecorder(), terminalFailures = MeetingPCMFailureCounter()
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root, chunkDuration: 60,
+            eventHandler: events.record, clockContext: context)
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let liveOffers = MeetingPCMFailureCounter()
+        let committer = MeetingAECOutputCommitter(writer: writer, transcriptGate: gate,
+            liveAudioHandler: { _, _ in liveOffers.increment() }, terminalFailure: { _ in terminalFailures.increment() })
+        let seconds = 45 * 60, rate = 48_000, baseTicks: Int64 = 586_026_000_000_000
+        // One-second synthetic packets retain the native 512/1024-frame clock breakpoints.
+        // The clock and PCM cover 45 minutes; no microphone, model or wall-clock wait is used.
+        func host(_ frame: Int) -> MeetingMediaTime {
+            .init(value: baseTicks + Int64((Double(frame) * 1_000_000_000 / Double(rate)).rounded()),
+                  timescale: 1_000_000_000)
+        }
+        for second in 0..<seconds {
+            let sample = try self.makeRawSampleBuffer(channelCount: 1, layoutTag: nil, frameCount: rate,
+                pts: Double(baseTicks) / 1_000_000_000 + Double(second))
+            var spans: [MeetingAudioClockSpan] = [], frame = 0, packet = 0
+            while frame < rate {
+                let end = min(rate, frame + (packet % 3 == 2 ? 1_024 : 512))
+                spans.append(.init(frameStart: Double(frame), frameEnd: Double(end),
+                    hostStart: host(second * rate + frame), hostEnd: host(second * rate + end),
+                    discontinuityBefore: second == 0 && frame == 0))
+                frame = end; packet += 1
+            }
+            let mapping = MeetingAudioClockMapping(frameCount: Int64(rate), spans: spans)
+            try MeetingCaptureClockMetadata.attach(mapping: mapping, clockID: context.clockID,
+                sourceID: context.sourceID, producerEpoch: 1, to: sample)
+            committer.commitCaptured(sample, protection: .acousticallyClosed)
+            if second % 8 == 7 { await committer.waitForPendingCommits() }
+            // Each virtual minute joins the real close/hash/fsync, avoiding an artificial
+            // faster-than-disk finalization load while still exercising all accumulated history.
+            if second % 60 == 59 {
+                await committer.waitForPendingCommits()
+                _ = await writer.beginSplice()
+            }
+        }
+        await committer.waitForPendingCommits(); committer.finish()
+        let saved = await writer.stop()
+        XCTAssertEqual(saved.chunks.count, 45)
+        XCTAssertEqual(liveOffers.value(), seconds)
+        XCTAssertEqual(terminalFailures.value(), 0)
+        XCTAssertEqual(saved.health.droppedSampleCount, 0)
+        XCTAssertFalse(events.snapshot().contains { if case .interrupted = $0 { return true }; return false })
+        XCTAssertTrue(saved.chunks.allSatisfy { $0.finalizationState == .finalized })
+        XCTAssertEqual(saved.chunks.compactMap { $0.captureAnalysisAsset?.frameCount }.reduce(0, +), Int64(seconds * rate))
+        for (index, chunk) in saved.chunks.enumerated() {
+            let mapping = try XCTUnwrap(chunk.clockMapping)
+            XCTAssertLessThanOrEqual(mapping.spans.count, 2, "Rounded native clock packets must not inflate every later manifest")
+            XCTAssertEqual(mapping.spans.first?.hostStart, host(index * 60 * rate))
+            XCTAssertEqual(mapping.spans.last?.hostEnd, host((index + 1) * 60 * rate))
+            let file = try AVAudioFile(forReading: root.appendingPathComponent(chunk.relativeFilePath),
+                commonFormat: .pcmFormatFloat32, interleaved: false)
+            XCTAssertEqual(file.length, Int64(60 * rate))
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 16_384))
+            while file.framePosition < file.length {
+                try file.read(into: buffer)
+                guard buffer.frameLength > 0 else { return XCTFail("Synthetic CAF ended before its declared frame count") }
+                let data = try XCTUnwrap(buffer.floatChannelData?[0])
+                XCTAssertTrue(UnsafeBufferPointer(start: data, count: Int(buffer.frameLength)).allSatisfy { $0 == 0.25 })
+            }
+        }
+        let manifest = try Data(contentsOf: root.appendingPathComponent("tracks/microphone/track.json"))
+        XCTAssertLessThan(manifest.count, 150_000, "A long call must not rewrite tens of megabytes on its PCM queue")
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let persisted = try decoder.decode(MeetingAudioTrack.self, from: manifest)
+        XCTAssertEqual(persisted.chunks, saved.chunks)
+    }
+
     @MainActor
     func testInRoomStreamingUsesSharedEpochAwareTeeAndExactWriterEndpointsAtRealUptime() async throws {
         for channels in [1, 2] {

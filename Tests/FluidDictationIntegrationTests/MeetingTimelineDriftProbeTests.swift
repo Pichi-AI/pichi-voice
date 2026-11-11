@@ -185,6 +185,87 @@ private final class DriftStreamOutput: NSObject, SCStreamOutput {
 
 /// Model-free checks of the same frame mapping, attachment and converter used by native capture.
 final class MeetingRecordingClockCoreTests: XCTestCase {
+    func testCompletedNativeClockCompactionBoundsEveryOriginalBreakpointAtLargeUptime() throws {
+        let origin: Int64 = 586_026_433_062_500
+        func host(_ frame: Int) -> MeetingMediaTime {
+            .init(value: origin + Int64((Double(frame) * 1_000_000_000 / 48_000).rounded()), timescale: 1_000_000_000)
+        }
+        var spans: [MeetingAudioClockSpan] = [], frame = 0, packet = 0
+        while frame < 60 * 48_000 {
+            let end = min(60 * 48_000, frame + (packet % 3 == 2 ? 1_024 : 512))
+            spans.append(.init(frameStart: Double(frame), frameEnd: Double(end),
+                hostStart: host(frame), hostEnd: host(end), discontinuityBefore: frame == 0))
+            frame = end; packet += 1
+        }
+        let measured = MeetingAudioClockMapping(frameCount: Int64(frame), spans: spans)
+        let compact = try measured.compacted()
+        XCTAssertGreaterThan(measured.spans.count, 3_000)
+        XCTAssertLessThanOrEqual(compact.spans.count, 2)
+        XCTAssertEqual(compact.frameCount, measured.frameCount)
+        XCTAssertEqual(compact.spans.first?.hostStart, measured.spans.first?.hostStart)
+        XCTAssertEqual(compact.spans.last?.hostEnd, measured.spans.last?.hostEnd)
+        XCTAssertEqual(compact.spans.first?.discontinuityBefore, true)
+        self.assertClockCompaction(compact, preserves: measured)
+        let encoded = try JSONEncoder().encode(compact)
+        XCTAssertLessThan(encoded.count, 1_024)
+        XCTAssertEqual(try JSONDecoder().decode(MeetingAudioClockMapping.self, from: encoded), compact)
+    }
+
+    func testClockCompactionRetainsGapsDiscontinuitiesAndMeasuredRateChanges() throws {
+        func host(_ ticks: Int64) -> MeetingMediaTime { .init(value: ticks, timescale: 1_000_000_000) }
+        let origin: Int64 = 586_026_000_000_000
+        for (gap, boundary) in [(Int64(0), true), (Int64(1), false), (Int64(-1), false), (Int64(2), true)] {
+            let measured = MeetingAudioClockMapping(frameCount: 200, spans: [
+                .init(frameStart: 0, frameEnd: 100, hostStart: host(origin), hostEnd: host(origin + 1_000_000_000)),
+                .init(frameStart: 100, frameEnd: 200, hostStart: host(origin + 1_000_000_000 + gap),
+                      hostEnd: host(origin + 2_000_000_000 + gap), discontinuityBefore: boundary)
+            ])
+            XCTAssertEqual(try measured.compacted(), measured, "Neither side of a measured boundary may disappear")
+        }
+        var spans: [MeetingAudioClockSpan] = []
+        for index in 0..<256 {
+            func point(_ value: Int) -> MeetingMediaTime {
+                host(origin + Int64(value) * 10_000_000 + Int64(value * value))
+            }
+            spans.append(.init(frameStart: Double(index * 480), frameEnd: Double((index + 1) * 480),
+                hostStart: point(index), hostEnd: point(index + 1)))
+        }
+        let curved = MeetingAudioClockMapping(frameCount: 256 * 480, spans: spans)
+        let compact = try curved.compacted()
+        XCTAssertGreaterThan(compact.spans.count, 2, "Measured clock drift cannot be replaced by one nominal-rate line")
+        self.assertClockCompaction(compact, preserves: curved)
+    }
+
+    func testClockCompactionPreservesOtherRationalClocksAndRejectsInvalidInput() throws {
+        let measured = MeetingAudioClockMapping(frameCount: 960, spans: [
+            .init(frameStart: 0, frameEnd: 480, hostStart: .init(value: 48_000, timescale: 48_000),
+                  hostEnd: .init(value: 48_480, timescale: 48_000)),
+            .init(frameStart: 480, frameEnd: 960, hostStart: .init(value: 48_480, timescale: 48_000),
+                  hostEnd: .init(value: 48_960, timescale: 48_000))
+        ])
+        XCTAssertEqual(try measured.compacted(), measured)
+        XCTAssertEqual(try MeetingAudioClockMapping(frameCount: 0, spans: []).compacted().spans, [])
+        var invalid = measured; invalid.frameCount += 1
+        XCTAssertThrowsError(try invalid.compacted())
+        invalid = measured; invalid.version = 2
+        XCTAssertThrowsError(try invalid.compacted())
+    }
+
+    private func assertClockCompaction(_ compact: MeetingAudioClockMapping, preserves original: MeetingAudioClockMapping,
+                                       file: StaticString = #filePath, line: UInt = #line) {
+        for source in original.spans {
+            for (frame, time) in [(source.frameStart, source.hostStart), (source.frameEnd, source.hostEnd)] {
+                guard let span = compact.spans.first(where: { frame >= $0.frameStart && frame <= $0.frameEnd }) else {
+                    XCTFail("Compaction removed measured frames", file: file, line: line); continue
+                }
+                let localTicks = Double(span.hostEnd.value - span.hostStart.value)
+                    * (frame - span.frameStart) / (span.frameEnd - span.frameStart)
+                let originalTicks = Double(time.value - span.hostStart.value)
+                XCTAssertLessThanOrEqual(abs(localTicks - originalTicks), 1, "Compaction exceeded one nanosecond", file: file, line: line)
+            }
+        }
+    }
+
     func testNanosecondBoundaryAllowanceUsesExactTicksAtLargeHostUptime() throws {
         let endpoint: Int64 = 207_042_531_395_835
         func point(_ value: Int64) -> MeetingMediaTime { .init(value: value, timescale: 1_000_000_000) }

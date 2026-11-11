@@ -790,6 +790,17 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 "Audio chunk timing was not monotonic."
             )
         }
+        // Keep the measured native clock while removing sub-nanosecond affine redundancy.
+        // This runs once on the finalization queue, against every original breakpoint. Keeping
+        // thousands of equivalent packet spans per minute makes each later track/era manifest
+        // rewrite block PCM persistence for longer than the bounded producer queue can absorb.
+        let clockMapping: MeetingAudioClockMapping?
+        do {
+            clockMapping = try activeChunk.clockMapping?.compacted()
+        } catch {
+            activeChunk.sink.cancel()
+            return .failed(Self.failedChunk(from: activeChunk), "PCM clock mapping finalization failed: \(error)")
+        }
         switch activeChunk.sink.finalize() {
         case let .success(finalization):
             let asset = MeetingAudioAsset(
@@ -816,7 +827,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 audioSchemaVersion: 2,
                 captureAnalysisAsset: asset,
                 playbackArchiveAsset: nil,
-                clockMapping: activeChunk.clockMapping
+                clockMapping: clockMapping
             ), activeChunk.format)
         case let .failure(error):
             return .failed(self.failedChunk(from: activeChunk), "PCM chunk finalization failed: \(error)")
