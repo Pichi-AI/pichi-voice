@@ -60,6 +60,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     private let sessionDirectory: URL
     private let trackDirectory: URL
     private let chunkDuration: TimeInterval
+    private let maximumClockSpans: Int
     private let eventHandler: EventHandler
     private let diagnosticSampleObserver: (@Sendable (CMSampleBuffer, UInt64) -> Void)?
     private let sampleAdmission: (@Sendable (CMSampleBuffer) -> Bool)?
@@ -111,7 +112,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         diagnosticSampleObserver: (@Sendable (CMSampleBuffer, UInt64) -> Void)? = nil,
         sampleAdmission: (@Sendable (CMSampleBuffer) -> Bool)? = nil,
         clockContext: MeetingRecordingClockContext? = nil,
-        persistenceHook: MeetingAudioRecordingJournal.Hook? = nil
+        persistenceHook: MeetingAudioRecordingJournal.Hook? = nil,
+        maximumClockSpans: Int = MeetingAudioClockMapping.maximumSpans
     ) throws {
         self.clockContext = clockContext
         self.trackID = track.id
@@ -121,6 +123,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             .appendingPathComponent("tracks", isDirectory: true)
             .appendingPathComponent(track.kind.rawValue, isDirectory: true)
         self.chunkDuration = max(60, chunkDuration)
+        self.maximumClockSpans = max(1, min(maximumClockSpans, MeetingAudioClockMapping.maximumSpans))
         self.eventHandler = eventHandler
         self.diagnosticSampleObserver = diagnosticSampleObserver
         self.sampleAdmission = sampleAdmission
@@ -571,6 +574,17 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             }
             guard var activeChunk = self.activeChunk else { return }
             if let hostMapping {
+                // Irreducible clock detail is bounded independently of chunk duration. Rotate
+                // the container before that budget is spent; valid PCM must not be discarded
+                // merely because its optional timing representation needs another record.
+                if let mapping = activeChunk.clockMapping,
+                   mapping.spans.count > self.maximumClockSpans - hostMapping.spans.count {
+                    self.scheduleActiveChunkFinalization()
+                    try self.beginChunk(with: sampleBuffer, at: presentationTime, producerEpoch: producerEpoch,
+                        discontinuities: [])
+                    guard let replacement = self.activeChunk else { return }
+                    activeChunk = replacement
+                }
                 activeChunk.clockMapping = try activeChunk.clockMapping.map { try $0.appending(hostMapping) } ?? hostMapping
             }
             let receipt = try activeChunk.sink.append(sampleBuffer)

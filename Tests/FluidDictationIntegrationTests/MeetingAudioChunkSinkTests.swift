@@ -66,6 +66,35 @@ private final class MeetingRejectedSpeechConsumer: MeetingMemoryAudioConsuming, 
 /// P1a's sink fixtures intentionally use real ready CMSampleBuffers.  These tests stay in the
 /// integration target because the sink is an internal harness type, not a package product.
 final class MeetingAudioChunkSinkTests: XCTestCase {
+    func testClockDetailBudgetRotatesFilesWithoutDroppingOrRetimingValidPCM() async throws {
+        let root = try self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1,
+            firstPresentationTime: nil, recordingTimePolicy: .hostMonotonicV1)
+        let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic", sourceDisplayName: "Synthetic",
+            format: nil, timebase: timebase, health: .waiting, chunks: [])
+        let context = try MeetingRecordingClock(timebase: timebase).source(track.id)
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root, chunkDuration: 60,
+            eventHandler: { _ in }, clockContext: context, maximumClockSpans: 8)
+        var ticks: Int64 = 1_000_000_000
+        for index in 0..<24 {
+            let start = ticks
+            ticks += 2_666_667 + Int64(index % 2) * 100
+            let pts = CMTime(value: start, timescale: 1_000_000_000)
+            let sample = try self.makeRawSampleBuffer(channelCount: 1, layoutTag: nil, frameCount: 128, pts: pts.seconds, exactPTS: pts)
+            let mapping = MeetingAudioClockMapping(frameCount: 128, spans: [.init(frameStart: 0, frameEnd: 128,
+                hostStart: .init(value: start, timescale: 1_000_000_000), hostEnd: .init(value: ticks, timescale: 1_000_000_000))])
+            try MeetingCaptureClockMetadata.attach(mapping: mapping, clockID: context.clockID, sourceID: context.sourceID, producerEpoch: 1, to: sample)
+            XCTAssertTrue(writer.enqueue(sample))
+        }
+        let saved = await writer.stop()
+        XCTAssertGreaterThan(saved.chunks.count, 1)
+        XCTAssertEqual(saved.chunks.compactMap { $0.captureAnalysisAsset?.frameCount }.reduce(0, +), 24 * 128)
+        XCTAssertEqual(saved.health.droppedSampleCount, 0)
+        XCTAssertTrue(saved.chunks.allSatisfy { $0.discontinuities.isEmpty && $0.finalizationState == .finalized })
+        XCTAssertEqual(saved.chunks.last?.presentationEnd.value, ticks)
+    }
+
     func testEpochRevocationAfterDequeueCannotHideMissingLiveCoverage() async throws {
         let root = try self.makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
