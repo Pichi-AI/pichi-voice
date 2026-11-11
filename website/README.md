@@ -18,7 +18,7 @@ The illustrated meeting text is synthetic and is not a screenshot or performance
 
 ## Hero animation and focused checks
 
-The EN preview entry point stays byte-identical to `/voice/`. EN and RU use the same local demo adapter. Four synthetic scenes play in order: Gmail, Telegram text, a Zoom call in Pichi Meet, and an in-person tablet meeting. Each streams words and waves, holds its completed result for three seconds using a timer, then crossfades to the next scene. Persistent selectors allow manual selection without moving focus. All four complete descriptions remain available to assistive reading outside the decorative artwork.
+The EN preview entry point stays byte-identical to `/voice/`. EN and RU use the same local demo adapter. Four synthetic scenes play in order: Gmail, Telegram text, a Zoom call in Pichi Meet, and an in-person tablet meeting. Each streams words and waves, holds its completed result for three seconds using a timer, then crossfades to the next scene. Persistent selectors allow manual selection without moving focus. Telegram keeps its dictated text in a neutral, unsent Draft composer throughout the completed hold. All four complete descriptions remain available to assistive reading outside the decorative artwork.
 
 Viewport exit, hidden documents and persisted `pagehide` cancel pending work and show the current complete scene. Returning to a visible, active viewport restarts that scene. Reduced motion and missing or failed viewport observation keep complete static scenes with manual selection. Unmount and terminal `pagehide` release the timer, frame, observer and listeners and restore static HTML. Nothing accesses a microphone, audio device or network.
 
