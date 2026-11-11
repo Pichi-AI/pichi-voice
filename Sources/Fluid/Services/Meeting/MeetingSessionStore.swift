@@ -674,7 +674,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
                 let identities = Set(capsules.map(\.trackID))
                 if identities.count == 1, let capsule = capsules.first {
                     recoveredTrack = .init(id: capsule.trackID, kind: kind, sourceIdentifier: "recovered-capture",
-                        sourceDisplayName: kind == .microphone ? PichiLocalization.text("Microphone") : PichiLocalization.text("System Audio"),
+                        sourceDisplayName: kind == .microphone ? PichiLocalization.text("Microphone") : PichiLocalization.text("System audio"),
                         format: nil, timebase: session.timebase, health: .waiting, chunks: [])
                 }
             }
