@@ -6,7 +6,7 @@ struct HistoryTextComparisonView: View {
     let entry: TranscriptionHistoryEntry
     let copy: (String) -> Void
     var historyStore: TranscriptionHistoryStore? = nil
-    var rejectionService: DictionaryRejectionService = .shared
+    var rejectionService: DictionaryRejectionService? = nil
     @State private var showChanges = true
     @State private var comparison: HistoryTextDiff?
     @State private var sourceCorrections: HistoryTextDiff?
@@ -172,7 +172,7 @@ struct HistoryTextComparisonView: View {
         let profile = PrivateProfileStorage.current
         let history = self.historyStore ?? TranscriptionHistoryStore.shared
         self.rejectionTask = Task { @MainActor in
-            let result = await self.rejectionService.restore(entryID: entryID, replacementID: hit.id,
+            let result = await (self.rejectionService ?? .shared).restore(entryID: entryID, replacementID: hit.id,
                 expectedSource: source, history: history, profile: profile)
             guard !Task.isCancelled, self.entry.id == entryID, PrivateProfileStorage.isReadable(profile) else { return }
             self.rejectionStatus = result.restored
@@ -435,7 +435,7 @@ struct HistoryTextComparisonView: View {
             self.rejectionTask?.cancel()
             let expected = history.entries.first(where: { $0.id == context.entryID })?.sourceTranscriptText
             self.rejectionTask = Task { @MainActor in
-                let saved = await self.rejectionService.remember(rejected, corrected: replacement, profile: context.profile, isValid: {
+                let saved = await (self.rejectionService ?? .shared).remember(rejected, corrected: replacement, profile: context.profile, isValid: {
                     history.entries.first(where: { $0.id == context.entryID })?.sourceTranscriptText == expected
                 })
                 guard !Task.isCancelled, self.entry.id == context.entryID else { return }

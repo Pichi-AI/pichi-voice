@@ -54,10 +54,10 @@ final class DictionaryRejectionService {
     init(negatives: DictionaryNegativeExampleStore = .shared,
          profiles: @escaping @MainActor () async -> [PronunciationDictionaryProfile] = { await PronunciationDictionaryStore.shared.allProfiles() },
          entries: @escaping @MainActor () -> [SettingsStore.CustomDictionaryEntry] = { SettingsStore.shared.customDictionaryEntries + BuiltInDictionary.entries },
-         textRejections: DictionaryTextRejectionStore = .shared,
+         textRejections: DictionaryTextRejectionStore? = nil,
          enabled: @escaping @MainActor () -> Bool = { DictionaryMatcherExperiment.collectNegatives }) {
         self.negatives = negatives; self.profiles = profiles; self.entries = entries
-        self.textRejections = textRejections; self.enabled = enabled
+        self.textRejections = textRejections ?? .shared; self.enabled = enabled
     }
 
     @discardableResult

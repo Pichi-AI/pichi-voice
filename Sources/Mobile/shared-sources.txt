@@ -45,6 +45,7 @@ Sources/Fluid/Services/DictionaryAudioInspection.swift
 Sources/Fluid/Services/DictionaryAudioSpan.swift
 Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift
 Sources/Fluid/Services/DictionaryExperimentalMatcher.swift
+Sources/Fluid/Services/DictionaryAcousticEvidence.swift
 Sources/Fluid/Services/DictionaryLearningEvidence.swift
 Sources/Fluid/Services/DictionaryLexicalEvidence.swift
 Sources/Fluid/Services/DictionaryMatchPlayground.swift

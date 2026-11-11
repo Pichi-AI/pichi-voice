@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 source = Path("Sources/Fluid/Services/DictionaryNegativeExamples.swift").read_text()
 start = source.index("nonisolated final class DictionaryCaptureEvidenceFile")
-end = source.index("\nnonisolated struct DictionaryAcousticEvidence", start)
+end = source.index("\nnonisolated struct DictionaryNegativeCorrection", start)
 Path(sys.argv[1]).write_text("import Foundation\nimport Darwin\n" + source[start:end])
 PYTHON
 # The Intel data-only store excludes the optional ARM FluidAudio integration.

@@ -36,7 +36,7 @@ enhancements = between(fluid, "nonisolated struct FluidAudioProviderEnhancementO
 # The neighboring CTC types below perform no download, loading or inference.
 vocabulary = vocabulary.replace("#if arch(arm64)\nimport FluidAudio\n#endif", "")
 vocabulary = vocabulary.replace("#if arch(arm64)", "").replace("#endif", "")
-evidence_reader = between(negative, "nonisolated final class DictionaryCaptureEvidenceFile", "\nnonisolated struct DictionaryAcousticEvidence")
+evidence_reader = between(negative, "nonisolated final class DictionaryCaptureEvidenceFile", "\nnonisolated struct DictionaryNegativeCorrection")
 experiment_core = between(experiment, "nonisolated enum DictionaryPronunciationExperiment", "\n/// Bounded, local-only evidence")
 references_core = references.replace("#if arch(arm64)", "").replace("import FluidAudio", "").replace("#endif", "")
 runtime_status = between(native, "public struct GigaAMExecutionStatus:", "/// The shipped Core ML graph")

@@ -79,21 +79,6 @@ nonisolated final class DictionaryCaptureEvidenceFile: @unchecked Sendable {
     deinit { self.close() }
 }
 
-nonisolated struct DictionaryAcousticEvidence: Codable, Equatable, Sendable {
-    let id: UUID
-    let entryID: UUID
-    let label: String
-    let profileKey: String
-    let modelKey: String
-    let sourceWordRange: Range<Int>
-    let frames: DictionaryMatchFrames
-    var matchFrameRange: Range<Int>? = nil
-
-    func aligned(to wordRange: Range<Int>, label: String) -> Self {
-        Self(id: self.id, entryID: self.entryID, label: label, profileKey: self.profileKey, modelKey: self.modelKey, sourceWordRange: wordRange, frames: self.frames, matchFrameRange: self.matchFrameRange)
-    }
-}
-
 nonisolated struct DictionaryNegativeCorrection: Sendable {
     let evidence: DictionaryAcousticEvidence
     let correctedText: String

@@ -22,6 +22,7 @@ xcrun swiftc -D DICTIONARY_EXPERIMENT_STANDALONE -O -parse-as-library \
     "$task_repo_dir/Sources/Fluid/Account/PrivateProfileDefaults.swift" \
     "$task_repo_dir/Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift" \
     "$task_repo_dir/Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift" \
+    "$task_repo_dir/Sources/Fluid/Services/DictionaryAcousticEvidence.swift" \
     "$task_repo_dir/Sources/Fluid/Services/DictionaryExperimentalMatcher.swift" \
     "$task_repo_dir/Sources/Fluid/Services/DictionaryNegativeExamples.swift" \
     "$task_repo_dir/Sources/Fluid/Services/DictionaryAudioInspection.swift" \

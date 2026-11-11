@@ -8272,7 +8272,8 @@ final class ASRService: ObservableObject {
     /// Uses case-insensitive matching with word boundaries.
     /// Optimized: caches compiled regexes to avoid per-call compilation overhead.
     static func applyCustomDictionary(_ text: String, onReplacement: ((UUID, NSRange, String, String) -> Void)? = nil,
-                                     rejections: DictionaryTextRejectionStore = .shared) -> String {
+                                     rejections: DictionaryTextRejectionStore? = nil) -> String {
+        let rejections = rejections ?? DictionaryTextRejectionStore.shared
         // Built-in spellings always exist, so the compiled patterns decide whether there is work.
 
         // Rebuild cache if needed (lazy initialization)

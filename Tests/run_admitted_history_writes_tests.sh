@@ -54,10 +54,12 @@ xcrun swiftc -target x86_64-apple-macosx15.0 -parse-as-library -swift-version 5 
     Sources/Fluid/Account/PrivateDictationCaptureOutput.swift \
     Sources/Fluid/Account/PrivateDirectDictationCapture.swift \
     Sources/Fluid/Persistence/DictationAudioHistoryStore.swift \
+    Sources/Fluid/Services/DictionaryHistoryReplacement.swift \
     Sources/Fluid/Persistence/TranscriptionHistoryDatabase.swift Sources/Fluid/Persistence/TranscriptionHistoryStore.swift \
     Sources/Fluid/Persistence/ChatHistoryStore.swift Sources/Fluid/Persistence/FileTranscriptionHistoryStore.swift \
     Sources/Fluid/Persistence/PersistedHistory.swift Sources/Fluid/Services/ParakeetVocabularyStore.swift \
     Sources/Fluid/Services/PronunciationDictionaryStore.swift Sources/Fluid/Services/DictionaryAudioInspection.swift \
+    Sources/Fluid/Services/DictionaryAcousticEvidence.swift \
     Sources/Fluid/Services/DictionaryLearningEvidence.swift Sources/Fluid/Services/DictionaryNegativeExamples.swift \
     Sources/Fluid/Services/DictionaryExperimentalMatcher.swift Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingOwnerVoiceProfile.swift Sources/Fluid/Services/TranscriptionExecutor.swift \
