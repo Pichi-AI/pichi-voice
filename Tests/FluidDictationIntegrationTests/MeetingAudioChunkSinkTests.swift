@@ -66,6 +66,33 @@ private final class MeetingRejectedSpeechConsumer: MeetingMemoryAudioConsuming, 
 /// P1a's sink fixtures intentionally use real ready CMSampleBuffers.  These tests stay in the
 /// integration target because the sink is an internal harness type, not a package product.
 final class MeetingAudioChunkSinkTests: XCTestCase {
+    func testStopJoinsJournalEvenWhenAllOptionalAcknowledgementSlotsAreOccupied() async throws {
+        let root = try self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let entered = expectation(description: "journal held")
+        let gate = MeetingCaptureFaultGate(entered)
+        defer { gate.release.signal() }
+        let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic", sourceDisplayName: "Synthetic",
+            format: nil, timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting, chunks: [])
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root, chunkDuration: 60,
+            eventHandler: { _ in }, persistenceHook: { op in if case .manifest = op { gate.blockOnce() } })
+        await fulfillment(of: [entered], timeout: 2)
+        XCTAssertTrue(try writer.enqueue(self.makeRawSampleBuffer(channelCount: 1, layoutTag: nil, frameCount: 480, pts: 0)))
+        let acknowledged = MeetingPCMFailureCounter()
+        for _ in 0..<128 { writer.enqueueMetadata(failClosed: true, mutate: { _ in }, completion: { _ in acknowledged.increment() }) }
+        _ = await writer.snapshot()
+        let earlyReturn = expectation(description: "Stop must wait for its terminal receipt")
+        earlyReturn.isInverted = true
+        let stop = Task { let track = await writer.stop(); earlyReturn.fulfill(); return track }
+        await fulfillment(of: [earlyReturn], timeout: 0.05)
+        gate.release.signal()
+        let captured = await stop.value
+        XCTAssertEqual(acknowledged.value(), 128)
+        XCTAssertEqual(captured.chunks.first?.captureAnalysisAsset?.frameCount, 480)
+        XCTAssertEqual(captured.chunks.first?.finalizationState, .finalized)
+    }
+
     @MainActor
     func testRejectedSpeechConsumerDoesNotStopRealWriterAndJoinsItsResources() async throws {
         let root = try self.makeDirectory()

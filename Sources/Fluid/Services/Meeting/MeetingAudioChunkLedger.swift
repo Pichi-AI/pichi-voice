@@ -269,6 +269,7 @@ final nonisolated class MeetingAudioRecordingJournal: @unchecked Sendable {
     private var pending: Snapshot?
     private var completions: [Completion] = []
     private var running = false
+    private var finishing = false
     private var recordedThrough = -1
     private var pendingRecovery = Set<UUID>()
 
@@ -282,8 +283,12 @@ final nonisolated class MeetingAudioRecordingJournal: @unchecked Sendable {
 
     func submit(_ snapshot: Snapshot, completion: Completion? = nil) {
         let (start, rejected) = self.lock.withLock { () -> (Bool, Bool) in
+            guard !self.finishing || snapshot.final else { return (false, completion != nil) }
+            if snapshot.final { self.finishing = true }
             self.pending = snapshot
-            let rejected = completion != nil && self.completions.count >= 128
+            // The one terminal receipt has its own reserved slot. Backpressure on optional
+            // acknowledgements cannot let Stop return while file/journal work is still owned.
+            let rejected = completion != nil && self.completions.count >= 128 && !snapshot.final
             if let completion, !rejected { self.completions.append(completion) }
             guard !self.running else { return (false, rejected) }
             self.running = true
