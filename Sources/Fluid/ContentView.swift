@@ -3338,6 +3338,7 @@ struct ContentView: View {
         }
         let audioSnapshot = self.asr.consumeLastCompletedAudioSnapshot()
         let dictionaryLearningRecording = self.asr.consumeDictionaryLearningRecording()
+        var dictionaryReplacementTrace = self.asr.consumeDictionaryReplacementTrace()
         let transcriptionDurationMilliseconds = self.asr.consumeLastFinalTranscriptionDurationMs()
         let parakeetProcessingDurationMilliseconds = self.asr.consumeLastFinalParakeetProcessingMs()
         DebugLogger.shared.info(
@@ -3610,6 +3611,7 @@ struct ContentView: View {
         // Save to transcription history (transcription mode only, if enabled)
         if shouldPersistOutputs, !sendsExistingDraft, let privateOutput, let admission = privateOutput.admission {
             let historyTimestamp = Date()
+            dictionaryReplacementTrace?.remap(to: outputRoute.deliversText && spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText)
             privateOutput.history.addEntry(
                 timestamp: historyTimestamp,
                 rawText: outputRoute.deliversText && spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText,
@@ -3623,7 +3625,8 @@ struct ContentView: View {
                 aiProcessingDurationMilliseconds: aiProcessingDurationMilliseconds,
                 aiTokensPerSecond: aiTokensPerSecond,
                 aiProcessingError: aiFallbackReason,
-                admission: admission
+                admission: admission,
+                dictionaryReplacements: dictionaryReplacementTrace?.replacements ?? []
             )
             privateOutput.saveAudio(
                 audioSnapshot,

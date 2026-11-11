@@ -168,6 +168,160 @@ final class ExternalDictationHistoryCorrectionTests: XCTestCase {
     }
 }
 
+extension ExternalDictationHistoryCorrectionTests {
+    private func acousticFixture() -> (SettingsStore.CustomDictionaryEntry, PronunciationDictionaryProfile, DictionaryLearningAlignment) {
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Newo")
+        let positive = PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 3, modelKey: "parakeet-v2")
+        let profile = PronunciationDictionaryProfile(dictionaryEntryID: entry.id, label: entry.replacement,
+            modelKey: "parakeet-v2", hiddenSize: 2, enrollments: [positive, positive, positive])
+        let frames = DictionaryMatchFrames(hiddenSize: 2, values: [0.6, 0.8, 0.6, 0.8, 0.6, 0.8])
+        let evidence = DictionaryAcousticEvidence(id: UUID(), entryID: entry.id, label: entry.replacement,
+            profileKey: DictionaryNegativeEvidenceResolver.profileKey(profile) + ":shared-features-v1", modelKey: profile.modelKey,
+            sourceWordRange: 0..<1, frames: frames)
+        var alignment = DictionaryLearningAlignment(modelKey: profile.modelKey,
+            words: [.init(text: "ну", start: 0, end: 0.2), .init(text: "потом", start: 0.3, end: 0.5), .init(text: "Newo", start: 0.6, end: 0.8)],
+            originalText: "ну потом Newo")
+        alignment.acousticEvidence = [evidence]
+        return (entry, profile, alignment)
+    }
+
+    func testAcousticTraceMarksOnlyActualReplacementAndPreservesModelSpelling() throws {
+        let (_, _, alignment) = self.acousticFixture()
+        var trace = DictionaryReplacementTrace.acoustic(output: "Newo потом Newo", alignment: alignment)
+        let hit = try XCTUnwrap(trace.replacements.first)
+        XCTAssertEqual(trace.replacements.count, 1, "An already spoken canonical word has no replacement origin")
+        XCTAssertEqual(hit.heard, "ну")
+        XCTAssertEqual(hit.range, NSRange(location: 0, length: 4))
+        XCTAssertEqual(hit.kind, .acoustic)
+        XCTAssertEqual(hit.evidence?.id, alignment.acousticEvidence.first?.id)
+        trace.remap(to: "Newo, потом Newo!")
+        XCTAssertEqual(trace.replacements.first?.id, hit.id)
+        XCTAssertEqual(trace.replacements.first?.heard, "ну")
+        let ambiguous = DictionaryReplacementTrace.acoustic(output: "Unattributed rewritten result", alignment: alignment)
+        XCTAssertTrue(ambiguous.replacements.isEmpty)
+    }
+
+    func testReplacementTraceAndHistoryRoundTripSurviveManualEditsAndAudio() throws {
+        let (_, _, alignment) = self.acousticFixture()
+        let trace = DictionaryReplacementTrace.acoustic(output: "Newo потом Newo", alignment: alignment)
+        let original = TranscriptionHistoryEntry(rawText: trace.text, processedText: trace.text,
+            appName: "Fixture", windowTitle: "Fixture", wasAIProcessed: false, dictionaryReplacements: trace.replacements)
+        let metadata = DictationAudioMetadata(fileName: "synthetic.wav", durationMilliseconds: 100, byteCount: 100,
+            sampleRate: 16_000, channels: 1, model: "synthetic")
+        let updated = original.replacingAudio(metadata).replacingFinalText("Newo, потом Newo!")
+        let decoded = try JSONDecoder().decode(TranscriptionHistoryEntry.self, from: JSONEncoder().encode(updated))
+        XCTAssertEqual(decoded.dictionaryReplacements, trace.replacements)
+        XCTAssertEqual(decoded.currentDictionaryReplacements.count, 1)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(updated)) as? [String: Any])
+        legacy.removeValue(forKey: "dictionaryReplacements")
+        let old = try JSONDecoder().decode(TranscriptionHistoryEntry.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertTrue(old.dictionaryReplacements.isEmpty)
+    }
+
+    func testRestoreUsesRecordedModelTextForOneOccurrenceAndPersistsNegativeVeto() async throws {
+        try await self.withHistory { history, writer, root in
+            let (entry, profile, alignment) = self.acousticFixture()
+            let trace = DictionaryReplacementTrace.acoustic(output: "Newo потом Newo", alignment: alignment)
+            let suite = "DictionaryReject-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let negatives = DictionaryNegativeExampleStore(url: root.appendingPathComponent("negatives.plist"), collectionEnabled: { true })
+            let service = DictionaryRejectionService(negatives: negatives, profiles: { [profile] }, entries: { [entry] },
+                textRejections: DictionaryTextRejectionStore(defaults: defaults), enabled: { true })
+            let id = UUID(), hit = try XCTUnwrap(trace.replacements.first)
+            history.addEntry(id: id, rawText: trace.text, processedText: trace.text, appName: "Fixture", windowTitle: "Fixture",
+                dictionaryReplacements: trace.replacements)
+            let result = await service.restore(entryID: id, replacementID: hit.id, expectedSource: trace.text,
+                history: history, profile: PrivateProfileStorage.current)
+            XCTAssertTrue(result.restored)
+            XCTAssertTrue(result.negativeSaved)
+            XCTAssertEqual(history.entries[0].sourceTranscriptText, "ну потом Newo")
+            XCTAssertEqual(history.entries[0].processedText, "ну потом Newo")
+            XCTAssertTrue(history.entries[0].currentDictionaryReplacements.isEmpty)
+            XCTAssertEqual(history.entries[0].rawText, "Newo потом Newo")
+            await history.finishPendingWrites()
+            let persisted = try await writer.load()
+            XCTAssertEqual(persisted.first, history.entries.first)
+            let reloaded = DictionaryNegativeExampleStore(url: root.appendingPathComponent("negatives.plist"), collectionEnabled: { true })
+            let frames = await reloaded.frames(entryID: entry.id, profileKey: hit.evidence!.profileKey, modelKey: profile.modelKey)
+            XCTAssertEqual(frames.count, 1)
+            let positive = DictionaryMatchFrames(hiddenSize: 2, values: [1, 0, 1, 0, 1, 0])
+            XCTAssertFalse(DictionaryExperimentalMatcher.negativeAllows(query: hit.evidence!.frames, references: [positive], negatives: frames))
+            XCTAssertTrue(DictionaryExperimentalMatcher.negativeAllows(query: positive, references: [positive], negatives: frames))
+            let again = await service.restore(entryID: id, replacementID: hit.id, expectedSource: trace.text,
+                history: history, profile: PrivateProfileStorage.current)
+            XCTAssertFalse(again.restored, "A stale action cannot restore or learn twice")
+        }
+    }
+
+    func testChangedPronunciationProfileAndMissingEvidenceDoNotInventNegativeExamples() async throws {
+        try await self.withHistory { history, _, root in
+            let (entry, profile, alignment) = self.acousticFixture()
+            let trace = DictionaryReplacementTrace.acoustic(output: "Newo потом Newo", alignment: alignment)
+            let suite = "DictionaryReject-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let negatives = DictionaryNegativeExampleStore(url: root.appendingPathComponent("negatives.plist"), collectionEnabled: { true })
+            var changed = profile; changed.label = "Renamed"
+            let service = DictionaryRejectionService(negatives: negatives, profiles: { [changed] }, entries: { [entry] },
+                textRejections: DictionaryTextRejectionStore(defaults: defaults), enabled: { true })
+            let hit = try XCTUnwrap(trace.replacements.first)
+            let saved = await service.remember(hit, corrected: "ну", profile: PrivateProfileStorage.current)
+            XCTAssertFalse(saved)
+            let frames = await negatives.frames(entryID: entry.id, profileKey: try XCTUnwrap(hit.evidence).profileKey, modelKey: profile.modelKey)
+            XCTAssertTrue(frames.isEmpty)
+            var withoutEvidence = hit; withoutEvidence.evidence = nil
+            let id = UUID()
+            history.addEntry(id: id, rawText: trace.text, processedText: trace.text, appName: "Fixture", windowTitle: "Fixture",
+                dictionaryReplacements: [withoutEvidence])
+            let result = await service.restore(entryID: id, replacementID: hit.id, expectedSource: trace.text,
+                history: history, profile: PrivateProfileStorage.current)
+            XCTAssertTrue(result.restored)
+            XCTAssertFalse(result.negativeSaved)
+        }
+    }
+
+    func testTextRuleRejectionSurvivesRelaunchAndVetoesOnlyRejectedSpelling() async throws {
+        try await self.withHistory { history, _, root in
+            let suite = "DictionaryTextReject-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let prefs = PrivateProfileDefaults.shared
+            let keys = ["DictionarySharedFeatureMatcherEnabled", "DictionaryNegativeComparisonEnabled"]
+            let prior = keys.map { prefs.object(forKey: $0) }
+            let oldEntries = SettingsStore.shared.customDictionaryEntries
+            defer {
+                for (key, value) in zip(keys, prior) { prefs.set(value, forKey: key) }
+                SettingsStore.shared.customDictionaryEntries = oldEntries; ASRService.invalidateDictionaryCache()
+            }
+            keys.forEach { prefs.set(true, forKey: $0) }
+            let entry = SettingsStore.CustomDictionaryEntry(triggers: ["nuufixture", "newfixture"], replacement: "NewoFixture")
+            SettingsStore.shared.customDictionaryEntries = [entry]; ASRService.invalidateDictionaryCache()
+            let store = DictionaryTextRejectionStore(defaults: defaults)
+            let before = "nuufixture потом newfixture"
+            var trace = DictionaryReplacementTrace(text: before)
+            let output = ASRService.applyCustomDictionary(before, onReplacement: { id, range, _, replacement in
+                trace.replace(range: range, entryID: id, label: replacement, kind: .textRule)
+            }, rejections: store)
+            XCTAssertEqual(trace.text, output)
+            XCTAssertEqual(trace.replacements.count, 2)
+            let hit = try XCTUnwrap(trace.replacements.first { $0.heard == "nuufixture" })
+            let id = UUID()
+            history.addEntry(id: id, rawText: output, processedText: output, appName: "Fixture", windowTitle: "Fixture",
+                dictionaryReplacements: trace.replacements)
+            let service = DictionaryRejectionService(negatives: DictionaryNegativeExampleStore(url: root.appendingPathComponent("negatives.plist"), collectionEnabled: { true }),
+                profiles: { [] }, entries: { [entry] }, textRejections: store, enabled: { true })
+            let result = await service.restore(entryID: id, replacementID: hit.id, expectedSource: output,
+                history: history, profile: PrivateProfileStorage.current)
+            XCTAssertTrue(result.restored); XCTAssertTrue(result.negativeSaved)
+            XCTAssertEqual(history.entries[0].sourceTranscriptText, "nuufixture потом NewoFixture")
+            let reloaded = DictionaryTextRejectionStore(defaults: defaults)
+            XCTAssertEqual(ASRService.applyCustomDictionary(before, rejections: reloaded), "nuufixture потом NewoFixture")
+            XCTAssertEqual(SettingsStore.shared.customDictionaryEntries, [entry], "Negative feedback leaves the word and good explicit spelling intact")
+        }
+    }
+}
+
 @MainActor
 final class DictationE2ETests: XCTestCase {
     // Pronunciation features are opt-in in the app; these tests exercise the enabled paths.

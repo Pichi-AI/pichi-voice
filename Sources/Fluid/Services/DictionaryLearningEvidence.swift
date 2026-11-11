@@ -11,6 +11,8 @@ nonisolated struct DictionaryLearningFeatureFrames: Equatable, Sendable {
 nonisolated struct DictionaryLearningAlignment: Sendable {
     let modelKey: String
     let words: [ASRWordTiming]
+    /// Exact provider output before any acoustic dictionary substitution.
+    var originalText: String? = nil
     var acousticOutput: String? = nil
     var acousticEvidence: [DictionaryAcousticEvidence] = []
     /// New spellings that voice matching replaced in this dictation, learned unless the user undoes them.

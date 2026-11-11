@@ -680,9 +680,20 @@ final class AutomaticDictionaryCorrectionTracker {
         // This is the same explicit user edit as History Save. Mirror it before
         // asynchronous dictionary/audio work, whose failure or Undo must not put
         // the incorrect text back into history.
+        var dictionaryRejection: DictionaryHistoryReplacement?
         if let historyCandidate = candidate ?? repeated, let range = historyCandidate.sourceUTF16Range,
            let originalRange = pending.sourceMap.originalRange(for: range) {
-            self.session?.historyCorrection?.apply(originalDeliveredRange: originalRange, replacement: historyCandidate.correctedText)
+            let history = self.session?.historyCorrection
+            dictionaryRejection = history?.dictionaryRejection(originalDeliveredRange: originalRange, replacement: historyCandidate.correctedText)
+            let applied = history?.apply(originalDeliveredRange: originalRange, replacement: historyCandidate.correctedText,
+                replacesAllOccurrences: dictionaryRejection == nil) == true
+            if applied, let hit = dictionaryRejection, let history, self.evidencePreparationTasks.count < 32 {
+                let preparationID = UUID()
+                self.evidencePreparationTasks[preparationID] = Task { @MainActor [weak self] in
+                    defer { self?.evidencePreparationTasks.removeValue(forKey: preparationID) }
+                    await history.rememberRejection(hit, corrected: historyCandidate.correctedText)
+                }
+            }
         }
 
         if let repeated, let range = repeated.sourceUTF16Range,
@@ -690,9 +701,15 @@ final class AutomaticDictionaryCorrectionTracker {
             // The same spoken span has one current correction. In particular,
             // restoring the original spelling must not reapply an earlier typo.
             self.session?.acceptedCorrections.removeAll { NSIntersectionRange($0.sourceRange, originalRange).length > 0 }
-            self.session?.acceptedCorrections.append((repeated.heardText, repeated.correctedText, originalRange))
+            if dictionaryRejection == nil {
+                self.session?.acceptedCorrections.append((repeated.heardText, repeated.correctedText, originalRange))
+            }
             if self.session?.acceptedCorrections.count ?? 0 > 64 { self.session?.acceptedCorrections.removeFirst() }
         }
+
+        // Rejecting a proven substitution is negative feedback for that word,
+        // never a positive pronunciation enrollment for the replacement text.
+        if dictionaryRejection != nil { return }
 
         if !SettingsStore.shared.automaticDictionaryLearningEnabled,
            let candidate, let context, DictionaryMatcherExperiment.collectNegatives,

@@ -29,7 +29,7 @@ final class DictationHistoryCorrectionSession {
     }
 
     @discardableResult
-    func apply(originalDeliveredRange: NSRange, replacement: String) -> Bool {
+    func apply(originalDeliveredRange: NSRange, replacement: String, replacesAllOccurrences: Bool = true) -> Bool {
         guard PrivateProfileStorage.isReadable(self.profile), PrivateProfileStorage.acceptsNewWork,
               let entry = self.history.entries.first(where: { $0.id == self.entryID }),
               entry.sourceTranscriptText == self.expectedSource, entry.processedText == self.expectedFinal else { return false }
@@ -40,23 +40,40 @@ final class DictationHistoryCorrectionSession {
         let isOriginal = sourceRange != nil
         guard let range = sourceRange ?? finalRange else { return false }
         let before = isOriginal ? entry.sourceTranscriptText : (entry.clipboardText ?? "")
-        let plan = DictionaryCorrectionReplacementPlan(sourceText: before, range: range, replacement: replacement)
+        let plan = replacesAllOccurrences ? DictionaryCorrectionReplacementPlan(sourceText: before, range: range, replacement: replacement) : nil
         guard self.history.applyWordCorrection(entryID: self.entryID, expectedText: before, range: range,
-            replacement: replacement, profile: self.profile, isOriginal: isOriginal),
+            replacement: replacement, profile: self.profile, isOriginal: isOriginal, replacesAllOccurrences: replacesAllOccurrences),
               let updated = self.history.entries.first(where: { $0.id == self.entryID }) else { return false }
-        if isOriginal, let plan {
-            for edit in plan.ranges.reversed() { _ = self.sourceMap.replace(range: edit, replacement: replacement) }
+        if isOriginal {
+            for edit in (plan?.ranges ?? [range]).reversed() { _ = self.sourceMap.replace(range: edit, replacement: replacement) }
         }
         // Keep final-only mapping only while the persisted formatter projection is
         // exactly the same explicit replacement plan. Never guess after a rewrite.
         if var map = self.finalMap, let finalRange,
            let finalPlan = DictionaryCorrectionReplacementPlan(sourceText: map.text, range: finalRange, replacement: replacement),
-           finalPlan.text == updated.clipboardText {
-            for edit in finalPlan.ranges.reversed() { _ = map.replace(range: edit, replacement: replacement) }
+           (replacesAllOccurrences ? finalPlan.text : (map.text as NSString).replacingCharacters(in: finalRange, with: replacement)) == updated.clipboardText {
+            for edit in (replacesAllOccurrences ? finalPlan.ranges : [finalRange]).reversed() { _ = map.replace(range: edit, replacement: replacement) }
             self.finalMap = map
         } else { self.finalMap = nil }
         self.expectedSource = updated.sourceTranscriptText
         self.expectedFinal = updated.processedText
         return true
+    }
+
+    func dictionaryRejection(originalDeliveredRange: NSRange, replacement: String) -> DictionaryHistoryReplacement? {
+        guard let entry = self.history.entries.first(where: { $0.id == self.entryID }),
+              entry.sourceTranscriptText == self.expectedSource, entry.processedText == self.expectedFinal,
+              let original = DictionaryLearningAlignmentResolver.textRange(in: self.sourceMap.originalText,
+                delivered: self.deliveredText, selected: originalDeliveredRange),
+              let range = self.sourceMap.currentRange(forOriginal: original) else { return nil }
+        return entry.currentDictionaryReplacements.first { $0.range == range &&
+            DictionaryNegativeEvidenceResolver.normalized($0.label) != DictionaryNegativeEvidenceResolver.normalized(replacement) }
+    }
+
+    func rememberRejection(_ hit: DictionaryHistoryReplacement, corrected: String) async {
+        let expected = self.expectedSource
+        _ = await DictionaryRejectionService.shared.remember(hit, corrected: corrected, profile: self.profile, isValid: {
+            self.history.entries.first(where: { $0.id == self.entryID })?.sourceTranscriptText == expected
+        })
     }
 }

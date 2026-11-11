@@ -70,6 +70,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
     /// User-corrected source text; rawText remains the exact ASR output.
     let correctedRawText: String?
     let sourceFragments: [SourceFragment]
+    let dictionaryReplacements: [DictionaryHistoryReplacement]
     var sourceTranscriptText: String { self.correctedRawText ?? self.rawText }
     let appName: String
     let windowTitle: String
@@ -109,7 +110,8 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         searchRevision: UInt64? = nil,
         originalProcessedText: String? = nil,
         correctedRawText: String? = nil,
-        sourceFragments: [SourceFragment] = []
+        sourceFragments: [SourceFragment] = [],
+        dictionaryReplacements: [DictionaryHistoryReplacement] = []
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -118,6 +120,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         self.originalProcessedText = originalProcessedText
         self.correctedRawText = correctedRawText
         self.sourceFragments = Array(sourceFragments.filter { $0.isValid(in: correctedRawText ?? rawText) }.prefix(128))
+        self.dictionaryReplacements = DictionaryHistoryReplacement.sanitized(dictionaryReplacements, in: rawText)
         self.appName = appName
         self.windowTitle = windowTitle
         self.characterCount = processedText.count
@@ -153,7 +156,8 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         searchRevision: UInt64?,
         originalProcessedText: String?,
         correctedRawText: String?,
-        sourceFragments: [SourceFragment]
+        sourceFragments: [SourceFragment],
+        dictionaryReplacements: [DictionaryHistoryReplacement] = []
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -162,6 +166,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         self.originalProcessedText = originalProcessedText
         self.correctedRawText = correctedRawText
         self.sourceFragments = Array(sourceFragments.filter { $0.isValid(in: correctedRawText ?? rawText) }.prefix(128))
+        self.dictionaryReplacements = DictionaryHistoryReplacement.sanitized(dictionaryReplacements, in: rawText)
         self.appName = appName
         self.windowTitle = windowTitle
         self.characterCount = characterCount
@@ -188,6 +193,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         let fragmentSource = self.correctedRawText ?? self.rawText
         self.sourceFragments = Array((try container.decodeIfPresent([SourceFragment].self, forKey: .sourceFragments) ?? [])
             .filter { $0.isValid(in: fragmentSource) }.prefix(128))
+        self.dictionaryReplacements = DictionaryHistoryReplacement.sanitized(try container.decodeIfPresent([DictionaryHistoryReplacement].self, forKey: .dictionaryReplacements) ?? [], in: self.rawText)
         self.appName = try container.decode(String.self, forKey: .appName)
         self.windowTitle = try container.decode(String.self, forKey: .windowTitle)
         self.characterCount = try container.decode(Int.self, forKey: .characterCount)
@@ -213,7 +219,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, timestamp, rawText, processedText, originalProcessedText, correctedRawText, sourceFragments, appName, windowTitle
+        case id, timestamp, rawText, processedText, originalProcessedText, correctedRawText, sourceFragments, dictionaryReplacements, appName, windowTitle
         case characterCount, wasAIProcessed, processingModel
         case transcriptionDurationMilliseconds, parakeetProcessingDurationMilliseconds, aiProcessingDurationMilliseconds
         case aiTokensPerSecond
@@ -288,7 +294,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             audio: audio,
             isStarred: self.isStarred,
             searchRevision: self.searchRevision,
-            originalProcessedText: self.originalProcessedText, correctedRawText: self.correctedRawText, sourceFragments: self.sourceFragments
+            originalProcessedText: self.originalProcessedText, correctedRawText: self.correctedRawText, sourceFragments: self.sourceFragments, dictionaryReplacements: self.dictionaryReplacements
         )
     }
 
@@ -304,7 +310,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             aiProcessingDurationMilliseconds: self.aiProcessingDurationMilliseconds,
             aiTokensPerSecond: self.aiTokensPerSecond, aiProcessingError: self.aiProcessingError,
             audio: self.audio, isStarred: self.isStarred, searchRevision: self.searchRevision,
-            originalProcessedText: self.originalProcessedText ?? self.processedText, correctedRawText: self.correctedRawText, sourceFragments: self.sourceFragments
+            originalProcessedText: self.originalProcessedText ?? self.processedText, correctedRawText: self.correctedRawText, sourceFragments: self.sourceFragments, dictionaryReplacements: self.dictionaryReplacements
         )
     }
 
@@ -332,7 +338,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             aiTokensPerSecond: self.aiTokensPerSecond, aiProcessingError: self.aiProcessingError,
             audio: self.audio, isStarred: self.isStarred, searchRevision: self.searchRevision,
             originalProcessedText: self.originalProcessedText ?? self.processedText,
-            correctedRawText: text, sourceFragments: groups
+            correctedRawText: text, sourceFragments: groups, dictionaryReplacements: self.dictionaryReplacements
         )
     }
 
@@ -934,7 +940,8 @@ final class TranscriptionHistoryStore: ObservableObject {
         aiTokensPerSecond: Double? = nil,
         aiProcessingError: String? = nil,
         audio: DictationAudioMetadata? = nil,
-        admission: DictationHistoryWriteAdmission? = nil
+        admission: DictationHistoryWriteAdmission? = nil,
+        dictionaryReplacements: [DictionaryHistoryReplacement] = []
     ) {
         let id = id ?? admission?.entryID ?? UUID()
         if let admission {
@@ -957,7 +964,8 @@ final class TranscriptionHistoryStore: ObservableObject {
             aiProcessingDurationMilliseconds: aiProcessingDurationMilliseconds,
             aiTokensPerSecond: aiTokensPerSecond,
             aiProcessingError: aiProcessingError,
-            audio: audio
+            audio: audio,
+            dictionaryReplacements: dictionaryReplacements
         )
 
         if let admission {
@@ -987,7 +995,8 @@ final class TranscriptionHistoryStore: ObservableObject {
         replacement: String,
         profile: PrivateProfileSnapshot,
         isOriginal: Bool = false,
-        confirmationRange: NSRange? = nil
+        confirmationRange: NSRange? = nil,
+        replacesAllOccurrences: Bool = true
     ) -> Bool {
         guard self.canAccess, PrivateProfileStorage.acceptsNewWork,
               PrivateProfileStorage.isReadable(profile),
@@ -1003,7 +1012,7 @@ final class TranscriptionHistoryStore: ObservableObject {
               replacement.utf16.count <= 100_000,
               !replacement.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
         else { return false }
-        let plan = DictionaryCorrectionReplacementPlan(sourceText: expectedText, range: range, replacement: replacement)
+        let plan = replacesAllOccurrences ? DictionaryCorrectionReplacementPlan(sourceText: expectedText, range: range, replacement: replacement) : nil
         let final = plan?.text ?? expectedText.replacingCharacters(in: swiftRange, with: replacement)
         guard !final.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               final.utf16.count <= 100_000 else { return false }

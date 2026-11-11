@@ -17,8 +17,8 @@ nonisolated enum DictionaryMatcherExperiment {
     }
 
     static var positiveEnabled: Bool { sharedFeaturesEnabled }
-    static var collectNegatives: Bool { sharedFeaturesEnabled && PrivateProfileDefaults.shared.bool(forKey: "DictionaryNegativeLearningEnabled") }
-    static var compareNegatives: Bool { sharedFeaturesEnabled && PrivateProfileDefaults.shared.bool(forKey: "DictionaryNegativeComparisonEnabled") }
+    static var collectNegatives: Bool { sharedFeaturesEnabled && (PrivateProfileDefaults.shared.object(forKey: "DictionaryNegativeLearningEnabled") as? Bool ?? true) }
+    static var compareNegatives: Bool { sharedFeaturesEnabled && (PrivateProfileDefaults.shared.object(forKey: "DictionaryNegativeComparisonEnabled") as? Bool ?? true) }
     static var needsFrames: Bool { sharedFeaturesEnabled }
     static let version = "parakeet-exact-rms005-frames-v1"
 }

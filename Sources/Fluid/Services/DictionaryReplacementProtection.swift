@@ -8,7 +8,7 @@ nonisolated enum DictionaryTranscriptReplacement {
         let label: String
     }
 
-    static func apply(to text: String, wordTexts: [String], replacements: [Replacement]) -> String {
+    static func wordRanges(in text: String, wordTexts: [String]) -> [NSRange]? {
         let source = text as NSString
         var searchLocation = 0
         var ranges: [NSRange] = []
@@ -20,13 +20,18 @@ nonisolated enum DictionaryTranscriptReplacement {
             // that token's index and require its exact surface as an anchor.
             let searchableWord = lexicalWord.isEmpty
                 ? wordText.trimmingCharacters(in: .whitespacesAndNewlines) : lexicalWord
-            guard !searchableWord.isEmpty, searchLocation <= source.length else { return text }
+            guard !searchableWord.isEmpty, searchLocation <= source.length else { return nil }
             let searchRange = NSRange(location: searchLocation, length: source.length - searchLocation)
             let range = source.range(of: searchableWord, options: .caseInsensitive, range: searchRange)
-            guard range.location != NSNotFound else { return text }
+            guard range.location != NSNotFound else { return nil }
             ranges.append(range)
             searchLocation = NSMaxRange(range)
         }
+        return ranges
+    }
+
+    static func apply(to text: String, wordTexts: [String], replacements: [Replacement]) -> String {
+        guard let ranges = self.wordRanges(in: text, wordTexts: wordTexts) else { return text }
 
         let edits = replacements.compactMap { replacement -> (NSRange, String)? in
             guard ranges.indices.contains(replacement.wordRange.lowerBound),
@@ -53,19 +58,25 @@ nonisolated enum DictionaryReplacementProtection {
         regex: NSRegularExpression,
         template: String,
         canonical: NSRegularExpression?,
-        onReplacement: ((NSRange, String, String) -> Void)? = nil
+        onReplacement: ((NSRange, String, String) -> Void)? = nil,
+        shouldReplace: ((NSRange, String, String) -> Bool)? = nil
     ) -> String {
         let fullRange = NSRange(text.startIndex..., in: text)
-        guard canonical != nil || onReplacement != nil else {
+        guard canonical != nil || onReplacement != nil || shouldReplace != nil else {
             return regex.stringByReplacingMatches(in: text, range: fullRange, withTemplate: template)
         }
         let completed = canonical?.matches(in: text, range: fullRange).map(\.range) ?? []
-        guard !completed.isEmpty || onReplacement != nil else {
+        guard !completed.isEmpty || onReplacement != nil || shouldReplace != nil else {
             return regex.stringByReplacingMatches(in: text, range: fullRange, withTemplate: template)
         }
 
         var completedIndex = 0
         let matches = regex.matches(in: text, range: fullRange).filter { match in
+            if let shouldReplace {
+                let heard = (text as NSString).substring(with: match.range)
+                let replacement = regex.replacementString(for: match, in: text, offset: 0, template: template)
+                guard shouldReplace(match.range, heard, replacement) else { return false }
+            }
             while completedIndex < completed.count, NSMaxRange(completed[completedIndex]) <= match.range.location {
                 completedIndex += 1
             }
