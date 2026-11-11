@@ -25,3 +25,5 @@ Viewport exit, hidden documents and persisted `pagehide` cancel pending work and
 Run `node --test Tests/test_voice_demo.mjs` from the repository root. The suite covers timeline/controller behavior and mounts the real shipped HTML through the production DOM adapter with deterministic browser boundaries. It does not establish browser visual acceptance or release-asset availability.
 
 The Gmail compose panel and Telegram personal-chat details follow public official UI references. All names, draft messages and timestamps are synthetic, localized consistently across the story, and never sent. The compose/send/attachment visuals remain decorative; only the persistent scene selectors are interactive.
+
+The story follows one project manager preparing a flower shop for its Monday opening: client catalog photos before noon, a colleague coordinating a two o’clock courier test, a Zoom discussion of free launch-day delivery, then a meeting-room review of the test order. The floating caption shows at most the last six spoken words; complete drafts and transcripts stay in their scenes and in stable assistive-reading text.
