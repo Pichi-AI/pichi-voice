@@ -49,8 +49,11 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
     private var pendingLiveBytes = 0
     private var readyLiveTokens = Set<UInt64>()
     private var liveDeferred = false
-    private var excludedOwnedLiveAudio = false
-    var hasDeferredLiveAudio: Bool { self.lock.withLock { self.liveDeferred || self.excludedOwnedLiveAudio } }
+    private var ownedPCMFrames: UInt64 = 0
+    private var offeredLiveFrames: UInt64 = 0
+    /// Includes raw retained tails and offers revoked after dequeue, not only queued offers.
+    /// Durability is the writer's authority; these counters prevent false transcript completeness.
+    var hasDeferredLiveAudio: Bool { self.lock.withLock { self.liveDeferred || self.ownedPCMFrames != self.offeredLiveFrames } }
 
     var hasPendingCommits: Bool {
         self.lock.withLock { self.pendingCommitCount > 0 }
@@ -125,6 +128,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         }
         let start = Self.seconds(of: sampleBuffer)
         self.beginPendingCommit()
+        self.observeOwnedPCM(sampleBuffer)
         self.writer.enqueue(sampleBuffer, producerEpoch: self.producerEpoch, afterPersistingMetadata: { track in
             Self.applyEra(to: &track, protection: .unfiltered, provenance: nil, startSeconds: start)
         }, failClosed: true) { result in
@@ -185,6 +189,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
     ) {
         guard !self.lock.withLock({ self.retired }) else { return }
         if self.lock.withLock({ self.liveDeferred }) {
+            self.observeOwnedPCM(sampleBuffer)
             _ = self.writer.enqueue(sampleBuffer, producerEpoch: self.producerEpoch)
             return
         }
@@ -230,6 +235,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
             return
         }
         self.beginPendingCommit()
+        self.observeOwnedPCM(sampleBuffer)
         self.writer.enqueue(sampleBuffer, producerEpoch: self.producerEpoch, afterPersistingMetadata: { track in
             self.lock.withLock {
                 guard !self.retired,
@@ -280,9 +286,12 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
 
     private func clearPendingLive() {
         self.lock.withLock {
-            if !self.pendingLive.isEmpty { self.excludedOwnedLiveAudio = true }
             self.pendingLive.removeAll(); self.pendingLiveBytes = 0; self.readyLiveTokens.removeAll()
         }
+    }
+
+    private func observeOwnedPCM(_ sample: CMSampleBuffer) {
+        self.lock.withLock { self.ownedPCMFrames &+= UInt64(max(0, CMSampleBufferGetNumSamples(sample))) }
     }
 
     private func reportProtection(_ protection: MeetingMicrophoneEchoProtection, gateEpoch: UInt64) {
@@ -299,8 +308,9 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         let admitted = self.lock.withLock {
             !self.retired && self.transcriptGate.observeAndAdmit(sample.sampleBuffer, since: gateEpoch)
         }
-        if admitted {
-            self.liveAudioHandler?(.microphone, sample.sampleBuffer)
+        if admitted, let handler = self.liveAudioHandler {
+            self.lock.withLock { self.offeredLiveFrames &+= UInt64(max(0, CMSampleBufferGetNumSamples(sample.sampleBuffer))) }
+            handler(.microphone, sample.sampleBuffer)
         }
     }
 
@@ -324,6 +334,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         }
 
         self.beginPendingCommit()
+        self.observeOwnedPCM(sampleBox.sampleBuffer)
         self.writer.enqueue(
             sampleBox.sampleBuffer,
             producerEpoch: self.producerEpoch,
@@ -392,9 +403,6 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
 
     /// Close live delivery without relabelling successfully filtered audio at Stop.
     func finish() {
-        self.lock.withLock {
-            if !self.pendingLive.isEmpty { self.excludedOwnedLiveAudio = true }
-        }
         self.clearPendingLive()
         self.lock.withLock {
             self.generation &+= 1
@@ -449,6 +457,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         onConsumed: (@Sendable () -> Void)? = nil
     ) -> Bool {
         self.beginPendingCommit()
+        self.observeOwnedPCM(sampleBuffer)
         guard self.writer.enqueue(sampleBuffer, producerEpoch: self.producerEpoch, onConsumed: {
             defer { self.endPendingCommit() }
             onConsumed?()

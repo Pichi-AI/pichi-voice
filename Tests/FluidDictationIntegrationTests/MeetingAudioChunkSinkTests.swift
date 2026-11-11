@@ -66,6 +66,33 @@ private final class MeetingRejectedSpeechConsumer: MeetingMemoryAudioConsuming, 
 /// P1a's sink fixtures intentionally use real ready CMSampleBuffers.  These tests stay in the
 /// integration target because the sink is an internal harness type, not a package product.
 final class MeetingAudioChunkSinkTests: XCTestCase {
+    func testEpochRevocationAfterDequeueCannotHideMissingLiveCoverage() async throws {
+        let root = try self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let entered = expectation(description: "promotion receipt held")
+        let held = MeetingCaptureFaultGate(entered)
+        defer { held.release.signal() }
+        let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic", sourceDisplayName: "Synthetic",
+            format: nil, timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting, chunks: [])
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root, chunkDuration: 60,
+            eventHandler: { _ in }, persistenceHook: { op in if case .manifest = op { held.blockOnce() } })
+        await fulfillment(of: [entered], timeout: 2)
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected), offers = MeetingPCMFailureCounter()
+        let committer = MeetingAECOutputCommitter(writer: writer, transcriptGate: gate,
+            liveAudioHandler: { _, _ in offers.increment(); _ = gate.invalidate() }, terminalFailure: { _ in })
+        for index in 0..<2 {
+            committer.commitCaptured(try self.makeRawSampleBuffer(channelCount: 1, layoutTag: nil,
+                frameCount: 480, pts: Double(index) / 100), protection: .acousticallyClosed)
+        }
+        _ = await writer.snapshot()
+        held.release.signal(); await committer.waitForPendingCommits()
+        XCTAssertEqual(offers.value(), 1)
+        XCTAssertTrue(committer.hasDeferredLiveAudio, "Coverage must include offers removed before epoch admission failed")
+        let captured = await writer.stop()
+        XCTAssertEqual(captured.chunks.compactMap { $0.captureAnalysisAsset?.frameCount }.reduce(0, +), 960)
+    }
+
     func testDelayedPromotionReceiptCannotUndoEmergencyConservativeMetadata() async throws {
         let root = try self.makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

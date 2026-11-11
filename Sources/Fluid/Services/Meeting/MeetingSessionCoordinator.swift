@@ -2936,9 +2936,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             session.resultSidecarReference = result.resultSidecarReference
             let discardedMemoryPCM = session.audioStorageMode == .memoryOnly && session.transcriptIsComplete == false
                 && session.events.contains(where: { $0.kind == .writerBackpressure })
-            session.transcriptIsComplete = (result.resultSidecarReference != nil || Self.usesPCMProcessing(session))
-                ? result.isComplete && !discardedMemoryPCM
-                : nil
+            let lostCaptureInput = session.audioTracks.contains { $0.health.droppedSampleCount > 0 }
+            session.transcriptIsComplete = lostCaptureInput ? false : ((result.resultSidecarReference != nil || Self.usesPCMProcessing(session))
+                ? result.isComplete && !discardedMemoryPCM : nil)
             if result.resultSidecarReference != nil || Self.usesPCMProcessing(session) {
                 session.transcriptTimeDomain = .meetingRelative
             }
