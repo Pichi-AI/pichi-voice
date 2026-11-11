@@ -323,7 +323,11 @@ final class MeetingRecordingClockCoreTests: XCTestCase {
         }
         let session = try JSONDecoder().decode(MeetingSession.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
         let track = try XCTUnwrap(session.audioTracks.first { $0.kind == .microphone })
-        let mapping = try XCTUnwrap(track.chunks.first?.clockMapping).validated()
+        let originalMapping = try XCTUnwrap(track.chunks.first?.clockMapping).validated()
+        let mapping = try originalMapping.compacted()
+        self.assertClockCompaction(mapping, preserves: originalMapping)
+        // Replay the persisted compact clock through the real converter and source timeline.
+        // Only timing metadata is read; all PCM below is generated synthetic silence.
         let base = session.timebase
         let origin = Double(base.startedHostTime) * Double(base.machTimebaseNumerator)
             / Double(base.machTimebaseDenominator) / 1_000_000_000
