@@ -62,7 +62,6 @@ python3 -B -S Tests/test_sensitive_topic_trainer.py
 python3 -B -S Tests/test_sensitive_topic_version_report.py
 python3 -B -S Tests/test_text_model_eval_protocol.py
 python3 -B -S tools/test_meeting_admission_b3_eval.py
-python3 -B -S tools/test_meeting_continuity_driver.py
 python3 -B -S tools/test_meeting_playback_stage0_baseline.py
 python3 -B -S tools/test_meeting_reliability_baseline.py
 python3 -B -S scripts/test_dictation_log_summary.py

@@ -25,7 +25,7 @@ Preserve inherited target names and layout. Do not reorganize existing tests mer
 | Small synthetic or approved public fixtures | `Tests/Fixtures/` or the owning target's `Fixtures/`. Explain provenance and licenses where needed. Register resources with the actual test target. |
 | Package and native adapter unit tests | The owning `Vendor/<Package>/Tests/` tree and existing package test target. Examples include NativeTextInference, PichiGigaAM, RussianMorphology and TranscribeCpp. |
 | Portable development-tool tests | Existing `Tests/test_*.py` conventions, or tests beside their owning tool under `tools/`. Use standard-library unittest or the existing runner. |
-| Existing standalone probes | Maintain `Tests/run_*` and their registry in `scripts/dev/standalone-regression.py`. They are complementary legacy checks. `scripts/dev/test-*.sh` contains separate manual probes. |
+| Existing standalone probes | Maintain `Tests/run_*` and their registry in `scripts/dev/standalone-regression.py`. They are complementary legacy checks. The registry covers every `Tests/run_*` runner and lists by hand the checks that live elsewhere. The `scripts/dev/test-*.sh` probes that load real models stay manual and unregistered. |
 
 Add new app behavior tests to actual XCTest targets. Do not introduce new tests that extract Swift declarations by text markers, assert source layout or compile a copied implementation. Maintain existing projections when required by an affected contract, but report their narrower scope and prefer migration into actual targets when part of the task. Do not split production files solely to satisfy a probe.
 

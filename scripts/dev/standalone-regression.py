@@ -238,6 +238,7 @@ class Probe:
 
 
 # Discovery covers Tests/run_* only, so checks that live elsewhere are listed here by hand.
+# The continuity driver test reads macOS Chrome paths, so it cannot run in the Linux check.
 OTHER_PROBES = (
     Probe("Tests/test_published_upstream_release.py", "python3"),
     Probe("scripts/dev/test-meeting-microphone-privacy.sh", "bash"),
@@ -247,6 +248,7 @@ OTHER_PROBES = (
     Probe("scripts/test_dictation_default_provider.sh", "sh"),
     Probe("scripts/test_dictation_target.sh", "sh"),
     Probe("scripts/test_paste_clipboard.sh", "sh"),
+    Probe("tools/test_meeting_continuity_driver.py", "python3"),
     Probe("tools/test_meeting_continuity_fixture.py", "python3"),
     Probe("tools/test_meeting_playback_stage05_signal_gate.py", "python3"),
 )
