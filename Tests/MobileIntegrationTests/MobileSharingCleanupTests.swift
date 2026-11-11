@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import XCTest
 @testable import PichiVoiceMobile
@@ -15,6 +16,56 @@ final class MobileSharingCleanupTests: XCTestCase {
     override func tearDownWithError() throws {
         if let fixtureRoot { try manager.removeItem(at: fixtureRoot) }
         fixtureRoot = nil
+    }
+
+    @MainActor
+    func testAudioShareOffersOneCompressedPlayableM4AAndCleansItsDirectory() async throws {
+        let source = fixtureRoot.appendingPathComponent("audio", isDirectory: true)
+        try manager.createDirectory(at: source, withIntermediateDirectories: true)
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+            machTimebaseDenominator: 1, firstPresentationTime: nil)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+        var chunks: [MeetingAudioChunk] = []
+        for index in 0..<2 {
+            let path = "tone-\(index).caf"
+            let url = source.appendingPathComponent(path)
+            do {
+                let file = try AVAudioFile(forWriting: url, settings: format.settings)
+                let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16_000))
+                buffer.frameLength = 16_000
+                let samples = try XCTUnwrap(buffer.floatChannelData?[0])
+                for frame in 0..<16_000 { samples[frame] = Float(sin(Double(frame) * 2 * .pi * 440 / 16_000) * 0.3) }
+                try file.write(from: buffer)
+            }
+            chunks.append(.init(id: UUID(), sequence: index, relativeFilePath: path,
+                presentationStart: .init(value: Int64(index), timescale: 1),
+                presentationEnd: .init(value: Int64(index + 1), timescale: 1), discontinuities: [],
+                sha256: "synthetic", byteCount: Int64(try Data(contentsOf: url).count), finalizationState: .finalized))
+        }
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Встреча Ёё",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic")), startedAt: Date(), timebase: timebase)
+        session.state = .completed
+        session.audioTracks = [.init(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
+            sourceDisplayName: "Synthetic", format: nil, timebase: timebase, health: .waiting, chunks: chunks)]
+        let payload = try await MeetingSharePayload.audio(session: session, directory: source)
+        defer { payload.cleanup() }
+        XCTAssertTrue(payload.includesAudio)
+        XCTAssertEqual(payload.items.count, 1)
+        let url = try XCTUnwrap(payload.items.first as? URL)
+        XCTAssertEqual(url.lastPathComponent, "Встреча Ёё.m4a")
+        XCTAssertEqual(url.deletingLastPathComponent(), payload.directory)
+        XCTAssertEqual(try manager.contentsOfDirectory(atPath: payload.directory.path), [url.lastPathComponent])
+        XCTAssertEqual(try AVAudioFile(forReading: url).length, 32_000)
+        XCTAssertLessThan(try Data(contentsOf: url).count, Int(chunks.reduce(0) { $0 + $1.byteCount }) / 2)
+        let original = try Data(contentsOf: chunks[0].fileURL(relativeTo: source))
+        payload.cleanup()
+        XCTAssertFalse(manager.fileExists(atPath: payload.directory.path))
+        XCTAssertEqual(try Data(contentsOf: chunks[0].fileURL(relativeTo: source)), original)
+        let existingShares = try Set(manager.contentsOfDirectory(atPath: manager.temporaryDirectory.path).filter { $0.hasPrefix("meeting-share-") })
+        try manager.removeItem(at: chunks[1].fileURL(relativeTo: source))
+        do { _ = try await MeetingSharePayload.audio(session: session, directory: source); XCTFail("Missing chunk") } catch {}
+        let sharesAfterFailure = try Set(manager.contentsOfDirectory(atPath: manager.temporaryDirectory.path).filter { $0.hasPrefix("meeting-share-") })
+        XCTAssertEqual(sharesAfterFailure, existingShares, "Failure cleans only its own share staging")
     }
 
     func testTranscriptSharePreservesCyrillicFileNameAndBytes() throws {

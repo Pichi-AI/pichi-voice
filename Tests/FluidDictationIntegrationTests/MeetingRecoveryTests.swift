@@ -7976,6 +7976,39 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertFalse(hasFinalizedAudio)
     }
 
+    // Invented sine waves only. These exercise the real native decoder and AAC encoder.
+    @discardableResult
+    private func writeExportTone(to url: URL, frequency: Double = 440, duration: Double = 1) throws -> Data {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            let count = AVAudioFrameCount(duration * 16_000)
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: count))
+            buffer.frameLength = count
+            let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+            for index in 0..<Int(count) { channel[index] = Float(sin(Double(index) * 2 * .pi * frequency / 16_000) * 0.3) }
+            try file.write(from: buffer)
+        }
+        return try Data(contentsOf: url)
+    }
+
+    private func exportSamples(_ url: URL) throws -> [Float] {
+        let file = try AVAudioFile(forReading: url)
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: buffer)
+        return Array(UnsafeBufferPointer(start: try XCTUnwrap(buffer.floatChannelData?[0]), count: Int(buffer.frameLength)))
+    }
+
+    private func exportToneEnergy(_ samples: [Float], frequency: Double, interval: Range<Int>) -> Double {
+        var real = 0.0, imaginary = 0.0
+        for index in interval {
+            let phase = Double(index) * 2 * .pi * frequency / 16_000
+            real += Double(samples[index]) * cos(phase)
+            imaginary += Double(samples[index]) * sin(phase)
+        }
+        return hypot(real, imaginary) / Double(interval.count)
+    }
+
     func testMeetingAudioExportKeepsMainActorAvailableDuringCopy() async throws {
         let preferences = MeetingUIPreferences()
         let source = self.makeTempDirectory()
@@ -7985,9 +8018,8 @@ final class MeetingRecoveryTests: XCTestCase {
             try? FileManager.default.removeItem(at: destination)
         }
         let chunk = self.makeFinalizedChunk(path: "fixture.caf")
-        let bytes = Data("recorded-audio".utf8)
         let sourceFile = chunk.fileURL(relativeTo: source)
-        try bytes.write(to: sourceFile)
+        let bytes = try writeExportTone(to: sourceFile)
         let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [chunk])])
         let started = self.expectation(description: "copy started on worker")
         let release = DispatchSemaphore(value: 0)
@@ -8005,10 +8037,10 @@ final class MeetingRecoveryTests: XCTestCase {
         await self.fulfillment(of: [started], timeout: 2)
         // Reaching the main actor while the worker is held proves UI actions can still run.
         MainActor.assertIsolated()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("Test").path), "Do not publish a partially copied export")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("Test.m4a").path), "Do not publish a partially copied export")
         release.signal()
         try await export.value
-        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("Test/microphone-000.caf")), bytes)
+        XCTAssertEqual(try AVAudioFile(forReading: destination.appendingPathComponent("Test.m4a")).length, 16_000)
         XCTAssertEqual(try Data(contentsOf: sourceFile), bytes, "Export must not alter the recording")
         XCTAssertEqual(MeetingUIPreferences(), preferences, "Export must not change capture or retention settings")
     }
@@ -8042,17 +8074,17 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         let chunk = self.makeFinalizedChunk(path: "fixture.caf")
         let sourceFile = chunk.fileURL(relativeTo: source)
-        let first = Data("first-recording".utf8)
-        let second = Data("second-recording".utf8)
+        let first = try writeExportTone(to: sourceFile, frequency: 440)
         let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [chunk])])
-        try first.write(to: sourceFile)
         try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination)
-        try second.write(to: sourceFile)
+        let firstExport = try Data(contentsOf: destination.appendingPathComponent("Test.m4a"))
+        let second = try writeExportTone(to: sourceFile, frequency: 880)
         try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination)
-        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("Test/microphone-000.caf")), first)
-        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("Test 2/microphone-000.caf")), second)
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("Test.m4a")), firstExport)
+        XCTAssertNotEqual(try Data(contentsOf: destination.appendingPathComponent("Test 2.m4a")), firstExport)
+        XCTAssertNotEqual(first, second)
         XCTAssertEqual(try Data(contentsOf: sourceFile), second)
-        XCTAssertEqual(try Set(FileManager.default.contentsOfDirectory(atPath: destination.path)), ["Test", "Test 2"])
+        XCTAssertEqual(try Set(FileManager.default.contentsOfDirectory(atPath: destination.path)), ["Test.m4a", "Test 2.m4a"])
     }
 
     func testMeetingAudioExportConcurrentRequestsPreserveEveryExport() async throws {
@@ -8064,8 +8096,7 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         let chunk = self.makeFinalizedChunk(path: "fixture.caf")
         let sourceFile = chunk.fileURL(relativeTo: source)
-        let bytes = Data("recorded-audio".utf8)
-        try bytes.write(to: sourceFile)
+        let bytes = try writeExportTone(to: sourceFile)
         let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [chunk])])
         let started = self.expectation(description: "first export copying")
         let release = DispatchSemaphore(value: 0)
@@ -8092,10 +8123,10 @@ final class MeetingRecoveryTests: XCTestCase {
         for task in following {
             try await task.value
         }
-        let names = ["Test", "Test 2", "Test 3", "Test 4"]
+        let names = ["Test.m4a", "Test 2.m4a", "Test 3.m4a", "Test 4.m4a"]
         XCTAssertEqual(try Set(FileManager.default.contentsOfDirectory(atPath: destination.path)), Set(names))
         for name in names {
-            XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("\(name)/microphone-000.caf")), bytes)
+            XCTAssertEqual(try AVAudioFile(forReading: destination.appendingPathComponent(name)).length, 16_000)
         }
         XCTAssertEqual(try Data(contentsOf: sourceFile), bytes, "Concurrent exports must leave the recording intact")
     }
@@ -8109,7 +8140,7 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         let chunks = [self.makeFinalizedChunk(path: "first.caf"), self.makeFinalizedChunk(sequence: 1, path: "second.caf")]
         for chunk in chunks {
-            try Data("recorded-audio".utf8).write(to: chunk.fileURL(relativeTo: source))
+            _ = try writeExportTone(to: chunk.fileURL(relativeTo: source))
         }
         let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: chunks)])
         let started = self.expectation(description: "first chunk copied, second chunk waiting")
@@ -8135,6 +8166,154 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [], "The earlier copied chunk must not survive as a partial export")
         XCTAssertFalse(FileManager.default.fileExists(atPath: source.path), "Export must not recreate deleted source audio")
+    }
+
+    func testMeetingAudioExportCombinesOrderedChunksGapsAndSimultaneousTracksIntoOneAAC() async throws {
+        let source = makeTempDirectory(), destination = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: source); try? FileManager.default.removeItem(at: destination) }
+        var first = makeFinalizedChunk(path: "first.caf")
+        var last = makeFinalizedChunk(sequence: 1, path: "last.caf")
+        last.presentationStart = .init(value: 2_000, timescale: 1_000)
+        last.presentationEnd = .init(value: 3_000, timescale: 1_000)
+        first.byteCount = Int64(try writeExportTone(to: first.fileURL(relativeTo: source), frequency: 440).count)
+        last.byteCount = Int64(try writeExportTone(to: last.fileURL(relativeTo: source), frequency: 880).count)
+        var simultaneous = makeFinalizedChunk(path: "system.caf")
+        simultaneous.byteCount = Int64(try writeExportTone(to: simultaneous.fileURL(relativeTo: source), frequency: 660).count)
+        var system = makeMicrophoneTrack(chunks: [simultaneous]); system.kind = .applicationAudio
+        let session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [last, first]), system])
+        let url = try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), ["Test.m4a"])
+        let asset = AVURLAsset(url: url)
+        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        XCTAssertEqual(tracks.count, 1, "Popular players receive one mixed audio stream")
+        let descriptions = try await XCTUnwrap(tracks.first).load(.formatDescriptions)
+        XCTAssertEqual(CMFormatDescriptionGetMediaSubType(try XCTUnwrap(descriptions.first)), kAudioFormatMPEG4AAC)
+        let samples = try exportSamples(url)
+        XCTAssertEqual(samples.count, 48_000)
+        XCTAssertGreaterThan(exportToneEnergy(samples, frequency: 440, interval: 3_200..<12_800), 0.05)
+        XCTAssertGreaterThan(exportToneEnergy(samples, frequency: 660, interval: 3_200..<12_800), 0.05)
+        XCTAssertLessThan(samples[20_000..<28_000].map { abs($0) }.max() ?? 1, 0.005, "Missing capture time stays silent")
+        XCTAssertGreaterThan(exportToneEnergy(samples, frequency: 880, interval: 35_200..<44_800), 0.05)
+        let size = try Data(contentsOf: url).count
+        XCTAssertLessThan(size, Int(first.byteCount + last.byteCount + simultaneous.byteCount) / 2)
+    }
+
+    func testMeetingAudioExportHostClockSpansKeepAnInternalPause() async throws {
+        let source = makeTempDirectory(), destination = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: source); try? FileManager.default.removeItem(at: destination) }
+        var chunk = makeFinalizedChunk(path: "host.caf")
+        let bytes = try writeExportTone(to: chunk.fileURL(relativeTo: source), duration: 2)
+        chunk.presentationStart = .init(value: 10, timescale: 1)
+        chunk.presentationEnd = .init(value: 13, timescale: 1)
+        chunk.captureAnalysisAsset = .init(role: .captureAnalysis, encoding: .linearPCMFloat32CAFV1, presence: .ready,
+            relativeFilePath: chunk.relativeFilePath, byteCount: Int64(bytes.count), sha256: "synthetic", sampleRate: 16_000, channelCount: 1, frameCount: 32_000)
+        chunk.clockMapping = .init(frameCount: 32_000, spans: [
+            .init(frameStart: 0, frameEnd: 16_000, hostStart: .init(value: 10, timescale: 1), hostEnd: .init(value: 11, timescale: 1)),
+            .init(frameStart: 16_000, frameEnd: 32_000, hostStart: .init(value: 12, timescale: 1), hostEnd: .init(value: 13, timescale: 1), discontinuityBefore: true)
+        ])
+        var session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [chunk])])
+        session.timebase.recordingTimePolicy = .hostMonotonicV1
+        session.timebase.startedHostTime = 10_000_000_000
+        let url = try await MeetingAudioExporter.export(of: session, from: source, into: destination)
+        let samples = try exportSamples(url)
+        XCTAssertEqual(samples.count, 48_000)
+        XCTAssertGreaterThan(exportToneEnergy(samples, frequency: 440, interval: 3_200..<12_800), 0.1)
+        XCTAssertLessThan(samples[20_000..<28_000].map { abs($0) }.max() ?? 1, 0.005)
+        XCTAssertGreaterThan(exportToneEnergy(samples, frequency: 440, interval: 35_200..<44_800), 0.1)
+    }
+
+    func testMeetingAudioExportRefusesUnreadableEscapingDeletedAndConcealedSources() async throws {
+        let source = makeTempDirectory(), destination = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: source); try? FileManager.default.removeItem(at: destination) }
+        let valid = makeFinalizedChunk(path: "valid.caf")
+        _ = try writeExportTone(to: valid.fileURL(relativeTo: source))
+        try Data("invalid audio".utf8).write(to: source.appendingPathComponent("corrupt.caf"))
+        try FileManager.default.createSymbolicLink(at: source.appendingPathComponent("link.caf"), withDestinationURL: valid.fileURL(relativeTo: source))
+        for path in ["missing.caf", "corrupt.caf", "../escape.caf", "link.caf"] {
+            let chunk = makeFinalizedChunk(path: path)
+            let session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [chunk])])
+            do { _ = try await MeetingAudioExporter.export(of: session, from: source, into: destination); XCTFail(path) } catch {}
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [])
+        }
+        var session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [valid])])
+        session.retention.audioDeletedAt = Date()
+        do { _ = try await MeetingAudioExporter.export(of: session, from: source, into: destination); XCTFail("Deleted audio") } catch {}
+        session.retention.audioDeletedAt = nil
+        session.requiresEncryptedPersistence = true
+        // Non-guest protected sessions are concealed by the existing model contract.
+        session.profileOwnership = nil
+        XCTAssertTrue(session.isLocalContentConcealed)
+        do { _ = try await MeetingAudioExporter.export(of: session, from: source, into: destination); XCTFail("Concealed audio") } catch {}
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [])
+    }
+
+    func testMeetingAudioExportCancellationJoinsCopyAndRemovesPrivateStaging() async throws {
+        let source = makeTempDirectory(), destination = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: source); try? FileManager.default.removeItem(at: destination) }
+        let chunk = makeFinalizedChunk(path: "fixture.caf")
+        let original = try writeExportTone(to: chunk.fileURL(relativeTo: source))
+        let session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [chunk, chunk])])
+        let started = expectation(description: "Copy owns staging")
+        let gate = MeetingAudioExportTestGate()
+        defer { gate.release.signal() }
+        var finished = false
+        let task = Task {
+            defer { finished = true }
+            return try await MeetingAudioExporter.export(of: session, from: source, into: destination) { from, to in
+                try FileManager.default.copyItem(at: from, to: to)
+                gate.recordCopy(); started.fulfill()
+                guard gate.release.wait(timeout: .now() + 5) == .success else { throw CocoaError(.fileWriteUnknown) }
+            }
+        }
+        await fulfillment(of: [started], timeout: 2)
+        task.cancel()
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertFalse(finished, "Cancellation joins a synchronous copy before returning")
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: destination.path).allSatisfy { $0.hasSuffix(".export-tmp") })
+        gate.release.signal()
+        do { _ = try await task.value; XCTFail("Cancelled export") } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(finished)
+        XCTAssertEqual(gate.copyCount, 1, "Do not start the next chunk after cancellation")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [])
+        XCTAssertEqual(try Data(contentsOf: chunk.fileURL(relativeTo: source)), original)
+    }
+
+    func testMeetingAudioExportPreCancellationAndRevokedPublicationLeaveNoOutput() async throws {
+        let source = makeTempDirectory(), destination = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: source); try? FileManager.default.removeItem(at: destination) }
+        let chunk = makeFinalizedChunk(path: "fixture.caf")
+        _ = try writeExportTone(to: chunk.fileURL(relativeTo: source))
+        let session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [chunk])])
+        let task = Task { try await MeetingAudioExporter.export(of: session, from: source, into: destination) }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Pre-cancelled export") } catch { XCTAssertTrue(error is CancellationError) }
+        do {
+            _ = try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination,
+                validatePublication: { throw CancellationError() })
+            XCTFail("Revoked publication")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [])
+    }
+
+    func testMeetingAudioExportPublicationCollisionAndLateCancellationPreserveBothFiles() async throws {
+        let source = makeTempDirectory(), destination = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: source); try? FileManager.default.removeItem(at: destination) }
+        let chunk = makeFinalizedChunk(path: "fixture.caf")
+        _ = try writeExportTone(to: chunk.fileURL(relativeTo: source))
+        let session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [chunk])])
+        let sentinel = destination.appendingPathComponent("Test.m4a")
+        let bytes = Data("existing user file".utf8)
+        let task = Task {
+            try await MeetingAudioExporter.export(of: session, from: source, into: destination, validatePublication: {
+                if !FileManager.default.fileExists(atPath: sentinel.path) { try bytes.write(to: sentinel, options: .withoutOverwriting) }
+            })
+        }
+        let url = try await task.value
+        task.cancel()
+        XCTAssertEqual(url.lastPathComponent, "Test 2.m4a")
+        XCTAssertEqual(try Data(contentsOf: sentinel), bytes)
+        XCTAssertEqual(try AVAudioFile(forReading: url).length, 16_000)
+        XCTAssertEqual(try Set(FileManager.default.contentsOfDirectory(atPath: destination.path)), ["Test.m4a", "Test 2.m4a"])
     }
 
     // MARK: - ASR activity arbiter
@@ -10423,4 +10602,13 @@ private final class MemoryCheckpointProcessingController: MeetingProcessingContr
             diarizationModel: nil, lastCompletedTrackID: nil, errorCode: nil)
         return MeetingProcessingResult(speakers: session.speakers, segments: session.transcriptSegments, attempt: attempt)
     }
+}
+
+/// Synchronizes the injected synchronous copy without sharing mutable test state unsafely.
+nonisolated private final class MeetingAudioExportTestGate: @unchecked Sendable {
+    let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var copies = 0
+    var copyCount: Int { lock.withLock { copies } }
+    func recordCopy() { lock.withLock { copies += 1 } }
 }
