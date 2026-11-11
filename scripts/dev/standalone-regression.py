@@ -54,9 +54,13 @@ def interruption_status(error):
     return 128 + (error.signal_number if isinstance(error, RunTermination) else signal.SIGINT)
 
 
+# A closed terminal sends HUP. Probes run in their own sessions, so only this process can stop them.
+HANDLED_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+
+
 @contextmanager
 def defer_interrupts():
-    previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, set(HANDLED_SIGNALS))
     try:
         yield
     finally:
@@ -92,7 +96,7 @@ def suite_signal_handlers():
                 number, pending = pending, None
                 deliver(number)
 
-    originals = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
+    originals = {number: signal.getsignal(number) for number in HANDLED_SIGNALS}
     failure = None
     try:
         with defer_interrupts():
@@ -116,7 +120,7 @@ def suite_signal_handlers():
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, previous)
         if queued and failure is None:
-            deliver(signal.SIGTERM if signal.SIGTERM in queued else signal.SIGINT)
+            deliver(next(number for number in HANDLED_SIGNALS if number in queued))
 
 
 def process_group_exists(group):
