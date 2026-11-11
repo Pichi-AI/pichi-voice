@@ -3,6 +3,11 @@ import Foundation
 /// Eligibility for automatic learning only. Manual dictionary entries remain unrestricted.
 /// Keep this separate from observing edits and from acoustic matching so it can be replaced.
 nonisolated enum DictionaryCorrectionEditPolicy {
+    /// Feedback preserves meaningful symbols: C, C++ and C# are different terms.
+    static func feedbackIdentity(_ text: String) -> String {
+        text.precomposedStringWithCanonicalMapping.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            .folding(options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX"))
+    }
     static func allows(heard: String, corrected: String) -> Bool {
         guard self.isTerm(heard), self.isTerm(corrected) else { return false }
         let before = heard.lowercased()

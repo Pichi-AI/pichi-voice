@@ -172,6 +172,122 @@ final class ExternalDictationHistoryCorrectionTests: XCTestCase {
 }
 
 extension ExternalDictationHistoryCorrectionTests {
+    func testExternalObservationAdmitsHistoryAndTextFeedbackWithoutAcousticLearning() {
+        XCTAssertTrue(AutomaticDictionaryCorrectionTracker.shouldObserve(automaticLearningEnabled: false, acousticFeedbackEnabled: false,
+            textFeedbackEnabled: true, hasHistory: false, hasDictionarySubstitutions: true))
+        XCTAssertTrue(AutomaticDictionaryCorrectionTracker.shouldObserve(automaticLearningEnabled: false, acousticFeedbackEnabled: false,
+            textFeedbackEnabled: false, hasHistory: true, hasDictionarySubstitutions: false))
+        XCTAssertFalse(AutomaticDictionaryCorrectionTracker.shouldObserve(automaticLearningEnabled: false, acousticFeedbackEnabled: false,
+            textFeedbackEnabled: false, hasHistory: false, hasDictionarySubstitutions: true))
+        XCTAssertFalse(AutomaticDictionaryCorrectionTracker.shouldObserve(automaticLearningEnabled: false, acousticFeedbackEnabled: false,
+            textFeedbackEnabled: true, hasHistory: false, hasDictionarySubstitutions: false))
+    }
+
+    func testSymbolDistinctTextRejectionRestoresCAndDoesNotVetoCSharpAlias() async throws {
+        try await self.withHistory { history, _, root in
+            let suite = "SymbolFeedback-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let prefs = PrivateProfileDefaults.shared
+            let keys = ["DictionarySharedFeatureMatcherEnabled", "DictionaryNegativeLearningEnabled", "DictionaryNegativeComparisonEnabled"]
+            let previous = keys.map { prefs.object(forKey: $0) }, oldEntries = SettingsStore.shared.customDictionaryEntries
+            defer {
+                for (key, value) in zip(keys, previous) { prefs.set(value, forKey: key) }
+                SettingsStore.shared.customDictionaryEntries = oldEntries; ASRService.invalidateDictionaryCache()
+            }
+            prefs.set(false, forKey: keys[0]); prefs.set(true, forKey: keys[1]); prefs.set(true, forKey: keys[2])
+            let entry = SettingsStore.CustomDictionaryEntry(triggers: ["C", "C#"], replacement: "C++")
+            SettingsStore.shared.customDictionaryEntries = [entry]; ASRService.invalidateDictionaryCache()
+            let textStore = DictionaryTextRejectionStore(defaults: defaults)
+            var trace = DictionaryReplacementTrace(text: "C")
+            let output = ASRService.applyCustomDictionary("C", onReplacement: { id, range, _, label in
+                trace.replace(range: range, entryID: id, label: label, kind: .textRule)
+            }, rejections: textStore)
+            XCTAssertEqual(output, "C++")
+            let hit = try XCTUnwrap(trace.replacements.first), id = UUID()
+            XCTAssertNotNil(DictionaryReplacementTrace.rejection(in: [hit], originalRange: hit.range, replacement: "C"))
+            history.addEntry(id: id, rawText: output, processedText: output, appName: "Fixture", windowTitle: "Fixture", dictionaryReplacements: [hit])
+            let service = DictionaryRejectionService(negatives: DictionaryNegativeExampleStore(url: root.appendingPathComponent("symbols.plist"), collectionEnabled: { true }),
+                profiles: { [] }, entries: { [entry] }, textRejections: textStore)
+            let result = await service.restore(entryID: id, replacementID: hit.id, expectedSource: output, history: history, profile: PrivateProfileStorage.current)
+            XCTAssertTrue(result.restored); XCTAssertTrue(result.negativeSaved)
+            XCTAssertEqual(history.entries[0].sourceTranscriptText, "C")
+            XCTAssertEqual(ASRService.applyCustomDictionary("C", rejections: textStore), "C")
+            XCTAssertEqual(ASRService.applyCustomDictionary("C#", rejections: textStore), "C++")
+            XCTAssertEqual(history.entries[0].rejectedDictionaryReplacement(at: NSRange(location: 0, length: 1), replacement: "D")?.id, hit.id,
+                "Later versions remain negative feedback for the original substitution")
+        }
+    }
+
+    func testIndependentHistoryRejectionsSurviveCancellationOfEarlierPresentation() async throws {
+        try await self.withHistory { history, _, root in
+            let (entry, profile, initial) = self.acousticFixture()
+            let firstEvidence = try XCTUnwrap(initial.acousticEvidence.first)
+            let secondEvidence = DictionaryAcousticEvidence(id: UUID(), entryID: entry.id, label: entry.replacement,
+                profileKey: firstEvidence.profileKey, modelKey: profile.modelKey, sourceWordRange: 2..<3, frames: firstEvidence.frames)
+            var alignment = DictionaryLearningAlignment(modelKey: profile.modelKey,
+                words: [.init(text: "ну", start: 0, end: 0.2), .init(text: "потом", start: 0.3, end: 0.5), .init(text: "ну", start: 0.6, end: 0.8)],
+                originalText: "ну потом ну")
+            alignment.acousticEvidence = [firstEvidence, secondEvidence]
+            let trace = DictionaryReplacementTrace.acoustic(output: "Newo потом Newo", alignment: alignment)
+            let hits = trace.replacements.sorted { $0.location < $1.location }
+            XCTAssertEqual(hits.count, 2)
+            let id = UUID(), gate = DictionaryRejectionTestGate()
+            let store = DictionaryNegativeExampleStore(url: root.appendingPathComponent("independent.plist"), collectionEnabled: { true })
+            try await store.retainEvidence([firstEvidence, secondEvidence])
+            history.addEntry(id: id, rawText: trace.text, processedText: trace.text, appName: "Fixture", windowTitle: "Fixture", dictionaryReplacements: hits)
+            let suite = "IndependentFeedback-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            var paused = false
+            let service = DictionaryRejectionService(negatives: store, profiles: {
+                if !paused { paused = true; await gate.pause() }
+                return [profile]
+            }, entries: { [entry] }, textRejections: DictionaryTextRejectionStore(defaults: defaults), enabled: { true })
+            let firstPresentation = Task { @MainActor in
+                let result = await service.restore(entryID: id, replacementID: hits[0].id, expectedSource: trace.text,
+                    history: history, profile: PrivateProfileStorage.current)
+                gate.finished(); return result
+            }
+            let reached = await gate.waitForEntry()
+            XCTAssertTrue(reached)
+            firstPresentation.cancel()
+            let second = await service.restore(entryID: id, replacementID: hits[1].id, expectedSource: history.entries[0].sourceTranscriptText,
+                history: history, profile: PrivateProfileStorage.current)
+            gate.release()
+            let first = await firstPresentation.value
+            XCTAssertTrue(first.restored); XCTAssertTrue(first.negativeSaved)
+            XCTAssertTrue(second.restored); XCTAssertTrue(second.negativeSaved)
+            let learned = await store.frames(entryID: entry.id, profileKey: firstEvidence.profileKey, modelKey: profile.modelKey)
+            XCTAssertEqual(learned.count, 2)
+            XCTAssertEqual(history.entries[0].sourceTranscriptText, "ну потом ну")
+            XCTAssertEqual(service.pendingFeedbackCount, 0)
+        }
+    }
+
+    func testFeedbackQueueBoundsAndJoinsProfileRetirement() async throws {
+        try await self.withHistory { _, _, root in
+            let suite = "BoundedFeedback-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Newo")
+            let service = DictionaryRejectionService(negatives: DictionaryNegativeExampleStore(url: root.appendingPathComponent("queue.plist"), collectionEnabled: { true }),
+                profiles: { [] }, entries: { [entry] }, textRejections: DictionaryTextRejectionStore(defaults: defaults), enabled: { true })
+            var jobs: [Task<Bool, Never>] = []
+            for _ in 0..<32 {
+                let hit = DictionaryHistoryReplacement(id: UUID(), entryID: entry.id, label: entry.replacement, heard: "ну", location: 0, length: 4, kind: .textRule)
+                jobs.append(try XCTUnwrap(service.enqueue(hit, corrected: "ну", profile: PrivateProfileStorage.current)))
+            }
+            let overflow = DictionaryHistoryReplacement(id: UUID(), entryID: entry.id, label: entry.replacement, heard: "ну", location: 0, length: 4, kind: .textRule)
+            XCTAssertEqual(service.pendingFeedbackCount, 32)
+            XCTAssertNil(service.enqueue(overflow, corrected: "ну", profile: PrivateProfileStorage.current))
+            await service.prepareForPrivateProfileTransition()
+            XCTAssertEqual(service.pendingFeedbackCount, 0)
+            for job in jobs { let saved = await job.value; XCTAssertFalse(saved) }
+            XCTAssertNil(service.enqueue(overflow, corrected: "ну", profile: PrivateProfileStorage.current))
+        }
+    }
+
     func testNegativeLearningDefaultsOnAndHonorsSavedOffChoices() {
         let prefs = PrivateProfileDefaults.shared
         let keys = ["DictionarySharedFeatureMatcherEnabled", "DictionaryNegativeLearningEnabled", "DictionaryNegativeComparisonEnabled"]

@@ -72,7 +72,7 @@ final class DictationHistoryCorrectionSession {
                 delivered: self.deliveredText, selected: originalDeliveredRange),
               let range = self.sourceMap.currentRange(forOriginal: original) else { return nil }
         return entry.currentDictionaryReplacements.first { $0.range == range &&
-            DictionaryNegativeEvidenceResolver.normalized($0.label) != DictionaryNegativeEvidenceResolver.normalized(replacement) }
+            DictionaryCorrectionEditPolicy.feedbackIdentity($0.label) != DictionaryCorrectionEditPolicy.feedbackIdentity(replacement) }
     }
 
 }

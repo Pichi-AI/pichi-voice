@@ -13,7 +13,7 @@ nonisolated struct DictionaryReplacementTrace {
 
     static func rejection(in hits: [DictionaryHistoryReplacement], originalRange: NSRange, replacement: String) -> DictionaryHistoryReplacement? {
         hits.first { $0.range == originalRange &&
-            DictionaryNegativeEvidenceResolver.normalized($0.label) != DictionaryNegativeEvidenceResolver.normalized(replacement) }
+            DictionaryCorrectionEditPolicy.feedbackIdentity($0.label) != DictionaryCorrectionEditPolicy.feedbackIdentity(replacement) }
     }
 
     static func acoustic(output: String, alignment: DictionaryLearningAlignment?) -> Self {

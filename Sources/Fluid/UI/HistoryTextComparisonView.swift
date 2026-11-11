@@ -418,9 +418,7 @@ struct HistoryTextComparisonView: View {
         let proposed = selectedPhrase ? explicit : (detected ?? explicit)
         let candidate = AutomaticDictionaryCorrectionDetector.confirmedCandidate(proposed, in: plan) ??
             AutomaticDictionaryCorrectionDetector.confirmedCandidate(explicit, in: plan)
-        let rejected = history.entries.first(where: { $0.id == context.entryID })?.currentDictionaryReplacements.first {
-            $0.range == range && DictionaryNegativeEvidenceResolver.normalized($0.label) != DictionaryNegativeEvidenceResolver.normalized(replacement)
-        }
+        let rejected = history.entries.first(where: { $0.id == context.entryID })?.rejectedDictionaryReplacement(at: range, replacement: replacement)
         guard history.applyWordCorrection(
             entryID: context.entryID, expectedText: context.edit.sourceText,
             range: range, replacement: replacement, profile: context.profile, isOriginal: true,
@@ -434,10 +432,11 @@ struct HistoryTextComparisonView: View {
         if let rejected {
             self.savedInlineCorrection = nil
             self.rejectionTask?.cancel()
+            let pending = (self.rejectionService ?? .shared).enqueue(rejected, corrected: replacement, profile: context.profile, isValid: {
+                history.entries.first(where: { $0.id == context.entryID })?.rejectionRemainsValid(rejected.id) == true
+            })
             self.rejectionTask = Task { @MainActor in
-                let saved = await (self.rejectionService ?? .shared).remember(rejected, corrected: replacement, profile: context.profile, isValid: {
-                    history.entries.first(where: { $0.id == context.entryID })?.rejectionRemainsValid(rejected.id) == true
-                })
+                let saved = await pending?.value ?? false
                 guard !Task.isCancelled, self.entry.id == context.entryID else { return }
                 self.rejectionStatus = saved ? "Correction saved. Negative example saved." : "Correction saved. Negative example unavailable."
                 self.rejectionTask = nil

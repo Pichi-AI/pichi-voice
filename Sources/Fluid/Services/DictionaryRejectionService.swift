@@ -20,7 +20,7 @@ final class DictionaryTextRejectionStore {
 
     func rejects(entryID: UUID, label: String, heard: String) -> Bool {
         self.load().contains { $0.entryID == entryID && $0.label == label &&
-            DictionaryNegativeEvidenceResolver.normalized($0.heard) == DictionaryNegativeEvidenceResolver.normalized(heard) }
+            DictionaryCorrectionEditPolicy.feedbackIdentity($0.heard) == DictionaryCorrectionEditPolicy.feedbackIdentity(heard) }
     }
 
     func remember(entryID: UUID, label: String, heard: String) -> Bool {
@@ -52,6 +52,13 @@ final class DictionaryRejectionService {
     private let entries: @MainActor () -> [SettingsStore.CustomDictionaryEntry]
     private let textRejections: DictionaryTextRejectionStore
     private let enabled: @MainActor () -> Bool
+    private var retired = false
+    private struct PendingFeedback {
+        let generation: UUID
+        let task: Task<Bool, Never>
+    }
+    private var pendingFeedback: [UUID: PendingFeedback] = [:]
+    var pendingFeedbackCount: Int { self.pendingFeedback.count }
 
     init(negatives: DictionaryNegativeExampleStore = .shared,
          profiles: (@MainActor () async -> [PronunciationDictionaryProfile])? = nil,
@@ -67,17 +74,48 @@ final class DictionaryRejectionService {
         self.textRejections = textRejections ?? .shared; self.enabled = enabled
     }
 
+    /// Feedback is owned by its profile service, independent from presentation
+    /// tasks and other occurrences. A newer version joins retirement of its own
+    /// predecessor before writing the same evidence identity again.
+    func enqueue(_ hit: DictionaryHistoryReplacement, corrected: String, profile: PrivateProfileSnapshot,
+                 isValid: @escaping @MainActor () -> Bool = { true }) -> Task<Bool, Never>? {
+        guard !self.retired, PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              self.pendingFeedback.count < 32 || self.pendingFeedback[hit.id] != nil else { return nil }
+        let previous = self.pendingFeedback[hit.id]?.task
+        previous?.cancel()
+        let generation = UUID()
+        let task = Task { @MainActor [weak self] in
+            if let previous { _ = await previous.value }
+            guard let self else { return false }
+            defer {
+                if self.pendingFeedback[hit.id]?.generation == generation { self.pendingFeedback.removeValue(forKey: hit.id) }
+            }
+            guard !Task.isCancelled, !self.retired else { return false }
+            return await self.remember(hit, corrected: corrected, profile: profile, isValid: isValid)
+        }
+        self.pendingFeedback[hit.id] = PendingFeedback(generation: generation, task: task)
+        return task
+    }
+
+    func prepareForPrivateProfileTransition() async {
+        self.retired = true
+        let jobs = self.pendingFeedback.values.map(\.task)
+        jobs.forEach { $0.cancel() }
+        for job in jobs { _ = await job.value }
+        self.pendingFeedback.removeAll()
+    }
+
     @discardableResult
     func remember(_ hit: DictionaryHistoryReplacement, corrected: String, profile: PrivateProfileSnapshot,
                   isValid: @escaping @MainActor () -> Bool = { true }) async -> Bool {
         let generation = DictionaryMatcherExperiment.generation
         func current() -> Bool {
-            PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork && self.enabled() &&
+            !self.retired && PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork && self.enabled() &&
                 generation == DictionaryMatcherExperiment.generation && isValid() && self.entries().contains {
                     $0.id == hit.entryID && $0.replacement == hit.label
                 }
         }
-        guard !Task.isCancelled, current(), DictionaryNegativeEvidenceResolver.normalized(corrected) != DictionaryNegativeEvidenceResolver.normalized(hit.label) else { return false }
+        guard !Task.isCancelled, current(), DictionaryCorrectionEditPolicy.feedbackIdentity(corrected) != DictionaryCorrectionEditPolicy.feedbackIdentity(hit.label) else { return false }
         if hit.kind == .textRule {
             return self.textRejections.remember(entryID: hit.entryID, label: hit.label, heard: hit.ruleInput ?? hit.heard)
         }
@@ -121,9 +159,10 @@ final class DictionaryRejectionService {
                 replacement: hit.heard, profile: profile, isOriginal: true, replacesAllOccurrences: false),
               history.entries.contains(where: { $0.id == entryID }) else { return (false, false) }
         DictionaryVoiceSpellingLearner.shared.reject(editedText: hit.label)
-        let saved = await self.remember(hit, corrected: hit.heard, profile: profile, isValid: {
+        let pending = self.enqueue(hit, corrected: hit.heard, profile: profile, isValid: {
             history.entries.first(where: { $0.id == entryID })?.rejectionRemainsValid(hit.id) == true
         })
+        let saved = await pending?.value ?? false
         return (true, saved)
     }
 }

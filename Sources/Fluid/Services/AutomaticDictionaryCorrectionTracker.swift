@@ -257,10 +257,14 @@ final class AutomaticDictionaryCorrectionTracker {
     private var repeatVerificationTask: Task<Void, Never>?
     private var suggestionGeneration = UUID()
     private var correctionRevocations: [UUID: Task<Void, Never>] = [:]
-    private var negativeFeedbackTasks: [UUID: Task<Void, Never>] = [:]
     private let profile = PrivateProfileStorage.current
 
     private init() {}
+
+    nonisolated static func shouldObserve(automaticLearningEnabled: Bool, acousticFeedbackEnabled: Bool,
+                                         textFeedbackEnabled: Bool, hasHistory: Bool, hasDictionarySubstitutions: Bool) -> Bool {
+        automaticLearningEnabled || acousticFeedbackEnabled || hasHistory || (textFeedbackEnabled && hasDictionarySubstitutions)
+    }
 
     func beginObservingInsertion(
         _ insertedText: String, targetPID: pid_t?, learningRecording: DictionaryLearningRecording? = nil,
@@ -269,7 +273,10 @@ final class AutomaticDictionaryCorrectionTracker {
     ) {
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
         self.cancel()
-        guard SettingsStore.shared.automaticDictionaryLearningEnabled || DictionaryMatcherExperiment.collectNegatives,
+        guard Self.shouldObserve(automaticLearningEnabled: SettingsStore.shared.automaticDictionaryLearningEnabled,
+                  acousticFeedbackEnabled: DictionaryMatcherExperiment.collectNegatives,
+                  textFeedbackEnabled: DictionaryMatcherExperiment.collectTextNegatives,
+                  hasHistory: historyCorrection != nil, hasDictionarySubstitutions: !dictionaryReplacements.isEmpty),
               !insertedText.isEmpty
         else {
             return
@@ -314,8 +321,7 @@ final class AutomaticDictionaryCorrectionTracker {
 
     func prepareForPrivateProfileTransition() async {
         let tasks = [verificationTask, timeoutTask, debounceTask, repeatVerificationTask] +
-            (Array(self.evidencePreparationTasks.values) + Array(self.correctionRevocations.values) + Array(self.negativeFeedbackTasks.values)).map(Optional.some)
-        self.negativeFeedbackTasks.values.forEach { $0.cancel() }
+            (Array(self.evidencePreparationTasks.values) + Array(self.correctionRevocations.values)).map(Optional.some)
         cancel()
         for task in tasks { await task?.value }
     }
@@ -696,14 +702,12 @@ final class AutomaticDictionaryCorrectionTracker {
                 history?.dictionaryRejection(originalDeliveredRange: originalRange, replacement: historyCandidate.correctedText)
             let applied = history?.apply(originalDeliveredRange: originalRange, replacement: historyCandidate.correctedText,
                 replacesAllOccurrences: dictionaryRejection == nil) == true
-            if let hit = dictionaryRejection, self.negativeFeedbackTasks.count < 32 {
+            if let hit = dictionaryRejection {
                 let approval = CorrectionApproval(range: NSRange(location: range.location, length: historyCandidate.correctedText.utf16.count), text: historyCandidate.correctedText)
+                self.session?.approvals.removeAll { !$0.isValid }
                 self.session?.approvals.append(approval)
                 let profile = self.profile, service = DictionaryRejectionService.shared
-                self.negativeFeedbackTasks[approval.id] = Task { @MainActor [weak self] in
-                    defer { self?.negativeFeedbackTasks.removeValue(forKey: approval.id) }
-                    _ = await service.remember(hit, corrected: historyCandidate.correctedText, profile: profile, isValid: { approval.isValid })
-                }
+                _ = service.enqueue(hit, corrected: historyCandidate.correctedText, profile: profile, isValid: { approval.isValid })
             }
             if history != nil, !applied { DebugLogger.shared.debug("History correction skipped because its snapshot changed", source: "DictionaryLearning") }
         }

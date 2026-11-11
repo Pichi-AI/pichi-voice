@@ -42,12 +42,16 @@ nonisolated struct DictionaryHistoryReplacement: Codable, Equatable, Identifiabl
 }
 
 extension TranscriptionHistoryEntry {
+    func rejectedDictionaryReplacement(at range: NSRange, replacement: String) -> DictionaryHistoryReplacement? {
+        guard let original = self.originalSourceRange(for: range) else { return nil }
+        return self.dictionaryReplacements.first { $0.range == original &&
+            DictionaryCorrectionEditPolicy.feedbackIdentity($0.label) != DictionaryCorrectionEditPolicy.feedbackIdentity(replacement) }
+    }
     func rejectionRemainsValid(_ replacementID: UUID) -> Bool {
         guard let hit = self.dictionaryReplacements.first(where: { $0.id == replacementID }) else { return false }
         return self.sourceFragments.contains { fragment in
-            guard let spelling = DictionaryCorrectionEditPolicy.acousticSpelling(fragment.text) else { return false }
             return fragment.originalRange == hit.range && fragment.isValid(in: self.sourceTranscriptText) &&
-                spelling.caseInsensitiveCompare(hit.label) != .orderedSame
+                DictionaryCorrectionEditPolicy.feedbackIdentity(fragment.text) != DictionaryCorrectionEditPolicy.feedbackIdentity(hit.label)
         }
     }
     /// Manual edits supersede only the overlapping substitution, preserving all
