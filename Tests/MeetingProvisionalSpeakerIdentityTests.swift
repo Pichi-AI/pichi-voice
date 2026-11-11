@@ -298,7 +298,7 @@ import Foundation
         check(first.inserted[2].speakerID == nil, "Punctuation acquired a reading identity")
         check(first.inserted[3].speakerID == first.inserted[1].speakerID)
         check(first.inserted[4].speakerID == first.inserted[1].speakerID, "A known short reply lost its actual identity")
-        check(first.inserted[3].speakerAttribution?.rule == .existingParticipantContext)
+        check(first.inserted[3].speakerAttribution?.rule == .readingParticipantContext)
         check(first.inserted[3].speakerAttribution?.rule.isIndependentAcousticSelection == false)
         check(first.inserted[3].nativeSpeakerAssignment == .assigned(c)
             && first.inserted[3].nativeTiming == rows[3].nativeTiming && first.inserted[3].text == "да")
@@ -330,8 +330,8 @@ import Foundation
         for index in 0..<40 {
             let start = Double(index * 10)
             let result = try update(&unknown, [word(10_000 + index, start, start + 0.2)], [], end: start + 10)
-            check(result.speakers.isEmpty && result.inserted[0].speakerID == nil,
-                "Unscored fragments manufactured a catch-all or consumed participant capacity")
+            check(result.speakers.count == 1 && result.inserted[0].speakerID == result.speakers[0].id,
+                "Unscored fragments must reuse one reading identity within the explicit capacity")
         }
     }
 
@@ -369,8 +369,8 @@ import Foundation
         check(result.inserted[0].speakerID == ownerID && result.inserted[3].speakerID == ownerID,
             "Unscored text stole the returning proven owner's identity")
         check(result.speakers.count == 1 && result.speakers[0].isLocalUser)
-        check(result.inserted[1].speakerID == nil && result.inserted[2].speakerID == nil,
-            "A long unsupported run escaped the bounded contextual limit")
+        check(result.inserted[1].speakerID == ownerID && result.inserted[2].speakerID == ownerID,
+            "A long unresolved run must retain a reading participant without claiming acoustic identity")
     }
 
     static func stableFinalPublicationBoundaries() throws {
@@ -384,7 +384,7 @@ import Foundation
         func finalize(_ rows: [MeetingTranscriptSegment], barriers: [MeetingSpeakerAttributionInterval] = [],
                       blocked: Bool = false) throws -> MeetingPCMTranscriptBatch {
             try Tail.finalizingProtectedTranscript(.init(segments: rows, speakers: people), attemptID: attempt,
-                policy: .standard, speakerNameFormat: "Speaker %lld", barriersByTrack: [trackID: barriers],
+                policy: .init(enableProvisionalSpeakerIdentities: true, enableStableSpeakerOpening: true), speakerNameFormat: "Speaker %lld", barriersByTrack: [trackID: barriers],
                 contextualBarrierEpochIDs: blocked ? [epoch] : [], epochForSegment: { _ in epoch })
         }
         func anchored(_ index: Int, _ start: Double, token: MeetingBackendSpeakerToken = a) -> MeetingTranscriptSegment {

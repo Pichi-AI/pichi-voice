@@ -151,14 +151,8 @@ final class MobileSetupUITests: XCTestCase {
                     }
                     XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: 10), .completed)
                     XCTAssertTrue(app.buttons["meeting.start"].isHittable, "Start must remain reachable above the tab bar")
-                    let settings = app.buttons["meeting.settings"]
-                    XCTAssertTrue(settings.waitForExistence(timeout: 5))
-                    XCTAssertTrue(settings.isHittable)
-                    XCTAssertTrue(app.windows.firstMatch.frame.contains(settings.frame), "The whole line must remain visible")
-                    if app.tabBars.firstMatch.exists {
-                        XCTAssertTrue(settings.frame.intersection(app.tabBars.firstMatch.frame).isEmpty,
-                                      "The floating tab bar must not cover the next recording's settings")
-                    }
+                    XCTAssertFalse(app.buttons["meeting.settings"].exists,
+                                   "The recordings screen contains only the recording action")
                     capture("first-hint-\(language)-\(appearance)-\(name)")
                 }
             }

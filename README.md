@@ -1,330 +1,79 @@
+<p align="center"><img src="Sources/Fluid/Assets.xcassets/PichiAppIcon.appiconset/icon-128@1x.png" width="96" height="96" alt="Pichi Voice" /></p>
+
 # Pichi Voice
 
-Private development downstream of [FluidVoice](https://github.com/altic-dev/FluidVoice). Pichi adds configurable branding and themes, Russian meeting captions and grounded summaries, and native optimized GigaAM recognition while retaining upstream audio and persistence contracts. See [development setup](docs/development/codex.md), [upstream strategy](docs/development/upstream.md), and [agent instructions](AGENTS.md).
+**Speak your text. Keep your meetings on your device.**
 
-- [Branding and white-label configuration](docs/development/branding.md)
-- [Russian meetings and local summaries](docs/development/russian-meetings.md)
-- [Native GigaAM model import and verification](Vendor/PichiGigaAM/README.md)
+Voice typing on Mac, local meeting recording and transcription on Mac, iPhone and iPad. Spend less time typing and keep control of your recordings.
 
-The upstream README follows for reference. Its install commands, release links, branding, and contribution rules describe FluidVoice.
+[Русский](README.ru.md) · [Website](https://pichi.ai/voice) · [Releases](https://github.com/Pichi-AI/pichi-voice/releases) · [User guide](docs/product/user-guide.md) · [Support](SUPPORT.md)
 
-# FluidVoice
+## What you can do
 
-<p align="center">
-  <a href="https://github.com/altic-dev/FluidVoice/stargazers"><img src="https://img.shields.io/github/stars/altic-dev/FluidVoice?style=social" alt="GitHub stars"/></a>
-  <a href="https://github.com/sponsors/altic-dev"><img src="https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors&logoColor=white" alt="Sponsor FluidVoice"/></a>
-  <a href="https://x.com/fluidvoiceapp"><img src="https://img.shields.io/badge/X-%40fluidvoiceapp-black?logo=x&logoColor=white" alt="X @fluidvoiceapp"/></a>
-  <br />
-  <a href="https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1"><img src="https://img.shields.io/badge/Models-Nemotron%20Speech%203.5%20%7C%20Parakeet%20Flash%20%7C%20Parakeet%20v3%20%26%20v2%20%7C%20Cohere%20%7C%20Apple%20Speech%20%7C%20Whisper-blue" alt="Supported Models"/></a>
-  <br /><br />
-  <a href="https://trendshift.io/repositories/16601?utm_source=repository-badge&utm_medium=badge&utm_campaign=badge-repository-16601" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/16601" alt="altic-dev%2FFluidVoice | Trendshift" width="250" height="55"/></a>
-</p>
+| | Mac | iPhone and iPad |
+| --- | --- | --- |
+| Voice typing | Global shortcut and insertion into other apps | Meeting recording and transcription are the mobile focus |
+| In-person meetings | Record through your microphone | Record conversations away from your computer |
+| Online meetings | Capture computer audio and your microphone, with separate microphone controls | Record in-person conversations through the device microphone |
+| Local transcription | Choose a compatible on-device speech model | Download a compatible model and transcribe on the device |
+| Review | Transcripts, speaker labels, supported summaries and export | Recording history, audio playback and speaker-labelled transcripts |
 
-Open source voice-to-text dictation app for macOS with on-device AI enhancement.
+Compatible speech models support Russian and English. Other languages, speed and memory requirements depend on the model and device. Automatic speaker labels and summaries can contain mistakes: review important results.
 
-**Install with Homebrew:** `brew install --cask fluidvoice`
+## Availability
 
-**Manual download:** [latest release](https://github.com/altic-dev/FluidVoice/releases/latest)
+| Platform | Requirements | Download |
+| --- | --- | --- |
+| macOS | macOS 15 or later; Apple Silicon | [Download Mac installer](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B67-public.1/Pichi-Voice-0.1.0-67-macos-arm64.dmg) |
+| Windows | - | Coming Soon |
+| iOS (iPhone / iPad) | iOS / iPadOS 17 or later; memory and storage for the selected model | Coming Soon |
+| Android | - | Coming Soon |
 
-> [!WARNING]
-> **fluidvoice.org is not affiliated with, operated by, or endorsed by FluidVoice or Altic.** Its claims to be our official website are unauthorized.
->
-> Our official website is [altic.dev/fluid](https://altic.dev/fluid). Our official domains also include **fluidvoice.com** and **fluidvoice.app**.
->
-> For official downloads, use this repository's [GitHub Releases](https://github.com/altic-dev/FluidVoice/releases).
->
-> If **fluidvoice.org** appears in your search results claiming to be our official website, please report the misleading result to the search provider.
+## Get started
 
-> [!NOTE]
-> FluidVoice is on macOS today. **iOS and Windows are on the way** — join the waitlist to get notified when we launch: **[altic.dev/fluid/waitlist](https://www.altic.dev/fluid/waitlist)**
+1. [Download the Mac installer](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B67-public.1/Pichi-Voice-0.1.0-67-macos-arm64.dmg) for Apple Silicon and macOS 15 or later.
+2. Open the disk image and drag Pichi Voice to Applications. Open Pichi Voice from Applications.
+3. Complete the guided setup when Pichi Voice opens. Grant microphone access, Accessibility for typing into other apps, and screen/system-audio access for computer-audio recording.
+4. Select and download a speech model for your language while online.
+5. Try a short dictation or recording and review the result.
 
+Core local recording and compatible on-device transcription do not require a Pichi account.
 
-> [!IMPORTANT]
-> This project is free and open source under GPLv3. If FluidVoice is useful to you, please star the repository — it helps visibility and keeps development going.
+See the [user guide](docs/product/user-guide.md) for recording, dictation, permissions and troubleshooting.
 
----
+## Online meetings and conferencing
 
-## Support FluidVoice
+On Mac, Pichi Voice records locally rather than inviting a meeting bot. You control microphone capture separately from computer audio.
 
-If FluidVoice helps you, you can support continued development and future platform work for iOS and Windows on [GitHub Sponsors](https://github.com/sponsors/altic-dev).
+Zoom and Google Meet have been exercised in native checks. Audio capture, connected-call detection and observation of the conferencing app's microphone state are different capabilities. Automatic mute observation depends on the client, interface and permissions; it is not a universal or zero-delay guarantee. Use Pichi Voice's explicit microphone control for direct control over local microphone recording.
 
----
+Compatibility work has also examined **Yandex Telemost, Kontur.Talk, MTS Link, VK Teams and TrueConf**. Complete connected-call and mute scenarios for these services remain under verification. The [dated compatibility report](docs/research/communication-platforms-2026-11.md) records the tested versions and remaining gaps.
 
-## What's New in 1.6.0
+## Privacy and offline use
 
-- **Insanely fast Parakeet** — rebuilt Parakeet implementation with pretty much zero delay between speaking and seeing words on screen
-- **Fluid Intelligence** — fully local AI model for on-device dictation enhancement. No cloud, no API keys, no data leaving your Mac
-- **Better Theming** — adaptive light/dark theme with a compact toolbar switcher
-- **Refreshed Onboarding** — language-first voice engine setup, real dictation tryout, and AI enhancement setup in one clean pass
+Compatible local models process audio on your device after their required files are downloaded. Core local recording and transcription work without a Pichi account. Cloud AI providers and Pichi account/upload features are optional; selecting them can send relevant content to the chosen service.
 
-> [!WARNING]
-> Based on early feedback, Fluid Intelligence may cause you to unsubscribe from other dictation apps and save money. You've been warned.
+Model downloads and optional services still use the network. Exported files are governed by the receiving app's or storage service's controls. Review audio retention and sharing settings, and record only conversations you are authorized to process.
 
-## Fluid Intelligence
+Read [privacy and data handling](docs/product/privacy.md) and the [mobile privacy policy](https://pichi.ai/voice/privacy).
 
-FluidVoice is fully open source under GPLv3. **Fluid Intelligence** is a separate, privately maintained local AI runtime that powers advanced on-device dictation enhancement — smart formatting, context-aware capitalization, and post-processing — all running locally on your Mac.
+## Build and contribute
 
-The app works great on its own with any supported speech model and optional cloud AI providers. Fluid Intelligence adds a fully local, private AI layer for users who want on-device enhancement without sending data anywhere.
-
-We're keeping Fluid Intelligence private for now so we can sustainably offer the core dictation experience for free. This may change in the future.
-
----
-
-## Fluid Intelligence Sneak Peek
-
-<table>
-  <tr>
-    <td width="50%" align="center"><b>Email Template</b></td>
-    <td width="50%" align="center"><b>Flowers</b></td>
-  </tr>
-  <tr>
-    <td width="50%"><video src="https://github.com/user-attachments/assets/36747e9d-1ea3-4d27-8d38-eaacb6d57285" width="100%"></video></td>
-    <td width="50%"><video src="https://github.com/user-attachments/assets/5f6063ab-0506-4687-b825-c7bf4ab66ed6" width="100%"></video></td>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><b>Change Time & Name</b></td>
-    <td width="50%" align="center"><b>Emoji</b></td>
-  </tr>
-  <tr>
-    <td width="50%"><video src="https://github.com/user-attachments/assets/6c7a7c4c-17a8-453d-8eff-1aa1fa9f6077" width="100%"></video></td>
-    <td width="50%"><video src="https://github.com/user-attachments/assets/04e00f3d-a602-448d-9bde-50b5e8f61ac6" width="100%"></video></td>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><b>Hyphens & Numbers</b></td>
-    <td width="50%"></td>
-  </tr>
-  <tr>
-    <td width="50%"><video src="https://github.com/user-attachments/assets/47175f2b-9f06-452e-b892-42488e4ba536" width="100%"></video></td>
-    <td width="50%"></td>
-  </tr>
-</table>
-
-## Demo
-
-### Command Mode — Take any action on your Mac using FluidVoice
-
-https://github.com/user-attachments/assets/ffb47afd-1621-432a-bdca-baa4b8526301
-
-### Write Mode — Write or rewrite text in any text box in any app
-
-https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
-
----
-
-## Features
-
-- **Fluid Intelligence** — on-device AI enhancement for smart formatting, context-aware capitalization, and post-processing, all running locally on your Mac with zero data leaving your machine
-- **Command Mode** — control your Mac by voice: launch apps, run shortcuts, trigger system actions, and automate workflows without touching the keyboard
-- **Write Mode** — write or rewrite text directly in any text field across any app. Select text and rewrite it, or dictate new content inline
-- **Live Preview** — real-time transcription overlay with notch support, so you see words appear as you speak
-- **Multiple Speech Models** — Nemotron Speech 3.5, Parakeet Flash, Parakeet TDT v3 & v2, Cohere Transcribe, Apple Speech, and Whisper. Pick the model that fits your language and latency needs
-- **AI Enhancement** — optional post-processing via OpenAI, Groq, custom providers, or local Fluid Intelligence for cleaner, more accurate transcripts
-- **Audio History** — optional local recording history with budget controls and ZIP export, so you can review past dictations without cloud storage
-- **Today-Usage Stats** — daily usage tracking at a glance with a stats header card and toolbar pill
-- **Adaptive Theming** — light/dark theme that follows your system, with a compact toolbar switcher
-- **Global Hotkey** — instant voice capture from anywhere, no app switching needed
-- **Hold Space to Mute** - optional temporary mute within a dictation: hold Space while thinking, then release to continue the same recording; quick taps still type spaces
-- **Smart Typing** — direct insertion into any app via accessibility APIs for reliable, app-independent text entry
-- **Menu Bar Integration** — quick access, status, and settings from the menu bar
-- **Auto-Updates** — seamless updates with an optional beta channel for early previews
-- **Per-App Configuration** — assign different prompt sets to different apps, so your dictation adapts to whatever you're working in. Fully optional
-- **Notch-Aware Overlay** — transcription overlay that fits cleanly around the MacBook notch, or use a standard overlay if your Mac doesn't have one
-- **Local-First** — your voice and text never leave your machine unless you opt in to a cloud AI provider
-- **Fastest Parakeet on Mac** — one of the fastest native implementations of Parakeet on macOS, with near-instant transcription and minimal latency
-- **Configurable Overlay** — choose from pill-shaped to large overlay sizes to show live preview, or keep it minimal. Everything is optional
-- **Everything is Optional** — AI enhancement, Fluid Intelligence, audio history, detailed analytics, and beta builds are optional. The core dictation experience works out of the box with zero configuration beyond permissions and a hotkey
-
----
-
-## Supported Models
-
-| Model | Best for | Language support | Download size | Hardware |
-| --- | --- | --- | --- | --- |
-| Nemotron Speech 3.5 — Ultra Fast Low Latency | Streaming-capable multilingual dictation | ~40 languages | ~670 MB | Apple Silicon |
-| Nemotron 3.5 Multilingual | Higher-accuracy multilingual dictation | ~40 languages | ~530 MB | Apple Silicon |
-| [Parakeet Flash (Beta)](https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1) | Lowest-latency live English dictation | English | ~250 MB | Apple Silicon |
-| Parakeet TDT v3 | Fast default multilingual dictation | [25 languages](#parakeet-tdt-v3-languages) | ~500 MB | Apple Silicon |
-| Parakeet TDT v2 | Fastest English-only dictation | [English](#parakeet-tdt-v2-languages) | ~500 MB | Apple Silicon |
-| Cohere Transcribe | High-accuracy multilingual dictation | [14 languages](#cohere-transcribe-languages) | ~1.4 GB | Apple Silicon |
-| Apple Speech | Zero-download native macOS speech | [System languages](#apple-speech-languages) | Built-in | Apple Silicon + Intel |
-| Whisper Tiny / Base / Small / Medium / Large | Broad compatibility, including Intel Macs | [99 languages](#whisper-language-support) | ~75 MB to ~2.9 GB | Apple Silicon + Intel |
-
-### Parakeet TDT v3 Languages
-
-Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak, Slovenian, Spanish, Swedish, and Ukrainian.
-
-### Parakeet TDT v2 Languages
-
-English.
-
-### Cohere Transcribe Languages
-
-English, French, German, Italian, Spanish, Portuguese, Greek, Dutch, Polish, Mandarin, Japanese, Korean, Vietnamese, and Arabic.
-
-### Apple Speech Languages
-
-System language support depends on the macOS speech recognition languages available on your machine.
-
-### Whisper Language Support
-
-Whisper supports up to 99 languages, depending on the model size you choose.
-
----
-
-## Quick Start
-
-1. **Install** with Homebrew:
-   ```bash
-   brew install --cask fluidvoice
-   ```
-   Or download the [latest release](https://github.com/altic-dev/FluidVoice/releases/latest).
-
-2. **Grant permissions** — FluidVoice will ask for microphone and accessibility access. Both are required for dictation and typing into other apps.
-
-3. **Set your hotkey** — pick a global hotkey in settings that triggers voice capture from anywhere.
-
-4. **Go through onboarding** — choose your voice model based on your language and latency needs. Models range from zero-download Apple Speech to high-accuracy Nemotron and Whisper.
-
-5. **(Optional) Enable Fluid Intelligence** — download the local AI model during onboarding for on-device dictation enhancement. Everything runs locally, no data leaves your Mac.
-
-6. **(Optional) Bring your own AI provider** — add an OpenAI, Groq, or custom provider API key for cloud-based enhancement. Keys are stored securely in macOS Keychain. Select "Always allow" for key access.
-
-7. **(Optional) Opt in to beta builds** — `Settings → Automatic Updates → Beta Releases` for early access to new features.
-
-To pause listening without ending a hands-free dictation, enable **Settings → Dictation → Hold Space to Mute**. Start dictation with your usual shortcut, hold Space to mute, and release it to resume. The overlay shows a muted microphone. A quick tap (up to 250 ms) types one space on release; a longer hold types nothing. Muting starts immediately in both cases. Your normal shortcut still finishes the recording. Muted audio is excluded from live transcription, the final transcript, and saved audio history. Space works normally outside dictation; modifier-plus-Space and configured Space shortcuts keep their existing behavior. The option is off by default and applies to Dictation mode.
-
----
-
-## Requirements
-
-- macOS 15.0 (Sequoia) or later
-- Apple Silicon Mac for all models
-- Intel Macs supported via Whisper models (from 1.5.1+)
-- ~1 GB disk space for a voice model
-- ~3.5 GB disk space for the Fluid Intelligence model (optional)
-- Microphone access
-- Accessibility permissions for typing
-
----
-
-## Building from Source
-
-```bash
-git clone https://github.com/altic-dev/FluidVoice.git
-cd FluidVoice
-open Fluid.xcodeproj
+```sh
+git clone https://github.com/Pichi-AI/pichi-voice.git
+cd pichi-voice
+bash scripts/dev/new-worktree.sh my-change
+# Continue in the absolute worktree directory printed by the helper.
+bash scripts/dev/setup.sh
+bash scripts/dev/macos.sh build
 ```
 
-Build and run in Xcode. All dependencies are managed via Swift Package Manager.
+Xcode is required for native Apple builds. Model weights are obtained separately under their own licenses and are not included in the repository.
 
-Run a signed Debug build using the script:
+[Development setup](docs/development/codex.md) · [Testing](docs/development/testing.md) · [Branding](docs/development/branding.md) · [Localization](docs/development/localization.md) · [Contributing](CONTRIBUTING.md)
 
-```bash
-./build.sh
-```
+## License and acknowledgements
 
-The signed build is written to `DerivedData/Build/Products/Debug/FluidVoice Debug.app`.
-Keep launching that product after each rebuild so macOS can preserve its Accessibility
-authorization.
+Pichi Voice is free software under [GNU GPL version 3](LICENSE). It is a modified downstream of [FluidVoice](https://github.com/altic-dev/FluidVoice), with Pichi product identity and additional meeting, mobile and speech capabilities. Original copyright notices and upstream history are preserved.
 
-For CI or contributors who do not have a signing identity, use the explicit unsigned
-fallback:
-
-```bash
-./build.sh unsigned
-```
-
-Unsigned builds are tied to a specific executable version and may require Accessibility,
-Screen Recording, and microphone permissions to be removed and granted again after rebuilding.
-
----
-
-## Contributing
-
-Contributions are welcome! Read the [contribution guidelines](CONTRIBUTING.md) before starting work.
-
-- **Every PR needs a linked issue**, including bug fixes and small changes.
-- **Major features and UI or UX changes need maintainer or moderator approval before implementation.** Open an issue and wait for explicit agreement on the scope.
-- **Major feature requests start in [Discussions](https://github.com/altic-dev/FluidVoice/discussions/new?category=ideas).** After approval, create or link a tracking issue and reference both in the PR.
-- **Keep PRs focused and verifiable.** Include a screenshot, image, or video, clear reproduction or verification steps, and testing results. Show before and after for UI or UX changes.
-
-### Development Setup
-
-1. Clone and open in Xcode as above.
-2. **Signing:** `FluidVoice → Signing & Capabilities → Automatically manage signing → pick your Team` (Personal Team is fine). If you have certificates for multiple teams, select one without changing the project by running `FLUIDVOICE_DEVELOPMENT_TEAM=YOUR_TEAM_ID ./build.sh`.
-3. Build and run — SPM handles dependencies.
-4. **(Optional) Pre-commit hook** to prevent accidental team ID commits:
-   ```bash
-   cp scripts/check-team-id.sh .git/hooks/pre-commit
-   chmod +x .git/hooks/pre-commit
-   ```
-
-### Pull Request Guidelines
-
-- **One feature or fix per PR** — keep changes focused and atomic
-- **Link a tracking issue** — a Discussion alone does not replace it
-- **Get approval before implementing major features or UI or UX changes**
-- **Follow the PR template**, including reproduction steps and screenshot, image, or video evidence
-- **Report testing results** and any checks you could not run
-- **AI-assisted coding is welcome; human review is required.** A human must create or vet the final PR, understand the full diff, and verify the behavior. Briefly explain AI use and your own checks; keep descriptions, code comments, and review replies focused. See [AI-assisted contribution guidelines](CONTRIBUTING.md#ai-assisted-contributions).
-- **Never commit personal team IDs or API keys**
-- **Check `git diff`** before committing
-
-**These requirements are mandatory. PRs that do not follow the [contribution guidelines](CONTRIBUTING.md) will not be reviewed or merged until they comply, and may be closed.**
-
----
-
-## Run Integration Tests
-
-```bash
-xcodebuild test -project Fluid.xcodeproj -scheme Fluid -destination 'platform=macOS'
-```
-
-CI uses unsigned builds:
-
-```bash
-xcodebuild test -project Fluid.xcodeproj -scheme Fluid -destination 'platform=macOS' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
-```
-
----
-
-## Privacy & Analytics
-
-FluidVoice is **local-first**. Your voice, audio, and transcribed text never leave your machine unless you explicitly opt in to a cloud AI provider.
-
-### What's Collected
-
-FluidVoice records one anonymous activity signal per local day and uploads the week's buffered signals together after the week ends. Detailed anonymous analytics are enabled by default and can be disabled at any time from `Settings → Share Detailed Anonymous Analytics`; when disabled, only the weekly activity batch is sent.
-
-**Daily activity:**
-
-- A random installation ID, activity date, app version, and macOS platform label
-
-**With detailed analytics enabled:**
-
-- Daily feature and model usage totals
-- Onboarding progress
-- Model download starts and high-level outcomes
-
-**Not Collected:**
-
-- Voice, raw audio, or transcribed text
-- Selected text, prompts, or AI responses
-- Terminal commands, window titles, file paths, clipboard, or typed content
-- Any personal or private information
-
----
-
-## Community
-
-Join our Discord: https://discord.gg/VUPHaKSvYV
-
-Follow development on X: [@fluidvoiceapp](https://x.com/fluidvoiceapp)
-
----
-
-## License
-
-From 2026-02-23 onward, this project is licensed under the [GNU General Public License, Version 3.0 (GPLv3)](LICENSE).
-
-Versions published before this date were licensed under Apache License 2.0.
+See [acknowledgements and third-party software](docs/product/acknowledgements.md). Pichi Voice is distributed separately; use Pichi's own repository and releases for Pichi downloads and support.

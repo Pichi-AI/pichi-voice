@@ -34,20 +34,126 @@ final class MeetingMemoryProcessingAttempt {
     private var privacyPreparation: Task<Void, Error>?
     let privacyContext: MeetingTranscriptPrivacyContext?
     let checkpoint: @MainActor (MeetingPCMTranscriptBatch) async throws -> Void
-    let preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?
+    let preview: (@MainActor @Sendable (MeetingAudioTrackKind, MeetingLivePartial?) async throws -> Void)?
     let confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?
+    var trackConfidentlyNonSpeech: MeetingTrackConfidentNonSpeechQuery?
     let speechPreviewID = UUID()
     let archive: MeetingMemoryAudioArchive
     var consumer: (any MeetingMemoryAudioConsuming)?
     var recordingConsumer: MeetingArchivedMemoryAudioConsumer?
     var analysisTask: Task<MeetingProcessingResult, Error>?
-    var streamingController: MeetingStreamingPCMController?
-    var streamingTranscript: MeetingStreamingTranscriptState?
+    var streamingControllers: [MeetingAudioTrackID: MeetingStreamingPCMController] = [:]
+    var streamingTranscripts: [MeetingAudioTrackID: MeetingStreamingTranscriptState] = [:]
+    var streamingTracks: [MeetingAudioTrackID: MeetingAudioTrack] = [:]
+    var streamingProgress: [MeetingAudioTrackID: @Sendable (MeetingStreamingPCMObservation) async throws -> Void] = [:]
+    var streamingConsumers: [MeetingAudioTrackID: any MeetingMemoryAudioConsuming] = [:]
+    let publicationGate = MeetingProcessingSerializationGate()
+    var sourceTimelines: [MeetingAudioTrackID: MeetingPCMSourceTimeline] = [:]
+    private var publishedSourceThroughSamples: [MeetingAudioTrackID: Int] = [:]
+    var echoAdmission: MeetingStreamingEchoAdmission?
+    var streamingFailureTask: Task<Void, Never>?
+
+    func observeEcho(_ observation: MeetingStreamingPCMObservation, track: MeetingAudioTrack) async throws -> MeetingStreamingPCMObservation {
+        guard let echoAdmission else { return observation }
+        let result: MeetingStreamingPCMObservation
+        do { result = try await echoAdmission.observe(track: track, observation: observation) }
+        catch let error as MeetingStreamingEchoAdmission.Failure {
+            // This enum has scalar cases only. Never log the observation or raw words.
+            DebugLogger.shared.warning("echo_admission_failure reason=\(String(describing: error))", source: "MeetingStreamingPCM")
+            throw error
+        }
+        if let revisions = await echoAdmission.pendingRevisionBatch() { try await publish(revisions) }
+        return result
+    }
+
+    func sealEcho(trackID: MeetingAudioTrackID) async throws {
+        guard let echoAdmission else { return }
+        try await echoAdmission.markSealed(trackID: trackID)
+        if let revisions = await echoAdmission.pendingRevisionBatch() { try await publish(revisions) }
+    }
+
+    func cancelStreamingAfterFailure() async {
+        if let task = streamingFailureTask { await task.value; return }
+        let controllers = Array(streamingControllers.values)
+        let echo = echoAdmission
+        let task = Task {
+            await withTaskGroup(of: Void.self) { group in
+                for controller in controllers { group.addTask { await controller.cancelAndWait() } }
+            }
+            await echo?.cancel()
+        }
+        streamingFailureTask = task
+        await task.value
+    }
+
+    func projectedPreview(_ partial: MeetingLivePartial?, trackID: MeetingAudioTrackID) throws -> MeetingLivePartial? {
+        guard var partial, let timeline = sourceTimelines[trackID] else { return partial }
+        guard let start = timeline.mapTime(partial.start) else { throw MeetingPCMSourceTimeline.Failure.invalidTimestamp }
+        partial.start = start
+        if let end = partial.end {
+            guard let mapped = timeline.mapEndTime(end) else { throw MeetingPCMSourceTimeline.Failure.invalidTimestamp }
+            partial.end = mapped
+        }
+        return partial
+    }
+
+    func projectedBatch(_ input: MeetingPCMTranscriptBatch) throws -> MeetingPCMTranscriptBatch {
+        guard let track = input.sourceTrack, let timeline = sourceTimelines[track.id] else { return input }
+        var batch = input
+        for index in batch.segments.indices {
+            let native = batch.segments[index].nativeTiming
+            guard let start = timeline.mapTime(native?.start ?? batch.segments[index].start.seconds),
+                  let end = timeline.mapEndTime(native?.end ?? batch.segments[index].end.seconds), end > start else {
+                throw MeetingPCMSourceTimeline.Failure.invalidTimestamp
+            }
+            batch.segments[index].start = .init(value: Int64((start * 1_000_000).rounded()), timescale: 1_000_000)
+            batch.segments[index].end = .init(value: Int64((end * 1_000_000).rounded()), timescale: 1_000_000)
+            // The stored native envelope is defined in meeting presentation time, as
+            // in canonical assembly. Keep full precision while mapping the genuine bounds;
+            // inference state/activity retain their unchanged compact source clock.
+            if native != nil { batch.segments[index].nativeTiming = .init(start: start, end: end) }
+        }
+        batch.livePreview = try projectedPreview(batch.livePreview, trackID: track.id)
+        if let through = batch.protectedSourceThroughSample {
+            // Projection is pure. Advance the publication cursor only after the protected
+            // checkpoint below joins, so a failed/cancelled save can be retried intact.
+            let from = self.publishedSourceThroughSamples[track.id] ?? 0
+            if through > from {
+                batch.protectedSourceIntervals = try timeline.measuredIntervals(fromSample: from, throughSample: through)
+            }
+            batch.protectedSourceThroughSample = nil
+        }
+        return batch
+    }
+
+    func controller(for trackID: MeetingAudioTrackID) throws -> MeetingStreamingPCMController {
+        guard let controller = streamingControllers[trackID] else { throw MeetingStreamingPCMControllerError.invalidScope }
+        return controller
+    }
+
+    func publish(_ batch: MeetingPCMTranscriptBatch) async throws {
+        try await publicationGate.acquire()
+        do {
+            var safe = try projectedBatch(batch)
+            if let echoAdmission { safe = try await echoAdmission.admitting(safe) }
+            if !safe.segments.isEmpty || !safe.speakers.isEmpty || !safe.speakerRevisions.isEmpty
+                || !safe.echoRevisions.isEmpty || safe.protectedSourceThroughSample != nil || !safe.protectedSourceIntervals.isEmpty {
+                try await checkpoint(safe)
+                if let track = batch.sourceTrack, let through = batch.protectedSourceThroughSample {
+                    self.publishedSourceThroughSamples[track.id] = max(self.publishedSourceThroughSamples[track.id] ?? 0, through)
+                }
+            }
+            await publicationGate.release()
+        } catch {
+            await publicationGate.release()
+            throw error
+        }
+    }
     init(request: MeetingBackendRequest, descriptor: MeetingBackendDescriptor, runtime: any MeetingParakeetNemotronRunning,
          archive: MeetingMemoryAudioArchive,
          redactor: (any TranscriptTextRedacting)?,
          checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
-         preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?,
+         preview: (@MainActor @Sendable (MeetingAudioTrackKind, MeetingLivePartial?) async throws -> Void)?,
          confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil) {
         self.request = request; self.descriptor = descriptor; self.runtime = runtime; self.archive = archive
         self.redactor = redactor; self.checkpoint = checkpoint
@@ -92,6 +198,7 @@ extension MeetingProcessingPipeline {
     /// Foreground idle preparation is metadata-only until a registered adapter explicitly
     /// opens installed resources. It creates no session, audio lease or microphone identity.
     func prepareSelectedIdleResources(
+        recordingTimePolicy: MeetingRecordingTimePolicy? = nil,
         prepareFirst: @escaping @MainActor @Sendable () async throws -> (@Sendable () async -> Void)? = { nil }
     ) async throws -> MeetingIdlePreparationToken? {
         let modelID = settings.selectedSpeechModel.rawValue
@@ -110,8 +217,9 @@ extension MeetingProcessingPipeline {
             ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
         let backendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
             selectedModelID: modelID, savedBackendID: settings.meetingTranscriptionBackendID)
-        let configuration = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: backendID, languageCode: language,
+        var configuration = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: backendID, languageCode: language,
             diarizationEnabled: settings.meetingSpeakerLabelsEnabled, speakerProcessingMode: speakerMode)
+        configuration.recordingTimePolicy = recordingTimePolicy
         let backend = try backendRegistry.makeBackend(id: backendID, context: .init(legacyExecutor: { _, _ in
             throw MeetingModelResidencyError.unsupportedProvider
         }, idleResourcePreparation: idleResourcePreparation))
@@ -177,12 +285,12 @@ extension MeetingProcessingPipeline {
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
                             preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void) async throws {
-        try await prepareMemoryAudioAttempt(session: session, sessionDirectory: sessionDirectory, checkpoint: checkpoint, preview: preview)
+        try await prepareMemoryAudioAttempt(session: session, sessionDirectory: sessionDirectory, checkpoint: checkpoint, preview: { _, partial in try await preview(partial) })
     }
 
     private func prepareMemoryAudioAttempt(session: MeetingSession, sessionDirectory: URL,
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
-                            preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?,
+                            preview: (@MainActor @Sendable (MeetingAudioTrackKind, MeetingLivePartial?) async throws -> Void)?,
                             confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil,
                             frozenPrivacyProvider: (@MainActor () throws -> (any TranscriptTextRedacting)?)? = nil) async throws {
         guard session.audioStorageMode == .memoryOnly || session.effectiveSpeakerProcessingMode == .streaming,
@@ -194,21 +302,25 @@ extension MeetingProcessingPipeline {
         let attemptID = UUID()
         let admissionContext = self.pcmAdmissionContextProvider(session.piiRedactionEnabled == true)
         func requestSnapshot() -> MeetingBackendRequest {
-            MeetingBackendRequest(attemptID: attemptID, session: session, sessionDirectory: sessionDirectory,
-                configuration: PichiMeetingProviderFactory.configuration(
+            var configuration = PichiMeetingProviderFactory.configuration(
                     backendID: backendID, languageCode: session.languageCode,
                     artifactFingerprintOverride: session.recordingASRArtifactFingerprint,
                     diarizationEnabled: session.speakerLabelsEnabled ?? true,
-                    speakerProcessingMode: session.effectiveSpeakerProcessingMode))
+                    speakerProcessingMode: session.effectiveSpeakerProcessingMode)
+            configuration.recordingTimePolicy = session.timebase.recordingTimePolicy
+            return MeetingBackendRequest(attemptID: attemptID, session: session, sessionDirectory: sessionDirectory,
+                configuration: configuration)
         }
         // Resolve the actual registered factory before preparing any weights. This metadata-only
         // context grants no executor/runtime. A declared descriptor alone cannot authorize PCM:
         // bare factories are inspected too, and the backend must implement strict-input admission.
-        let preflightRequest = MeetingBackendRequest(attemptID: attemptID, session: session, sessionDirectory: sessionDirectory,
-            configuration: PichiMeetingProviderFactory.validationConfiguration(backendID: backendID,
+        var preflightConfiguration = PichiMeetingProviderFactory.validationConfiguration(backendID: backendID,
                 languageCode: session.languageCode, diarizationEnabled: session.speakerLabelsEnabled ?? true,
                 artifactFingerprintOverride: session.recordingASRArtifactFingerprint,
-                speakerProcessingMode: session.effectiveSpeakerProcessingMode))
+                speakerProcessingMode: session.effectiveSpeakerProcessingMode)
+        preflightConfiguration.recordingTimePolicy = session.timebase.recordingTimePolicy
+        let preflightRequest = MeetingBackendRequest(attemptID: attemptID, session: session,
+            sessionDirectory: sessionDirectory, configuration: preflightConfiguration)
         let preflightBackend = try self.resolveMemoryInputBackend(backendID: backendID,
             configuration: preflightRequest.configuration, mode: session.mode, admissionContext: admissionContext)
         let descriptor = preflightBackend.descriptor
@@ -237,7 +349,8 @@ extension MeetingProcessingPipeline {
         try backend.validatePCMInput(configuration: request.configuration, mode: session.mode, admissionContext: admissionContext)
         let runtime = try backend.makePCMRuntime(request)
         let configuration = request.configuration
-        if configuration.effectiveSpeakerProcessingMode == .streaming, !runtime.supportsStreamingPCMProcessing {
+        if configuration.effectiveSpeakerProcessingMode == .streaming,
+           !runtime.supportsStreamingPCMProcessing || (session.mode == .onlineCall && !runtime.supportsMultiTrackStreamingPCMProcessing) {
             throw MeetingPCMInputError.unsupportedRuntime
         }
         // Pin offline resources without a throwaway ASR load/unload. The first bounded
@@ -270,7 +383,7 @@ extension MeetingProcessingPipeline {
                             preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
                             confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws {
         try await self.prepareMemoryAudioAttempt(session: session, sessionDirectory: sessionDirectory,
-            checkpoint: checkpoint, preview: preview, confidentlyNonSpeech: confidentlyNonSpeech)
+            checkpoint: checkpoint, preview: { _, partial in try await preview(partial) }, confidentlyNonSpeech: confidentlyNonSpeech)
     }
 
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
@@ -279,15 +392,35 @@ extension MeetingProcessingPipeline {
                             preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
                             confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws {
         try await self.prepareMemoryAudioAttempt(session: session, sessionDirectory: sessionDirectory,
-            checkpoint: checkpoint, preview: preview, confidentlyNonSpeech: confidentlyNonSpeech,
+            checkpoint: checkpoint, preview: { _, partial in try await preview(partial) }, confidentlyNonSpeech: confidentlyNonSpeech,
             frozenPrivacyProvider: { privacyRedactor })
+    }
+
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            privacyRedactor: (any TranscriptTextRedacting)?,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            trackPreview: @escaping @MainActor @Sendable (MeetingAudioTrackKind, MeetingLivePartial?) async throws -> Void,
+                            trackConfidentlyNonSpeech: MeetingTrackConfidentNonSpeechQuery?) async throws {
+        try await self.prepareMemoryAudioAttempt(session: session, sessionDirectory: sessionDirectory,
+            checkpoint: checkpoint, preview: trackPreview,
+            frozenPrivacyProvider: { privacyRedactor })
+        self.memoryAttempts[session.id]?.trackConfidentlyNonSpeech = trackConfidentlyNonSpeech
     }
 
     func memoryConsumer(for sessionID: UUID, track: MeetingAudioTrack,
                         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void) async throws -> any MeetingMemoryAudioConsuming {
-        guard let attempt = self.memoryAttempts[sessionID], attempt.consumer == nil else { throw MeetingMemoryAudioError.invalidBudget }
-        guard track.kind == .microphone, attempt.descriptor.supportedTrackKinds.contains(track.kind) else {
+        guard let attempt = self.memoryAttempts[sessionID],
+              attempt.consumer == nil || (attempt.request.configuration.effectiveSpeakerProcessingMode == .streaming
+                && attempt.streamingConsumers[track.id] == nil) else { throw MeetingMemoryAudioError.invalidBudget }
+        guard (track.kind == .microphone || (attempt.request.session.mode == .onlineCall
+                && attempt.request.configuration.effectiveSpeakerProcessingMode == .streaming)),
+              attempt.descriptor.supportedTrackKinds.contains(track.kind) else {
             throw MeetingBackendError.unsupportedTrackTopology(backend: attempt.descriptor.id)
+        }
+        if attempt.request.configuration.effectiveSpeakerProcessingMode == .streaming {
+            guard !attempt.streamingTracks.values.contains(where: { $0.kind == track.kind }) else {
+                throw MeetingBackendError.unsupportedTrackTopology(backend: attempt.descriptor.id)
+            }
         }
         let service = self.asrServiceProvider()
         let runtime = attempt.runtime
@@ -314,7 +447,7 @@ extension MeetingProcessingPipeline {
                     partial = speech.speechPreview(id: speechPreviewID)
                 }
                 try Task.checkCancellation()
-                try await publishPreview(partial)
+                try await publishPreview(track.kind, partial)
                 DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
                     let nativeTiming = speech.speechObservationHasNativeTiming.map { String($0) } ?? "legacy"
                     let coverageEnd = partial?.end.map { String($0) } ?? "none"
@@ -404,15 +537,25 @@ extension MeetingProcessingPipeline {
             analysis.cancel()
             _ = try? await analysis.value
         }
-        await attempt.streamingController?.cancelAndWait()
-        await attempt.streamingTranscript?.cancel()
+        await attempt.cancelStreamingAfterFailure()
+        for state in attempt.streamingTranscripts.values { await state.cancel() }
+        for consumer in attempt.streamingConsumers.values { try? await consumer.finish() }
         try? await attempt.consumer?.finish()
+        attempt.streamingControllers.removeAll()
+        attempt.streamingTranscripts.removeAll()
+        attempt.streamingConsumers.removeAll()
+        attempt.streamingProgress.removeAll()
+        attempt.sourceTimelines.removeAll()
+        attempt.echoAdmission = nil
+        attempt.streamingFailureTask = nil
+        attempt.consumer = nil
         attempt.archive.clear()
         if self.memoryAttempts[sessionID] === attempt { self.memoryAttempts.removeValue(forKey: sessionID) }
     }
 
     func finishMemoryAudio(session: MeetingSession, progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
-        guard let attempt = self.memoryAttempts[session.id], attempt.consumer != nil else { throw MeetingProcessingError.noRecoverableAudio }
+        guard let attempt = self.memoryAttempts[session.id],
+              attempt.consumer != nil || !attempt.streamingConsumers.isEmpty else { throw MeetingProcessingError.noRecoverableAudio }
         let task: Task<MeetingProcessingResult, Error>
         if let existing = attempt.analysisTask { task = existing }
         else {
@@ -421,25 +564,58 @@ extension MeetingProcessingPipeline {
             }
             attempt.analysisTask = task
         }
-        return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+        return try await withTaskCancellationHandler {
+            do {
+                let result = try await task.value
+                await self.releaseMemoryAttempt(attempt, sessionID: session.id)
+                return result
+            } catch {
+                await self.releaseMemoryAttempt(attempt, sessionID: session.id)
+                throw error
+            }
+        } onCancel: { task.cancel() }
+    }
+
+    private func releaseMemoryAttempt(_ attempt: MeetingMemoryProcessingAttempt, sessionID: MeetingSessionID) async {
+        // Even a publication/finalizer failure may leave the shared sibling command idle.
+        // Join that exact resource stack before releasing references or its audio archive.
+        await attempt.cancelStreamingAfterFailure()
+        guard self.memoryAttempts[sessionID] === attempt else { return }
+        let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.archiveRelease)
+        attempt.archive.clear()
+        attempt.analysisTask = nil
+        attempt.consumer = nil
+        attempt.streamingConsumers.removeAll()
+        attempt.streamingControllers.removeAll()
+        attempt.streamingTranscripts.removeAll()
+        attempt.streamingProgress.removeAll()
+        attempt.sourceTimelines.removeAll()
+        attempt.echoAdmission = nil
+        attempt.streamingFailureTask = nil
+        self.memoryAttempts.removeValue(forKey: sessionID)
+        MeetingPCMRuntimeDiagnostics.completedDetailed(.archiveRelease, since: began)
     }
 
     private func completeMemoryAudio(session: MeetingSession, attempt: MeetingMemoryProcessingAttempt,
                                      progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
-        guard let consumer = attempt.consumer else { throw MeetingProcessingError.noRecoverableAudio }
-        defer {
-            let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.archiveRelease)
-            attempt.archive.clear()
-            attempt.analysisTask = nil
-            if self.memoryAttempts[session.id] === attempt { self.memoryAttempts.removeValue(forKey: session.id) }
-            MeetingPCMRuntimeDiagnostics.completedDetailed(.archiveRelease, since: began)
-        }
+        guard attempt.consumer != nil || !attempt.streamingConsumers.isEmpty else { throw MeetingProcessingError.noRecoverableAudio }
         progress(.transcribing)
         do {
             let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.speechTail)
             var succeeded = false
             defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.speechTail, since: began, succeeded: succeeded) }
-            try await consumer.finish()
+            if attempt.request.configuration.effectiveSpeakerProcessingMode == .streaming {
+                let consumers = Array(attempt.streamingConsumers.values)
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    for consumer in consumers { group.addTask { try await consumer.finish() } }
+                    do { while try await group.next() != nil {} }
+                    catch {
+                        group.cancelAll()
+                        for controller in attempt.streamingControllers.values { await controller.cancelAndWait() }
+                        throw error
+                    }
+                }
+            } else { try await attempt.consumer?.finish() }
             succeeded = true
         }
         try Task.checkCancellation()
@@ -472,17 +648,22 @@ extension MeetingProcessingPipeline {
             }
         }
         try Task.checkCancellation()
-        if attempt.request.configuration.speakerLabelsEnabled,
-           attempt.request.configuration.effectiveSpeakerProcessingMode != .streaming, let track {
+        if attempt.request.configuration.speakerLabelsEnabled, track != nil,
+           attempt.request.configuration.effectiveSpeakerProcessingMode != .streaming
+            || attempt.request.configuration.speakerAttributionPolicy?.enableCompleteReadingAssignment == true {
             // Recognition/replay has already passed the existing privacy gate. Final batch
             // diarization can still abstain; use the same protected reading identity policy
             // as streaming without replaying speech or inventing native speaker evidence.
+            let scopes = MeetingReadingSpeakerResolver.readingScopes(for: batch.segments)
+            let readingBarriers = Dictionary(grouping: session.transcriptCoverageGaps ?? [], by: \.trackID)
+                .mapValues { $0.map { MeetingSpeakerAttributionInterval(start: $0.start, end: $0.end) } }
             batch = try MeetingStreamingProtectedWordTail.finalizingProtectedTranscript(batch,
                 attemptID: attempt.request.attemptID,
                 policy: attempt.request.configuration.speakerAttributionPolicy,
                 speakerNameFormat: batch.speakerNameFormat ?? PichiLocalization.text("Speaker %lld"),
-                trackKinds: [track.id: track.kind],
-                epochForSegment: { _ in .init(trackID: track.id, ordinal: 0) })
+                trackKinds: Dictionary(session.audioTracks.map { ($0.id, $0.kind) }, uniquingKeysWith: { first, _ in first }),
+                barriersByTrack: readingBarriers,
+                epochForSegment: { scopes[$0.id] })
         }
         progress(.finalizing)
         // Stop-time pending records can predate or differ from the admitted PCM request.

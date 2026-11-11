@@ -1,6 +1,6 @@
 # Fluid WebRTC Audio Processing package
 
-This local Swift package contains FluidVoice's pinned WebRTC Audio Processing Module/AEC3 bridge.
+This local Swift package contains the pinned WebRTC Audio Processing Module/AEC3 bridge used by Pichi Voice, originally integrated by FluidVoice.
 It is built from Google WebRTC revision
 `d9bd07ba5f614156021df666ba4052ac73cf7953` and statically linked for macOS 15 on `arm64` and
 `x86_64`.

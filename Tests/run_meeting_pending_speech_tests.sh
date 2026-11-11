@@ -28,6 +28,7 @@ xcrun swiftc -swift-version 6 -default-isolation MainActor -parse-as-library \
     "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift \
     Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift \
+    Sources/Fluid/Services/Meeting/Platform/MeetingCapturePCMTransport.swift \
     Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \
     Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift \
     Tests/MeetingPendingSpeechProjectionTests.swift -o "$task_test_dir/tests"

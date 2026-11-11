@@ -5,6 +5,7 @@ import Foundation
 /// True requires complete, measured non-speech coverage on the original capture clock.
 /// Missing, stale or uncertain activity evidence must return false and preserve recognition.
 typealias MeetingConfidentNonSpeechQuery = @Sendable (TimeInterval, TimeInterval) async -> Bool
+typealias MeetingTrackConfidentNonSpeechQuery = @Sendable (MeetingAudioTrackKind, TimeInterval, TimeInterval) async -> Bool
 
 extension MeetingProcessingPipeline {
     /// PCM input is another input capability of the existing pipeline, not another meeting
@@ -14,6 +15,7 @@ extension MeetingProcessingPipeline {
         chunkSeconds: Double = 12,
         maximumPendingSeconds: Double = 60,
         initialChunkSeconds: Double? = nil,
+        sourceTimeline: MeetingPCMSourceTimeline? = nil,
         recognize: @escaping @Sendable ([Float], TimeInterval) async throws -> MeetingPCMTranscriptBatch,
         checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
         didProcessWindow: (@Sendable (MeetingPCMWindowProcessingFeedback) async throws -> Void)? = nil,
@@ -24,6 +26,7 @@ extension MeetingProcessingPipeline {
         try MeetingPipelineMemoryAudioConsumer(chunkSeconds: chunkSeconds,
                                               maximumPendingSeconds: maximumPendingSeconds,
                                               initialChunkSeconds: initialChunkSeconds,
+                                              sourceTimeline: sourceTimeline,
                                               recognition: .sealed(recognize), checkpoint: checkpoint, didProcessWindow: didProcessWindow,
                                               finalize: finalize, diagnostic: diagnostic, failure: failure)
     }
@@ -39,6 +42,7 @@ extension MeetingProcessingPipeline {
         previewIntervalSeconds: Double = 3,
         confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil,
         pauseEndpointSilenceSeconds: Double? = nil,
+        sourceTimeline: MeetingPCMSourceTimeline? = nil,
         recognize: @escaping @Sendable (MeetingPCMProgressiveWindow, TimeInterval) async throws -> MeetingPCMTranscriptBatch,
         checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
         didProcessWindow: (@Sendable (MeetingPCMWindowProcessingFeedback) async throws -> Void)? = nil,
@@ -51,6 +55,7 @@ extension MeetingProcessingPipeline {
                                               initialChunkSeconds: initialPreviewSeconds,
                                               confidentlyNonSpeech: confidentlyNonSpeech,
                                               pauseEndpointSilenceSeconds: pauseEndpointSilenceSeconds,
+                                              sourceTimeline: sourceTimeline,
                                               recognition: .progressive(intervalSeconds: previewIntervalSeconds, recognize),
                                               checkpoint: checkpoint, didProcessWindow: didProcessWindow,
                                               finalize: finalize, diagnostic: diagnostic, failure: failure)
@@ -287,6 +292,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     private let recognition: Recognition
     private let previewIntervalFrames: Int?
     private let nonSpeechQuery: MeetingConfidentNonSpeechQuery?
+    private let sourceTimeline: MeetingPCMSourceTimeline?
     private let pauseEndpointSilenceFrames: Int?
     private var openProgressiveWindow: MeetingPCMProgressiveWindow?
     private var openProgressiveStart: TimeInterval = 0
@@ -318,6 +324,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     init(chunkSeconds: Double, maximumPendingSeconds: Double, initialChunkSeconds: Double?,
          confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil,
          pauseEndpointSilenceSeconds: Double? = nil,
+         sourceTimeline: MeetingPCMSourceTimeline? = nil,
          recognition: Recognition,
          checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
          didProcessWindow: (@Sendable (MeetingPCMWindowProcessingFeedback) async throws -> Void)? = nil,
@@ -337,7 +344,13 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
         self.initialChunkFrames = Int((initial * 16_000).rounded())
         self.maximumPendingFrames = Int((maximumPendingSeconds * 16_000).rounded())
         self.recognition = recognition
-        self.nonSpeechQuery = confidentlyNonSpeech
+        self.sourceTimeline = sourceTimeline
+        if let sourceTimeline, let confidentlyNonSpeech {
+            self.nonSpeechQuery = { start, end in
+                guard let mapped = sourceTimeline.mapInterval(start: start, end: end) else { return false }
+                return await confidentlyNonSpeech(mapped.start, mapped.end)
+            }
+        } else { self.nonSpeechQuery = confidentlyNonSpeech }
         if let silence = pauseEndpointSilenceSeconds {
             guard silence.isFinite, silence >= 0.25, silence <= chunkSeconds else {
                 throw MeetingMemoryAudioError.invalidBudget
@@ -386,7 +399,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
                 rejected = MeetingMemoryAudioError.invalidPCM
                 return false
             }
-            if let expectedPTS, abs(CMTimeGetSeconds(pts - expectedPTS)) > 1.0 / 16_000 {
+            if self.sourceTimeline == nil, let expectedPTS, abs(CMTimeGetSeconds(pts - expectedPTS)) > 1.0 / 16_000 {
                 rejected = MeetingMemoryAudioError.timelineDiscontinuity
                 return false
             }
@@ -398,6 +411,18 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
             guard (0..<frameCount).allSatisfy({ data[$0].isFinite }) else {
                 rejected = MeetingMemoryAudioError.invalidPCM
                 return false
+            }
+            if let sourceTimeline {
+                do {
+                    if try sourceTimeline.record(sourceStartSample: sourceStartFrame, frameCount: frameCount,
+                        presentationTime: CMTimeGetSeconds(pts),
+                        clockMapping: MeetingCaptureClockMetadata.read(from: sampleBuffer)?.mapping) {
+                        self.sealSourceBoundaryLocked()
+                    }
+                } catch {
+                    rejected = error
+                    return false
+                }
             }
             self.expectedPTS = pts + CMTime(value: Int64(frameCount), timescale: 16_000)
             self.acceptedSourceFrames += frameCount
@@ -441,6 +466,22 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
         }
         if let rejected { self.fail(rejected) }
         return accepted
+    }
+
+    /// Called with the transport lock held. A measured source gap is an ASR boundary,
+    /// not acoustic silence. The next job retains the contiguous compact inference clock.
+    private func sealSourceBoundaryLocked() {
+        if let window = self.openProgressiveWindow {
+            window.seal()
+            if !self.openProgressiveScheduled { self.jobs.append(.progressive(window, self.openProgressiveStart)) }
+            self.openProgressiveWindow = nil
+            self.openProgressiveScheduled = false
+        }
+        if !self.tail.isEmpty {
+            self.jobs.append(.sealed(self.tail, self.tailStart))
+            self.tail = []
+            self.emittedInitialWindow = true
+        }
     }
 
     // Only the consumer mutates capture window ownership. Endpointing adds no worker or
@@ -502,7 +543,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
                     if let finalize, var batch = try await finalize() {
                         if priorError != nil { batch.isComplete = false }
                         if !batch.segments.isEmpty || !batch.speakers.isEmpty || !batch.speakerRevisions.isEmpty
-                            || batch.protectedSourceThroughSample != nil {
+                            || batch.protectedSourceThroughSample != nil || !batch.protectedSourceIntervals.isEmpty {
                             try await self.checkpoint(batch)
                         }
                     }
@@ -601,7 +642,10 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
             case .invalidPCM: kind = "invalid_pcm"
             case .invalidBudget: kind = "invalid_budget"
             case .timelineDiscontinuity: kind = "timeline_discontinuity"
-            case nil: kind = String(reflecting: type(of: error))
+            case nil:
+                if let timelineFailure = error as? MeetingPCMSourceTimeline.Failure {
+                    kind = "source_timeline_\(timelineFailure.rawValue)"
+                } else { kind = String(reflecting: type(of: error)) }
             }
             self.diagnostic("stopped errorKind=\(kind) pendingFrames=\(pending.0) queuedWindows=\(pending.1) budgetFrames=\(self.maximumPendingFrames)")
             self.failure(error)

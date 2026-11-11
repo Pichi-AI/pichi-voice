@@ -44,6 +44,14 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
     /// immutable source evidence. Ordinary batches leave this additive capability empty.
     var speakerRevisions: [SpeakerRevision] = []
 
+    /// Cross-source acoustic/text admission may arrive after protected words. This patch
+    /// changes only duplicate visibility, preserving user text, native evidence and aliases.
+    struct EchoRevision: Equatable, Sendable {
+        let segmentID: MeetingTranscriptSegmentID
+        let isLikelyEcho: Bool
+    }
+    var echoRevisions: [EchoRevision] = []
+
     /// Provenance of one growing physical PCM window. Native timing partitions
     /// can change between observations without starting a different hypothesis.
     nonisolated struct SpeechObservationIdentity: Equatable, Sendable {
@@ -62,6 +70,10 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
     /// through joined ASR, acoustic and privacy admission. Apply after publishing its
     /// protected history; never serialize it as a word or use it for speaker identity.
     var protectedSourceThroughSample: Int? = nil
+    /// Measured meeting-time intervals admitted by the same protected checkpoint.
+    /// Source gaps are deliberately absent; these are not a continuous prefix.
+    /// Like the source cursor above, this is transient presentation evidence only.
+    var protectedSourceIntervals: [Range<TimeInterval>] = []
     /// Ephemeral ASR observation metadata. True only after this audio window seals.
     var speechObservationIsFinal = false
     /// Ephemeral only. Neither this identity nor unfiltered speech enters a session.
@@ -83,8 +95,10 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
         let ordered = segments.sorted { $0.start < $1.start }
         return ordered.first.map {
             MeetingLivePartial(id: id, text: ordered.map(\.text).joined(separator: " "),
-                start: $0.start.seconds,
-                end: permitsSpeechPreviewCoverage ? ordered.map { $0.end.seconds }.max() : nil)
+                // This still belongs to the compact inference clock. Presentation
+                // timestamps can be rounded outside the last admitted PCM frame.
+                start: $0.nativeTiming?.start ?? $0.start.seconds,
+                end: permitsSpeechPreviewCoverage ? ordered.map { $0.nativeTiming?.end ?? $0.end.seconds }.max() : nil)
         }
     }
 

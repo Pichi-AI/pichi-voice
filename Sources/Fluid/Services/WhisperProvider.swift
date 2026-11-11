@@ -80,9 +80,9 @@ nonisolated struct WhisperProbabilityDiagnostics: Sendable, Equatable {
     }
 }
 
-/// Short Tiny calls must not spend several decoder retries on an uncertain
-/// phrase. This adapter-local policy uses the loaded artifact and native quality
-/// scalars, not UI language, token confidence, or a quiet-speech amplitude gate.
+/// Short Tiny calls use one bounded decode. Native quality scalars distinguish
+/// uncertain wording from silence and repetition; low likelihood alone must not
+/// erase speech. The policy follows the loaded artifact, never the UI language.
 nonisolated enum WhisperShortInputPolicy {
     static let maximumSamples = 20 * WhisperSignalDiagnostics.sampleRate
 
@@ -106,26 +106,29 @@ nonisolated enum WhisperShortInputPolicy {
         case noSpeech = "no_speech"
         case lowLogprob = "low_logprob"
         case compression = "compression"
+
+        var preservesText: Bool { self == .accepted || self == .lowLogprob }
     }
 
     static func evaluate(hasText: Bool, chunks: [Chunk]) -> Decision {
         guard hasText else { return .empty }
         guard !chunks.isEmpty else { return .missingQuality }
+        var uncertain = false
         for chunk in chunks {
             guard chunk.temperature.isFinite, chunk.temperature >= 0,
                   chunk.avgLogprob.isFinite, chunk.avgLogprob <= 0,
                   chunk.compressionRatio.isFinite, chunk.compressionRatio >= 0,
                   chunk.noSpeechProbability.isFinite, (0...1).contains(chunk.noSpeechProbability),
                   chunk.fallbacks >= 0 else { return .invalidQuality }
-            // The first two thresholds are Whisper's existing retry criteria.
-            // With retries disabled, do not publish a failed final decoder tier.
-            // A strong no-speech probability also rejects Tiny's digital-silence
-            // hallucination even when its language-model logprob looks good.
+            // Logprob is a retry criterion, not proof that this audio contains no
+            // words. Preserve the native final hypothesis when only wording is
+            // uncertain. Still reject silence, malformed evidence and repetition
+            // across every chunk, including chunks after an uncertain one.
             if chunk.noSpeechTriggered || chunk.noSpeechProbability >= 0.9 { return .noSpeech }
-            if chunk.avgLogprob < -1 { return .lowLogprob }
             if chunk.compressionRatio > 2.4 { return .compression }
+            uncertain = uncertain || chunk.avgLogprob < -1
         }
-        return .accepted
+        return uncertain ? .lowLogprob : .accepted
     }
 }
 
@@ -700,7 +703,7 @@ final class WhisperProvider: TranscriptionProvider {
                     "encode_ms=\(WhisperProbabilityDiagnostics.timingField(timings.encodeMs)) " +
                     "decode_ms=\(WhisperProbabilityDiagnostics.timingField(timings.decodeMs))"
             }
-            return decision == .accepted ? transcript : nil
+            return decision.preservesText ? transcript : nil
         } catch {
             let wallMilliseconds = (ProcessInfo.processInfo.systemUptime - started) * 1_000
             let cancelled = Task.isCancelled

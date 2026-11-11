@@ -34,10 +34,10 @@ struct DictationScreenContextSettings: View {
             Task { await self.permission.refresh() }
         }
         .onChange(of: self.isBusy) { _, isBusy in
-            if isBusy { self.permissionRequestTask?.cancel() }
+            if isBusy { self.cancelScreenPermissionRequest() }
         }
         .onDisappear {
-            self.permissionRequestTask?.cancel()
+            self.cancelScreenPermissionRequest()
         }
     }
 
@@ -62,7 +62,7 @@ struct DictationScreenContextSettings: View {
             HStack(spacing: 12) {
                 FluidGlassControlGroup {
                     Button(PichiLocalization.text(self.permission.requiresSettings ? "Open System Settings" : "Allow screen access")) {
-                        self.requestScreenAccess()
+                        self.beginScreenPermissionRequest()
                     }
                     .fluidGlassAction()
                     .disabled(self.isBusy || self.permission.isRequesting)
@@ -91,17 +91,22 @@ struct DictationScreenContextSettings: View {
         return PichiLocalization.format("Supported models: %@. Everything is processed on your device.", names.joined(separator: ", "))
     }
 
-    private func requestScreenAccess() {
+    private func beginScreenPermissionRequest() {
         guard !self.isBusy, self.permissionRequestTask == nil else { return }
-        if self.permission.requiresSettings {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                NSWorkspace.shared.open(url)
-            }
-            return
-        }
         self.permissionRequestTask = Task {
             defer { self.permissionRequestTask = nil }
-            await self.permission.requestIfNeeded { !Task.isCancelled }
+            await self.requestScreenAccess()
         }
+    }
+
+    /// The permission button's UI-to-service boundary. Refresh/toggles never call it.
+    func requestScreenAccess() async {
+        guard !self.isBusy else { return }
+        await self.permission.requestIfNeeded { !self.isBusy && !Task.isCancelled }
+    }
+
+    func cancelScreenPermissionRequest() {
+        self.permissionRequestTask?.cancel()
+        self.permission.cancel()
     }
 }

@@ -1,16 +1,36 @@
 import Foundation
 
+/// Exact inference input and word position before overlap ownership removes context words.
+/// The range is in samples from the runtime call's input, not a measured speech envelope.
+public struct GigaAMWordSourceContext: Sendable, Equatable {
+    public let sampleRange: Range<Int>
+    public let wordIndex: Int
+
+    public init(sampleRange: Range<Int>, wordIndex: Int) {
+        self.sampleRange = sampleRange
+        self.wordIndex = wordIndex
+    }
+
+    public var isValid: Bool {
+        self.sampleRange.lowerBound >= 0 && !self.sampleRange.isEmpty
+            && (0..<8_192).contains(self.wordIndex)
+    }
+}
+
 public struct GigaAMWordTiming: Sendable, Equatable {
     public let text: String
     public let start: TimeInterval
     public let end: TimeInterval
     public let confidence: Float
+    public let sourceContext: GigaAMWordSourceContext?
 
-    public init(text: String, start: TimeInterval, end: TimeInterval, confidence: Float) {
+    public init(text: String, start: TimeInterval, end: TimeInterval, confidence: Float,
+                sourceContext: GigaAMWordSourceContext? = nil) {
         self.text = text
         self.start = start
         self.end = end
         self.confidence = confidence
+        self.sourceContext = sourceContext
     }
 }
 

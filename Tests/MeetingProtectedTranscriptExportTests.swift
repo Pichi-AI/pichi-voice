@@ -15,6 +15,9 @@ extension MeetingSessionStoreCheckpointTests {
         session.endedAt = session.startedAt.addingTimeInterval(5)
         session.audioStorageMode = .memoryOnly
         session.piiRedactionEnabled = true
+        // Keep the established portable-import fixture's anonymous legacy turn.
+        // Default/enabled complete ownership is covered by the reading contract.
+        session.speakerLabelsEnabled = false
         session.transcriptTimeDomain = .meetingRelative
         let trackID = id("000000000010"), ownerID = id("000000000002"), remoteID = id("000000000003")
         let aliasID = id("000000000004")

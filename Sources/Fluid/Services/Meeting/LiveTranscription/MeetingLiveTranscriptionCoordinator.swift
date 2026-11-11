@@ -59,7 +59,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     private var microphoneCaptureMethod: MeetingAudioTrackCaptureMethod?
     private let originBox: MeetingLiveOriginBox
     private let onUpdate: @Sendable (MeetingLiveTranscriptSnapshot) -> Void
-    private let onEmptyRecognition: (@Sendable (MeetingLiveSpeaker, TimeInterval, TimeInterval) -> Void)?
+    private let onResolvedAudioWithoutCaption: (@Sendable (MeetingLiveSpeaker, TimeInterval, TimeInterval) -> Void)?
 
     private var bufferedMicrophoneEngine: PichiMeetingBufferedTrackEngine?
     private var bufferedApplicationEngine: PichiMeetingBufferedTrackEngine?
@@ -74,10 +74,10 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     #endif
 
     init(originBox: MeetingLiveOriginBox = MeetingLiveOriginBox(),
-         onEmptyRecognition: (@Sendable (MeetingLiveSpeaker, TimeInterval, TimeInterval) -> Void)? = nil,
+         onResolvedAudioWithoutCaption: (@Sendable (MeetingLiveSpeaker, TimeInterval, TimeInterval) -> Void)? = nil,
          onUpdate: @escaping @Sendable (MeetingLiveTranscriptSnapshot) -> Void) {
         self.originBox = originBox
-        self.onEmptyRecognition = onEmptyRecognition
+        self.onResolvedAudioWithoutCaption = onResolvedAudioWithoutCaption
         self.onUpdate = onUpdate
     }
 
@@ -361,12 +361,13 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
             guard let updated else { return }
             // No text enters privacy publication here. A successful empty final is
             // processing evidence for its own source interval, never for queued audio.
-            self.onEmptyRecognition?(speaker, startSeconds, endSeconds)
+            self.onResolvedAudioWithoutCaption?(speaker, startSeconds, endSeconds)
             self.onUpdate(updated)
             return
         }
 
         self.recordProbe("utterance-before-filter", kind: kind, pts: startSeconds, text: text)
+        var resolvedWithoutCaption = false
         let updated: MeetingLiveTranscriptSnapshot = self.stateLock.withLock {
             self.snapshot.revision &+= 1
             if speaker == .you {
@@ -379,6 +380,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
                     if MeetingLiveEchoFilter.shouldSuppress(micText: text, recentThemText: recentThem) {
                         self.comparisonProbe?.recordEvent("utterance-echo-suppressed", track: kind, pts: startSeconds, text: text, detail: recentThem)
                         self.snapshot = self.snapshot.settingPartial(nil, for: .you).markingFinalized(id)
+                        resolvedWithoutCaption = true
                         return self.snapshot
                     }
                 }
@@ -391,6 +393,9 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
             let utterance = MeetingLiveUtterance(id: id, speaker: speaker, text: text, start: startSeconds, end: endSeconds)
             self.snapshot = self.snapshot.inserting(utterance).settingPartial(nil, for: speaker)
             return self.snapshot
+        }
+        if resolvedWithoutCaption, !self.stateLock.withLock({ self.isStopped }) {
+            self.onResolvedAudioWithoutCaption?(speaker, startSeconds, endSeconds)
         }
         self.onUpdate(updated)
     }

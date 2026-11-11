@@ -1053,3 +1053,287 @@ private final nonisolated class FocusedContextReadTrace: @unchecked Sendable {
     var events: [String] { self.lock.withLock { self.recorded } }
     func record(_ event: String) { self.lock.withLock { self.recorded.append(event) } }
 }
+
+/// Runs the production permission controller and view actions with synthetic OS
+/// checks and a guide substitute. No TCC requests, Settings windows or capture.
+@MainActor
+final class ScreenPermissionGuideTests: XCTestCase {
+    func testFirstRequestStaysNativeAndOnlyNextExplicitActionShowsGuide() async throws {
+        let state = ScreenPermissionCheck()
+        let guide = ScreenPermissionGuideSpy()
+        var requests = 0
+        let permission = DictationScreenPermissionController(check: { state.isAllowed }, request: {
+            requests += 1
+            return false
+        }, guide: guide)
+
+        await permission.refresh()
+        XCTAssertTrue(guide.presentations.isEmpty)
+        await permission.requestIfNeeded { true }
+        XCTAssertEqual(requests, 1)
+        XCTAssertTrue(permission.requiresSettings)
+        XCTAssertTrue(guide.presentations.isEmpty)
+        await permission.refresh()
+        XCTAssertTrue(guide.presentations.isEmpty, "A denied refresh must remain read-only")
+
+        await permission.requestIfNeeded { true }
+        let presentation = try XCTUnwrap(guide.presentations.last)
+        XCTAssertEqual(presentation.url.absoluteString, "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        XCTAssertEqual(presentation.instruction, PichiLocalization.format("Drag %@ into the Screen & System Audio Recording list as shown", Bundle.main.fluidAppDisplayName))
+        XCTAssertFalse(presentation.isGranted())
+        state.isAllowed = true
+        XCTAssertTrue(presentation.isGranted(), "The guide must use the same live permission check")
+        XCTAssertEqual(requests, 1)
+        XCTAssertFalse(permission.isRequesting)
+        permission.cancel()
+    }
+
+    func testGrantedRefreshDismissesGuideAndPreventsFurtherRequests() async throws {
+        let state = ScreenPermissionCheck()
+        let guide = ScreenPermissionGuideSpy()
+        var requests = 0
+        let permission = DictationScreenPermissionController(check: { state.isAllowed }, request: {
+            requests += 1
+            return false
+        }, guide: guide)
+        await permission.requestIfNeeded { true }
+        await permission.requestIfNeeded { true }
+        let id = try XCTUnwrap(guide.activeID)
+        state.isAllowed = true
+        await permission.refresh()
+        XCTAssertTrue(permission.isAllowed)
+        XCTAssertFalse(permission.requiresSettings)
+        XCTAssertEqual(guide.dismissed, [id])
+        XCTAssertNil(guide.activeID)
+        await permission.requestIfNeeded { true }
+        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(guide.presentations.count, 1)
+    }
+
+    func testRepeatedSettingsActionsReplaceGuideAndIgnoreRetiredCallbacks() async throws {
+        let guide = ScreenPermissionGuideSpy()
+        let permission = DictationScreenPermissionController(check: { false }, request: { false }, guide: guide)
+        await permission.requestIfNeeded { true }
+        await permission.requestIfNeeded { true }
+        let first = try XCTUnwrap(guide.presentations.last)
+        await permission.requestIfNeeded { true }
+        let second = try XCTUnwrap(guide.presentations.last)
+        XCTAssertNotEqual(first.id, second.id)
+        XCTAssertEqual(guide.dismissed, [first.id])
+        first.onGranted()
+        XCTAssertFalse(permission.isAllowed)
+        XCTAssertEqual(guide.activeID, second.id)
+        second.onGranted()
+        XCTAssertTrue(permission.isAllowed)
+        XCTAssertFalse(permission.requiresSettings)
+        XCTAssertNil(guide.activeID)
+    }
+
+    func testLeavingDismissesGuideAndRejectsLateGrant() async throws {
+        let guide = ScreenPermissionGuideSpy()
+        let permission = DictationScreenPermissionController(check: { false }, request: { false }, guide: guide)
+        await permission.requestIfNeeded { true }
+        await permission.requestIfNeeded { true }
+        let presentation = try XCTUnwrap(guide.presentations.last)
+        permission.cancel()
+        presentation.onGranted()
+        XCTAssertNil(guide.activeID)
+        XCTAssertEqual(guide.dismissed, [presentation.id])
+        XCTAssertFalse(permission.isAllowed)
+        XCTAssertTrue(permission.requiresSettings)
+        await permission.requestIfNeeded { true }
+        XCTAssertEqual(guide.presentations.count, 2, "Returning permits a fresh explicit action")
+        permission.cancel()
+    }
+
+    func testGuideGrantInvalidatesAnOlderInFlightRefresh() async throws {
+        let holdCheck = ScreenPermissionCheck()
+        let started = DispatchSemaphore(value: 0)
+        let resume = DispatchSemaphore(value: 0)
+        let guide = ScreenPermissionGuideSpy()
+        let permission = DictationScreenPermissionController(check: {
+            if holdCheck.isAllowed {
+                started.signal()
+                _ = resume.wait(timeout: .now() + 2)
+            }
+            return false
+        }, request: { false }, guide: guide)
+        await permission.requestIfNeeded { true }
+        await permission.requestIfNeeded { true }
+        let presentation = try XCTUnwrap(guide.presentations.last)
+        holdCheck.isAllowed = true
+        let staleRefresh = Task { await permission.refresh() }
+        let didStart = await Task.detached { started.wait(timeout: .now() + 2) == .success }.value
+        XCTAssertTrue(didStart)
+        presentation.onGranted()
+        resume.signal()
+        await staleRefresh.value
+        XCTAssertTrue(permission.isAllowed)
+        XCTAssertFalse(permission.requiresSettings)
+        XCTAssertNil(guide.activeID)
+    }
+
+    func testLeavingDuringSettingsCheckCannotPresentDelayedGuide() async {
+        let started = DispatchSemaphore(value: 0)
+        let resume = DispatchSemaphore(value: 0)
+        let guide = ScreenPermissionGuideSpy()
+        let permission = DictationScreenPermissionController(check: {
+            started.signal()
+            _ = resume.wait(timeout: .now() + 2)
+            return false
+        }, request: { false }, guide: guide)
+        // Both refreshes are explicitly released, without sleeping or touching TCC.
+        let first = Task { await permission.requestIfNeeded { true } }
+        let firstStarted = await Task.detached { started.wait(timeout: .now() + 2) == .success }.value
+        XCTAssertTrue(firstStarted)
+        resume.signal()
+        await first.value
+        let settingsAction = Task { await permission.requestIfNeeded { true } }
+        let secondStarted = await Task.detached { started.wait(timeout: .now() + 2) == .success }.value
+        XCTAssertTrue(secondStarted)
+        permission.cancel()
+        resume.signal()
+        await settingsAction.value
+        XCTAssertTrue(guide.presentations.isEmpty)
+        XCTAssertFalse(permission.isRequesting)
+    }
+
+    func testCancelledSettingsActionDoesNotOpenGuide() async {
+        let guide = ScreenPermissionGuideSpy()
+        let permission = DictationScreenPermissionController(check: { false }, request: { false }, guide: guide)
+        await permission.requestIfNeeded { true }
+        let action = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await permission.requestIfNeeded { true }
+        }
+        await action.value
+        XCTAssertTrue(guide.presentations.isEmpty)
+        XCTAssertFalse(permission.isRequesting)
+    }
+
+    func testSharedGuideRejectsCancelledDelayedPresentation() throws {
+        var pending: [@MainActor () -> Void] = []
+        var opened: [URL] = []
+        let guide = PermissionDragGuideController(openSettings: { opened.append($0) }, schedulePresentation: { pending.append($0) })
+        let url = try XCTUnwrap(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"))
+        var grants = 0
+        let id = guide.present(instruction: "Synthetic guide", settingsPaneURL: url, isGranted: { true }, onGranted: { grants += 1 })
+        guide.dismiss(requestID: id)
+        pending.forEach { $0() }
+        XCTAssertEqual(opened, [url])
+        XCTAssertEqual(grants, 0)
+    }
+
+    func testSharedGuideOldOwnerCannotDismissReplacementAndEarlyGrantSkipsPanel() throws {
+        var pending: [@MainActor () -> Void] = []
+        let guide = PermissionDragGuideController(openSettings: { _ in }, schedulePresentation: { pending.append($0) })
+        let url = try XCTUnwrap(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"))
+        var grants: [String] = []
+        let first = guide.present(instruction: "First", settingsPaneURL: url, isGranted: { true }, onGranted: { grants.append("first") })
+        let second = guide.present(instruction: "Second", settingsPaneURL: url, isGranted: { true }, onGranted: { grants.append("second") })
+        guide.dismiss(requestID: first)
+        pending.forEach { $0() }
+        XCTAssertEqual(grants, ["second"])
+        guide.dismiss(requestID: second)
+    }
+
+    func testDictationSettingsActionRoutesThroughGuideAndBusyActionDoesNothing() async throws {
+        try await self.withSettings { settings in
+            let guide = ScreenPermissionGuideSpy()
+            let permission = DictationScreenPermissionController(check: { false }, request: { false }, guide: guide)
+            let view = DictationScreenContextSettings(settings: settings, isBusy: false, permission: permission)
+            await view.requestScreenAccess()
+            XCTAssertTrue(guide.presentations.isEmpty)
+            await view.requestScreenAccess()
+            XCTAssertEqual(guide.presentations.count, 1)
+            let busyView = DictationScreenContextSettings(settings: settings, isBusy: true, permission: permission)
+            await busyView.requestScreenAccess()
+            XCTAssertEqual(guide.presentations.count, 1)
+            view.cancelScreenPermissionRequest()
+            XCTAssertNil(guide.activeID)
+        }
+    }
+
+    func testEditModeSettingsActionHonorsOptInAndDismissesOnLeaving() async throws {
+        try await self.withSettings { settings in
+            let guide = ScreenPermissionGuideSpy()
+            var requests = 0
+            let permission = DictationScreenPermissionController(check: { false }, request: {
+                requests += 1
+                return false
+            }, guide: guide)
+            let view = EditModeScreenContextSettings(settings: settings, permission: permission)
+            view.enabledBinding.wrappedValue = false
+            await view.requestScreenAccess()
+            XCTAssertEqual(requests, 0)
+            view.enabledBinding.wrappedValue = true
+            XCTAssertTrue(guide.presentations.isEmpty)
+            await view.requestScreenAccess()
+            XCTAssertEqual(requests, 1)
+            await view.requestScreenAccess()
+            XCTAssertEqual(guide.presentations.count, 1)
+            view.enabledBinding.wrappedValue = false
+            view.cancelScreenPermissionRequest()
+            await view.requestScreenAccess()
+            XCTAssertNil(guide.activeID)
+            XCTAssertEqual(guide.presentations.count, 1)
+            XCTAssertFalse(settings.dictationScreenContextEnabled)
+        }
+    }
+
+    func testDashboardActionUsesGuideAndGrantedStatusDoesNotReopenIt() async {
+        let state = ScreenPermissionCheck()
+        let guide = ScreenPermissionGuideSpy()
+        let permission = DictationScreenPermissionController(check: { state.isAllowed }, request: { false }, guide: guide)
+        // Exercise the actual Dashboard button action without initializing its
+        // unrelated history, settings, ASR or stats singletons.
+        await DashboardView.requestScreenAccess(permission: permission, isBusy: { true })
+        XCTAssertFalse(permission.hasChecked)
+        await DashboardView.requestScreenAccess(permission: permission, isBusy: { false })
+        XCTAssertTrue(guide.presentations.isEmpty)
+        await DashboardView.requestScreenAccess(permission: permission, isBusy: { false })
+        XCTAssertEqual(guide.presentations.count, 1)
+        state.isAllowed = true
+        await DashboardView.requestScreenAccess(permission: permission, isBusy: { false })
+        XCTAssertTrue(permission.isAllowed)
+        XCTAssertNil(guide.activeID)
+        XCTAssertEqual(guide.presentations.count, 1)
+        permission.cancel()
+    }
+
+    private func withSettings(_ body: @MainActor (SettingsStore) async throws -> Void) async throws {
+        let suite = "ScreenPermissionGuideTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults, initializeDesktop: false)
+        settings.dictationScreenContextEnabled = false
+        try await body(settings)
+    }
+}
+
+@MainActor
+private final class ScreenPermissionGuideSpy: PermissionDragGuidePresenting {
+    struct Presentation {
+        let id: UUID
+        let instruction: String
+        let url: URL
+        let isGranted: @Sendable () -> Bool
+        let onGranted: @MainActor () -> Void
+    }
+    var presentations: [Presentation] = []
+    var dismissed: [UUID] = []
+    var activeID: UUID?
+
+    func present(instruction: String, settingsPaneURL: URL, isGranted: @escaping @Sendable () -> Bool,
+                 onGranted: @escaping @MainActor () -> Void) -> UUID {
+        let id = UUID()
+        self.activeID = id
+        self.presentations.append(.init(id: id, instruction: instruction, url: settingsPaneURL, isGranted: isGranted, onGranted: onGranted))
+        return id
+    }
+
+    func dismiss(requestID: UUID) {
+        self.dismissed.append(requestID)
+        if self.activeID == requestID { self.activeID = nil }
+    }
+}

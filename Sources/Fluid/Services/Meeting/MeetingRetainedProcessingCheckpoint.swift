@@ -77,7 +77,8 @@ nonisolated struct MeetingRetainedProcessingCheckpoint: Sendable {
                   header.pin.configuration.speakerLabelsEnabled == (session.speakerLabelsEnabled ?? true),
                   header.pin.configuration.effectiveSpeakerProcessingMode == session.effectiveSpeakerProcessingMode,
                   header.pin.piiRedactionEnabled == (session.piiRedactionEnabled == true),
-                  header.pin.configuration.pipelineVersion == MeetingFinalProcessingConfiguration.defaultPipelineVersion
+                  header.pin.configuration.pipelineVersion == MeetingFinalProcessingConfiguration.defaultPipelineVersion,
+                  header.pin.configuration.recordingTimePolicy == session.timebase.recordingTimePolicy
             else { throw Failure.changedConfiguration }
             let key = try SymmetricKey(data: Self.privateRead(try self.confinedURL(Self.keyFileName), limit: 32))
             let sealed = try AES.GCM.SealedBox(combined: envelope.ciphertext)
@@ -92,7 +93,8 @@ nonisolated struct MeetingRetainedProcessingCheckpoint: Sendable {
     func write(_ value: Value, session: MeetingSession) throws {
         guard session.audioStorageMode == .retainedFiles, session.retention.audioDeletedAt == nil,
               value.pin.sessionID == session.id,
-              value.pin.configuration.effectiveSpeakerProcessingMode == session.effectiveSpeakerProcessingMode
+              value.pin.configuration.effectiveSpeakerProcessingMode == session.effectiveSpeakerProcessingMode,
+              value.pin.configuration.recordingTimePolicy == session.timebase.recordingTimePolicy
         else { throw Failure.changedConfiguration }
         try Task.checkCancellation()
         let root = self.sessionDirectory.standardizedFileURL.resolvingSymlinksInPath()

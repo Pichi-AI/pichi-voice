@@ -63,6 +63,7 @@ struct DictionaryNegativeCorrection {}
                     "Ordinary manual dictionary workflow retains its existing spelling behavior")
         let punctuated = self.candidate("I met Barat.", "I met Barath.")
         self.expect(punctuated?.heardText == "Barat" && punctuated?.correctedText == "Barath", "Sentence punctuation")
+        self.expect(punctuated?.sourceUTF16Range == ("I met Barat." as NSString).range(of: "Barat"), "Approval range excludes sentence punctuation")
         let before = "Title: I met Barat"
         self.expect(
             AutomaticDictionaryCorrectionDetector.candidate(before: before, after: "Heading: I met Barat", insertedRange: (before as NSString).range(of: "I met Barat")) == nil,
@@ -75,7 +76,52 @@ struct DictionaryNegativeCorrection {}
         self.expect(self.candidate("I met Barat", "I met Barath") != nil, "Typed spelling repair")
         self.expect(self.candidate("I met Barat", "I met Barat") == nil, "Undo returns to original")
         self.knownCompoundTerms()
+        self.repeatedCorrections()
         print("\(self.checks) correction detector checks passed")
+    }
+
+    static func repeatedCorrections() {
+        let source = "😀 Ошипка, Ошипка! ошибка Ошипками XОшипка Ошипка-слово"
+        let first = (source as NSString).range(of: "Ошипка")
+        let plan = DictionaryCorrectionReplacementPlan(sourceText: source, range: first, replacement: "Ошибка")!
+        self.expect(plan.text == "😀 Ошибка, Ошибка! ошибка Ошипками XОшипка Ошипка-слово", "Repeat exact complete words with punctuation and UTF16 prefix")
+        self.expect(plan.ranges.count == 2, "Case variants, substrings and hyphenated words remain distinct")
+        let phrase = "Petch Voice, then Petch Voice."
+        let group = DictionaryCorrectionReplacementPlan(sourceText: phrase, range: (phrase as NSString).range(of: "Petch Voice"), replacement: "Pichi Voice Pro")!
+        self.expect(group.text == "Pichi Voice Pro, then Pichi Voice Pro.", "Repeat complete selected compounds")
+        let last = (phrase as NSString).range(of: "Petch Voice", options: .backwards)
+        self.expect(group.mappedRange(last) == (group.text as NSString).range(of: "Pichi Voice Pro", options: .backwards), "Track a selected later occurrence after growing replacements")
+        let scoped = DictionaryCorrectionReplacementPlan(sourceText: "bad bad bad", range: NSRange(location: 4, length: 3), replacement: "good", scope: NSRange(location: 4, length: 3))!
+        self.expect(scoped.text == "bad good bad", "Live propagation stays within the inserted dictation")
+        let shrink = DictionaryCorrectionReplacementPlan(sourceText: "fooo fooo", range: NSRange(location: 0, length: 4), replacement: "foo")!
+        self.expect(shrink.text == "foo foo", "Shrinking edits keep every original occurrence")
+        self.expect(shrink.mappedRange(NSRange(location: 9, length: 0)) == NSRange(location: 7, length: 0), "Restore caret after repeated shrinking edits")
+        self.expect(DictionaryCorrectionReplacementPlan(sourceText: "😀 word", range: NSRange(location: 1, length: 1), replacement: "x") == nil, "Reject broken UTF16 selection")
+        let approved = NSRange(location: 0, length: 3)
+        self.expect(DictionaryCorrectionReplacementPlan.confirmedRange(approved, text: "foo", replacing: NSRange(location: 3, length: 0), withLength: 1, in: "food") == nil, "Appending a letter revokes queued pronunciation approval")
+        self.expect(DictionaryCorrectionReplacementPlan.confirmedRange(approved, text: "foo", replacing: NSRange(location: 0, length: 0), withLength: 1, in: "xfoo") == nil, "Prepending a letter revokes queued pronunciation approval")
+        self.expect(DictionaryCorrectionReplacementPlan.confirmedRange(approved, text: "foo", replacing: NSRange(location: 3, length: 0), withLength: 1, in: "foo ") == approved, "Appending a separator preserves approval")
+        self.expect(DictionaryCorrectionReplacementPlan.confirmedRange(approved, text: "foo", replacing: NSRange(location: 0, length: 0), withLength: 1, in: " foo") == NSRange(location: 1, length: 3), "Prepending a separator shifts the same approval")
+        let compoundBefore = "Pech Pech"
+        let compoundPlan = DictionaryCorrectionReplacementPlan(sourceText: compoundBefore, range: NSRange(location: 0, length: 4), replacement: "Pichi")!
+        let expanded = AutomaticDictionaryCorrectionDetector.candidate(before: compoundBefore, after: "Pichi Pech", insertedRange: NSRange(location: 0, length: 9), knownCanonicalTerms: ["Pichi Pech"])
+        self.expect(AutomaticDictionaryCorrectionDetector.confirmedCandidate(expanded, in: compoundPlan) == nil, "Propagation cannot approve a different expanded canonical group")
+        let core = self.candidate(compoundBefore, "Pichi Pech")
+        self.expect(AutomaticDictionaryCorrectionDetector.confirmedCandidate(core, in: compoundPlan)?.correctedText == "Pichi", "Keep the explicitly confirmed word after propagation changes its neighbor")
+
+        var map = DictionaryCorrectionTextMap(originalText: "😀 fooo then baad fooo")
+        let originalSecond = (map.originalText as NSString).range(of: "baad")
+        let originalRepeat = (map.originalText as NSString).range(of: "fooo", options: .backwards)
+        self.expect(map.replace(range: NSRange(location: 6, length: 1), replacement: ""), "Record a letter deletion")
+        self.expect(map.originalRange(for: (map.text as NSString).range(of: "foo")) == (map.originalText as NSString).range(of: "fooo"), "Deleted terminal letter retains its spoken provenance")
+        self.expect(map.originalRange(for: (map.text as NSString).range(of: "baad")) == originalSecond, "Second correction survives preceding length change")
+        let repeatPlan = DictionaryCorrectionReplacementPlan(sourceText: map.text, range: (map.text as NSString).range(of: "fooo"), replacement: "foo")!
+        for range in repeatPlan.ranges.reversed() { self.expect(map.replace(range: range, replacement: "foo"), "Record propagated edit") }
+        self.expect(map.originalRange(for: (map.text as NSString).range(of: "foo", options: .backwards)) == originalRepeat, "Repeated spelling retains its own original occurrence")
+        let second = (map.text as NSString).range(of: "baad")
+        self.expect(map.replace(range: second, replacement: "better"), "Record second distinct repair")
+        self.expect(map.originalRange(for: (map.text as NSString).range(of: "better")) == originalSecond, "A replacement maps to immutable original audio text")
+        self.expect(map.originalRange(for: (map.text as NSString).range(of: "ett")) == nil, "Partial replacement cannot guess an original occurrence")
     }
 
     static func knownCompoundTerms() {

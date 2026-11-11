@@ -13,6 +13,129 @@ import XCTest
 // Existing recovery suite shares setup across crash and corruption scenarios.
 // swiftlint:disable:next type_body_length
 final class MeetingRecoveryTests: XCTestCase {
+    func testMicrophoneButtonActionRoutesThroughCoordinatorAndAttemptControl() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = StubCaptureController()
+        capture.recordingTimePolicy = .hostMonotonicV1
+        capture.usesMicrophoneControl = true
+        let microphone = self.makeMicrophoneTrack(chunks: [])
+        var application = self.makeMicrophoneTrack(chunks: [])
+        application.kind = .applicationAudio
+        capture.startResult = .init(tracks: [microphone, application], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(store: MeetingSessionStore(rootDirectory: dir), capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        var configuration = self.makeConfiguration()
+        configuration.mode = .onlineCall
+        // Exercise controls without starting the upstream English caption model.
+        configuration.languageCode = "es"
+        configuration.application = .init(bundleIdentifier: "us.zoom.xos", displayName: "Synthetic Zoom")
+        let session = try await coordinator.startRecording(configuration: configuration)
+        XCTAssertEqual(session.timebase.recordingTimePolicy, .hostMonotonicV1)
+        let origin = Double(session.timebase.startedHostTime) * Double(session.timebase.machTimebaseNumerator)
+            / Double(session.timebase.machTimebaseDenominator) / 1_000_000_000
+        XCTAssertEqual(try XCTUnwrap(session.transcriptPresentationOrigin).seconds, origin, accuracy: 1e-9)
+        await self.drainCaptureEvents()
+        // Invoke the actual native surface's bound action, then verify the real coordinator
+        // and attempt control composition. Physical native event routing is a separate check.
+        let indicator = MeetingRecordingPillContent(coordinator: coordinator).microphoneIndicator
+        let applied = self.expectation(description: "The capture owner published the button's manual pause")
+        let publication = coordinator.$microphoneMuteState.filter { $0 == .manuallyMuted }.first().sink { _ in applied.fulfill() }
+        defer { publication.cancel() }
+        try XCTUnwrap(indicator.onToggle)()
+        await fulfillment(of: [applied], timeout: 2)
+        XCTAssertEqual(coordinator.microphoneMuteState, .manuallyMuted)
+        capture.observeMeetingMute(.unmuted)
+        await self.drainCaptureEvents()
+        XCTAssertEqual(coordinator.microphoneMuteState, .manuallyMuted)
+        capture.observeMeetingMute(.muted)
+        await self.drainCaptureEvents()
+        await coordinator.toggleMicrophoneRecording(expectedSessionID: session.id)
+        await self.drainCaptureEvents()
+        XCTAssertEqual(coordinator.microphoneMuteState, .muted, "Local enable cannot override the meeting mute")
+        capture.observeMeetingMute(.unmuted)
+        await self.drainCaptureEvents()
+        XCTAssertEqual(coordinator.microphoneMuteState, .unmuted)
+        await coordinator.toggleMicrophoneRecording(expectedSessionID: UUID())
+        XCTAssertEqual(coordinator.microphoneMuteState, .unmuted, "A retired surface cannot toggle another attempt")
+        XCTAssertEqual(capture.startCount, 1)
+        XCTAssertTrue(coordinator.isRecording)
+        await coordinator.shutdownForTermination()
+        let nextCoordinator = MeetingSessionCoordinator(store: MeetingSessionStore(rootDirectory: dir), capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let next = try await nextCoordinator.startRecording(configuration: configuration)
+        await self.drainCaptureEvents()
+        XCTAssertEqual(nextCoordinator.microphoneMuteState, .unmuted)
+        try XCTUnwrap(indicator.onToggle)()
+        await self.drainCaptureEvents(); await self.drainCaptureEvents()
+        XCTAssertEqual(nextCoordinator.microphoneMuteState, .unmuted)
+        XCTAssertNotEqual(next.id, session.id)
+        await nextCoordinator.shutdownForTermination()
+    }
+
+    func testProtectedIntervalCheckpointsRetireOnlyTheirSourceWavesAfterRouteGaps() async throws {
+        let suite = "WaveformIntervals.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.fluidMeetEnabled = true
+        settings.selectedSpeechModel = .parakeetTDTv2
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let microphone = self.makeMicrophoneTrack(chunks: [])
+        var application = self.makeMicrophoneTrack(chunks: [])
+        application.kind = .applicationAudio
+        let capture = StubCaptureController()
+        capture.startResult = .init(tracks: [microphone, application], firstPresentationTime: nil)
+        let processing = MemoryCheckpointProcessingController()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
+            audioArbiter: StubArbiter(), settings: settings)
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        var configuration = self.makeConfiguration()
+        configuration.mode = .onlineCall
+        configuration.application = .init(bundleIdentifier: "us.zoom.xos", displayName: "Synthetic Zoom")
+        configuration.audioStorageMode = .memoryOnly
+        configuration.languageCode = "en"
+        configuration.speakerLabelsEnabled = false
+        let session = try await coordinator.startRecording(configuration: configuration)
+        capture.stopResult = .init(tracks: [microphone, application], stoppedAt: session.startedAt.addingTimeInterval(20))
+        let clock = Double(session.timebase.startedHostTime) * Double(session.timebase.machTimebaseNumerator)
+            / Double(session.timebase.machTimebaseDenominator) / 1_000_000_000
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
+                                                channels: 1, interleaved: false))
+        for track in [microphone, application] {
+            for base in [0.0, 4.0, 10.0] {
+                for frame in 0..<100 {
+                    let start = base + Double(frame) * 0.02
+                    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 320))
+                    buffer.frameLength = 320
+                    try XCTUnwrap(buffer.floatChannelData?[0]).update(
+                        repeating: 0.018 + 0.011 * Float(sin(start * 6 * .pi)), count: 320)
+                    capture.emitLive(kind: track.kind, sampleBuffer: try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(
+                        from: buffer, presentationTime: CMTime(seconds: clock + start, preferredTimescale: 1_000_000_000))))
+                }
+            }
+        }
+        var batch = MeetingPCMTranscriptBatch(segments: [])
+        batch.sourceTrack = microphone
+        try await processing.checkpoint(batch)
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.contains { $0.source == .you })
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.contains { $0.source == .them })
+        batch.protectedSourceIntervals = [0..<2, 4..<6]
+        try await processing.checkpoint(batch)
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.filter { $0.source == .you }.allSatisfy { $0.start >= 10 - 0.000_001 })
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.contains { $0.source == .them && $0.start < 2 })
+        batch.sourceTrack = application
+        try await processing.checkpoint(batch)
+        XCTAssertTrue(coordinator.pendingSpeech.tokens.allSatisfy { $0.start >= 10 - 0.000_001 })
+        let loaded = try await store.load(id: session.id)
+        let persisted = try XCTUnwrap(loaded)
+        XCTAssertTrue(persisted.transcriptSegments.isEmpty, "Source processing metadata cannot invent transcript words")
+        XCTAssertGreaterThan(coordinator.liveTranscript.revision, 0)
+    }
+
     func testFloatingCaptionCornersStayTransparentAcrossAppearanceAndNativeResizing() async throws {
         let directory = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -143,6 +266,158 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertFalse(coordinator.hasPendingStart)
     }
 
+    private func makeSpeechActivityPreparationConfiguration() -> MeetingCaptureConfiguration {
+        var configuration = self.makeConfiguration()
+        configuration.speakerLabelsEnabled = false
+        return configuration
+    }
+
+    func testSpeechActivityPreparationRunsBeforeEachPermissionPreflight() async throws {
+        let settings = SettingsStore.shared
+        let original = settings.fluidMeetEnabled
+        defer { settings.fluidMeetEnabled = original }
+        settings.fluidMeetEnabled = true
+        let directory = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let capture = StubCaptureController()
+        capture.preflightError = CocoaError(.fileReadUnknown)
+        let arbiter = StubArbiter()
+        var preparations = 0
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: directory), capture: capture,
+            processing: StubProcessingController(), audioArbiter: arbiter,
+            speechActivityModel: { throw CocoaError(.fileNoSuchFile) },
+            prepareSpeechActivity: {
+                XCTAssertEqual(capture.preflightCount, preparations)
+                XCTAssertEqual(arbiter.acquireCount, 0)
+                preparations += 1
+            })
+        for _ in 0..<2 {
+            do {
+                _ = try await coordinator.startRecording(configuration: self.makeSpeechActivityPreparationConfiguration())
+                XCTFail("The synthetic permission boundary must stop capture")
+            } catch {
+                XCTAssertEqual((error as? CocoaError)?.code, .fileReadUnknown)
+            }
+        }
+        XCTAssertEqual(preparations, 2, "Activity preparation is not conditional on an ASR download or speaker setup")
+        XCTAssertEqual(capture.preflightCount, 2)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertFalse(coordinator.hasPendingStart)
+    }
+
+    func testSpeechActivityPreparationFailureIsFailOpenButCancellationIsNot() async throws {
+        let settings = SettingsStore.shared
+        let original = settings.fluidMeetEnabled
+        defer { settings.fluidMeetEnabled = original }
+        settings.fluidMeetEnabled = true
+        for cancelled in [false, true] {
+            let directory = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let capture = StubCaptureController()
+            capture.preflightError = CocoaError(.fileReadUnknown)
+            let arbiter = StubArbiter()
+            let coordinator = MeetingSessionCoordinator(
+                store: MeetingSessionStore(rootDirectory: directory), capture: capture,
+                processing: StubProcessingController(), audioArbiter: arbiter,
+                speechActivityModel: { throw CocoaError(.fileNoSuchFile) },
+                prepareSpeechActivity: {
+                    if cancelled { throw CancellationError() }
+                    throw CocoaError(.fileNoSuchFile)
+                })
+            do {
+                _ = try await coordinator.startRecording(configuration: self.makeSpeechActivityPreparationConfiguration())
+                XCTFail("A cancelled start or the synthetic permission boundary must stop capture")
+            } catch {
+                if cancelled { XCTAssertTrue(error is CancellationError) }
+                else { XCTAssertEqual((error as? CocoaError)?.code, .fileReadUnknown) }
+            }
+            XCTAssertEqual(capture.preflightCount, cancelled ? 0 : 1,
+                "Unavailable optional activity evidence cannot block ordinary capture")
+            XCTAssertEqual(capture.startCount, 0)
+            XCTAssertEqual(arbiter.acquireCount, 0)
+            XCTAssertFalse(coordinator.hasPendingStart)
+        }
+    }
+
+    func testCancellingSpeechActivityPreparationCannotAcquireAudioOrCapture() async throws {
+        let settings = SettingsStore.shared
+        let original = settings.fluidMeetEnabled
+        defer { settings.fluidMeetEnabled = original }
+        settings.fluidMeetEnabled = true
+        let directory = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        let entered = expectation(description: "Activity resources are being prepared")
+        let gate = PermissionPreflightGate()
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: directory), capture: capture,
+            processing: StubProcessingController(), audioArbiter: arbiter,
+            speechActivityModel: { throw CocoaError(.fileNoSuchFile) },
+            prepareSpeechActivity: { entered.fulfill(); await gate.wait() })
+        let start = Task { try await coordinator.startRecording(configuration: self.makeSpeechActivityPreparationConfiguration()) }
+        self.addTeardownBlock { await gate.open(); _ = await start.result }
+        await fulfillment(of: [entered], timeout: 2)
+        start.cancel()
+        await gate.open()
+        do { _ = try await start.value; XCTFail("Cancellation must survive optional resource preparation") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(capture.preflightCount, 0)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertFalse(coordinator.hasPendingStart)
+    }
+
+    func testSelectionChangeDuringSpeechActivityPreparationCancelsFrozenAdmission() async throws {
+        let settings = SettingsStore.shared
+        let originalEnabled = settings.fluidMeetEnabled
+        let originalModel = settings.selectedSpeechModel
+        defer { settings.fluidMeetEnabled = originalEnabled; settings.selectedSpeechModel = originalModel }
+        settings.fluidMeetEnabled = true
+        settings.selectedSpeechModel = .whisperTiny
+        let directory = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: directory), capture: capture,
+            processing: StubProcessingController(), audioArbiter: arbiter,
+            speechActivityModel: { throw CocoaError(.fileNoSuchFile) },
+            prepareSpeechActivity: { settings.selectedSpeechModel = .parakeetTDTv2 })
+        do {
+            _ = try await coordinator.startRecording(configuration: self.makeSpeechActivityPreparationConfiguration())
+            XCTFail("Activity preparation cannot revive a stale recording selection")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(capture.preflightCount, 0)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertFalse(coordinator.hasPendingStart)
+    }
+
+    func testNoSpeechActivityProviderDoesNotPrepareItsResources() async throws {
+        let settings = SettingsStore.shared
+        let original = settings.fluidMeetEnabled
+        defer { settings.fluidMeetEnabled = original }
+        settings.fluidMeetEnabled = true
+        let directory = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let capture = StubCaptureController()
+        capture.preflightError = CocoaError(.fileReadUnknown)
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: directory), capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter(),
+            prepareSpeechActivity: { XCTFail("A composition without activity inference has nothing to prepare") })
+        do {
+            _ = try await coordinator.startRecording(configuration: self.makeSpeechActivityPreparationConfiguration())
+            XCTFail("The synthetic permission boundary must stop capture")
+        } catch { XCTAssertEqual((error as? CocoaError)?.code, .fileReadUnknown) }
+        XCTAssertEqual(capture.preflightCount, 1)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertFalse(coordinator.hasPendingStart)
+    }
+
     func testEchoWarningRendersWithoutInvokingRecordingActions() throws {
         var session = self.makeSession(state: .recording)
         session.mode = .onlineCall
@@ -264,7 +539,7 @@ final class MeetingRecoveryTests: XCTestCase {
         self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
         XCTAssertEqual(session.languageCode, "en")
-        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.productionDefault.rawValue)
+        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.parakeetV2.rawValue)
         XCTAssertEqual(session.state, .recording)
         XCTAssertEqual(capture.startCount, 1)
         XCTAssertEqual(arbiter.acquireCount, 1)
@@ -319,8 +594,8 @@ final class MeetingRecoveryTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = SettingsStore(defaults: defaults)
-        // Tiny and registered Parakeet v3 support streaming. The inherited v2 composite
-        // remains an actual after-recording-only backend for both storage policies.
+        // An explicit legacy backend remains after-recording-only. Selecting Parakeet v2
+        // normally uses its new live registration instead of this saved compatibility route.
         settings.selectedSpeechModel = .parakeetTDTv2
         settings.meetingTranscriptionBackendID = .parakeetNemotron
         let dir = self.makeTempDirectory()
@@ -342,6 +617,7 @@ final class MeetingRecoveryTests: XCTestCase {
             configuration.audioStorageMode = storage
             configuration.speakerLabelsEnabled = true
             configuration.speakerProcessingMode = .streaming
+            configuration.transcriptionBackendID = MeetingBackendID.parakeetNemotron.rawValue
             do {
                 _ = try await coordinator.startRecording(configuration: configuration)
                 XCTFail("A saved recording must not silently downgrade unsupported streaming")
@@ -741,6 +1017,71 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(saved.transcriptSegments, [segment], "Fractional media times and every other transcript field remain exact")
     }
 
+    func testEveryMeetingModelPublishesLiveSpeakersAndReleasesDictationAfterStop() async throws {
+        for model in PichiMeetingProviderFactory.retranscriptionModels {
+            let suite = "LiveMeetingModel.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let directory = self.makeTempDirectory()
+            defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+            let settings = SettingsStore(defaults: defaults, initializeDesktop: false)
+            settings.fluidMeetEnabled = true
+            settings.selectedSpeechModel = model
+            settings.meetingSaveAudio = true
+            settings.meetingSpeakerProcessingMode = .afterRecording
+            settings.meetingAudioRetentionPolicy = .never
+            let microphone = self.makeMicrophoneTrack(chunks: [])
+            var application = self.makeMicrophoneTrack(chunks: [])
+            application.kind = .applicationAudio
+            let capture = StubCaptureController()
+            capture.startResult = .init(tracks: [microphone, application], firstPresentationTime: nil)
+            let store = MeetingSessionStore(rootDirectory: directory)
+            let processing = MemoryCheckpointProcessingController()
+            let leasing = FakeASRActivityLeasing()
+            let arbiter = AudioActivityArbiter { leasing }
+            var preparedConfigurations: [MeetingFinalProcessingConfiguration] = []
+            let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
+                audioArbiter: arbiter, settings: settings,
+                prepareRegisteredSpeakerResources: { preparedConfigurations.append($0) })
+            self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+            var requested = self.makeConfiguration()
+            requested.mode = .onlineCall
+            requested.application = .init(bundleIdentifier: "com.google.Chrome", displayName: "Synthetic browser")
+            requested.languageCode = try XCTUnwrap(PichiMeetingProviderFactory.defaultLanguageCode(for: model.rawValue))
+            let configuration = settings.applyingMeetingRecordingPreferences(to: requested)
+            XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, .streaming)
+            let recording = try await coordinator.startRecording(configuration: configuration)
+            XCTAssertEqual(recording.recordingASRModel, model.rawValue)
+            XCTAssertEqual(recording.effectiveSpeakerProcessingMode, .streaming)
+            XCTAssertEqual(processing.preparedSession?.id, recording.id)
+            XCTAssertFalse(preparedConfigurations.isEmpty)
+            XCTAssertTrue(preparedConfigurations.allSatisfy { $0.asrModel == model.rawValue && $0.effectiveSpeakerProcessingMode == .streaming })
+            capture.stopResult = .init(tracks: [microphone, application], stoppedAt: recording.startedAt.addingTimeInterval(2))
+            for track in [microphone, application] {
+                let speaker = MeetingSessionSpeaker(id: UUID(), displayName: "Participant",
+                    diarizationClusterID: "synthetic-\(track.kind.rawValue)", trackKind: track.kind,
+                    isLocalUser: false, identityCandidates: [])
+                let segment = MeetingTranscriptSegment(id: UUID(), start: .init(value: 0, timescale: 1),
+                    end: .init(value: 1, timescale: 1), sourceTrackID: track.id, speakerID: speaker.id,
+                    text: "Live protected phrase", revision: 0, status: .final, overlap: .none, completeness: .complete)
+                try await processing.checkpoint(.init(segments: [segment], speakers: [speaker]))
+            }
+            let live = try XCTUnwrap(coordinator.activeSession)
+            XCTAssertEqual(live.state, .recording)
+            XCTAssertEqual(live.transcriptSegments.count, 2)
+            XCTAssertTrue(live.transcriptSegments.allSatisfy { $0.speakerID != nil })
+            XCTAssertEqual(coordinator.liveTranscript.utterances.count, 2)
+            let completed = try await coordinator.stopAndTranscribe()
+            XCTAssertEqual(completed.state, .completed)
+            XCTAssertEqual(completed.transcriptSegments, live.transcriptSegments)
+            XCTAssertEqual(leasing.handbackCount, 1)
+            let dictation = try leasing.acquireExclusiveActivity(.dictation)
+            leasing.releaseExclusiveActivity(dictation)
+            let saved = try await store.load(id: recording.id)
+            XCTAssertEqual(saved?.transcriptSegments, completed.transcriptSegments)
+            await coordinator.shutdownForTermination()
+        }
+    }
+
     func testCompletedPCMAllowsAliasUndoAndNewCaptureBeforeTermination() async throws {
         let suite = "CompletedPCMLifecycle.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -1080,8 +1421,12 @@ final class MeetingRecoveryTests: XCTestCase {
         var attributedFirst = first
         attributedFirst.speakerID = speaker.id
         let firstRevision = MeetingPCMTranscriptBatch.SpeakerRevision(attributedFirst)
-        XCTAssertEqual(coordinator.liveTranscript.utterances.first?.participant?.label, .unknown,
-            "Protected PCM rows use product speaker presentation even before attribution")
+        if case let .estimated(name)? = coordinator.liveTranscript.utterances.first?.participant?.label {
+            XCTAssertTrue(name.isProvisional,
+                "The common reading policy supplies a provisional participant until acoustic attribution arrives")
+        } else {
+            XCTFail("Protected PCM speech must retain its provisional participant before attribution")
+        }
         capture.onStop = { [weak coordinator] in
             let coordinator = try XCTUnwrap(coordinator)
             let elapsedAtStop = await coordinator.elapsedTime
@@ -1256,6 +1601,9 @@ final class MeetingRecoveryTests: XCTestCase {
         configuration.mode = .onlineCall
         configuration.application = .init(bundleIdentifier: "synthetic.call", displayName: "Synthetic call")
         let session = try await coordinator.startRecording(configuration: configuration)
+        // The silence watchdog waits for a known unmuted microphone in an online call.
+        capture.emit(.microphoneMuteStateChanged(.unmuted))
+        await self.drainCaptureEvents()
         var silent = application.health; silent.silentForSeconds = 100
         capture.emit(.trackHealth(trackID: application.id, health: silent))
         await self.drainCaptureEvents()
@@ -1598,6 +1946,9 @@ final class MeetingRecoveryTests: XCTestCase {
                 configuration.mode = .onlineCall
                 configuration.application = MeetingApplicationIdentity(bundleIdentifier: "us.zoom.xos", displayName: "Zoom")
                 let started = try await coordinator.startRecording(configuration: configuration)
+                // The silence watchdog waits for a known unmuted microphone in an online call.
+                capture.emit(.microphoneMuteStateChanged(.unmuted))
+                await self.drainCaptureEvents()
                 var silentHealth = applicationAudio.health
                 silentHealth.silentForSeconds = 100
                 let silence = MeetingCaptureEvent.trackHealth(trackID: applicationAudio.id, health: silentHealth)
@@ -7625,6 +7976,39 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertFalse(hasFinalizedAudio)
     }
 
+    // Invented sine waves only. These exercise the real native decoder and AAC encoder.
+    @discardableResult
+    private func writeExportTone(to url: URL, frequency: Double = 440, duration: Double = 1) throws -> Data {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            let count = AVAudioFrameCount(duration * 16_000)
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: count))
+            buffer.frameLength = count
+            let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+            for index in 0..<Int(count) { channel[index] = Float(sin(Double(index) * 2 * .pi * frequency / 16_000) * 0.3) }
+            try file.write(from: buffer)
+        }
+        return try Data(contentsOf: url)
+    }
+
+    private func exportSamples(_ url: URL) throws -> [Float] {
+        let file = try AVAudioFile(forReading: url)
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: buffer)
+        return Array(UnsafeBufferPointer(start: try XCTUnwrap(buffer.floatChannelData?[0]), count: Int(buffer.frameLength)))
+    }
+
+    private func exportToneEnergy(_ samples: [Float], frequency: Double, interval: Range<Int>) -> Double {
+        var real = 0.0, imaginary = 0.0
+        for index in interval {
+            let phase = Double(index) * 2 * .pi * frequency / 16_000
+            real += Double(samples[index]) * cos(phase)
+            imaginary += Double(samples[index]) * sin(phase)
+        }
+        return hypot(real, imaginary) / Double(interval.count)
+    }
+
     func testMeetingAudioExportKeepsMainActorAvailableDuringCopy() async throws {
         let preferences = MeetingUIPreferences()
         let source = self.makeTempDirectory()
@@ -7634,9 +8018,8 @@ final class MeetingRecoveryTests: XCTestCase {
             try? FileManager.default.removeItem(at: destination)
         }
         let chunk = self.makeFinalizedChunk(path: "fixture.caf")
-        let bytes = Data("recorded-audio".utf8)
         let sourceFile = chunk.fileURL(relativeTo: source)
-        try bytes.write(to: sourceFile)
+        let bytes = try writeExportTone(to: sourceFile)
         let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [chunk])])
         let started = self.expectation(description: "copy started on worker")
         let release = DispatchSemaphore(value: 0)
@@ -7654,10 +8037,10 @@ final class MeetingRecoveryTests: XCTestCase {
         await self.fulfillment(of: [started], timeout: 2)
         // Reaching the main actor while the worker is held proves UI actions can still run.
         MainActor.assertIsolated()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("Test").path), "Do not publish a partially copied export")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("Test.m4a").path), "Do not publish a partially copied export")
         release.signal()
         try await export.value
-        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("Test/microphone-000.caf")), bytes)
+        XCTAssertEqual(try AVAudioFile(forReading: destination.appendingPathComponent("Test.m4a")).length, 16_000)
         XCTAssertEqual(try Data(contentsOf: sourceFile), bytes, "Export must not alter the recording")
         XCTAssertEqual(MeetingUIPreferences(), preferences, "Export must not change capture or retention settings")
     }
@@ -7691,17 +8074,17 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         let chunk = self.makeFinalizedChunk(path: "fixture.caf")
         let sourceFile = chunk.fileURL(relativeTo: source)
-        let first = Data("first-recording".utf8)
-        let second = Data("second-recording".utf8)
+        let first = try writeExportTone(to: sourceFile, frequency: 440)
         let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [chunk])])
-        try first.write(to: sourceFile)
         try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination)
-        try second.write(to: sourceFile)
+        let firstExport = try Data(contentsOf: destination.appendingPathComponent("Test.m4a"))
+        let second = try writeExportTone(to: sourceFile, frequency: 880)
         try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination)
-        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("Test/microphone-000.caf")), first)
-        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("Test 2/microphone-000.caf")), second)
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("Test.m4a")), firstExport)
+        XCTAssertNotEqual(try Data(contentsOf: destination.appendingPathComponent("Test 2.m4a")), firstExport)
+        XCTAssertNotEqual(first, second)
         XCTAssertEqual(try Data(contentsOf: sourceFile), second)
-        XCTAssertEqual(try Set(FileManager.default.contentsOfDirectory(atPath: destination.path)), ["Test", "Test 2"])
+        XCTAssertEqual(try Set(FileManager.default.contentsOfDirectory(atPath: destination.path)), ["Test.m4a", "Test 2.m4a"])
     }
 
     func testMeetingAudioExportConcurrentRequestsPreserveEveryExport() async throws {
@@ -7713,8 +8096,7 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         let chunk = self.makeFinalizedChunk(path: "fixture.caf")
         let sourceFile = chunk.fileURL(relativeTo: source)
-        let bytes = Data("recorded-audio".utf8)
-        try bytes.write(to: sourceFile)
+        let bytes = try writeExportTone(to: sourceFile)
         let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [chunk])])
         let started = self.expectation(description: "first export copying")
         let release = DispatchSemaphore(value: 0)
@@ -7741,10 +8123,10 @@ final class MeetingRecoveryTests: XCTestCase {
         for task in following {
             try await task.value
         }
-        let names = ["Test", "Test 2", "Test 3", "Test 4"]
+        let names = ["Test.m4a", "Test 2.m4a", "Test 3.m4a", "Test 4.m4a"]
         XCTAssertEqual(try Set(FileManager.default.contentsOfDirectory(atPath: destination.path)), Set(names))
         for name in names {
-            XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("\(name)/microphone-000.caf")), bytes)
+            XCTAssertEqual(try AVAudioFile(forReading: destination.appendingPathComponent(name)).length, 16_000)
         }
         XCTAssertEqual(try Data(contentsOf: sourceFile), bytes, "Concurrent exports must leave the recording intact")
     }
@@ -7758,7 +8140,7 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         let chunks = [self.makeFinalizedChunk(path: "first.caf"), self.makeFinalizedChunk(sequence: 1, path: "second.caf")]
         for chunk in chunks {
-            try Data("recorded-audio".utf8).write(to: chunk.fileURL(relativeTo: source))
+            _ = try writeExportTone(to: chunk.fileURL(relativeTo: source))
         }
         let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: chunks)])
         let started = self.expectation(description: "first chunk copied, second chunk waiting")
@@ -7784,6 +8166,154 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [], "The earlier copied chunk must not survive as a partial export")
         XCTAssertFalse(FileManager.default.fileExists(atPath: source.path), "Export must not recreate deleted source audio")
+    }
+
+    func testMeetingAudioExportCombinesOrderedChunksGapsAndSimultaneousTracksIntoOneAAC() async throws {
+        let source = makeTempDirectory(), destination = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: source); try? FileManager.default.removeItem(at: destination) }
+        var first = makeFinalizedChunk(path: "first.caf")
+        var last = makeFinalizedChunk(sequence: 1, path: "last.caf")
+        last.presentationStart = .init(value: 2_000, timescale: 1_000)
+        last.presentationEnd = .init(value: 3_000, timescale: 1_000)
+        first.byteCount = Int64(try writeExportTone(to: first.fileURL(relativeTo: source), frequency: 440).count)
+        last.byteCount = Int64(try writeExportTone(to: last.fileURL(relativeTo: source), frequency: 880).count)
+        var simultaneous = makeFinalizedChunk(path: "system.caf")
+        simultaneous.byteCount = Int64(try writeExportTone(to: simultaneous.fileURL(relativeTo: source), frequency: 660).count)
+        var system = makeMicrophoneTrack(chunks: [simultaneous]); system.kind = .applicationAudio
+        let session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [last, first]), system])
+        let url = try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), ["Test.m4a"])
+        let asset = AVURLAsset(url: url)
+        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        XCTAssertEqual(tracks.count, 1, "Popular players receive one mixed audio stream")
+        let descriptions = try await XCTUnwrap(tracks.first).load(.formatDescriptions)
+        XCTAssertEqual(CMFormatDescriptionGetMediaSubType(try XCTUnwrap(descriptions.first)), kAudioFormatMPEG4AAC)
+        let samples = try exportSamples(url)
+        XCTAssertEqual(samples.count, 48_000)
+        XCTAssertGreaterThan(exportToneEnergy(samples, frequency: 440, interval: 3_200..<12_800), 0.05)
+        XCTAssertGreaterThan(exportToneEnergy(samples, frequency: 660, interval: 3_200..<12_800), 0.05)
+        XCTAssertLessThan(samples[20_000..<28_000].map { abs($0) }.max() ?? 1, 0.005, "Missing capture time stays silent")
+        XCTAssertGreaterThan(exportToneEnergy(samples, frequency: 880, interval: 35_200..<44_800), 0.05)
+        let size = try Data(contentsOf: url).count
+        XCTAssertLessThan(size, Int(first.byteCount + last.byteCount + simultaneous.byteCount) / 2)
+    }
+
+    func testMeetingAudioExportHostClockSpansKeepAnInternalPause() async throws {
+        let source = makeTempDirectory(), destination = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: source); try? FileManager.default.removeItem(at: destination) }
+        var chunk = makeFinalizedChunk(path: "host.caf")
+        let bytes = try writeExportTone(to: chunk.fileURL(relativeTo: source), duration: 2)
+        chunk.presentationStart = .init(value: 10, timescale: 1)
+        chunk.presentationEnd = .init(value: 13, timescale: 1)
+        chunk.captureAnalysisAsset = .init(role: .captureAnalysis, encoding: .linearPCMFloat32CAFV1, presence: .ready,
+            relativeFilePath: chunk.relativeFilePath, byteCount: Int64(bytes.count), sha256: "synthetic", sampleRate: 16_000, channelCount: 1, frameCount: 32_000)
+        chunk.clockMapping = .init(frameCount: 32_000, spans: [
+            .init(frameStart: 0, frameEnd: 16_000, hostStart: .init(value: 10, timescale: 1), hostEnd: .init(value: 11, timescale: 1)),
+            .init(frameStart: 16_000, frameEnd: 32_000, hostStart: .init(value: 12, timescale: 1), hostEnd: .init(value: 13, timescale: 1), discontinuityBefore: true)
+        ])
+        var session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [chunk])])
+        session.timebase.recordingTimePolicy = .hostMonotonicV1
+        session.timebase.startedHostTime = 10_000_000_000
+        let url = try await MeetingAudioExporter.export(of: session, from: source, into: destination)
+        let samples = try exportSamples(url)
+        XCTAssertEqual(samples.count, 48_000)
+        XCTAssertGreaterThan(exportToneEnergy(samples, frequency: 440, interval: 3_200..<12_800), 0.1)
+        XCTAssertLessThan(samples[20_000..<28_000].map { abs($0) }.max() ?? 1, 0.005)
+        XCTAssertGreaterThan(exportToneEnergy(samples, frequency: 440, interval: 35_200..<44_800), 0.1)
+    }
+
+    func testMeetingAudioExportRefusesUnreadableEscapingDeletedAndConcealedSources() async throws {
+        let source = makeTempDirectory(), destination = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: source); try? FileManager.default.removeItem(at: destination) }
+        let valid = makeFinalizedChunk(path: "valid.caf")
+        _ = try writeExportTone(to: valid.fileURL(relativeTo: source))
+        try Data("invalid audio".utf8).write(to: source.appendingPathComponent("corrupt.caf"))
+        try FileManager.default.createSymbolicLink(at: source.appendingPathComponent("link.caf"), withDestinationURL: valid.fileURL(relativeTo: source))
+        for path in ["missing.caf", "corrupt.caf", "../escape.caf", "link.caf"] {
+            let chunk = makeFinalizedChunk(path: path)
+            let session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [chunk])])
+            do { _ = try await MeetingAudioExporter.export(of: session, from: source, into: destination); XCTFail(path) } catch {}
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [])
+        }
+        var session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [valid])])
+        session.retention.audioDeletedAt = Date()
+        do { _ = try await MeetingAudioExporter.export(of: session, from: source, into: destination); XCTFail("Deleted audio") } catch {}
+        session.retention.audioDeletedAt = nil
+        session.requiresEncryptedPersistence = true
+        // Non-guest protected sessions are concealed by the existing model contract.
+        session.profileOwnership = nil
+        XCTAssertTrue(session.isLocalContentConcealed)
+        do { _ = try await MeetingAudioExporter.export(of: session, from: source, into: destination); XCTFail("Concealed audio") } catch {}
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [])
+    }
+
+    func testMeetingAudioExportCancellationJoinsCopyAndRemovesPrivateStaging() async throws {
+        let source = makeTempDirectory(), destination = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: source); try? FileManager.default.removeItem(at: destination) }
+        let chunk = makeFinalizedChunk(path: "fixture.caf")
+        let original = try writeExportTone(to: chunk.fileURL(relativeTo: source))
+        let session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [chunk, chunk])])
+        let started = expectation(description: "Copy owns staging")
+        let gate = MeetingAudioExportTestGate()
+        defer { gate.release.signal() }
+        var finished = false
+        let task = Task {
+            defer { finished = true }
+            return try await MeetingAudioExporter.export(of: session, from: source, into: destination) { from, to in
+                try FileManager.default.copyItem(at: from, to: to)
+                gate.recordCopy(); started.fulfill()
+                guard gate.release.wait(timeout: .now() + 5) == .success else { throw CocoaError(.fileWriteUnknown) }
+            }
+        }
+        await fulfillment(of: [started], timeout: 2)
+        task.cancel()
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertFalse(finished, "Cancellation joins a synchronous copy before returning")
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: destination.path).allSatisfy { $0.hasSuffix(".export-tmp") })
+        gate.release.signal()
+        do { _ = try await task.value; XCTFail("Cancelled export") } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(finished)
+        XCTAssertEqual(gate.copyCount, 1, "Do not start the next chunk after cancellation")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [])
+        XCTAssertEqual(try Data(contentsOf: chunk.fileURL(relativeTo: source)), original)
+    }
+
+    func testMeetingAudioExportPreCancellationAndRevokedPublicationLeaveNoOutput() async throws {
+        let source = makeTempDirectory(), destination = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: source); try? FileManager.default.removeItem(at: destination) }
+        let chunk = makeFinalizedChunk(path: "fixture.caf")
+        _ = try writeExportTone(to: chunk.fileURL(relativeTo: source))
+        let session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [chunk])])
+        let task = Task { try await MeetingAudioExporter.export(of: session, from: source, into: destination) }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Pre-cancelled export") } catch { XCTAssertTrue(error is CancellationError) }
+        do {
+            _ = try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination,
+                validatePublication: { throw CancellationError() })
+            XCTFail("Revoked publication")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [])
+    }
+
+    func testMeetingAudioExportPublicationCollisionAndLateCancellationPreserveBothFiles() async throws {
+        let source = makeTempDirectory(), destination = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: source); try? FileManager.default.removeItem(at: destination) }
+        let chunk = makeFinalizedChunk(path: "fixture.caf")
+        _ = try writeExportTone(to: chunk.fileURL(relativeTo: source))
+        let session = makeSession(state: .completed, audioTracks: [makeMicrophoneTrack(chunks: [chunk])])
+        let sentinel = destination.appendingPathComponent("Test.m4a")
+        let bytes = Data("existing user file".utf8)
+        let task = Task {
+            try await MeetingAudioExporter.export(of: session, from: source, into: destination, validatePublication: {
+                if !FileManager.default.fileExists(atPath: sentinel.path) { try bytes.write(to: sentinel, options: .withoutOverwriting) }
+            })
+        }
+        let url = try await task.value
+        task.cancel()
+        XCTAssertEqual(url.lastPathComponent, "Test 2.m4a")
+        XCTAssertEqual(try Data(contentsOf: sentinel), bytes)
+        XCTAssertEqual(try AVAudioFile(forReading: url).length, 16_000)
+        XCTAssertEqual(try Set(FileManager.default.contentsOfDirectory(atPath: destination.path)), ["Test.m4a", "Test 2.m4a"])
     }
 
     // MARK: - ASR activity arbiter
@@ -9130,6 +9660,20 @@ private actor SingleUseDrainingCaptureController: MeetingCaptureControlling {
 }
 
 private final class StubCaptureController: MeetingCaptureControlling, @unchecked Sendable {
+    var recordingTimePolicy: MeetingRecordingTimePolicy? = nil
+    var usesMicrophoneControl = false
+    private var microphoneControl: MeetingMicrophoneRecordingControl?
+    private var microphoneGate: MeetingMicrophonePrivacyGate?
+    private var controlledSessionID: MeetingSessionID?
+
+    func setMicrophoneManuallyMuted(_ muted: Bool, sessionID: MeetingSessionID) async throws {
+        guard sessionID == self.controlledSessionID, let control = self.microphoneControl else { throw MeetingCaptureError.wrongActiveSession }
+        control.setManuallyMuted(muted)
+    }
+
+    func observeMeetingMute(_ state: MeetingMicrophoneMuteState) {
+        self.microphoneControl?.observe(.init(state: state, observedAtHostTime: mach_absolute_time(), generation: 1))
+    }
     var startResult = MeetingCaptureStartResult(tracks: [], firstPresentationTime: nil)
     var startError: Error?
     var startupEvents: [MeetingCaptureEvent] = []
@@ -9167,6 +9711,12 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
         self.startCount += 1
         self.eventHandler = eventHandler
         self.liveAudioHandler = liveAudioHandler
+        if self.usesMicrophoneControl {
+            let gate = MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions), automaticWatchdog: false)
+            self.microphoneGate = gate
+            self.controlledSessionID = session.id
+            self.microphoneControl = MeetingMicrophoneRecordingControl(gate: gate) { eventHandler(.microphoneMuteStateChanged($0)) }
+        }
         for event in self.startupEvents {
             eventHandler(event)
         }
@@ -9177,6 +9727,11 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
         self.stopCount += 1
+        self.microphoneControl?.finish()
+        await self.microphoneGate?.stop()
+        self.microphoneControl = nil
+        self.microphoneGate = nil
+        self.controlledSessionID = nil
         try await self.onStop?()
         if let stopError { throw stopError }
         return self.stopResult ?? MeetingCaptureStopResult(tracks: [], stoppedAt: Date())
@@ -10047,4 +10602,13 @@ private final class MemoryCheckpointProcessingController: MeetingProcessingContr
             diarizationModel: nil, lastCompletedTrackID: nil, errorCode: nil)
         return MeetingProcessingResult(speakers: session.speakers, segments: session.transcriptSegments, attempt: attempt)
     }
+}
+
+/// Synchronizes the injected synchronous copy without sharing mutable test state unsafely.
+nonisolated private final class MeetingAudioExportTestGate: @unchecked Sendable {
+    let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var copies = 0
+    var copyCount: Int { lock.withLock { copies } }
+    func recordCopy() { lock.withLock { copies += 1 } }
 }

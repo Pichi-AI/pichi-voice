@@ -2,6 +2,7 @@ import Foundation
 
 // Only application composition is inert. The runner inserts the actual live value types,
 // generation/session guards and publication callback from MeetingSessionCoordinator.
+nonisolated enum MeetingAudioTrackKind { case microphone, applicationAudio }
 nonisolated struct MeetingSpeakerPresentation: Sendable, Equatable {}
 // PRODUCTION_LIVE_VALUE_TYPES
 
@@ -16,6 +17,11 @@ nonisolated struct MeetingSpeakerPresentation: Sendable, Equatable {}
     func reconcilePendingSpeech() { reconciliationCount += 1 }
 
     func preview(session: Session, generation: UUID) -> (MeetingLivePartial?) throws -> Void {
+        let callback = self.sourcePreview(session: session, generation: generation)
+        return { try callback(.microphone, $0) }
+    }
+
+    func sourcePreview(session: Session, generation: UUID) -> (MeetingAudioTrackKind, MeetingLivePartial?) throws -> Void {
         // PRODUCTION_PROTECTED_PREVIEW_CALLBACK
     }
 }

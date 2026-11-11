@@ -1,0 +1,18 @@
+Parakeet TDT v3 speech recognition model
+
+Original model: NVIDIA parakeet-tdt-0.6b-v3
+Original model card: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+Core ML conversion: Fluid Inference
+Conversion card: https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml
+
+The original and Core ML model-card metadata declare CC-BY-4.0. The full
+Creative Commons Attribution 4.0 International license is reproduced in
+CC-BY-4.0-LICENSE.txt. The conversion changes the model representation for
+Core ML execution on Apple platforms. Model files are downloaded separately.
+
+FluidAudio is the inference library and is separately licensed under
+Apache-2.0; its license is reproduced in FluidAudio-LICENSE.txt. A library
+license is not a replacement for the model license.
+
+The app does not claim to have trained or converted the original model or
+to be endorsed by NVIDIA or Fluid Inference.

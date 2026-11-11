@@ -90,6 +90,7 @@ Sources/Fluid/Services/Meeting/Backend/MeetingProviderBackedBackend.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingResultSidecar.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingResultSidecarStore.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift
+Sources/Fluid/Services/Meeting/Backend/MeetingReadingSpeakerResolver.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceMatcher.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceModelArtifacts.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptAssembler.swift
@@ -200,7 +201,9 @@ Sources/Fluid/Services/Meeting/Backend/MeetingIncrementalNemotronDiarizerSession
 Sources/Fluid/Services/Meeting/Backend/MeetingStreamingProtectedWordTail.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingPreparedStreamingRuntime.swift
 Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift
+Sources/Fluid/Services/Meeting/MeetingPCMSourceTimeline.swift
 Sources/Fluid/Services/Meeting/MeetingStreamingPCMController.swift
+Sources/Fluid/Services/Meeting/MeetingStreamingEchoAdmission.swift
 Sources/Fluid/Services/Meeting/MeetingStreamingTranscriptState.swift
 Sources/Fluid/Services/Meeting/MeetingProcessingPipelineStreamingAttempt.swift
 

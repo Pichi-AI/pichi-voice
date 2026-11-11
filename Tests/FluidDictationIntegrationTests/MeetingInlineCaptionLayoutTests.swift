@@ -7,6 +7,52 @@ import XCTest
 /// Windows stay invisible and cannot take focus, microphone or application ownership.
 @MainActor
 final class MeetingInlineCaptionLayoutTests: XCTestCase {
+    func testLiveSourceHeadersRenderInDocumentAndFloatingCaptionStyles() throws {
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.utterances = [
+            .init(id: UUID(), speaker: .them, text: "Давайте обсудим план встречи.", start: 0, end: 2),
+            .init(id: UUID(), speaker: .you, text: "Да, я подготовил предложения. Ёжик и ёлка.", start: 3, end: 6),
+            .init(id: UUID(), speaker: .them, text: "Добавим время на вопросы.", start: 7, end: 9,
+                participant: .init(identity: "synthetic-participant",
+                    label: .identified(.init(displayName: "Анна", isLocalUser: false)))),
+        ]
+        snapshot.partials[.you] = .init(id: UUID(), text: "Сейчас уточню детали", start: 10)
+        let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        XCTAssertEqual(rows.map(\.showsLabel), [true, true, true, true])
+        for scheme in [ColorScheme.light, .dark] {
+            for documentStyle in [true, false] {
+                let theme = AppTheme.adaptive(accent: .purple, colorScheme: scheme)
+                let content = VStack(alignment: .leading, spacing: 20) {
+                    ForEach(rows) { row in
+                        MeetingLiveBubbleRow(row: row, hidesPartialFromAccessibility: false,
+                            documentStyle: documentStyle)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(24)
+                .frame(width: 520, height: 480, alignment: .topLeading)
+                .background(theme.palette.contentBackground)
+                .appTheme(theme)
+                .environment(\.colorScheme, scheme)
+                let controller = NSHostingController(rootView: content)
+                let window = CaptionHost.QuietWindow(contentRect: CGRect(x: -10000, y: -10000, width: 520, height: 480),
+                    styleMask: [.borderless], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+                window.contentViewController = controller
+                defer { window.close() }
+                for _ in 0..<8 {
+                    controller.view.layoutSubtreeIfNeeded()
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.005))
+                }
+                try self.saveCapture(controller.view,
+                    step: documentStyle ? "source-labels-document" : "source-labels-floating", scheme: scheme)
+                XCTAssertFalse(window.isVisible)
+                XCTAssertFalse(window.isKeyWindow)
+            }
+        }
+    }
+
     func testPendingWordsKeepTheirSizesAndWrapAfterEnglishAndRussianText() throws {
         for scheme in [ColorScheme.light, .dark] {
             for text in ["Ёжик идёт.", "Ready now."] {
@@ -132,6 +178,11 @@ final class MeetingInlineCaptionLayoutTests: XCTestCase {
         let native = try nativeText(in: fixture)
         let view = fixture.controller.view
         let region = native.convert(native.bounds, to: view).insetBy(dx: -16, dy: -16).intersection(view.bounds)
+        try self.saveCapture(view, region: region, step: step, scheme: scheme)
+    }
+
+    private func saveCapture(_ view: NSView, region: CGRect? = nil, step: String, scheme: ColorScheme) throws {
+        let region = region ?? view.bounds
         let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: region))
         view.cacheDisplay(in: region, to: bitmap)
         let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))

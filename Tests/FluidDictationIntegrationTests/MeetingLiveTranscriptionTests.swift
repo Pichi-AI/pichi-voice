@@ -119,6 +119,15 @@ final class MeetingModelPreparationQueueTests: XCTestCase {
 }
 
 final class MeetingLiveTimeConversionTests: XCTestCase {
+    func testFrozenRecordingOriginIgnoresDelayedPacketsAndLaterProducerResets() {
+        let box = MeetingLiveOriginBox()
+        let origin = CMTime(value: 1_000_123_456_789, timescale: 1_000_000_000)
+        XCTAssertEqual(box.freeze(origin), origin)
+        XCTAssertEqual(box.establish(CMTime(value: 900, timescale: 1)), origin)
+        XCTAssertEqual(box.establish(CMTime(value: 1_200, timescale: 1)), origin)
+        XCTAssertEqual(box.freeze(CMTime(value: 0, timescale: 1)), origin)
+        XCTAssertEqual(box.current, origin)
+    }
     func testZeroOriginPassesPTSThrough() {
         let pts = CMTime(value: 5, timescale: 1)
         let origin = CMTime(value: 0, timescale: 1)
@@ -151,13 +160,33 @@ final class MeetingLiveTimeConversionTests: XCTestCase {
 }
 
 final class MeetingLiveTranscriptSnapshotTests: XCTestCase {
+    func testSuppressedMicrophoneEchoResolvesOnlyItsOwnAudio() {
+        let origin = MeetingLiveOriginBox()
+        origin.establish(.zero)
+        let resolved = expectation(description: "Suppressed source audio is processed without a duplicate caption")
+        let coordinator = MeetingLiveTranscriptionCoordinator(originBox: origin,
+            onResolvedAudioWithoutCaption: { source, start, end in
+                XCTAssertEqual(source, .you)
+                XCTAssertEqual(start, 3)
+                XCTAssertEqual(end, 5)
+                resolved.fulfill()
+            }, onUpdate: { _ in })
+        let text = "This is one complete synthetic sentence repeated in the microphone echo."
+        coordinator.handleUtterance(kind: .applicationAudio, text: text, start: .zero, end: CMTime(seconds: 1, preferredTimescale: 1000))
+        coordinator.handleUtterance(kind: .microphone, text: text,
+            start: CMTime(seconds: 3, preferredTimescale: 1000), end: CMTime(seconds: 5, preferredTimescale: 1000))
+        wait(for: [resolved], timeout: 1)
+        XCTAssertEqual(coordinator.latestSnapshot().utterances.count, 1)
+        XCTAssertEqual(coordinator.latestSnapshot().utterances.first?.speaker, .them)
+    }
+
     func testSuccessfulEmptyFinalReportsSourceCoverageWithoutPublishingEmptyWords() async {
         let origin = MeetingLiveOriginBox()
         origin.establish(CMTime(seconds: 100, preferredTimescale: 16_000))
         let completed = expectation(description: "Successful empty final supplies exact source coverage")
         completed.assertForOverFulfill = true
         let coordinator = MeetingLiveTranscriptionCoordinator(originBox: origin,
-            onEmptyRecognition: { source, start, end in
+            onResolvedAudioWithoutCaption: { source, start, end in
                 XCTAssertEqual(source, .them)
                 XCTAssertEqual(start, 2, accuracy: 0.0001)
                 XCTAssertEqual(end, 4, accuracy: 0.0001)
@@ -306,6 +335,25 @@ final class MeetingLiveBubbleComposerTests: XCTestCase {
         MeetingLiveUtterance(id: id, speaker: speaker, text: text, start: start, end: end)
     }
 
+    func testSourceHeadersAreLocalizedWithoutInventingParticipantIdentity() {
+        let unknown = MeetingSpeakerPresentation(identity: "unknown", label: .unknown)
+        let named = MeetingSpeakerPresentation(identity: "named",
+            label: .identified(.init(displayName: "Анна Ёлкина", isLocalUser: false)))
+        for (language, microphone, meeting) in [(PichiInterfaceLanguage.english, "Microphone", "Meeting audio"),
+                                               (.russian, "Микрофон", "Звук встречи")] {
+            for (source, label) in [(MeetingLiveSpeaker.you, microphone), (.them, meeting)] {
+                for participant in [nil, unknown, named] {
+                    let row = MeetingLiveBubbleComposer.Row(id: UUID(), speaker: source, text: "Original speech Ёё",
+                        isPartial: true, showsLabel: true, participant: participant, start: 7, readingTurnStart: 7)
+                    XCTAssertEqual(row.captionLabel(language: language), participant == named
+                        ? "00:07 Анна Ёлкина · \(label)" : label)
+                    XCTAssertEqual(row.text, "Original speech Ёё")
+                    XCTAssertEqual(row.participant, participant, "Source labels never supply participant evidence")
+                }
+            }
+        }
+    }
+
     func testFinalizedThenBottomPinnedPartialsOrderedByStart() {
         var snapshot = MeetingLiveTranscriptSnapshot.empty
         snapshot = snapshot.inserting(self.utterance(.you, "hello", start: 0, end: 1))
@@ -315,7 +363,7 @@ final class MeetingLiveBubbleComposerTests: XCTestCase {
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
         XCTAssertEqual(rows.map(\.text), ["hello", "you partial", "them partial"])
         XCTAssertEqual(rows.map(\.isPartial), [false, true, true])
-        XCTAssertEqual(rows.map(\.showsLabel), [false, false, false], "Capture sources do not invent participant headers")
+        XCTAssertEqual(rows.map(\.showsLabel), [true, false, true], "Source changes remain visible without participant identification")
     }
 
     func testShowsLabelIsFalseWhenSpeakerRepeatsAcrossPartial() {
@@ -324,7 +372,7 @@ final class MeetingLiveBubbleComposerTests: XCTestCase {
         snapshot = snapshot.settingPartial(MeetingLivePartial(id: UUID(), text: "still talking", start: 2), for: .you)
 
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
-        XCTAssertEqual(rows.map(\.showsLabel), [false, false], "Unidentified captions remain readable without pseudo-speaker labels")
+        XCTAssertEqual(rows.map(\.showsLabel), [true, false], "A growing turn keeps its source header without repeating it")
     }
 
     func testSolidifyKeepsRowIdentityStable() {
@@ -488,7 +536,6 @@ final class MeetingLiveCaptionRouteTests: XCTestCase {
         nil,
         SettingsStore.SpeechModel.appleSpeech.rawValue,
         SettingsStore.SpeechModel.appleSpeechAnalyzer.rawValue,
-        SettingsStore.SpeechModel.parakeetTDTv2.rawValue,
         SettingsStore.SpeechModel.whisperBase.rawValue,
         "fixture.unregistered-provider",
     ]
@@ -503,6 +550,10 @@ final class MeetingLiveCaptionRouteTests: XCTestCase {
         let whisperTiny = PichiMeetingProviderFactory.whisperTinyModelID
         XCTAssertEqual(self.route("ru", parakeetV3), .buffered(modelID: parakeetV3))
         XCTAssertEqual(self.route("en", parakeetV3), .buffered(modelID: parakeetV3))
+        XCTAssertEqual(self.route("en", "parakeet-tdt-v2"), .buffered(modelID: "parakeet-tdt-v2"))
+        XCTAssertEqual(self.route("ru", "parakeet-tdt-v2"), Self.unsupportedLanguage)
+        XCTAssertEqual(self.route("en", "fluid-parakeet-pro"), .buffered(modelID: "fluid-parakeet-pro"))
+        XCTAssertEqual(self.route("de", "fluid-parakeet-pro"), .buffered(modelID: "fluid-parakeet-pro"))
         XCTAssertEqual(self.route("ru", gigaam), .buffered(modelID: gigaam))
         XCTAssertEqual(self.route("en", gigaam), Self.unsupportedLanguage)
         XCTAssertEqual(self.route("ru", whisperTiny), .buffered(modelID: whisperTiny))
@@ -848,14 +899,21 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
     private final nonisolated class Events: @unchecked Sendable {
         private let lock = NSLock()
         private var partialValues: [(UUID, String)] = []
+        private var partialTimeValues: [(String, Double, Double)] = []
         private var utteranceValues: [(MeetingAudioTrackKind, UUID, String, Double, Double)] = []
         private var degradedValues: [String] = []
-        func partial(_ id: UUID, _ text: String) { self.lock.withLock { self.partialValues.append((id, text)) } }
+        func partial(_ id: UUID, _ text: String, start: CMTime = .invalid, end: CMTime = .invalid) {
+            self.lock.withLock {
+                self.partialValues.append((id, text))
+                self.partialTimeValues.append((text, start.seconds, end.seconds))
+            }
+        }
         func utterance(_ kind: MeetingAudioTrackKind, _ id: UUID, _ text: String, _ start: CMTime, _ end: CMTime) {
             self.lock.withLock { self.utteranceValues.append((kind, id, text, start.seconds, end.seconds)) }
         }
         func degraded(_ text: String) { self.lock.withLock { self.degradedValues.append(text) } }
         var partials: [(UUID, String)] { self.lock.withLock { self.partialValues } }
+        var partialTimes: [(String, Double, Double)] { self.lock.withLock { self.partialTimeValues } }
         var utterances: [(MeetingAudioTrackKind, UUID, String, Double, Double)] { self.lock.withLock { self.utteranceValues } }
         var degraded: [String] { self.lock.withLock { self.degradedValues } }
     }
@@ -872,7 +930,7 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
 
     private func configure(_ engine: PichiMeetingBufferedTrackEngine, events: Events) async {
         await engine.configure(
-            onPartial: { _, id, text, _, _ in events.partial(id, text) },
+            onPartial: { _, id, text, start, end in events.partial(id, text, start: start, end: end) },
             onUtterance: { kind, id, text, start, end in events.utterance(kind, id, text, start, end) },
             onDegraded: { _, text in events.degraded(text) },
             onReady: { _ in }
@@ -1284,6 +1342,90 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
         XCTAssertEqual(utterance.4, 6.3, accuracy: 0.0001)
         XCTAssertTrue(events.degraded.isEmpty)
         await engine.stop()
+    }
+
+    func testMappedCaptionsKeepPrerollAndNativeWordCoverageOnTheRecordingClock() async throws {
+        actor TimedRecognizer: PichiMeetingCaptionRecognizing {
+            func prepare() {}
+            func recognize(_ samples: [Float]) -> PichiMeetingCaptionRecognition {
+                .init(text: "два слова", endOfUtteranceProbability: nil, words: [
+                    .init(text: "два", start: 0.1, end: 0.3), .init(text: "слова", start: 0.3, end: 0.5)
+                ])
+            }
+            func unload() {}
+        }
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: TimedRecognizer())
+        let events = Events()
+        await self.configure(engine, events: events)
+        let clockID = UUID(), sourceID = UUID()
+        func mapped(_ offset: Double, _ duration: Double, _ value: Float, gap: Bool = false) throws -> MeetingLiveSampleCopy.Sample {
+            let start = 4 + offset * 1.0003
+            let end = 4 + (offset + duration) * 1.0003
+            let source = try self.sample(start: start, seconds: duration, value: value)
+            let mapping = MeetingAudioClockMapping(frameCount: Int64(source.buffer.frameLength), spans: [
+                .init(frameStart: 0, frameEnd: Double(source.buffer.frameLength),
+                      hostStart: MeetingAudioClockMapping.mediaTime(start), hostEnd: MeetingAudioClockMapping.mediaTime(end),
+                      discontinuityBefore: gap)
+            ])
+            return .init(buffer: source.buffer, pts: CMTime(seconds: start, preferredTimescale: 1_000_000_000),
+                duration: CMTime(seconds: end - start, preferredTimescale: 1_000_000_000),
+                clockPacket: .init(mapping: mapping, clockID: clockID, sourceID: sourceID, producerEpoch: 1))
+        }
+        try await engine.consumeForTesting(mapped(0, 0.1, 0))
+        try await engine.consumeForTesting(mapped(0.1, 1.6, 0.1))
+        try await engine.consumeForTesting(mapped(1.7, 0.8, 0))
+        let partial = try XCTUnwrap(events.partialTimes.first { !$0.0.isEmpty })
+        XCTAssertEqual(partial.1, 4 + 0.1 * 1.0003, accuracy: 2e-9)
+        XCTAssertEqual(partial.2, 4 + 0.5 * 1.0003, accuracy: 2e-9)
+        let final = try XCTUnwrap(events.utterances.first)
+        XCTAssertEqual(final.3, 4, accuracy: 2e-9)
+        XCTAssertEqual(final.4, 4 + 2.4 * 1.0003, accuracy: 2e-9)
+        // A 50ms real source gap must discard preroll from the preceding interval.
+        try await engine.consumeForTesting(mapped(2.55, 1.6, 0.2, gap: true))
+        try await engine.consumeForTesting(mapped(4.15, 0.8, 0))
+        XCTAssertEqual(try XCTUnwrap(events.utterances.last).3, 4 + 2.55 * 1.0003, accuracy: 2e-9)
+        await engine.stop()
+    }
+
+    func testMappedBufferedCaptionsKeepOneTurnAcrossActualPCMTopologyChanges() async throws {
+        for (rate, channels) in [(16_000.0, AVAudioChannelCount(1)), (48_000.0, AVAudioChannelCount(2))] {
+            let recognizer = Recognizer()
+            let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+            addTeardownBlock { await engine.stop() }
+            let events = Events()
+            await configure(engine, events: events)
+            let clockID = UUID(), sourceID = UUID()
+            for index in 0..<26 {
+                let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                    sampleRate: rate, channels: channels, interleaved: index.isMultiple(of: 2)))
+                let frames = AVAudioFrameCount(rate / 10)
+                let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+                buffer.frameLength = frames
+                for audio in UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList) {
+                    let pointer = try XCTUnwrap(audio.mData?.assumingMemoryBound(to: Float.self))
+                    pointer.initialize(repeating: index < 16 ? 0.1 : 0, count: Int(audio.mDataByteSize) / 4)
+                }
+                let start = CMTime(seconds: 100 + Double(index) * 0.1 * 1.000005, preferredTimescale: 1_000_000_000)
+                let end = CMTime(seconds: 100 + Double(index + 1) * 0.1 * 1.000005, preferredTimescale: 1_000_000_000)
+                let mapping = MeetingAudioClockMapping(frameCount: Int64(frames), spans: [
+                    .init(frameStart: 0, frameEnd: Double(frames),
+                        hostStart: .init(value: start.value, timescale: start.timescale),
+                        hostEnd: .init(value: end.value, timescale: end.timescale), discontinuityBefore: index == 0)
+                ])
+                await engine.consumeForTesting(.init(buffer: buffer, pts: start, duration: end - start,
+                    clockPacket: .init(mapping: mapping, clockID: clockID, sourceID: sourceID, producerEpoch: 1)))
+            }
+            XCTAssertEqual(events.utterances.count, 1)
+            let utterance = try XCTUnwrap(events.utterances.first)
+            XCTAssertEqual(utterance.2, "Русская встреча")
+            XCTAssertEqual(utterance.3, 100, accuracy: 1e-9)
+            XCTAssertGreaterThan(utterance.4, 102.2)
+            XCTAssertLessThanOrEqual(utterance.4, 102.60002)
+            XCTAssertTrue(events.degraded.isEmpty)
+            let inputs = await recognizer.inputs
+            XCTAssertTrue(inputs.contains { $0.count > 20_000 })
+            await engine.stop()
+        }
     }
 
     func testSharedRecognizerNeverMixesOnlineCallTrackBuffers() async throws {
@@ -1772,9 +1914,11 @@ final class MeetingLiveBoundaryTests: XCTestCase {
         private(set) var finishes = 0
         let naturalEnd: Bool
         let failFinish: Bool
-        init(naturalEnd: Bool = false, failFinish: Bool = false) {
+        let finalText: String
+        init(naturalEnd: Bool = false, failFinish: Bool = false, finalText: String = "hello") {
             self.naturalEnd = naturalEnd
             self.failFinish = failFinish
+            self.finalText = finalText
         }
 
         func prepareModels() async throws {}
@@ -1784,7 +1928,7 @@ final class MeetingLiveBoundaryTests: XCTestCase {
             self.calls += 1
             if self.calls == 1 {
                 self.partial?("hello")
-                if self.naturalEnd { self.end?("hello") }
+                if self.naturalEnd { self.end?(self.finalText) }
             }
             for _ in 0..<20 {
                 await Task.yield()
@@ -1825,6 +1969,26 @@ final class MeetingLiveBoundaryTests: XCTestCase {
         await fulfillment(of: [final], timeout: 1)
         let raced = await recognizer.resetDuringProcessing
         XCTAssertFalse(raced, "An EOU callback must not reset a suspended inference")
+    }
+
+    func testSuccessfulEmptyEnglishEndpointCompletesMeasuredInputForEitherSource() async throws {
+        for kind in [MeetingAudioTrackKind.microphone, .applicationAudio] {
+            let recognizer = Recognizer(naturalEnd: true, finalText: "")
+            let engine = MeetingLiveTrackEngine(kind: kind, recognizer: recognizer)
+            let completed = expectation(description: "A successful empty endpoint resolves measured PCM")
+            await engine.configure(onPartial: { _, _, _, _, _ in },
+                onUtterance: { source, _, text, start, end in
+                    XCTAssertEqual(source, kind)
+                    XCTAssertEqual(text, "")
+                    XCTAssertEqual(start.seconds, 10, accuracy: 0.000_001)
+                    XCTAssertGreaterThan(end, start)
+                    completed.fulfill()
+                }, onDegraded: { _, _ in XCTFail("Empty recognition is not a failure") }, onReady: { _ in })
+            await engine.diagnosticInstallCallbacks()
+            await engine.diagnosticConsume(try self.sample(at: 10))
+            await fulfillment(of: [completed], timeout: 1)
+            await engine.stop()
+        }
     }
 
     func testForcedEndpointFlushesTailWithoutDuplicateCallbacks() async throws {

@@ -2,6 +2,61 @@ import AVFoundation
 import Combine
 import Foundation
 
+@MainActor
+protocol MeetingPlaybackAudioSessionControlling {
+    func activate() throws
+    func deactivate()
+}
+
+/// Playback owns activation only while playing. Capture retains its own category and route policy.
+@MainActor
+final class MeetingPlaybackAudioSession: MeetingPlaybackAudioSessionControlling {
+#if os(iOS)
+    private let session: any MeetingPlaybackSystemAudioSession
+    private var ownsActivation = false
+
+    init(session: any MeetingPlaybackSystemAudioSession = AVAudioSession.sharedInstance()) {
+        self.session = session
+    }
+#endif
+
+    func activate() throws {
+#if os(iOS)
+        // The default/previous recording category can respect Silent or use an input route.
+        // Media playback remains audible in Silent and lets iOS keep the user's headphones.
+        try self.session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        self.ownsActivation = true
+        do { try self.session.setActive(true, options: []) }
+        catch { self.deactivate(); throw error }
+#endif
+    }
+
+    func deactivate() {
+#if os(iOS)
+        guard self.ownsActivation else { return }
+        self.ownsActivation = false
+        // A newer capture owner must never be deactivated by an old playback callback.
+        guard self.session.category == .playback, self.session.mode == .default,
+              self.session.categoryOptions == [.mixWithOthers] else { return }
+        try? self.session.setActive(false, options: [.notifyOthersOnDeactivation])
+#endif
+    }
+}
+
+#if os(iOS)
+@MainActor
+protocol MeetingPlaybackSystemAudioSession {
+    var category: AVAudioSession.Category { get }
+    var mode: AVAudioSession.Mode { get }
+    var categoryOptions: AVAudioSession.CategoryOptions { get }
+    func setCategory(_ category: AVAudioSession.Category, mode: AVAudioSession.Mode,
+                     options: AVAudioSession.CategoryOptions) throws
+    func setActive(_ active: Bool, options: AVAudioSession.SetActiveOptions) throws
+}
+
+extension AVAudioSession: MeetingPlaybackSystemAudioSession {}
+#endif
+
 /// Only the expanded player observes the clock; transcript rows do not redraw every tick.
 @MainActor
 final class MeetingPlaybackProgress: ObservableObject {
@@ -29,8 +84,15 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
     private var activeSegmentIDs: [MeetingTranscriptSegmentID] = []
     private var activeOwnership: MeetingProfileOwnership?
     private let profile = PrivateProfileStorage.current
+    private let store: any MeetingSessionStoring
+    private let audioSession: any MeetingPlaybackAudioSessionControlling
 
-    init() { PrivateProfileService.shared.register(self) }
+    init(store: any MeetingSessionStoring = MeetingSessionStore.shared,
+         audioSession: (any MeetingPlaybackAudioSessionControlling)? = nil) {
+        self.store = store
+        self.audioSession = audioSession ?? MeetingPlaybackAudioSession()
+        PrivateProfileService.shared.register(self)
+    }
 
     func prepareForPrivateProfileTransition() async throws {
         let task = loadTask
@@ -69,9 +131,10 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
         self.activeOwnership = expectedOwnership
         self.isLoading = true
         let requestID = self.requestID
+        let store = self.store
         self.loadTask = Task { [weak self] in
             do {
-                guard let source = try await MeetingSessionStore.shared.loadExistingSource(id: sessionID,
+                guard let source = try await store.loadExistingSource(id: sessionID,
                     expectedOwnership: expectedOwnership)
                 else { throw MeetingSegmentPlaybackError.unavailable }
                 let session = source.session, directory = source.directory
@@ -101,6 +164,7 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
                         guard !self.isSeeking else { return }
                         self.player?.pause()
                         self.progress.isPlaying = false
+                        self.audioSession.deactivate()
                         self.progress.elapsed = self.progress.duration
                     }
                 }
@@ -121,8 +185,7 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
                         self.errorMessage = "This audio chunk could not be played."
                     }
                 }
-                self.progress.isPlaying = true
-                player.play()
+                self.resume()
             } catch {
                 guard let self, !Task.isCancelled, self.requestID == requestID else { return }
                 self.stop()
@@ -136,7 +199,9 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
         if self.progress.isPlaying {
             player.pause()
             self.progress.isPlaying = false
+            self.audioSession.deactivate()
         } else {
+            guard self.activateAudioSession() else { return }
             self.progress.isPlaying = true
             if self.progress.elapsed >= self.progress.duration - 0.05 {
                 self.seek(to: 0)
@@ -144,6 +209,21 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
                 player.play()
             }
         }
+    }
+
+    private func activateAudioSession() -> Bool {
+        do { try self.audioSession.activate(); return true }
+        catch {
+            self.stop()
+            self.errorMessage = "This audio chunk could not be played."
+            return false
+        }
+    }
+
+    private func resume() {
+        guard self.activateAudioSession() else { return }
+        self.progress.isPlaying = true
+        self.player?.play()
     }
 
     func seek(to seconds: Double) {
@@ -163,6 +243,7 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
                     self.player?.play()
                 } else if position >= self.progress.duration || !finished {
                     self.progress.isPlaying = false
+                    self.audioSession.deactivate()
                 }
             }
         }
@@ -179,6 +260,7 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
         self.loadTask?.cancel()
         self.loadTask = nil
         self.player?.pause()
+        self.audioSession.deactivate()
         if let timeObserver { self.player?.removeTimeObserver(timeObserver) }
         self.timeObserver = nil
         self.isSeeking = false
@@ -282,7 +364,45 @@ nonisolated enum MeetingSegmentPlaybackPlan {
             let sidecar = try MeetingResultSidecarStore(sessionDirectory: directory).read(
                 expectedAttemptID: attempt.id, expectedBackendID: MeetingBackendID(rawValue: backendID), reference: reference
             )
+            if session.timebase.recordingTimePolicy == .hostMonotonicV1 {
+                let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
+                guard abs(sidecar.analysisManifest.presentationOriginSeconds
+                    - MeetingAnalysisManifest.presentationOrigin(of: session)) <= tolerance else {
+                    throw MeetingSegmentPlaybackError.unavailable
+                }
+                for span in sidecar.analysisManifest.allSpans where span.trackID == segment.sourceTrackID {
+                    guard let chunk = session.audioTracks.first(where: { $0.id == span.trackID })?.chunks.first(where: { $0.id == span.chunkID }) else {
+                        throw MeetingSegmentPlaybackError.unavailable
+                    }
+                    try MeetingHostClockMapping.validatePlaybackSpan(span, chunk: chunk,
+                        origin: sidecar.analysisManifest.presentationOriginSeconds)
+                }
+            }
             return try self.slices(segment: segment, spans: sidecar.analysisManifest.allSpans, directory: directory)
+        }
+        if session.timebase.recordingTimePolicy == .hostMonotonicV1 {
+            guard let track = session.audioTracks.first(where: { $0.id == segment.sourceTrackID }) else {
+                throw MeetingSegmentPlaybackError.unavailable
+            }
+            let origin = MeetingAnalysisManifest.presentationOrigin(of: session)
+            var slices: [Slice] = []
+            for chunk in track.chunks.sorted(by: { $0.presentationStart < $1.presentationStart }) {
+                guard chunk.presentationEnd.seconds - origin > segment.start.seconds,
+                      chunk.presentationStart.seconds - origin < segment.end.seconds else { continue }
+                let mapping = try MeetingHostClockMapping.validated(chunk: chunk)
+                guard let asset = chunk.captureAnalysisAsset else { throw MeetingSegmentPlaybackError.unavailable }
+                for clockSpan in mapping.spans {
+                    let start = max(segment.start.seconds, clockSpan.hostStart.seconds - origin)
+                    let end = min(segment.end.seconds, clockSpan.hostEnd.seconds - origin)
+                    guard end > start else { continue }
+                    guard let mapped = try MeetingHostClockMapping.piece(in: .init(start: start, end: end),
+                        chunk: chunk, origin: origin) else { throw MeetingSegmentPlaybackError.unavailable }
+                    let url = try MeetingChunkPathConfinement.containedURL(sessionDirectory: directory, relativePath: asset.relativeFilePath)
+                    slices.append(Slice(url: url, start: mapped.source.start, end: mapped.source.end))
+                }
+            }
+            guard !slices.isEmpty else { throw MeetingSegmentPlaybackError.unavailable }
+            return slices
         }
         // Legacy transcripts use chunk-relative offsets. Refuse drift-corrected legacy audio
         // without a verified span mapping rather than silently playing the wrong words.

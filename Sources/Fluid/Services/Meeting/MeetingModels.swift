@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 typealias MeetingSessionID = UUID
 typealias MeetingAudioTrackID = UUID
@@ -397,11 +398,77 @@ nonisolated struct MeetingMediaTime: Codable, Equatable, Comparable, Sendable {
     }
 }
 
+/// Frozen capture-clock semantics. Absence retains the original sample-clock recording contract.
+nonisolated enum MeetingRecordingTimePolicy: String, Codable, Sendable {
+    case hostMonotonicV1
+}
+
+nonisolated enum MeetingRecordingTimePolicyError: LocalizedError, Equatable {
+    case legacyProcessingUnsupported(MeetingRecordingTimePolicy)
+    var errorDescription: String? {
+        PichiLocalization.text("Choose a transcription engine that supports recording time alignment.")
+    }
+}
+
+/// One measured affine interval from chunk-local PCM frames to absolute monotonic host time.
+/// Fractional frame boundaries survive conversion to another native or analysis sample rate.
+nonisolated struct MeetingAudioClockSpan: Codable, Equatable, Sendable {
+    var frameStart: Double
+    var frameEnd: Double
+    var hostStart: MeetingMediaTime
+    var hostEnd: MeetingMediaTime
+    var discontinuityBefore: Bool = false
+
+    init(frameStart: Double, frameEnd: Double, hostStart: MeetingMediaTime,
+         hostEnd: MeetingMediaTime, discontinuityBefore: Bool = false) {
+        self.frameStart = frameStart; self.frameEnd = frameEnd
+        self.hostStart = hostStart; self.hostEnd = hostEnd
+        self.discontinuityBefore = discontinuityBefore
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case frameStart, frameEnd, hostStart, hostEnd, discontinuityBefore
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.frameStart = try c.decode(Double.self, forKey: .frameStart)
+        self.frameEnd = try c.decode(Double.self, forKey: .frameEnd)
+        self.hostStart = try c.decode(MeetingMediaTime.self, forKey: .hostStart)
+        self.hostEnd = try c.decode(MeetingMediaTime.self, forKey: .hostEnd)
+        self.discontinuityBefore = try c.decodeIfPresent(Bool.self, forKey: .discontinuityBefore) ?? false
+    }
+}
+
+nonisolated struct MeetingAudioClockMapping: Codable, Equatable, Sendable {
+    var version: Int = 1
+    var frameCount: Int64
+    var spans: [MeetingAudioClockSpan]
+
+    var identityFingerprint: String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        guard let data = try? encoder.encode(self) else { return "invalid-clock-mapping" }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    init(version: Int = 1, frameCount: Int64, spans: [MeetingAudioClockSpan]) {
+        self.version = version; self.frameCount = frameCount; self.spans = spans
+    }
+    private enum CodingKeys: String, CodingKey { case version, frameCount, spans }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        self.frameCount = try c.decode(Int64.self, forKey: .frameCount)
+        self.spans = try c.decode([MeetingAudioClockSpan].self, forKey: .spans)
+    }
+}
+
 nonisolated struct MeetingTimebaseMetadata: Codable, Equatable, Sendable {
     var startedHostTime: UInt64
     var machTimebaseNumerator: UInt32
     var machTimebaseDenominator: UInt32
     var firstPresentationTime: MeetingMediaTime?
+    var recordingTimePolicy: MeetingRecordingTimePolicy? = nil
+    var endedHostTime: UInt64? = nil
 }
 
 nonisolated struct MeetingAudioFormat: Codable, Equatable, Sendable {
@@ -441,6 +508,7 @@ nonisolated struct MeetingAudioChunk: Codable, Identifiable, Equatable, Sendable
     var audioSchemaVersion: Int? = nil
     var captureAnalysisAsset: MeetingAudioAsset? = nil
     var playbackArchiveAsset: MeetingAudioAsset? = nil
+    var clockMapping: MeetingAudioClockMapping? = nil
 
     init(
         id: MeetingAudioChunkID,
@@ -454,18 +522,20 @@ nonisolated struct MeetingAudioChunk: Codable, Identifiable, Equatable, Sendable
         finalizationState: MeetingAudioChunkFinalizationState,
         audioSchemaVersion: Int? = nil,
         captureAnalysisAsset: MeetingAudioAsset? = nil,
-        playbackArchiveAsset: MeetingAudioAsset? = nil
+        playbackArchiveAsset: MeetingAudioAsset? = nil,
+        clockMapping: MeetingAudioClockMapping? = nil
     ) {
         self.id = id; self.sequence = sequence; self.relativeFilePath = relativeFilePath
         self.presentationStart = presentationStart; self.presentationEnd = presentationEnd
         self.discontinuities = discontinuities; self.sha256 = sha256; self.byteCount = byteCount
         self.finalizationState = finalizationState; self.audioSchemaVersion = audioSchemaVersion
         self.captureAnalysisAsset = captureAnalysisAsset; self.playbackArchiveAsset = playbackArchiveAsset
+        self.clockMapping = clockMapping
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, sequence, relativeFilePath, presentationStart, presentationEnd, discontinuities
-        case sha256, byteCount, finalizationState, audioSchemaVersion, captureAnalysisAsset, playbackArchiveAsset
+        case sha256, byteCount, finalizationState, audioSchemaVersion, captureAnalysisAsset, playbackArchiveAsset, clockMapping
     }
 
     init(from decoder: Decoder) throws {
@@ -482,6 +552,7 @@ nonisolated struct MeetingAudioChunk: Codable, Identifiable, Equatable, Sendable
         self.audioSchemaVersion = try c.decodeIfPresent(Int.self, forKey: .audioSchemaVersion)
         self.captureAnalysisAsset = try c.decodeIfPresent(MeetingAudioAsset.self, forKey: .captureAnalysisAsset)
         self.playbackArchiveAsset = try c.decodeIfPresent(MeetingAudioAsset.self, forKey: .playbackArchiveAsset)
+        self.clockMapping = try c.decodeIfPresent(MeetingAudioClockMapping.self, forKey: .clockMapping)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -494,6 +565,7 @@ nonisolated struct MeetingAudioChunk: Codable, Identifiable, Equatable, Sendable
         try c.encodeIfPresent(self.audioSchemaVersion, forKey: .audioSchemaVersion)
         try c.encodeIfPresent(self.captureAnalysisAsset, forKey: .captureAnalysisAsset)
         try c.encodeIfPresent(self.playbackArchiveAsset, forKey: .playbackArchiveAsset)
+        try c.encodeIfPresent(self.clockMapping, forKey: .clockMapping)
     }
 
     func assetValidationIssues() -> [MeetingAudioAssetValidationIssue] {
@@ -1007,6 +1079,7 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     /// Initial acoustic token assignment, before contextual reading rules or manual identity edits.
     var nativeSpeakerAssignment: MeetingBackendSpeakerAssignment? = nil
     var nativeTiming: MeetingTranscriptNativeTiming? = nil
+    var nativeWordTimingProvenance: ASRWordTimingProvenance? = nil
     var speakerAttribution: MeetingTranscriptSpeakerAttribution? = nil
     /// A stable reading identity while acoustic identity is unresolved. Native assignments,
     /// timing and attribution summaries remain evidence and are never rewritten to claim it.
@@ -1266,6 +1339,9 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
     /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
     var transcriptTimeDomain: MeetingTranscriptTimeDomain? = nil
+    /// Explicit clock basis for new source-streaming publication. Older recordings keep
+    /// their minimum-chunk origin; this value aligns retained playback and later retries.
+    var transcriptPresentationOrigin: MeetingMediaTime? = nil
     var retention: MeetingRetentionState
     var processingAttempts: [MeetingProcessingAttempt]
     var updatedAt: Date
@@ -1298,6 +1374,17 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.selectedMicrophone = configuration.microphone
         self.startedAt = startedAt
         self.timebase = timebase
+        if (timebase.recordingTimePolicy == .hostMonotonicV1
+            || (configuration.mode == .onlineCall && configuration.effectiveSpeakerProcessingMode == .streaming)),
+           timebase.machTimebaseDenominator > 0 {
+            let seconds = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
+                / Double(timebase.machTimebaseDenominator) / 1_000_000_000
+            let scale: Int32 = timebase.recordingTimePolicy == .hostMonotonicV1 ? 1_000_000_000 : 1_000_000
+            if seconds.isFinite, seconds >= 0, seconds < Double(Int64.max) / Double(scale) {
+                self.transcriptPresentationOrigin = .init(value: Int64((seconds * Double(scale)).rounded()), timescale: scale)
+                self.transcriptTimeDomain = .meetingRelative
+            }
+        }
         self.state = .preparing
         self.events = []
         self.failures = []
@@ -1358,7 +1445,13 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     }
 
     var duration: TimeInterval {
-        (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)
+        if self.timebase.recordingTimePolicy == .hostMonotonicV1,
+           let end = self.timebase.endedHostTime, end >= self.timebase.startedHostTime,
+           self.timebase.machTimebaseDenominator > 0 {
+            return Double(end - self.timebase.startedHostTime) * Double(self.timebase.machTimebaseNumerator)
+                / Double(self.timebase.machTimebaseDenominator) / 1_000_000_000
+        }
+        return (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)
     }
 
     var microphoneEchoWarning: String? {
@@ -1731,6 +1824,7 @@ nonisolated struct MeetingCaptureStartResult: Sendable {
 nonisolated struct MeetingCaptureStopResult: Sendable {
     var tracks: [MeetingAudioTrack]
     var stoppedAt: Date
+    var stoppedHostTime: UInt64? = nil
 }
 
 nonisolated struct MeetingProcessingResult: Codable, Sendable {
@@ -1768,6 +1862,7 @@ nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
         var id: MeetingAudioChunkID
         var byteCount: Int64
         var sha256: String
+        var clockMappingDigest: String? = nil
     }
 
     nonisolated struct SpeechInterval: Codable, Equatable, Sendable {
@@ -1797,7 +1892,8 @@ nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
                 track.id,
                 track.chunks
                     .filter { $0.finalizationState == .finalized && $0.byteCount > 0 }
-                    .map { ChunkFingerprint(id: $0.id, byteCount: $0.byteCount, sha256: $0.sha256) }
+                    .map { ChunkFingerprint(id: $0.id, byteCount: $0.byteCount, sha256: $0.sha256,
+                        clockMappingDigest: $0.clockMapping?.identityFingerprint) }
             )
         })
     }
@@ -1891,7 +1987,8 @@ nonisolated extension MeetingSession {
                             && segment.speakerID.map { id in self.speakers.contains {
                                 $0.id == id && $0.identityIsProvisional != nil
                             } } == true)),
-                      attribution.selectedSpeakerID == nil || attribution.selectedToken != nil,
+                      attribution.selectedSpeakerID == nil || attribution.selectedToken != nil
+                        || attribution.rule == .readingParticipantContext,
                       attribution.selectedSpeakerID.map({ speakerIDs.contains($0) }) ?? true,
                       Set(attribution.candidates.map(\.token)).count == attribution.candidates.count,
                       tokens.allSatisfy({ $0.analysisEpochID == epoch

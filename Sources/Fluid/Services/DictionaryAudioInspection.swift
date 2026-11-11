@@ -173,8 +173,17 @@ actor DictionaryAudioInspector {
         let start = max(0, min(audio.recordedSampleCount, Int((cut?.start ?? 0) * 16_000)))
         let end = min(audio.recordedSampleCount, Int((cut?.end ?? audio.duration) * 16_000))
         guard start < end else { throw DictionaryMatchPlaygroundError.unavailable("This selection has no recorded audio.") }
-        var pcm = Data(capacity: (end - start) * 2)
-        for value in audio.samples[start..<end] {
+        return try self.wav(samples: Array(audio.samples[start..<end]))
+    }
+
+    /// The saved-sample browser reuses this codec for validated focal PCM without
+    /// constructing feature-bearing inspection evidence or loading an ASR model.
+    func wav(samples: [Float]) throws -> Data {
+        guard !samples.isEmpty, samples.count <= 16_000 * 120, samples.allSatisfy(\.isFinite) else {
+            throw DictionaryMatchPlaygroundError.unavailable("This selection has no recorded audio.")
+        }
+        var pcm = Data(capacity: samples.count * 2)
+        for value in samples {
             var sample = Int16(max(-1, min(1, value)) * Float(Int16.max)).littleEndian
             withUnsafeBytes(of: &sample) { pcm.append(contentsOf: $0) }
         }

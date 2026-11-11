@@ -43,9 +43,13 @@ final class MobileFirstRunWalkthroughUITests: XCTestCase {
         let kiosk = app.buttons["settings.kiosk"]
         reveal(kiosk); kiosk.tap(); settle(); capture("03-restricted-mode")
         backToSettings()
+        let recordingSettings = app.buttons["settings.recording"]
+        for _ in 0..<4 where !recordingSettings.isHittable { app.collectionViews.firstMatch.swipeDown() }
+        XCTAssertTrue(recordingSettings.isHittable)
+        recordingSettings.tap(); settle(); capture("04-recording-settings")
+        backToSettings()
         open("meetings")
-        app.buttons["meeting.settings"].tap(); settle(); capture("04-recording-sheet")
-        app.buttons["settings.recording.done"].tap()
+        XCTAssertFalse(app.buttons["meeting.settings"].exists)
 
         // The first meeting owns the whole window until it stops.
         start.tap(); capture("05-start-tapped")

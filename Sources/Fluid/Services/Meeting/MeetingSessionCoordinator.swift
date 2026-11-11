@@ -1,4 +1,5 @@
 import Combine
+import CoreMedia
 import Darwin
 import Foundation
 
@@ -119,6 +120,18 @@ final class MeetingSessionCoordinator: ObservableObject {
     @Published private(set) var trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth] = [:]
     #if os(macOS)
     @Published private(set) var microphoneMuteState: MeetingMicrophoneMuteState = .notApplicable
+    @Published private(set) var isMicrophoneControlPending = false
+
+    /// Used by both native microphone buttons. The capture owner applies admission before
+    /// publishing state; a retired view cannot change the next recording's local intent.
+    func toggleMicrophoneRecording(expectedSessionID: MeetingSessionID?) async {
+        guard !self.isMicrophoneControlPending, self.isRecording,
+              let session = self.activeSession, session.id == expectedSessionID,
+              session.mode == .onlineCall else { return }
+        self.isMicrophoneControlPending = true
+        defer { self.isMicrophoneControlPending = false }
+        try? await self.capture.setMicrophoneManuallyMuted(self.microphoneMuteState != .manuallyMuted, sessionID: session.id)
+    }
     #endif
     @Published private(set) var liveTranscript: MeetingLiveTranscriptSnapshot = .empty
     @Published private(set) var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
@@ -166,6 +179,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var pendingSpeechCapture: MeetingPendingSpeechCapture?
     private var pendingSpeechTeardownTask: Task<Void, Never>?
     private let speechActivityModel: MeetingCaptureSpeechActivityWorker.Factory?
+    private let prepareSpeechActivity: @MainActor () async throws -> Void
     private var pendingSpeechDiagnosticID: UUID?
     private var captureGeneration: UUID? {
         didSet {
@@ -188,7 +202,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// this token until recognition/privacy finalization and terminal persistence have completed.
     private var memoryCheckpointGeneration: UUID?
     private var operationGeneration: UUID?
-    private var stopRequestedAt: (sessionID: MeetingSessionID, date: Date)?
+    private var stopRequestedAt: (sessionID: MeetingSessionID, date: Date, hostTime: UInt64)?
     /// A joined capture can outlive the processing generation during termination. Retain
     /// only its immutable physical facts, never an older transcript/session snapshot.
     private var captureStopHandoff: (sessionID: MeetingSessionID, generation: UUID,
@@ -288,6 +302,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private var correctionUndoStacks: [MeetingSessionID: [OwnedTranscriptCorrection]] = [:]
     private let prepareRecordingDependencies: @MainActor (Set<MeetingDiarizationDependency>) async throws -> Void
+    private let prepareRegisteredSpeakerResources: @MainActor (MeetingFinalProcessingConfiguration) async throws -> Void
     private let validateRecordingModels: @MainActor () async throws -> Void
     private let validateFrozenRecordingConfiguration: @MainActor (MeetingFinalProcessingConfiguration) throws -> Void
     private let processingLogger: @MainActor (String) -> Void
@@ -300,12 +315,16 @@ final class MeetingSessionCoordinator: ObservableObject {
         audioArbiter: any MeetingAudioActivityArbitrating,
         preferredMicrophoneUID: @escaping @MainActor () -> String? = { nil },
         speechActivityModel: MeetingCaptureSpeechActivityWorker.Factory? = nil,
+        prepareSpeechActivity: @escaping @MainActor () async throws -> Void = {},
         settings: SettingsStore = .shared,
         locationResolver: (any MeetingLocationResolving)? = nil,
         defaultConfigurationResolver: (@MainActor (MeetingCaptureMode, String) async throws -> MeetingCaptureConfiguration)? = nil,
         redactorProvider: @escaping @MainActor () throws -> (any TranscriptTextRedacting)? = { nil },
         validateRecordingModels: @escaping @MainActor () async throws -> Void = {},
         prepareRecordingDependencies: @escaping @MainActor (Set<MeetingDiarizationDependency>) async throws -> Void = { _ in },
+        prepareRegisteredSpeakerResources: @escaping @MainActor (MeetingFinalProcessingConfiguration) async throws -> Void = {
+            try await PichiMeetingProviderFactory.prepareSpeakerResources(for: $0)
+        },
         validateFrozenRecordingConfiguration: @escaping @MainActor (MeetingFinalProcessingConfiguration) throws -> Void = { _ in },
         processingLogger: @escaping @MainActor (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingSessionCoordinator") }
     ) {
@@ -315,6 +334,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.processing = processing
         self.audioArbiter = audioArbiter
         self.speechActivityModel = speechActivityModel
+        self.prepareSpeechActivity = prepareSpeechActivity
         self.preferredMicrophoneUID = preferredMicrophoneUID
         self.settings = settings
         self.locationResolver = locationResolver
@@ -322,6 +342,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.redactorProvider = redactorProvider
         self.validateRecordingModels = validateRecordingModels
         self.prepareRecordingDependencies = prepareRecordingDependencies
+        self.prepareRegisteredSpeakerResources = prepareRegisteredSpeakerResources
         self.validateFrozenRecordingConfiguration = validateFrozenRecordingConfiguration
         self.processingLogger = processingLogger
         self.locationPreferenceObserver = settings.objectWillChange.sink { [weak self] _ in
@@ -395,6 +416,16 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     var elapsedTime: TimeInterval {
         guard let session = self.activeSession else { return 0 }
+        if session.timebase.recordingTimePolicy == .hostMonotonicV1 {
+            let end: UInt64
+            if self.state == .stopping(session.id), let request = self.stopRequestedAt, request.sessionID == session.id {
+                end = session.timebase.endedHostTime ?? request.hostTime
+            } else { end = session.timebase.endedHostTime ?? mach_absolute_time() }
+            let start = session.timebase.startedHostTime
+            guard end >= start else { return 0 }
+            return Double(end - start) * Double(session.timebase.machTimebaseNumerator)
+                / Double(session.timebase.machTimebaseDenominator) / 1_000_000_000
+        }
         // Freeze the visible timer immediately on Stop. The final persisted boundary is
         // supplied by capture after the audio runtime joins, not this UI request estimate.
         if self.state == .stopping(session.id), let request = self.stopRequestedAt, request.sessionID == session.id {
@@ -490,7 +521,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     ) async throws {
         if configuration.effectiveSpeakerProcessingMode == .streaming,
            PichiMeetingProviderFactory.registeredBackendDescriptor(for: configuration.asrModel)?.id == descriptor.id {
-            try await PichiMeetingProviderFactory.prepareSpeakerResources(for: configuration)
+            try await self.prepareRegisteredSpeakerResources(configuration)
         } else {
             try await self.prepareRecordingDependencies(descriptor.diarizationDependencies)
         }
@@ -584,20 +615,22 @@ final class MeetingSessionCoordinator: ObservableObject {
         // changed while they were open; final preparation still binds the exact session request.
         let initialDescriptor = try self.processing.validateRecordingInput(
             configuration: configuration, backendID: requestedBackendID)
-        let validationSnapshot = PichiMeetingProviderFactory.validationConfiguration(
+        var validationSnapshot = PichiMeetingProviderFactory.validationConfiguration(
             backendID: requestedBackendID, languageCode: configuration.languageCode,
             preferredASRModel: selectedSpeechModel,
             diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
             speakerProcessingMode: configuration.effectiveSpeakerProcessingMode)
+        validationSnapshot.recordingTimePolicy = self.capture.recordingTimePolicy
         try initialDescriptor?.validateSpeakerProcessingMode(configuration: validationSnapshot, mode: configuration.mode)
         // Explicit registered requests require a preinstalled artifact. Capture its identity
         // before any dependency work or permission prompt and retain this exact snapshot.
         let explicitRecordingConfiguration: MeetingFinalProcessingConfiguration?
         if configuration.transcriptionBackendID != nil {
-            let snapshot = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: requestedBackendID,
+            var snapshot = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: requestedBackendID,
                 languageCode: configuration.languageCode, preferredASRModel: selectedSpeechModel,
                 diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
                 speakerProcessingMode: configuration.effectiveSpeakerProcessingMode)
+            snapshot.recordingTimePolicy = self.capture.recordingTimePolicy
             let registeredOverride = PichiMeetingProviderFactory.registeredBackendDescriptor(for: snapshot.asrModel)?.id == requestedBackendID
             try PichiMeetingProviderFactory.validateRecordingConfiguration(snapshot,
                 isAppleSilicon: CPUArchitecture.isAppleSilicon, requiresInstalledArtifact: registeredOverride,
@@ -622,6 +655,26 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
         guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
               self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
+        if self.speechActivityModel != nil {
+            // The synchronous model factory only opens an existing local artifact. Its
+            // optional resource operation must also run for installed/explicit ASR routes,
+            // before permission prompts or the exclusive recording lease are acquired.
+            do {
+                try await self.prepareSpeechActivity()
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                try Task.checkCancellation()
+                DebugLogger.shared.warning(
+                    "Optional speech activity preparation failed; capture and recognition remain available.",
+                    source: "MeetingSessionCoordinator")
+            }
+            try Task.checkCancellation()
+            guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
+            guard self.startReservation == reservation, self.terminationTask == nil,
+                  self.settings.selectedSpeechModel.rawValue == selectedModelID,
+                  self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
+        }
         let dependencyDescriptor = initialDescriptor
             ?? PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.settings.selectedSpeechModel.rawValue)
         if configuration.speakerLabelsEnabled != false, let dependencyDescriptor,
@@ -660,9 +713,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         let recordingSessionID = UUID()
         let recordingModelID: String
         let recordingBackendID: MeetingBackendID
-        let recordingASRConfiguration: MeetingFinalProcessingConfiguration
+        var recordingASRConfiguration: MeetingFinalProcessingConfiguration
         let recordingLiveModelID: String
-        let recordingLiveConfiguration: MeetingFinalProcessingConfiguration
+        var recordingLiveConfiguration: MeetingFinalProcessingConfiguration
         let recordingProfileOwnership: MeetingProfileOwnership?
         do {
             try Task.checkCancellation()
@@ -747,7 +800,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.trackHealth = [:]
             self.state = .idle
         }
-        let timebase = Self.makeTimebase()
+        let timebase = Self.makeTimebase(recordingTimePolicy: self.capture.recordingTimePolicy)
+        recordingASRConfiguration.recordingTimePolicy = timebase.recordingTimePolicy
+        recordingLiveConfiguration.recordingTimePolicy = timebase.recordingTimePolicy
         var session = MeetingSession(id: recordingSessionID, configuration: publicationConfiguration, timebase: timebase)
         session.profileOwnership = recordingProfileOwnership
         session.recordingBackendID = recordingBackendID.rawValue
@@ -758,7 +813,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.activeSession = session
         self.state = .preparing(session.id)
         #if os(macOS)
-        self.microphoneMuteState = configuration.mode == .onlineCall ? .checking : .notApplicable
+        self.microphoneMuteState = configuration.mode == .onlineCall ? .unmuted : .notApplicable
         #endif
         self.startupTrackHealth.removeAll()
         self.startupWriterFailures.removeAll()
@@ -769,13 +824,20 @@ final class MeetingSessionCoordinator: ObservableObject {
         await self.pendingSpeechTeardownTask?.value
         self.pendingSpeechTeardownTask = nil
         let captureOrigin = MeetingLiveOriginBox()
+        if timebase.recordingTimePolicy == .hostMonotonicV1 || (configuration.mode == .onlineCall && Self.usesPCMProcessing(configuration)) {
+            let seconds = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
+                / Double(timebase.machTimebaseDenominator) / 1_000_000_000
+            let origin = CMTime(seconds: seconds, preferredTimescale: 1_000_000_000)
+            if timebase.recordingTimePolicy != nil { _ = captureOrigin.freeze(origin) }
+            else { _ = captureOrigin.establish(origin) }
+        }
         let liveTranscriptionCoordinator = MeetingLiveTranscriptionCoordinator(originBox: captureOrigin,
-            onEmptyRecognition: { [weak self] source, start, end in
+            onResolvedAudioWithoutCaption: { [weak self] source, start, end in
                 CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
                     MainActor.assumeIsolated {
                         guard let self, generation == self.captureGeneration,
                               let capture = self.pendingSpeechCapture else { return }
-                        self.pendingSpeech = capture.acknowledgeEmptyRecognition(source: source, start: start, end: end)
+                        self.pendingSpeech = capture.acknowledgeResolvedAudio(source: source, start: start, end: end)
                     }
                 }
                 CFRunLoopWakeUp(CFRunLoopGetMain())
@@ -807,7 +869,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         } else { pendingDiagnostics = nil }
         await MeetingTimelineTrace.shared?.claimSession(session.id.uuidString)
         let pendingSpeechCapture = MeetingPendingSpeechCapture(originBox: captureOrigin,
-            activityModel: self.speechActivityModel, diagnostics: pendingDiagnostics) { [weak self] snapshot in
+            activityModel: self.speechActivityModel,
+            activitySources: configuration.mode == .onlineCall ? [.you, .them] : [.you], diagnostics: pendingDiagnostics) { [weak self] snapshot in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 guard self.captureGeneration == generation,
@@ -853,10 +916,11 @@ final class MeetingSessionCoordinator: ObservableObject {
                     session: session, sessionDirectory: sessionDirectory, privacyRedactor: recordingRedactor, checkpoint: { [weak self] batch in
                     guard let self, self.memoryCheckpointGeneration == generation else { throw CancellationError() }
                     try await self.checkpointMemoryTranscript(batch, sessionID: session.id, generation: generation)
-                }, preview: { [weak self] partial in
+                }, trackPreview: { [weak self] kind, partial in
                     guard let self, self.memoryCheckpointGeneration == generation,
                           self.activeSession?.id == session.id else { throw CancellationError() }
-                    self.liveTranscript = self.liveTranscript.settingPartial(partial, for: .you)
+                    let source: MeetingLiveSpeaker = kind == .microphone ? .you : .them
+                    self.liveTranscript = self.liveTranscript.settingPartial(partial, for: source)
                     self.liveTranscript.revision += 1
                     self.liveTranscript.availability = .available
                     self.reconcilePendingSpeech()
@@ -864,16 +928,17 @@ final class MeetingSessionCoordinator: ObservableObject {
                     // rendered frame. Optional chaining also avoids metadata work when off.
                     MeetingTimelineTrace.shared?.record("protected_live_publication", fields: [
                         "sessionID": session.id.uuidString, "generation": generation.uuidString,
-                        "stage": "pcm-protected-preview", "source": "you",
+                        "stage": "pcm-protected-preview", "source": source == .you ? "you" : "them",
                         "transcriptRevision": String(self.liveTranscript.revision),
-                        "partialPresent": String(self.liveTranscript.partials[.you] != nil),
-                        "partialID": self.liveTranscript.partials[.you]?.id.uuidString ?? "unavailable",
-                        "sourceStartSeconds": self.liveTranscript.partials[.you].map { String($0.start) } ?? "unavailable",
-                        "sourceEndSeconds": self.liveTranscript.partials[.you]?.end.map { String($0) } ?? "unavailable",
-                        "utf16Count": String(self.liveTranscript.partials[.you]?.text.utf16.count ?? 0),
+                        "partialPresent": String(self.liveTranscript.partials[source] != nil),
+                        "partialID": self.liveTranscript.partials[source]?.id.uuidString ?? "unavailable",
+                        "sourceStartSeconds": self.liveTranscript.partials[source].map { String($0.start) } ?? "unavailable",
+                        "sourceEndSeconds": self.liveTranscript.partials[source]?.end.map { String($0) } ?? "unavailable",
+                        "utf16Count": String(self.liveTranscript.partials[source]?.text.utf16.count ?? 0),
                         "publicationScope": "accepted-coordinator-assignment-not-render-frame"])
-                }, confidentlyNonSpeech: { [weak pendingSpeechCapture] start, end in
-                    await pendingSpeechCapture?.awaitConfidentNonSpeech(start: start, end: end) ?? false
+                }, trackConfidentlyNonSpeech: { [weak pendingSpeechCapture] kind, start, end in
+                    await pendingSpeechCapture?.awaitConfidentNonSpeech(source: kind == .microphone ? .you : .them,
+                        start: start, end: end) ?? false
                 })
             }
             captureStartAttempted = true
@@ -1254,6 +1319,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         session.resultSidecarReference = inputSession.resultSidecarReference
         session.transcriptIsComplete = inputSession.transcriptIsComplete
         session.transcriptTimeDomain = inputSession.transcriptTimeDomain
+        session.transcriptPresentationOrigin = inputSession.transcriptPresentationOrigin
     }
 
     /// Puts the pre-retry language back. Legacy meetings may have no attempt language at all, so the
@@ -2404,6 +2470,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func performStopAndTranscribe(generation: UUID) async throws -> MeetingSession {
+        let stopClock = ContinuousClock.now
         let profileBegan = MeetingPCMRuntimeDiagnostics.beginDetailed(.stopTotal)
         var profileSucceeded = false
         defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.stopTotal, since: profileBegan, succeeded: profileSucceeded) }
@@ -2425,7 +2492,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         if self.captureStopHandoff?.sessionID != session.id || self.captureStopHandoff?.generation != generation {
             self.captureStopHandoff = (session.id, generation, nil, nil)
         }
-        self.stopRequestedAt = (session.id, Date())
+        self.stopRequestedAt = (session.id, Date(), mach_absolute_time())
         self.state = .stopping(session.id)
         session.state = .stopping
         session.updatedAt = Date()
@@ -2492,6 +2559,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         #if DEBUG && os(macOS)
         diagnosticsStopSucceeded = true
         #endif
+        let elapsed = stopClock.duration(to: .now).components
+        let milliseconds = Double(elapsed.seconds) * 1_000 + Double(elapsed.attoseconds) / 1_000_000_000_000_000
+        self.processingLogger("Meeting stop_to_ready session=\(processed.id) mode=\(processed.effectiveSpeakerProcessingMode.rawValue) tracks=\(processed.audioTracks.count) elapsedMs=\(Int(milliseconds)) transcriptComplete=\(processed.transcriptIsComplete == true) resourcesHandedBack=true")
         return processed
     }
 
@@ -2567,25 +2637,28 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Construct the contextual projection away from the UI executor; only this already
     /// privacy-filtered value may be handed to the caption renderer.
     nonisolated static func protectedLiveHistory(session: MeetingSession, revision: UInt64,
-                                 preview: MeetingLivePartial?) async throws -> MeetingLiveTranscriptSnapshot {
+                                 preview: MeetingLivePartial?, previewSource: MeetingLiveSpeaker = .you,
+                                 otherPartials: [MeetingLiveSpeaker: MeetingLivePartial] = [:]) async throws -> MeetingLiveTranscriptSnapshot {
         let projection = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
             let reading = MeetingTranscriptExporter.speakerPresentations(in: session)
             var result = MeetingLiveTranscriptSnapshot.empty
             result.revision = revision
+            let kinds = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.id, $0.kind) })
+            result.partials = otherPartials
             result.utterances = session.transcriptSegments.enumerated().filter {
                 !$0.element.isEcho && reading[$0.element.id] != nil
             }.sorted {
                 ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
             }.map { _, segment in
-                MeetingLiveUtterance(id: segment.id, speaker: .you, text: segment.text,
+                MeetingLiveUtterance(id: segment.id, speaker: kinds[segment.sourceTrackID] == .applicationAudio ? .them : .you, text: segment.text,
                     start: segment.start.seconds, end: segment.end.seconds,
                     participant: reading[segment.id])
             }
             let readablePreview = preview.flatMap { value in
                 MeetingTranscriptSegment.textContainsLexicalContent(value.text) || value.containsPrivacyReplacement ? value : nil
             }
-            result = result.settingPartial(readablePreview, for: .you)
+            result = result.settingPartial(readablePreview, for: previewSource)
             result.availability = .available
             try Task.checkCancellation()
             return result
@@ -2617,6 +2690,12 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             try revision.apply(to: &session.transcriptSegments[index])
         }
+        for revision in batch.echoRevisions {
+            // A protected lexical tail may not have published this raw word yet. The
+            // attempt reapplies its latest echo decision when that word is admitted.
+            guard let index = indices[revision.segmentID] else { continue }
+            session.transcriptSegments[index].isLikelyEcho = revision.isLikelyEcho
+        }
         session.speakers = batch.mergingSpeakers(into: session.speakers)
         session.transcriptTimeDomain = .meetingRelative
         session.transcriptIsComplete = (session.transcriptIsComplete ?? true) && batch.isComplete
@@ -2636,16 +2715,19 @@ final class MeetingSessionCoordinator: ObservableObject {
         // protected reading history, so earlier participants do not disappear while
         // recording. Projection is pure and joined off the main actor.
         let revisionBeforeProjection = self.liveTranscript.revision
+        let partialsBeforeProjection = self.liveTranscript.partials
+        let committingSource: MeetingLiveSpeaker? = batch.sourceTrack.map { $0.kind == .applicationAudio ? .them : .you }
         var snapshot = try await Self.protectedLiveHistory(
-            session: session, revision: revisionBeforeProjection + 1, preview: batch.livePreview)
+            session: session, revision: revisionBeforeProjection + 1, preview: committingSource == nil ? self.liveTranscript.partials[.you] : batch.livePreview,
+            previewSource: committingSource ?? .you,
+            otherPartials: self.liveTranscript.partials)
         guard self.memoryCheckpointGeneration == generation, self.activeSession?.id == sessionID else {
             throw CancellationError()
         }
         // A newer safe preview may arrive while the pure reading projection runs.
         // Publishing durable history must not roll that preview or revision backward.
-        if self.liveTranscript.revision > revisionBeforeProjection {
-            snapshot.partials = self.liveTranscript.partials
-        }
+        snapshot = snapshot.preservingConcurrentPartials(from: self.liveTranscript,
+            since: partialsBeforeProjection, committing: committingSource)
         snapshot.revision = self.liveTranscript.revision + 1
         self.liveTranscript = snapshot
         self.reconcilePendingSpeech()
@@ -2657,11 +2739,18 @@ final class MeetingSessionCoordinator: ObservableObject {
         // attribution and privacy have admitted it. Publish that protected history
         // first; acoustic progress or a provisional preview cannot retire waves.
         if let through = batch.protectedSourceThroughSample,
-           let track = batch.sourceTrack, track.kind == .microphone,
+           let track = batch.sourceTrack,
            self.activeSession?.audioTracks.contains(where: { $0.id == track.id }) == true,
            let capture = self.pendingSpeechCapture {
             self.pendingSpeech = capture.acknowledgeProtectedSource(
-                source: .you, throughSample: through, transcriptRevision: snapshot.revision)
+                source: track.kind == .microphone ? .you : .them, throughSample: through, transcriptRevision: snapshot.revision)
+        }
+        if !batch.protectedSourceIntervals.isEmpty, let track = batch.sourceTrack,
+           self.activeSession?.audioTracks.contains(where: { $0.id == track.id }) == true,
+           let capture = self.pendingSpeechCapture {
+            self.pendingSpeech = capture.acknowledgeProtectedIntervals(
+                source: track.kind == .microphone ? .you : .them,
+                intervals: batch.protectedSourceIntervals, transcriptRevision: snapshot.revision)
         }
     }
 
@@ -3336,14 +3425,15 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
     }
 
-    private static func makeTimebase() -> MeetingTimebaseMetadata {
+    private static func makeTimebase(recordingTimePolicy: MeetingRecordingTimePolicy?) -> MeetingTimebaseMetadata {
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)
         return MeetingTimebaseMetadata(
             startedHostTime: mach_absolute_time(),
             machTimebaseNumerator: info.numer,
             machTimebaseDenominator: info.denom,
-            firstPresentationTime: nil
+            firstPresentationTime: nil,
+            recordingTimePolicy: recordingTimePolicy
         )
     }
 
@@ -3392,6 +3482,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     private static func apply(_ stopResult: MeetingCaptureStopResult, to session: inout MeetingSession) {
         session.audioTracks = stopResult.tracks
         session.endedAt = stopResult.stoppedAt
+        if session.timebase.recordingTimePolicy == .hostMonotonicV1 {
+            session.timebase.endedHostTime = stopResult.stoppedHostTime ?? mach_absolute_time()
+        }
         session.timebase.firstPresentationTime = self.firstPresentationTime(in: stopResult.tracks)
     }
 

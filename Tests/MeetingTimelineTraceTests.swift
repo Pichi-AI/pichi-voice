@@ -61,8 +61,28 @@ import Foundation
         try require(ownedText.contains("synthetic-original-owner") && !ownedText.contains("must-not-enter-owner-trace"),
             "concealed-profile-cannot-retarget-trace")
         PrivateProfileStorage.select(originalProfile)
+        try concurrentSourcePreviewMerge()
         try await protectedPublication(root: root.appendingPathComponent("accepted-preview"))
         print("MeetingTimelineTrace: default-disabled/private-format/event-byte-queue-limits/accepted-protected-preview passed")
+    }
+
+    static func concurrentSourcePreviewMerge() throws {
+        let microphone = MeetingLivePartial(id: UUID(), text: "committed microphone words", start: 0, end: 1)
+        let remote = MeetingLivePartial(id: UUID(), text: "remote before projection", start: 1, end: 2)
+        let newerRemote = MeetingLivePartial(id: remote.id, text: "remote after projection", start: 1, end: 3)
+        var previous = MeetingLiveTranscriptSnapshot.empty
+        previous.partials = [.you: microphone, .them: remote]
+        var current = previous
+        current.partials[.them] = newerRemote
+        var projected = previous
+        projected.partials[.you] = nil
+        let committed = projected.preservingConcurrentPartials(from: current, since: previous.partials, committing: .you)
+        try require(committed.partials[.you] == nil, "other-source-update-cannot-resurrect-committed-preview")
+        try require(committed.partials[.them] == newerRemote, "other-source-preview-is-preserved")
+        let newerMicrophone = MeetingLivePartial(id: UUID(), text: "next microphone turn", start: 3, end: 4)
+        current.partials[.you] = newerMicrophone
+        let updated = projected.preservingConcurrentPartials(from: current, since: previous.partials, committing: .you)
+        try require(updated.partials[.you] == newerMicrophone, "only-newer-same-source-preview-survives")
     }
 
     static func protectedPublication(root: URL) async throws {

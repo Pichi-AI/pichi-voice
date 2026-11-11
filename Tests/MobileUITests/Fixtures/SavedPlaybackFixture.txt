@@ -1,0 +1,38 @@
+Saved playback native UI fixture
+
+SavedPlaybackMeeting.json and SavedPlaybackTone.wav are original synthetic test
+data created on 7 November 2026. They contain no recording, person, account,
+model output or third-party sample. They are distributed under the repository's
+GPL-3.0 license. The WAV is 12 seconds, mono PCM signed 16-bit little-endian,
+16 kHz, 440 Hz sine, peak 32/32768. It is deliberately quiet. Native controls
+and advancing time do not establish physical speaker audibility.
+
+The deterministic PCM recipe for sample i from 0 through 191999 is:
+    round(32 * sin(2 * pi * 440 * i / 16000))
+The standard-library wave writer stores one channel, two-byte samples and 16000
+frames per second. The JSON records the WAV's actual SHA-256, byte count and
+presentation interval. Tests/test_mobile_saved_playback_fixture.py checks the
+media contract; the native test consumes it through the real store and AVPlayer.
+
+Staging is restricted to a fresh task-owned simulator. Install the combined app,
+resolve its app data container with simctl get_app_container, and create:
+    Library/Application Support/ai.pichi.voice/Meetings/
+      F0000000-0000-4000-8000-000000000121/session.json
+      F0000000-0000-4000-8000-000000000121/tracks/SavedPlaybackTone.wav
+Copy the JSON to session.json and the WAV to the track path. Never overwrite a
+pre-existing session directory. Leave the directory in place for the ordinary
+store's discovery. Do not copy this fixture into an existing physical user app.
+
+Set PICHI_SAVED_PLAYBACK_FIXTURE_STAGED=1 in the UI runner environment and select:
+    PichiVoiceMobileUITests/MobileSavedPlaybackUITests/
+      testSavedPlaybackPauseResumeEndReplayAndReopen
+The test uses the ordinary app with simulator-only saved-history startup support.
+It changes only task-owned simulator language/theme preferences. Run on iPhone
+and iPad with distinct owned containers. Preserve screenshots and the final
+session files before disposing of the owned simulators. Missing staged data is
+a failed admission once the explicit opt-in is supplied, not a passing skip.
+
+The test checks native Audio routing to the saved clip, advancing position,
+pause/resume, natural end, replay, close and persistence after app relaunch in
+English/light and Russian/dark. It does not record, download models, send data,
+sign in, alter a physical installation or establish actual audible output.

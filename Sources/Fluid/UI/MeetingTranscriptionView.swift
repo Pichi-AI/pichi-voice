@@ -399,6 +399,7 @@ struct MeetingTranscriptionView: View {
     @State private var isRetrying = false
     @State private var cachedMicrophoneStatus: AVAuthorizationStatus = .notDetermined
     @State private var cachedScreenCaptureAccess = false
+    @State private var screenPermissionGuideID: UUID?
     @State private var cachedModelReady = false
     @State private var cachedSpeakerModelReady = false
     @State private var modelReadinessRevision = 0
@@ -443,6 +444,12 @@ struct MeetingTranscriptionView: View {
         } message: {
             Text("The transcript stays; the audio files are deleted from this Mac.")
         }
+        .onDisappear {
+            if let requestID = self.screenPermissionGuideID {
+                PermissionDragGuideController.shared.dismiss(requestID: requestID)
+                self.screenPermissionGuideID = nil
+            }
+        }
     }
 
     private func meetingHeader(projection: MeetingViewPrivateProjection.Stamp?, geometry: GeometryProxy) -> MeetingTranscriptionHeader {
@@ -462,6 +469,9 @@ struct MeetingTranscriptionView: View {
             state: self.canvasState,
             pendingSpeech: self.profileService.isPrivateDataVisible ? self.coordinator.pendingSpeech : .empty,
             microphoneMuteState: self.coordinator.microphoneMuteState,
+            onToggleMicrophone: self.coordinator.isMicrophoneControlPending ? nil : {
+                Task { await self.coordinator.toggleMicrophoneRecording(expectedSessionID: activeSessionID) }
+            },
             applications: self.applications,
             microphones: self.microphones,
             readiness: self.readiness,
@@ -1117,7 +1127,7 @@ struct MeetingTranscriptionView: View {
             )
         } catch { return nil }
 
-        return MeetingCaptureConfiguration(
+        let configuration = MeetingCaptureConfiguration(
             mode: self.privateState.setupDraft.mode,
             title: title,
             languageCode: self.privateState.setupDraft.languageCode,
@@ -1129,6 +1139,7 @@ struct MeetingTranscriptionView: View {
             microphone: microphone,
             timestampDefaultTitle: !self.privateState.setupDraft.titleWasEdited
         )
+        return self.settings.applyingMeetingRecordingPreferences(to: configuration)
     }
 
     private func stopAndTranscribe(expectedSessionID: MeetingSessionID?) {
@@ -1352,7 +1363,7 @@ struct MeetingTranscriptionView: View {
             }
             application = resolved.identity
         }
-        return MeetingCaptureConfiguration(
+        let configuration = MeetingCaptureConfiguration(
             mode: session.mode,
             title: session.defaultTitleBase ?? session.title,
             languageCode: session.languageCode,
@@ -1362,6 +1373,7 @@ struct MeetingTranscriptionView: View {
             microphone: microphone,
             timestampDefaultTitle: session.defaultTitleBase != nil
         )
+        return self.settings.applyingMeetingRecordingPreferences(to: configuration)
     }
 
     private func resolvedMicrophone(for session: MeetingSession) -> MeetingMicrophoneIdentity? {
@@ -1449,12 +1461,18 @@ struct MeetingTranscriptionView: View {
                 }
                 let sourceDirectory = source.directory
                 let profile = stamp.profile
-                // The shared exporter is joined, including its detached worker. Its final move
-                // currently has no cancellation gate; per-file reads still refuse a concealed owner.
-                try await Self.exportAudioFiles(of: freshSession, from: sourceDirectory, into: destinationFolder) { source, destination in
-                    guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.current == profile else { throw CancellationError() }
-                    try FileManager.default.copyItem(at: source, to: destination)
-                }
+                let exported = try await Self.exportAudioFiles(
+                    of: freshSession, from: sourceDirectory, into: destinationFolder,
+                    copyItem: { source, destination in
+                        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.current == profile else { throw CancellationError() }
+                        try FileManager.default.copyItem(at: source, to: destination)
+                    },
+                    validatePublication: {
+                        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.current == profile else { throw CancellationError() }
+                    }
+                )
+                guard self.privateState.accepts(stamp) else { return }
+                NSWorkspace.shared.activateFileViewerSelecting([exported])
             } catch {
                 guard self.privateState.accepts(stamp) else { return }
                 self.privateState.actionErrorMessage = PichiLocalization.format("Export failed: %@", error.localizedDescription)
@@ -1462,11 +1480,14 @@ struct MeetingTranscriptionView: View {
         }
     }
 
+    @discardableResult
     nonisolated static func exportAudioFiles(
         of session: MeetingSession, from sourceDirectory: URL, into destinationFolder: URL,
-        copyItem: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }
-    ) async throws {
-        try await MeetingAudioExporter.exportAudioFiles(of: session, from: sourceDirectory, into: destinationFolder, copyItem: copyItem)
+        copyItem: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) },
+        validatePublication: @escaping @Sendable () throws -> Void = {}
+    ) async throws -> URL {
+        try await MeetingAudioExporter.exportAudioFiles(of: session, from: sourceDirectory, into: destinationFolder,
+                                                       copyItem: copyItem, validatePublication: validatePublication)
     }
 
     private nonisolated static func sanitizedExportName(_ title: String) -> String {
@@ -1677,11 +1698,12 @@ struct MeetingTranscriptionView: View {
     private func openScreenRecordingSettings() {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
         else { return }
-        PermissionDragGuideController.shared.present(
+        self.screenPermissionGuideID = PermissionDragGuideController.shared.present(
             instruction: PichiLocalization.format("Drag %@ into the Screen & System Audio Recording list as shown", Bundle.main.fluidAppDisplayName),
             settingsPaneURL: url,
             isGranted: { CGPreflightScreenCaptureAccess() },
             onGranted: { [self] in
+                self.screenPermissionGuideID = nil
                 self.refreshCachedReadiness()
                 self.privateState.run { _ in await self.refreshSources(requestPermissions: false) }
             }
@@ -1765,6 +1787,7 @@ struct MeetingTranscriptionCanvas: View {
     let state: MeetingTranscriptionCanvasState
     var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
     var microphoneMuteState: MeetingMicrophoneMuteState = .notApplicable
+    var onToggleMicrophone: (() -> Void)? = nil
     let applications: [MeetingApplicationOption]
     let microphones: [MeetingMicrophoneOption]
     let readiness: MeetingSetupReadiness
@@ -1864,6 +1887,7 @@ struct MeetingTranscriptionCanvas: View {
                         liveTranscript: liveTranscript,
                         pendingSpeech: self.pendingSpeech,
                         microphoneMuteState: self.microphoneMuteState,
+                        onToggleMicrophone: self.onToggleMicrophone,
                         isStopping: false,
                         onStop: self.onStop
                     )

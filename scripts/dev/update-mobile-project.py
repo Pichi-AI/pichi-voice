@@ -17,7 +17,11 @@ APP_INFO = ROOT / "Sources/Mobile/Info.plist"
 VERSION_CONFIG = ROOT / "Sources/Mobile/Version.xcconfig"
 # Debug and Release share one app identity. An embedded extension must extend it, so a local
 # signing identity overrides this one setting rather than PRODUCT_BUNDLE_IDENTIFIER.
-APP_BUNDLE = "ai.pichi.voice.mobile"
+brand_identity = re.findall(r"^PICHI_BUNDLE_IDENTIFIER\s*=\s*([A-Za-z0-9.-]+)\s*$",
+    (ROOT / "Configuration/PichiBrand.xcconfig").read_text(), re.MULTILINE)
+if len(brand_identity) != 1:
+    raise ValueError("Expected one literal PICHI_BUNDLE_IDENTIFIER in Configuration/PichiBrand.xcconfig")
+APP_BUNDLE = brand_identity[0]
 
 # The app declares Live Activity support; the plist keeps its compact hand-edited layout.
 app_info_text = APP_INFO.read_text()
@@ -57,13 +61,14 @@ resource_paths = [
     "Sources/Fluid/Localization/Localizable.xcstrings", "Sources/Fluid/Assets.xcassets",
     "Sources/Fluid/Branding/brand-package.json", "Sources/Fluid/Resources/Notices",
     "Sources/Mobile/Resources/brand-distribution.json", "Sources/Mobile/Resources/MobileAssets.xcassets",
+    "Sources/Mobile/Resources/PrivacyInfo.xcprivacy",
 ]
 file_ids, source_builds, resource_builds = [], [], []
 file_refs = {}
 def file_ref(path, label="Mobile file "):
     if path not in file_refs:
         kind = {".swift":"sourcecode.swift", ".xcstrings":"text.json.xcstrings", ".xcassets":"folder.assetcatalog",
-                ".strings":"text.plist.strings", ".json":"text.json", ".xcconfig":"text.xcconfig"}.get(Path(path).suffix, "folder")
+                ".strings":"text.plist.strings", ".xcprivacy":"text.xml", ".json":"text.json", ".xcconfig":"text.xcconfig"}.get(Path(path).suffix, "folder")
         file_refs[path] = obj(label + path, f"isa = PBXFileReference; lastKnownFileType = {kind}; path = {quoted(path)}; sourceTree = SOURCE_ROOT;")
         file_ids.append(file_refs[path])
     return file_refs[path]
@@ -117,15 +122,17 @@ def configs(label, test=False, hosted=False, extension=False):
             settings.update(BUNDLE_LOADER="$(TEST_HOST)",
                 TEST_HOST="$(BUILT_PRODUCTS_DIR)/PichiVoiceMobile.app/PichiVoiceMobile")
         elif test:
-            settings.update(TEST_TARGET_NAME="PichiVoiceMobile", BUNDLE_LOADER="", TEST_HOST="")
+            settings.update(TEST_TARGET_NAME="PichiVoiceMobile", BUNDLE_LOADER="", TEST_HOST="",
+                PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER=APP_BUNDLE + ".uitests",
+                PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_UI_TEST_BUNDLE_IDENTIFIER)")
         elif extension:
             # The extension has no String Catalog; the app passes it already localized copy.
-            settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER=APP_BUNDLE, PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER).activity",
+            settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER="$(PICHI_BUNDLE_IDENTIFIER)", PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER).activity",
                 INFOPLIST_FILE="Sources/MobileActivity/Info.plist",
                 SKIP_INSTALL="YES", APPLICATION_EXTENSION_API_ONLY="YES", SWIFT_EMIT_LOC_STRINGS="NO",
                 LD_RUNPATH_SEARCH_PATHS="$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks")
         else:
-            settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER=APP_BUNDLE, PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER)",
+            settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER="$(PICHI_BUNDLE_IDENTIFIER)", PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER)",
                 INFOPLIST_FILE="Sources/Mobile/Info.plist", CODE_SIGN_ENTITLEMENTS="Sources/Mobile/Mobile.entitlements",
                 ASSETCATALOG_COMPILER_APPICON_NAME="MobileAppIcon",
                 ENABLE_PREVIEWS="YES", PICHI_SOURCE_REVISION="unknown")
@@ -171,7 +178,7 @@ test_config = configs("Mobile test", True)
 test_target = obj("PichiVoiceMobileUITests", f'isa = PBXNativeTarget; buildConfigurationList = {test_config}; buildPhases = {arr([test_sources,test_frameworks])}; buildRules = (); dependencies = {arr([dependency])}; name = PichiVoiceMobileUITests; productName = PichiVoiceMobileUITests; productReference = {test_product}; productType = "com.apple.product-type.bundle.ui-testing";')
 integration_builds = []
 integration_paths = list((ROOT / "Tests/MobileIntegrationTests").glob("*.swift"))
-for portable_name in ["MobileRegisteredModelInferenceTests.swift", "MeetingOwnerVoiceProfileTests.swift"]:
+for portable_name in ["MobileRegisteredModelInferenceTests.swift", "MeetingOwnerVoiceProfileTests.swift", "MeetingTranscriptAssemblerTests.swift"]:
     portable_test = ROOT / "Tests/FluidDictationIntegrationTests" / portable_name
     if portable_test.is_file(): integration_paths.append(portable_test)
 for path in sorted(integration_paths):
