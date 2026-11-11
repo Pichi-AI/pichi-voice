@@ -94,7 +94,7 @@ nonisolated struct DictionaryCorrectionReplacementPlan {
     let text: String
     let replacement: String
 
-    init?(sourceText: String, range: NSRange, replacement: String, scope: NSRange? = nil) {
+    init?(sourceText: String, range: NSRange, replacement: String, scope: NSRange? = nil, protectedRanges: [NSRange] = []) {
         let source = sourceText as NSString
         let scope = scope ?? NSRange(location: 0, length: source.length)
         guard source.length <= 100_000, replacement.utf16.count <= 320,
@@ -104,8 +104,9 @@ nonisolated struct DictionaryCorrectionReplacementPlan {
         let heard = source.substring(with: range)
         var matches = [range]
         if DictionaryCorrectionEditPolicy.isTerm(heard), DictionaryCorrectionEditPolicy.isTerm(replacement) {
-            matches += Self.exactTermRanges(of: heard, in: sourceText, scope: scope).filter {
-                $0 != range && NSIntersectionRange($0, range).length == 0
+            matches += Self.exactTermRanges(of: heard, in: sourceText, scope: scope).filter { candidate in
+                candidate != range && NSIntersectionRange(candidate, range).length == 0 &&
+                    protectedRanges.allSatisfy { NSIntersectionRange($0, candidate).length == 0 }
             }
         }
         self.ranges = matches.sorted { $0.location < $1.location }
@@ -220,6 +221,47 @@ nonisolated struct DictionaryCorrectionTextMap {
     private var edits: [(range: NSRange, length: Int, deletedLetters: Bool)] = []
 
     init(originalText: String) { self.originalText = originalText; self.text = originalText }
+
+    /// Applies exact character edits from a formatting stage while preserving
+    /// immutable origin coordinates. Large unrelated rewrites have no mapping.
+    mutating func remap(to text: String) -> [(range: NSRange, replacement: String)]? {
+        if text == self.text { return [] }
+        let before = Array(self.text), after = Array(text)
+        guard before.count + after.count <= 16_384 else { return nil }
+        var removed = Set<Int>(), added = Set<Int>()
+        for change in after.difference(from: before) {
+            switch change {
+            case let .remove(offset, _, _): removed.insert(offset)
+            case let .insert(offset, _, _): added.insert(offset)
+            }
+        }
+        var offsets = [0]
+        for character in before { offsets.append(offsets[offsets.count - 1] + String(character).utf16.count) }
+        var pairs: [(Int, Int)] = [], source = 0, target = 0
+        while source < before.count, target < after.count {
+            if removed.contains(source) { source += 1 }
+            else if added.contains(target) { target += 1 }
+            else { pairs.append((source, target)); source += 1; target += 1 }
+        }
+        pairs.append((before.count, after.count))
+        var edits: [(range: NSRange, replacement: String)] = []
+        var sourceStart = 0, targetStart = 0
+        for (sourceEnd, targetEnd) in pairs {
+            if sourceStart != sourceEnd || targetStart != targetEnd {
+                edits.append((NSRange(location: offsets[sourceStart], length: offsets[sourceEnd] - offsets[sourceStart]),
+                    String(after[targetStart..<targetEnd])))
+            }
+            sourceStart = sourceEnd + 1; targetStart = targetEnd + 1
+        }
+        guard edits.count <= 256 else { return nil }
+        var updated = self
+        for edit in edits.reversed() {
+            guard updated.replace(range: edit.range, replacement: edit.replacement) else { return nil }
+        }
+        guard updated.text == text else { return nil }
+        self = updated
+        return edits
+    }
 
     /// Maps an immutable delivered span through confirmed edits. Partial overlap
     /// is ambiguous and cannot authorize a later write to another word.

@@ -40,7 +40,9 @@ final class DictationHistoryCorrectionSession {
         let isOriginal = sourceRange != nil
         guard let range = sourceRange ?? finalRange else { return false }
         let before = isOriginal ? entry.sourceTranscriptText : (entry.clipboardText ?? "")
-        let plan = replacesAllOccurrences ? DictionaryCorrectionReplacementPlan(sourceText: before, range: range, replacement: replacement) : nil
+        let protected = isOriginal ? entry.currentDictionaryReplacements.map(\.range) : []
+        let plan = replacesAllOccurrences ? DictionaryCorrectionReplacementPlan(sourceText: before, range: range,
+            replacement: replacement, protectedRanges: protected) : nil
         guard self.history.applyWordCorrection(entryID: self.entryID, expectedText: before, range: range,
             replacement: replacement, profile: self.profile, isOriginal: isOriginal, replacesAllOccurrences: replacesAllOccurrences),
               let updated = self.history.entries.first(where: { $0.id == self.entryID }) else { return false }
@@ -49,8 +51,11 @@ final class DictationHistoryCorrectionSession {
         }
         // Keep final-only mapping only while the persisted formatter projection is
         // exactly the same explicit replacement plan. Never guess after a rewrite.
+        let finalProtected = entry.currentDictionaryReplacements.compactMap {
+            DictionaryLearningAlignmentResolver.textRange(in: entry.clipboardText ?? "", delivered: entry.sourceTranscriptText, selected: $0.range)
+        }
         if var map = self.finalMap, let finalRange,
-           let finalPlan = DictionaryCorrectionReplacementPlan(sourceText: map.text, range: finalRange, replacement: replacement),
+           let finalPlan = DictionaryCorrectionReplacementPlan(sourceText: map.text, range: finalRange, replacement: replacement, protectedRanges: finalProtected),
            (replacesAllOccurrences ? finalPlan.text : (map.text as NSString).replacingCharacters(in: finalRange, with: replacement)) == updated.clipboardText {
             for edit in (replacesAllOccurrences ? finalPlan.ranges : [finalRange]).reversed() { _ = map.replace(range: edit, replacement: replacement) }
             self.finalMap = map
@@ -71,9 +76,8 @@ final class DictationHistoryCorrectionSession {
     }
 
     func rememberRejection(_ hit: DictionaryHistoryReplacement, corrected: String) async {
-        let expected = self.expectedSource
         _ = await DictionaryRejectionService.shared.remember(hit, corrected: corrected, profile: self.profile, isValid: {
-            self.history.entries.first(where: { $0.id == self.entryID })?.sourceTranscriptText == expected
+            self.history.entries.first(where: { $0.id == self.entryID })?.rejectionRemainsValid(hit.id) == true
         })
     }
 }

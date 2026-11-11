@@ -1012,7 +1012,9 @@ final class TranscriptionHistoryStore: ObservableObject {
               replacement.utf16.count <= 100_000,
               !replacement.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
         else { return false }
-        let plan = replacesAllOccurrences ? DictionaryCorrectionReplacementPlan(sourceText: expectedText, range: range, replacement: replacement) : nil
+        let protected = isOriginal ? self.entries[index].currentDictionaryReplacements.map(\.range) : []
+        let plan = replacesAllOccurrences ? DictionaryCorrectionReplacementPlan(sourceText: expectedText, range: range,
+            replacement: replacement, protectedRanges: protected) : nil
         let final = plan?.text ?? expectedText.replacingCharacters(in: swiftRange, with: replacement)
         guard !final.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               final.utf16.count <= 100_000 else { return false }

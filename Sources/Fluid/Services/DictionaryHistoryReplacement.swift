@@ -8,36 +8,48 @@ nonisolated struct DictionaryHistoryReplacement: Codable, Equatable, Identifiabl
     let label: String
     let heard: String
     var location: Int
-    let length: Int
+    var length: Int
     let kind: Kind
-    var evidence: DictionaryAcousticEvidence?
+    var evidenceID: UUID? = nil
+    /// Exact input to this rule, which can differ from the original model text in a chain.
+    var ruleInput: String? = nil
+    /// Transient only. History retains an ID into the bounded evidence archive.
+    var evidence: DictionaryAcousticEvidence? = nil
+    private enum CodingKeys: String, CodingKey {
+        case id, entryID, label, heard, location, length, kind, evidenceID, ruleInput
+    }
     var range: NSRange { NSRange(location: self.location, length: self.length) }
 
     func isValid(in text: String) -> Bool {
         self.label.utf16.count <= 320 && self.heard.utf16.count <= 320 && !self.heard.isEmpty &&
             DictionaryCorrectionReplacementPlan.isValid(self.range, in: text) &&
-            (text as NSString).substring(with: self.range) == self.label && self.heard != self.label
+            (text as NSString).substring(with: self.range).caseInsensitiveCompare(self.label) == .orderedSame && self.heard != self.label
     }
 
     static func sanitized(_ hits: [Self], in text: String) -> [Self] {
-        var remainingBytes = 512 * 1024
         var identities = Set<UUID>()
         return hits.prefix(64).compactMap { hit in
             guard hit.isValid(in: text), identities.insert(hit.id).inserted else { return nil }
             var hit = hit
             if let evidence = hit.evidence {
-                if evidence.entryID == hit.entryID, evidence.label == hit.label, evidence.frames.isValid,
-                   evidence.modelKey.utf8.count <= 1024, evidence.profileKey.utf8.count <= 2048,
-                   evidence.frames.values.count <= remainingBytes / MemoryLayout<Float>.size {
-                    remainingBytes -= evidence.frames.values.count * MemoryLayout<Float>.size
-                } else { hit.evidence = nil }
+                hit.evidenceID = evidence.entryID == hit.entryID && evidence.label == hit.label && evidence.frames.isValid ? evidence.id : nil
             }
+            hit.evidence = nil
+            if hit.ruleInput?.utf16.count ?? 0 > 320 { hit.ruleInput = nil }
             return hit
         }
     }
 }
 
 extension TranscriptionHistoryEntry {
+    func rejectionRemainsValid(_ replacementID: UUID) -> Bool {
+        guard let hit = self.dictionaryReplacements.first(where: { $0.id == replacementID }) else { return false }
+        return self.sourceFragments.contains { fragment in
+            guard let spelling = DictionaryCorrectionEditPolicy.acousticSpelling(fragment.text) else { return false }
+            return fragment.originalRange == hit.range && fragment.isValid(in: self.sourceTranscriptText) &&
+                spelling.caseInsensitiveCompare(hit.label) != .orderedSame
+        }
+    }
     /// Manual edits supersede only the overlapping substitution, preserving all
     /// other occurrence identities and shifting them through confirmed edits.
     var currentDictionaryReplacements: [DictionaryHistoryReplacement] {

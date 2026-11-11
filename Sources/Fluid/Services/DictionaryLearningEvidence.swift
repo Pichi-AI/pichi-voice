@@ -142,11 +142,21 @@ nonisolated enum DictionaryLearningAlignmentResolver {
         guard before.count + after.count <= 2048,
               let first = after.firstIndex(where: { NSIntersectionRange($0.range, selected).length > 0 }),
               let last = after.lastIndex(where: { NSIntersectionRange($0.range, selected).length > 0 }),
-              after[first].range.location == selected.location,
-              NSMaxRange(after[last].range) == NSMaxRange(selected),
+              after[first].range.location >= selected.location,
+              NSMaxRange(after[last].range) <= NSMaxRange(selected),
               let mapped = try? self.sourceRange(raw: before.map(\.text), delivered: after.map(\.text), selected: first..<(last + 1)),
               !mapped.isEmpty, mapped.lowerBound >= 0, mapped.upperBound <= before.count else { return nil }
-        return NSUnionRange(before[mapped.lowerBound].range, before[mapped.upperBound - 1].range)
+        let lexical = NSUnionRange(before[mapped.lowerBound].range, before[mapped.upperBound - 1].range)
+        let prefixLength = after[first].range.location - selected.location
+        let suffixLength = NSMaxRange(selected) - NSMaxRange(after[last].range)
+        guard prefixLength <= 8, suffixLength <= 8, lexical.location >= prefixLength,
+              NSMaxRange(lexical) + suffixLength <= source.utf16.count else { return nil }
+        let prefix = (delivered as NSString).substring(with: NSRange(location: selected.location, length: prefixLength))
+        let suffix = (delivered as NSString).substring(with: NSRange(location: NSMaxRange(after[last].range), length: suffixLength))
+        guard !prefix.contains(where: { $0.isWhitespace }), !suffix.contains(where: { $0.isWhitespace }),
+              (source as NSString).substring(with: NSRange(location: lexical.location - prefixLength, length: prefixLength)) == prefix,
+              (source as NSString).substring(with: NSRange(location: NSMaxRange(lexical), length: suffixLength)) == suffix else { return nil }
+        return NSRange(location: lexical.location - prefixLength, length: lexical.length + prefixLength + suffixLength)
     }
 
     static func resolve(

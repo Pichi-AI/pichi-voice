@@ -3789,6 +3789,7 @@ struct ContentView: View {
             }
             // Delivery UI must complete before correction tracking queries Accessibility.
             if didTypeExternally, !spokenSendAllowed {
+                dictionaryReplacementTrace?.remap(to: finalOutputPlan.plainText)
                 AutomaticDictionaryCorrectionTracker.shared.beginObservingInsertion(
                     finalOutputPlan.plainText,
                     targetPID: typingTarget.pid,
@@ -3798,7 +3799,8 @@ struct ContentView: View {
                             DictationHistoryCorrectionSession(history: output.history, entryID: admission.entryID,
                                 deliveredText: finalOutputPlan.plainText, profile: output.profile)
                         }
-                    }
+                    },
+                    dictionaryReplacements: dictionaryReplacementTrace?.replacements ?? []
                 )
                 self.appBench("dictionary_tracking_scheduled afterDeliveryUI=true")
             }

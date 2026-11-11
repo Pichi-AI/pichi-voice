@@ -359,7 +359,7 @@ struct HistoryTextComparisonView: View {
             guard let range = DictionaryLearningAlignmentResolver.textRange(in: content,
                 delivered: self.entry.sourceTranscriptText, selected: hit.range),
                   DictionaryCorrectionReplacementPlan.isValid(range, in: content),
-                  (content as NSString).substring(with: range) == hit.label else { continue }
+                  (content as NSString).substring(with: range).caseInsensitiveCompare(hit.label) == .orderedSame else { continue }
             result.addAttributes([
                 .foregroundColor: NSColor(self.theme.palette.readableText(self.theme.palette.warning)),
                 .backgroundColor: NSColor(self.theme.palette.warning.opacity(0.12)),
@@ -398,10 +398,12 @@ struct HistoryTextComparisonView: View {
     }
 
     private func commitInlineCorrection(range: NSRange, replacement: String) -> Bool {
+        let history = self.historyStore ?? TranscriptionHistoryStore.shared
+        let protected = history.entries.first(where: { $0.id == self.entry.id })?.currentDictionaryReplacements.map(\.range) ?? []
         guard let context = self.activeInlineCorrection,
               context.entryID == self.entry.id, context.edit.range == range,
               let singleEditText = context.edit.replacing(with: replacement),
-              let plan = DictionaryCorrectionReplacementPlan(sourceText: context.edit.sourceText, range: range, replacement: replacement)
+              let plan = DictionaryCorrectionReplacementPlan(sourceText: context.edit.sourceText, range: range, replacement: replacement, protectedRanges: protected)
         else { return false }
         // Detect only the explicit edit. Propagated repetitions are not separate
         // user edits and must not turn one correction into an ambiguous diff.
@@ -416,7 +418,6 @@ struct HistoryTextComparisonView: View {
         let proposed = selectedPhrase ? explicit : (detected ?? explicit)
         let candidate = AutomaticDictionaryCorrectionDetector.confirmedCandidate(proposed, in: plan) ??
             AutomaticDictionaryCorrectionDetector.confirmedCandidate(explicit, in: plan)
-        let history = self.historyStore ?? TranscriptionHistoryStore.shared
         let rejected = history.entries.first(where: { $0.id == context.entryID })?.currentDictionaryReplacements.first {
             $0.range == range && DictionaryNegativeEvidenceResolver.normalized($0.label) != DictionaryNegativeEvidenceResolver.normalized(replacement)
         }
@@ -433,10 +434,9 @@ struct HistoryTextComparisonView: View {
         if let rejected {
             self.savedInlineCorrection = nil
             self.rejectionTask?.cancel()
-            let expected = history.entries.first(where: { $0.id == context.entryID })?.sourceTranscriptText
             self.rejectionTask = Task { @MainActor in
                 let saved = await (self.rejectionService ?? .shared).remember(rejected, corrected: replacement, profile: context.profile, isValid: {
-                    history.entries.first(where: { $0.id == context.entryID })?.sourceTranscriptText == expected
+                    history.entries.first(where: { $0.id == context.entryID })?.rejectionRemainsValid(rejected.id) == true
                 })
                 guard !Task.isCancelled, self.entry.id == context.entryID else { return }
                 self.rejectionStatus = saved ? "Correction saved. Negative example saved." : "Correction saved. Negative example unavailable."

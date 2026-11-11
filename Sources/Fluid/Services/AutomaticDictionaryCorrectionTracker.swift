@@ -219,6 +219,7 @@ final class AutomaticDictionaryCorrectionTracker {
         let observesFocusChanges: Bool
         let learningRecording: DictionaryLearningRecording?
         let historyCorrection: DictationHistoryCorrectionSession?
+        let dictionaryReplacements: [DictionaryHistoryReplacement]
         let knownCanonicalTerms: [String]
         var lastValue: String
         var insertedRange: NSRange
@@ -256,13 +257,15 @@ final class AutomaticDictionaryCorrectionTracker {
     private var repeatVerificationTask: Task<Void, Never>?
     private var suggestionGeneration = UUID()
     private var correctionRevocations: [UUID: Task<Void, Never>] = [:]
+    private var negativeFeedbackTasks: [UUID: Task<Void, Never>] = [:]
     private let profile = PrivateProfileStorage.current
 
     private init() {}
 
     func beginObservingInsertion(
         _ insertedText: String, targetPID: pid_t?, learningRecording: DictionaryLearningRecording? = nil,
-        historyCorrection: DictationHistoryCorrectionSession? = nil
+        historyCorrection: DictationHistoryCorrectionSession? = nil,
+        dictionaryReplacements: [DictionaryHistoryReplacement] = []
     ) {
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
         self.cancel()
@@ -290,6 +293,7 @@ final class AutomaticDictionaryCorrectionTracker {
                         for: seed,
                         learningRecording: DictionaryMatcherExperiment.sharedFeaturesEnabled ? learningRecording : nil,
                         historyCorrection: historyCorrection,
+                        dictionaryReplacements: dictionaryReplacements,
                         knownCanonicalTerms: knownCanonicalTerms
                     )
                     return
@@ -310,7 +314,8 @@ final class AutomaticDictionaryCorrectionTracker {
 
     func prepareForPrivateProfileTransition() async {
         let tasks = [verificationTask, timeoutTask, debounceTask, repeatVerificationTask] +
-            (Array(self.evidencePreparationTasks.values) + Array(self.correctionRevocations.values)).map(Optional.some)
+            (Array(self.evidencePreparationTasks.values) + Array(self.correctionRevocations.values) + Array(self.negativeFeedbackTasks.values)).map(Optional.some)
+        self.negativeFeedbackTasks.values.forEach { $0.cancel() }
         cancel()
         for task in tasks { await task?.value }
     }
@@ -541,6 +546,7 @@ final class AutomaticDictionaryCorrectionTracker {
         for seed: InsertionSeed,
         learningRecording: DictionaryLearningRecording?,
         historyCorrection: DictationHistoryCorrectionSession?,
+        dictionaryReplacements: [DictionaryHistoryReplacement],
         knownCanonicalTerms: [String]
     ) {
         self.verificationTask = nil
@@ -586,6 +592,7 @@ final class AutomaticDictionaryCorrectionTracker {
             observesFocusChanges: focusResult == .success,
             learningRecording: learningRecording,
             historyCorrection: historyCorrection,
+            dictionaryReplacements: dictionaryReplacements,
             knownCanonicalTerms: knownCanonicalTerms,
             lastValue: seed.expectedValue,
             insertedRange: seed.insertedRange,
@@ -684,16 +691,21 @@ final class AutomaticDictionaryCorrectionTracker {
         if let historyCandidate = candidate ?? repeated, let range = historyCandidate.sourceUTF16Range,
            let originalRange = pending.sourceMap.originalRange(for: range) {
             let history = self.session?.historyCorrection
-            dictionaryRejection = history?.dictionaryRejection(originalDeliveredRange: originalRange, replacement: historyCandidate.correctedText)
+            dictionaryRejection = DictionaryReplacementTrace.rejection(in: self.session?.dictionaryReplacements ?? [],
+                originalRange: originalRange, replacement: historyCandidate.correctedText) ??
+                history?.dictionaryRejection(originalDeliveredRange: originalRange, replacement: historyCandidate.correctedText)
             let applied = history?.apply(originalDeliveredRange: originalRange, replacement: historyCandidate.correctedText,
                 replacesAllOccurrences: dictionaryRejection == nil) == true
-            if applied, let hit = dictionaryRejection, let history, self.evidencePreparationTasks.count < 32 {
-                let preparationID = UUID()
-                self.evidencePreparationTasks[preparationID] = Task { @MainActor [weak self] in
-                    defer { self?.evidencePreparationTasks.removeValue(forKey: preparationID) }
-                    await history.rememberRejection(hit, corrected: historyCandidate.correctedText)
+            if let hit = dictionaryRejection, self.negativeFeedbackTasks.count < 32 {
+                let approval = CorrectionApproval(range: NSRange(location: range.location, length: historyCandidate.correctedText.utf16.count), text: historyCandidate.correctedText)
+                self.session?.approvals.append(approval)
+                let profile = self.profile, service = DictionaryRejectionService.shared
+                self.negativeFeedbackTasks[approval.id] = Task { @MainActor [weak self] in
+                    defer { self?.negativeFeedbackTasks.removeValue(forKey: approval.id) }
+                    _ = await service.remember(hit, corrected: historyCandidate.correctedText, profile: profile, isValid: { approval.isValid })
                 }
             }
+            if history != nil, !applied { DebugLogger.shared.debug("History correction skipped because its snapshot changed", source: "DictionaryLearning") }
         }
 
         if let repeated, let range = repeated.sourceUTF16Range,
@@ -838,12 +850,20 @@ final class AutomaticDictionaryCorrectionTracker {
             DebugLogger.shared.info("DICTIONARY_CORRECTION repeats_skipped reason=no_writable_text_attribute", source: "DictionaryLearning")
             return
         }
+        let protected = session.dictionaryReplacements.compactMap { hit -> NSRange? in
+            guard let range = session.textMap.currentRange(forOriginal: hit.range) else { return nil }
+            var current = hit; current.location = range.location; current.length = range.length
+            guard current.isValid(in: session.textMap.text) else { return nil }
+            return NSRange(location: session.insertedRange.location + range.location, length: range.length)
+        }
         for correction in session.acceptedCorrections {
             guard correction.heard != correction.corrected,
                   let first = DictionaryCorrectionReplacementPlan.exactTermRanges(
-                    of: correction.heard, in: session.lastValue, scope: session.insertedRange).first,
+                    of: correction.heard, in: session.lastValue, scope: session.insertedRange).first(where: { candidate in
+                        protected.allSatisfy { NSIntersectionRange($0, candidate).length == 0 }
+                    }),
                   let plan = DictionaryCorrectionReplacementPlan(sourceText: session.lastValue, range: first,
-                    replacement: correction.corrected, scope: session.insertedRange),
+                    replacement: correction.corrected, scope: session.insertedRange, protectedRanges: protected),
                   let restoredSelection = plan.mappedRange(selection) else { continue }
             let delta = plan.text.utf16.count - session.lastValue.utf16.count
             let updatedInsertion = NSRange(location: session.insertedRange.location, length: session.insertedRange.length + delta)

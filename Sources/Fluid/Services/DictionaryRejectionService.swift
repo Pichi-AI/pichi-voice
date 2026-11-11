@@ -44,7 +44,9 @@ final class DictionaryTextRejectionStore {
 /// fabricated from the newly typed spelling. This does not retrain ASR weights.
 @MainActor
 final class DictionaryRejectionService {
-    static let shared = DictionaryRejectionService()
+    static var shared: DictionaryRejectionService {
+        PrivateProfileObjectCache.value(key: "DictionaryRejectionService") { DictionaryRejectionService() }
+    }
     private let negatives: DictionaryNegativeExampleStore
     private let profiles: @MainActor () async -> [PronunciationDictionaryProfile]
     private let entries: @MainActor () -> [SettingsStore.CustomDictionaryEntry]
@@ -52,11 +54,12 @@ final class DictionaryRejectionService {
     private let enabled: @MainActor () -> Bool
 
     init(negatives: DictionaryNegativeExampleStore = .shared,
-         profiles: @escaping @MainActor () async -> [PronunciationDictionaryProfile] = { await PronunciationDictionaryStore.shared.allProfiles() },
+         profiles: (@MainActor () async -> [PronunciationDictionaryProfile])? = nil,
          entries: @escaping @MainActor () -> [SettingsStore.CustomDictionaryEntry] = { SettingsStore.shared.customDictionaryEntries + BuiltInDictionary.entries },
          textRejections: DictionaryTextRejectionStore? = nil,
-         enabled: @escaping @MainActor () -> Bool = { DictionaryMatcherExperiment.collectNegatives }) {
-        self.negatives = negatives; self.profiles = profiles; self.entries = entries
+         enabled: @escaping @MainActor () -> Bool = { DictionaryMatcherExperiment.collectTextNegatives }) {
+        let pronunciation = PronunciationDictionaryStore.shared
+        self.negatives = negatives; self.profiles = profiles ?? { await pronunciation.allProfiles() }; self.entries = entries
         self.textRejections = textRejections ?? .shared; self.enabled = enabled
     }
 
@@ -72,9 +75,12 @@ final class DictionaryRejectionService {
         }
         guard !Task.isCancelled, current(), DictionaryNegativeEvidenceResolver.normalized(corrected) != DictionaryNegativeEvidenceResolver.normalized(hit.label) else { return false }
         if hit.kind == .textRule {
-            return self.textRejections.remember(entryID: hit.entryID, label: hit.label, heard: hit.heard)
+            return self.textRejections.remember(entryID: hit.entryID, label: hit.label, heard: hit.ruleInput ?? hit.heard)
         }
-        guard let evidence = hit.evidence, evidence.entryID == hit.entryID, evidence.label == hit.label,
+        guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { return false }
+        var retained = hit.evidence
+        if retained == nil, let id = hit.evidenceID { retained = await self.negatives.retainedEvidence(id: id) }
+        guard !Task.isCancelled, current(), let evidence = retained, evidence.entryID == hit.entryID, evidence.label == hit.label,
               evidence.frames.isValid else { return false }
         func profileMatches(_ profiles: [PronunciationDictionaryProfile]) -> Bool {
             profiles.contains { item in
@@ -109,10 +115,10 @@ final class DictionaryRejectionService {
               let hit = before.currentDictionaryReplacements.first(where: { $0.id == replacementID }),
               history.applyWordCorrection(entryID: entryID, expectedText: expectedSource, range: hit.range,
                 replacement: hit.heard, profile: profile, isOriginal: true, replacesAllOccurrences: false),
-              let updated = history.entries.first(where: { $0.id == entryID }) else { return (false, false) }
+              history.entries.contains(where: { $0.id == entryID }) else { return (false, false) }
         DictionaryVoiceSpellingLearner.shared.reject(editedText: hit.label)
         let saved = await self.remember(hit, corrected: hit.heard, profile: profile, isValid: {
-            history.entries.first(where: { $0.id == entryID })?.sourceTranscriptText == updated.sourceTranscriptText
+            history.entries.first(where: { $0.id == entryID })?.rejectionRemainsValid(hit.id) == true
         })
         return (true, saved)
     }

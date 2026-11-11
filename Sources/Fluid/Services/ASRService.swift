@@ -1814,7 +1814,9 @@ final class ASRService: ObservableObject {
         await providerResetDrain?.task.value
         let expiry = dictionaryLearningExpiryTask
         expiry?.cancel(); await expiry?.value
-        dictionaryLearningExpiryTask = nil; lastDictionaryLearningRecording = nil; lastDictionaryReplacementTrace = nil
+        dictionaryLearningExpiryTask = nil; lastDictionaryLearningRecording = nil
+        let replacementExpiry = dictionaryReplacementExpiryTask
+        retainDictionaryReplacementTrace(nil); await replacementExpiry?.value
         lastCompletedAudioSnapshot = nil; lastDictionaryTrainingResult = nil
         lastStopOutcome = .empty; finalText = ""; partialTranscription = ""; previousFullTranscription = ""
         audioBuffer.clear(); audioCapturePipeline.clearPreroll()
@@ -2354,6 +2356,8 @@ final class ASRService: ObservableObject {
     private var lastCompletedAudioSnapshot: DictationAudioSnapshot?
     private var lastDictionaryLearningRecording: DictionaryLearningRecording?
     private var lastDictionaryReplacementTrace: DictionaryReplacementTrace?
+    private var dictionaryReplacementExpiryTask: Task<Void, Never>?
+    private var dictionaryReplacementGeneration = UUID()
     private var dictionaryLearningExpiryTask: Task<Void, Never>?
 
     // Streaming transcription state (no VAD)
@@ -2504,8 +2508,23 @@ final class ASRService: ObservableObject {
     }
 
     func consumeDictionaryReplacementTrace() -> DictionaryReplacementTrace? {
-        defer { self.lastDictionaryReplacementTrace = nil }
+        defer { self.retainDictionaryReplacementTrace(nil) }
         return self.lastDictionaryReplacementTrace
+    }
+
+    private func retainDictionaryReplacementTrace(_ trace: DictionaryReplacementTrace?) {
+        self.dictionaryReplacementExpiryTask?.cancel()
+        self.dictionaryReplacementExpiryTask = nil
+        self.dictionaryReplacementGeneration = UUID()
+        self.lastDictionaryReplacementTrace = trace
+        guard trace != nil else { return }
+        let generation = self.dictionaryReplacementGeneration
+        self.dictionaryReplacementExpiryTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .seconds(DictionaryLearningRecording.lifetime)) } catch { return }
+            guard let self, self.dictionaryReplacementGeneration == generation else { return }
+            self.lastDictionaryReplacementTrace = nil
+            self.dictionaryReplacementExpiryTask = nil
+        }
     }
 
     func consumeLastCompletedAudioSnapshot() -> DictationAudioSnapshot? {
@@ -3228,7 +3247,7 @@ final class ASRService: ObservableObject {
             return .failed
         }
         self.retainDictionaryLearningRecording(nil)
-        self.lastDictionaryReplacementTrace = nil
+        self.retainDictionaryReplacementTrace(nil)
         defer {
             if !self.isRunning { self.releaseDictationActivityIfNeeded(captureLease) }
         }
@@ -3889,7 +3908,7 @@ final class ASRService: ObservableObject {
         }
         self.lastCompletedAudioSnapshot = nil
         self.retainDictionaryLearningRecording(nil)
-        self.lastDictionaryReplacementTrace = nil
+        self.retainDictionaryReplacementTrace(nil)
         let stopStartedAt = Date().timeIntervalSince1970
         let traceStartedAt = ProcessInfo.processInfo.systemUptime
         var tracePreviousAt = traceStartedAt
@@ -4268,7 +4287,12 @@ final class ASRService: ObservableObject {
             }
             if !isolatedDictionaryCapture, let admission = self.admittedTranscription, PrivateProfileStorage.isReadable(admission.profile) {
                 replacementTrace.remap(to: outputText)
-                self.lastDictionaryReplacementTrace = replacementTrace
+                let evidence = replacementTrace.replacements.compactMap(\.evidence)
+                if admission.retainHistoryAudio, admission.collectNegatives, !evidence.isEmpty {
+                    do { try await DictionaryNegativeExampleStore.shared.retainEvidence(evidence) }
+                    catch { DebugLogger.shared.warning("Dictionary rejection evidence could not be retained", source: "DictionaryLearning") }
+                }
+                if PrivateProfileStorage.isReadable(admission.profile) { self.retainDictionaryReplacementTrace(replacementTrace) }
             }
             if !isolatedDictionaryCapture {
                 self.recordWordBoostHitIfAny(transcribedText: outputText)
@@ -8229,7 +8253,7 @@ final class ASRService: ObservableObject {
         for (pattern, match) in accepted.reversed() {
             let replacement = pattern.regex.replacementString(for: match, in: text, offset: 0, template: pattern.template)
             let heard = (text as NSString).substring(with: match.range)
-            if DictionaryMatcherExperiment.compareNegatives,
+            if DictionaryMatcherExperiment.compareTextNegatives,
                rejections.rejects(entryID: pattern.entryID, label: replacement, heard: heard) { continue }
             if heard != replacement { onReplacement(pattern, match.range, heard, replacement) }
             output.replaceCharacters(in: match.range, with: replacement)
@@ -8315,7 +8339,7 @@ final class ASRService: ObservableObject {
                     recordReplacement(pattern, range, heard, replacement)
                 },
                 shouldReplace: { _, heard, replacement in
-                    !DictionaryMatcherExperiment.compareNegatives || !rejections.rejects(
+                    !DictionaryMatcherExperiment.compareTextNegatives || !rejections.rejects(
                         entryID: pattern.entryID, label: replacement, heard: heard)
                 }
             )
