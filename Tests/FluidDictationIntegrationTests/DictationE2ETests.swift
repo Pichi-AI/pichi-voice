@@ -139,6 +139,32 @@ final class ExternalDictationHistoryCorrectionTests: XCTestCase {
             XCTAssertTrue(history.entries.isEmpty)
         }
     }
+
+    func testLateAdmittedAudioAttachmentKeepsExternalCorrection() async throws {
+        try await self.withHistory { history, writer, _ in
+            let admission = try history.admitRecordingWrite()
+            let timestamp = Date()
+            let audio = try admission.admitAudioSave(timestamp: timestamp)
+            defer { audio.complete() }
+            let raw = "Pech Voice"
+            history.addEntry(timestamp: timestamp, rawText: raw, processedText: raw,
+                appName: "Fixture", windowTitle: "Fixture", admission: admission)
+            let session = try XCTUnwrap(DictationHistoryCorrectionSession(history: history, entryID: admission.entryID,
+                deliveredText: raw, profile: PrivateProfileStorage.current))
+            XCTAssertTrue(session.apply(originalDeliveredRange: (raw as NSString).range(of: "Pech"), replacement: "Pichi"))
+            let metadata = try audio.save(snapshot: DictationAudioSnapshot(samples: [Float](repeating: 0.01, count: 160), sampleRate: 16_000, channels: 1), model: "synthetic")
+            try admission.attachAudio(metadata, from: audio)
+            try await admission.finish()
+            await history.finishPendingWrites()
+            let entry = try XCTUnwrap(try await writer.load().first)
+            XCTAssertEqual(entry.rawText, raw)
+            XCTAssertEqual(entry.sourceTranscriptText, "Pichi Voice")
+            XCTAssertEqual(entry.processedText, "Pichi Voice")
+            XCTAssertEqual(entry.audio, metadata)
+            XCTAssertEqual(entry.sourceFragments.first?.text, "Pichi")
+            XCTAssertEqual(history.admittedRecordingWriteCount, 0)
+        }
+    }
 }
 
 @MainActor
