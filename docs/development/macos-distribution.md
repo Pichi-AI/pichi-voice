@@ -1,6 +1,15 @@
 # macOS distribution
 
-The primary Mac download is a standard drag-install DMG. Open the image, drag
+The Mac app is distributed only as a standard drag-install DMG, available from
+the product website and Pichi Voice public releases. The application is Developer ID-signed and notarized by Apple.
+Mac App Store upload, review and release are not part of the macOS delivery
+process or its completion criteria. Do not prepare a separate sandboxed Store
+edition or replace automatic typing into other apps with manual paste for Store
+eligibility. Automatic typing is a core product capability. This distribution
+decision was confirmed by the product owner on November 11, 2026. Mobile App
+Store and TestFlight distribution remain separate.
+
+The installation flow is unchanged. Open the image, drag
 Pichi Voice to Applications, and open the app. The Finder layout uses a quiet
 light background, Pichi colors, the genuine app icon and the standard
 Applications icon. There is no separate Installer wizard or installation script.
@@ -13,9 +22,8 @@ downloads models, or adds credentials to the payload. Existing installations can
 replay setup through Help > Replay onboarding without deleting their data or
 resetting macOS permissions. Keep a verified backup before reinstall acceptance.
 
-A signed PKG remains an optional distribution format. It requires administrator
-authorization and uses the native Installer steps. Its resources and scripts
-remain maintained below for that separate use case.
+PKG resources and scripts are retained below as reference for historical
+packages. A PKG is not a current Mac release deliverable or acceptance gate.
 
 ## Archive signing preparation
 
@@ -38,7 +46,7 @@ entitlement parity were required before submission. This is evidence for that
 archive and export configuration, not a claim that all unsigned archives fail.
 Never publish an export merely because Xcode reports success.
 
-## Create an optional PKG
+## Historical PKG tooling
 
 Start with the frozen Developer ID Application-signed, notarized and stapled
 app. Do not rebuild, re-sign or modify it merely to change the download
@@ -160,7 +168,7 @@ The signed app's file data and metadata must remain unchanged. Do not set
 causing strict signature verification to reject it. Store the window arrangement
 in the disk image's own `.DS_Store` instead.
 
-### Verify the optional DMG
+### Verify the DMG
 
 Mount the image read-only, confirm the Applications link targets `/Applications`,
 and compare every app file, executable mode and symlink with the frozen input.
