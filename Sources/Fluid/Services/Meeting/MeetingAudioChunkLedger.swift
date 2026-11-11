@@ -2,6 +2,15 @@ import CryptoKit
 import Darwin
 import Foundation
 
+/// Self-describing capture metadata is stored inside its CAF as well as in the optional
+/// journal. A damaged index must not orphan PCM or require guessing its clock or provenance.
+nonisolated struct MeetingAudioRecoveryCapsule: Codable, Sendable {
+    var trackID: MeetingAudioTrackID
+    var kind: MeetingAudioTrackKind
+    var chunk: MeetingAudioChunk
+    var captureEras: [MeetingCaptureEra]? = nil
+}
+
 /// P0b writer-ledger facts. These are intentionally standalone and optional at the session layer:
 /// old session JSON never contains them, while the PCM-first writer durably checkpoints each new
 /// capture chunk. Legacy AAC sessions continue to decode without these records.
@@ -70,6 +79,39 @@ final nonisolated class MeetingAudioChunkLedgerStore: @unchecked Sendable {
     private let ledgerDirectoryName = "chunk-ledger"
 
     init(sessionDirectory: URL) { self.sessionDirectory = sessionDirectory.standardizedFileURL }
+
+    struct CaptureRecord: Codable, Sendable {
+        var trackID: MeetingAudioTrackID
+        var kind: MeetingAudioTrackKind
+        var chunk: MeetingAudioChunk
+    }
+
+    func writeCapture(_ record: CaptureRecord) throws {
+        try self.validate(record.chunk.relativeFilePath)
+        try self.ensureLedgerDirectory()
+        try self.writeReplacing(self.encode(record), to: self.recordURL(chunkID: record.chunk.id, suffix: "capture"))
+    }
+
+    func readCaptures(trackID: MeetingAudioTrackID, kind: MeetingAudioTrackKind) throws -> [MeetingAudioChunk] {
+        let directory = self.sessionDirectory.appendingPathComponent(self.ledgerDirectoryName)
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+        var info = stat()
+        guard lstat(directory.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { throw MeetingAudioChunkLedgerError.pathRejected }
+        let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        guard names.count <= 100_000 else { throw MeetingAudioChunkLedgerError.pathRejected }
+        var chunks: [MeetingAudioChunk] = []
+        for name in names where name.hasSuffix(".capture.json") {
+            let url = directory.appendingPathComponent(name)
+            var file = stat()
+            guard lstat(url.path, &file) == 0, (file.st_mode & S_IFMT) == S_IFREG,
+                  file.st_size > 0, file.st_size <= 8 * 1024 * 1024,
+                  let record = try? self.read(CaptureRecord.self, at: url),
+                  record.trackID == trackID, record.kind == kind else { continue }
+            try self.validate(record.chunk.relativeFilePath)
+            chunks.append(record.chunk)
+        }
+        return chunks.sorted { $0.sequence < $1.sequence }
+    }
 
     func writeIntent(_ intent: MeetingAudioChunkLedgerIntent) throws {
         try self.validate(intent.partialRelativeFilePath)
@@ -201,5 +243,134 @@ final nonisolated class MeetingAudioChunkLedgerStore: @unchecked Sendable {
         let dirFD = open(destination.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY); guard dirFD >= 0
         else { throw MeetingAudioChunkLedgerError.durabilityFailure("open directory") }; defer { close(dirFD) }; guard fsync(dirFD) == 0
         else { throw MeetingAudioChunkLedgerError.durabilityFailure("directory fsync") }
+    }
+}
+
+/// Optional persistence has one active snapshot and one coalesced successor, never one task
+/// per PCM packet. PCM handles are closed before submission. Only this worker hashes/syncs
+/// files, appends per-chunk recovery records, and updates the small track header. The complete
+/// compatibility manifest is written once at Stop. Failure never deletes captured audio.
+final nonisolated class MeetingAudioRecordingJournal: @unchecked Sendable {
+    enum Operation: Sendable { case manifest, intent, checkpoint, capture, finalize }
+    typealias Hook = @Sendable (Operation) throws -> Void
+    typealias Completion = @Sendable (Result<Void, Error>) -> Void
+    struct Snapshot: Sendable {
+        var track: MeetingAudioTrack
+        var intent: MeetingAudioChunkLedgerIntent?
+        var checkpoint: MeetingAudioChunkLedgerCheckpoint?
+        var final: Bool = false
+    }
+    private let lock = NSLock()
+    private let queue = DispatchQueue(label: "ai.pichi.meeting.capture-journal", qos: .utility)
+    private let directory: URL
+    private let ledger: MeetingAudioChunkLedgerStore
+    private let hook: Hook?
+    private let delivery: @Sendable ([MeetingAudioChunk], Error?, [Completion]) -> Void
+    private var pending: Snapshot?
+    private var completions: [Completion] = []
+    private var running = false
+    private var recordedThrough = -1
+    private var pendingRecovery = Set<UUID>()
+
+    init(directory: URL, hook: Hook? = nil,
+         delivery: @escaping @Sendable ([MeetingAudioChunk], Error?, [Completion]) -> Void) {
+        self.directory = directory
+        self.ledger = MeetingAudioChunkLedgerStore(sessionDirectory: directory)
+        self.hook = hook
+        self.delivery = delivery
+    }
+
+    func submit(_ snapshot: Snapshot, completion: Completion? = nil) {
+        let (start, rejected) = self.lock.withLock { () -> (Bool, Bool) in
+            self.pending = snapshot
+            let rejected = completion != nil && self.completions.count >= 128
+            if let completion, !rejected { self.completions.append(completion) }
+            guard !self.running else { return (false, rejected) }
+            self.running = true
+            return (true, rejected)
+        }
+        if rejected { completion?(.failure(MeetingAudioChunkLedgerError.durabilityFailure("metadata acknowledgements saturated"))) }
+        if start { self.queue.async { self.drain() } }
+    }
+
+    private func drain() {
+        while let (snapshot, callbacks) = self.lock.withLock({ () -> (Snapshot, [Completion])? in
+            guard let snapshot = self.pending else { self.running = false; return nil }
+            self.pending = nil
+            let callbacks = self.completions
+            self.completions.removeAll(keepingCapacity: true)
+            return (snapshot, callbacks)
+        }) {
+            let result = self.persist(snapshot)
+            self.delivery(result.chunks, result.error, callbacks)
+        }
+    }
+
+    private func persist(_ snapshot: Snapshot) -> (chunks: [MeetingAudioChunk], error: Error?) {
+        var failure: Error?
+        var track = snapshot.track
+        var updates: [MeetingAudioChunk] = []
+        // A header failure closes transcription admission, not audio intake. Still finalize
+        // already captured files, and retry metadata on the next coalesced snapshot or Stop.
+        do { try self.writeManifest(track, includeChunks: false) } catch { failure = failure ?? error }
+        if let intent = snapshot.intent {
+            do { try self.hook?(.intent); try self.ledger.writeIntent(intent) } catch { failure = failure ?? error }
+        }
+        if let checkpoint = snapshot.checkpoint {
+            do { try self.hook?(.checkpoint); try self.ledger.writeCheckpoint(checkpoint, for: checkpoint.chunkID) }
+            catch { failure = failure ?? error }
+        }
+        let recovered: [UUID: MeetingAudioChunk]
+        if snapshot.final {
+            recovered = Dictionary((try? self.ledger.readCaptures(trackID: track.id, kind: track.kind))?.map { ($0.id, $0) } ?? [], uniquingKeysWith: { first, _ in first })
+        } else { recovered = [:] }
+        for index in track.chunks.indices {
+            var chunk = track.chunks[index]
+            if chunk.sequence <= self.recordedThrough, !self.pendingRecovery.contains(chunk.id) {
+                if snapshot.final, chunk.finalizationState == .writing,
+                   let saved = recovered[chunk.id] {
+                    track.chunks[index] = saved; updates.append(saved)
+                }
+                continue
+            }
+            if chunk.finalizationState == .writing {
+                do {
+                    try self.hook?(.finalize)
+                    let file = try MeetingAudioFilePCMChunkSink.recoverClosedCapture(chunk, in: self.directory)
+                    chunk.relativeFilePath = file.relativeFilePath
+                    chunk.byteCount = file.byteCount; chunk.sha256 = file.sha256
+                    chunk.finalizationState = .finalized
+                    chunk.captureAnalysisAsset = .init(role: .captureAnalysis, encoding: .linearPCMFloat32CAFV1,
+                        presence: .ready, relativeFilePath: file.relativeFilePath, byteCount: file.byteCount,
+                        sha256: file.sha256, sampleRate: file.sampleRate, channelCount: file.channelCount, frameCount: file.frameCount)
+                } catch { failure = failure ?? error }
+            }
+            // Even a not-yet-verified partial has an exact recovery extent and clock. It is
+            // never admitted to inference until recovery independently validates the container.
+            do {
+                try self.hook?(.capture)
+                try self.ledger.writeCapture(.init(trackID: track.id, kind: track.kind, chunk: chunk))
+                self.recordedThrough = max(self.recordedThrough, chunk.sequence)
+                if chunk.finalizationState == .writing { self.pendingRecovery.insert(chunk.id) }
+                else { self.pendingRecovery.remove(chunk.id) }
+            } catch { failure = failure ?? error }
+            track.chunks[index] = chunk
+            updates.append(chunk)
+        }
+        if snapshot.final {
+            do { try self.writeManifest(track, includeChunks: true) } catch { failure = failure ?? error }
+        }
+        return (updates, failure)
+    }
+
+    private func writeManifest(_ track: MeetingAudioTrack, includeChunks: Bool) throws {
+        try self.hook?(.manifest)
+        var value = track
+        if !includeChunks { value.chunks = [] }
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(value)
+        let url = self.directory.appendingPathComponent("tracks/\(track.kind.rawValue)/track.json")
+        try data.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: NSNumber(value: Int16(0o600))], ofItemAtPath: url.path)
     }
 }

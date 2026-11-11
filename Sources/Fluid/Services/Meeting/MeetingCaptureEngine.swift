@@ -56,12 +56,6 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 PichiLocalization.text("In-memory transcription is not available for this attempt.")
             )
         }
-        if configuration.effectiveSpeakerProcessingMode == .streaming {
-            guard self.memoryConsumerFactory != nil else {
-                throw MeetingCaptureError.captureStartFailed(
-                    PichiLocalization.text("In-memory transcription is not available for this attempt."))
-            }
-        }
         guard self.activeCapture == nil, self.startingSessionID == nil, self.stopTask == nil else {
             throw MeetingCaptureError.captureAlreadyActive
         }
@@ -196,7 +190,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                         )
                         eventHandler(.interrupted(kind: .voiceProcessingDeclined, trackID: nil, detail: reason))
                     }
-                    try await microphoneWriter.updateTrackMetadata { track in
+                    await microphoneWriter.updateCaptureMetadata { track in
                         track.captureEras = [MeetingCaptureEra(
                             method: .screenCaptureKit,
                             deviceUID: configuration.microphone.coreAudioUID,
@@ -342,8 +336,9 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             #endif
             // The bounded worker's finish includes the final durable speaker checkpoint.
             // Stop cannot hand the session back before that tail has joined.
-            do { try await activeCapture.streamingTee?.finish() }
-            catch { runtimeFailure = runtimeFailure ?? error }
+            // Processing failure has its own recoverable event; both PCM writers already
+            // closed successfully and must not be reported as a capture-stop failure.
+            _ = try? await activeCapture.streamingTee?.finish()
             let result = MeetingCaptureStopResult(tracks: tracks, stoppedAt: stoppedAt,
                                                  stoppedHostTime: stoppedHostTime)
             if let runtimeFailure {
@@ -855,7 +850,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             includeMicrophone: includeMicrophone
         )
         if includeMicrophone {
-            try await microphoneWriter.updateTrackMetadata { track in
+            await microphoneWriter.updateCaptureMetadata { track in
                 guard var eras = track.captureEras, !eras.isEmpty else { return }
                 eras[0].deviceUID = resolvedMicrophone.coreAudioUID
                 eras[0].deviceName = resolvedMicrophone.displayName
@@ -1148,8 +1143,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     ) {
         let callbackState = self.stateLock.withLock {
             () -> (MeetingAECActivationState, MeetingAECPipeline?, MeetingAECStreamToken)? in
-            guard expectedGeneration == nil || expectedGeneration == self.streamGeneration,
-                  !self.captureClockFailed else { return nil }
+            guard expectedGeneration == nil || expectedGeneration == self.streamGeneration else { return nil }
             // Only a finite packet already owned by this clock can drain after its producer joins.
             // A native callback never receives this exception, and retired producers remain fenced.
             guard drainingOwnedClock ? stream === self.stream : MeetingScreenCaptureRecoveryPolicy.mayAdmitSample(
@@ -1265,7 +1259,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             return true
         }
         guard report else { return }
-        self.eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil,
+        self.eventHandler(.interrupted(kind: .liveTranscriptionDeferred, trackID: nil,
             detail: MeetingCapturePCMError.invalidPresentationTime.localizedDescription))
     }
 
@@ -1298,6 +1292,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         producer: MeetingAECStreamToken? = nil,
         expectedOwnership: MeetingCaptureStreamOwnership? = nil
     ) -> (MeetingAECOutputCommitter, MeetingMicrophoneEchoProtection)? {
+        guard !self.stateLock.withLock({ self.routeSafetyPersistenceFailed }) else { return nil }
         let snapshot = self.stateLock.withLock { () -> (MeetingCaptureStreamOwnership, MeetingMicrophoneEchoProtection)? in
             let owner = self.currentStreamOwnershipLocked()
             guard MeetingCaptureOwnershipGate.mayResumeMicrophone(
@@ -1571,21 +1566,19 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     }
 
     private func handleAECTerminalFailure(_ failure: MeetingAECFailure) {
-        let shouldReport = self.stateLock.withLock { () -> Bool in
-            // An ordered user/rebuild stop already closed admission and owns the terminal event.
+        let report = self.stateLock.withLock { () -> Bool in
             guard !self.stopping, !self.routeSafetyPersistenceFailed else { return false }
             self.routeSafetyPersistenceFailed = true
-            self.stopping = true
             self.aecActivation.invalidate()
             return true
         }
-        guard shouldReport else { return }
+        guard report else { return }
+        // AEC/provenance governs transcription, never ownership of the physical stream.
+        // The next capture callback can create a conservative committer and keep writing PCM.
         _ = self.microphoneTranscriptGate.invalidate()
-        self.eventHandler(.interrupted(
-            kind: .captureStoppedUnexpectedly,
+        self.eventHandler(.interrupted(kind: .liveTranscriptionDeferred,
             trackID: self.microphoneWriter.trackID,
-            detail: "AEC microphone pipeline failed closed (\(failure.rawValue)); recording was stopped to preserve transcript safety."
-        ))
+            detail: PichiLocalization.text("Audio recording continues. Live transcription will be retried later.")))
     }
 
     #if DEBUG
@@ -2463,22 +2456,16 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
 
     /// A failure of either tee sink ends this physical stream once. The recorded failure
     /// also prevents Stop from flushing a misleadingly complete converted timeline.
+    /// A transient queue/timing error disables live interpretation, not the microphone.
+    /// Future valid packets keep their measured host time and remain eligible for PCM storage.
     private func failTranscription(_ error: Error) {
         let emit = self.stateLock.withLock { () -> Bool in
-            // This callback already passed intake. Stop may have closed it meanwhile, but
-            // its joined queue drain must still observe the first rejected PCM buffer.
-            if self.pcmFailure == nil { self.pcmFailure = error }
-            let wasStopping = self.stopping
-            self.stopping = true
-            guard !wasStopping, !self.emittedUnexpectedStop else { return false }
+            guard !self.stopping, !self.emittedUnexpectedStop else { return false }
             self.emittedUnexpectedStop = true
             return true
         }
-        guard emit else { return }
-        let detail = (error as? LocalizedError)?.errorDescription
-            ?? PichiLocalization.text("Audio timing could not be verified.")
-        self.eventHandler(.interrupted(kind: .writerBackpressure, trackID: nil, detail: detail))
-        self.eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: detail))
+        if emit { self.eventHandler(.interrupted(kind: .liveTranscriptionDeferred, trackID: self.writer.trackID,
+            detail: PichiLocalization.text("Audio recording continues. Live transcription will be retried later."))) }
     }
 
     private func observeSessionLifecycle() {
@@ -3505,7 +3492,7 @@ nonisolated enum MeetingRawMicrophoneProtection {
     ) async throws -> Bool {
         guard protection.admitsTranscript, observedAtSeconds.isFinite, observedAtSeconds >= 0 else { return false }
         var recorded = false
-        try await writer.updateTrackMetadata { track in
+        await writer.updateCaptureMetadata { track in
             guard gate.invalidationEpoch == epoch,
                   var eras = track.captureEras, !eras.isEmpty,
                   observedAtSeconds > (eras.last?.startSeconds ?? -.infinity)
@@ -4741,7 +4728,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                     "Voice-processing fallback refused because microphone audio provenance was already committed."
                 )
             }
-            try await self.microphoneWriter.updateTrackMetadata { track in
+            await self.microphoneWriter.updateCaptureMetadata { track in
                 track.captureMethod = .screenCaptureKit
                 track.voiceProcessingConfig = nil
                 track.captureEras = [MeetingCaptureEra(
@@ -4824,7 +4811,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         // must fail the start outright — falling back would mix provenance on promoted writers.
         self.stateLock.withLock { self.phase = .vpio }
         let settled = await self.micCapture.settledConfiguration()
-        try await self.microphoneWriter.updateTrackMetadata { track in
+        await self.microphoneWriter.updateCaptureMetadata { track in
             track.captureMethod = .voiceProcessing
             track.voiceProcessingConfig = settled
             track.captureEras = [MeetingCaptureEra(
@@ -4988,14 +4975,13 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                   !self.routeSafetyPersistenceFailed
             else { return false }
             self.routeSafetyPersistenceFailed = true
-            self.phase = .failed
             self.interruptedThisEra = true
             return true
         }
         guard shouldEmit else { return }
         self.persistRouteInvalidation(boundary)
         self.eventHandler(.interrupted(
-            kind: .captureStoppedUnexpectedly,
+            kind: .liveTranscriptionDeferred,
             trackID: self.microphoneWriter.trackID,
             detail: "Core Audio route observation became unavailable; microphone transcription stopped fail-closed."
         ))
@@ -5075,15 +5061,14 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 let shouldEmit = self.stateLock.withLock { () -> Bool in
                     guard !self.routeSafetyPersistenceFailed else { return false }
                     self.routeSafetyPersistenceFailed = true
-                    self.phase = .failed
                     self.interruptedThisEra = true
                     return true
                 }
                 if shouldEmit {
                     self.eventHandler(.interrupted(
-                        kind: .captureStoppedUnexpectedly,
+                        kind: .liveTranscriptionDeferred,
                         trackID: self.microphoneWriter.trackID,
-                        detail: "Microphone route safety metadata could not be saved; recording was stopped fail-closed."
+                        detail: PichiLocalization.text("Audio recording continues. Live transcription will be retried later.")
                     ))
                 }
             }
@@ -5429,7 +5414,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
 
         // A nil or non-monotonic boundary would misattribute audio; skip the era record instead.
         var recordedNewEra = false
-        try? await self.microphoneWriter.updateTrackMetadata { [weak self] track in
+        await self.microphoneWriter.updateCaptureMetadata { [weak self] track in
             guard let self else { return }
             var eras = track.captureEras ?? [self.legacyEra(from: track)]
             if var last = eras.popLast() {
@@ -5791,7 +5776,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         )
         var recordedNewEra = false
         do {
-            try await self.microphoneWriter.updateTrackMetadata { track in
+            await self.microphoneWriter.updateCaptureMetadata { track in
                 var eras = track.captureEras ?? [self.legacyEra(from: track)]
                 if let boundary, boundary.seconds > (eras.last?.startSeconds ?? -.infinity) {
                     eras.append(MeetingCaptureEra(
@@ -6020,7 +6005,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         let settled = await candidateMicCapture.settledConfiguration()
         // A nil or non-monotonic boundary would misattribute audio; skip the era record instead.
         var recordedNewEra = false
-        try? await self.microphoneWriter.updateTrackMetadata { track in
+        await self.microphoneWriter.updateCaptureMetadata { track in
             var eras = track.captureEras ?? []
             if let boundary, boundary.seconds > (eras.last?.startSeconds ?? -.infinity) {
                 eras.append(MeetingCaptureEra(
@@ -6390,7 +6375,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         let settled = await candidate!.settledConfiguration()
         var recordedNewEra = false
         do {
-            try await self.microphoneWriter.updateTrackMetadata { track in
+            await self.microphoneWriter.updateCaptureMetadata { track in
                 var eras = track.captureEras ?? [self.legacyEra(from: track)]
                 if let boundary, boundary.seconds > (eras.last?.startSeconds ?? -.infinity) {
                     eras.append(MeetingCaptureEra(
@@ -6618,7 +6603,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         }
         var recordedNewEra = false
         do {
-            try await self.microphoneWriter.updateTrackMetadata { track in
+            await self.microphoneWriter.updateCaptureMetadata { track in
                 var eras = track.captureEras ?? [self.legacyEra(from: track)]
                 if let boundary, boundary.seconds > (eras.last?.startSeconds ?? -.infinity) {
                     eras.append(MeetingCaptureEra(
@@ -6828,7 +6813,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 elapsedValidHostSeconds: MeetingVoiceProcessingDriftSnapshot.elapsedValidHostSeconds(statsSnapshot),
                 eligible: MeetingVoiceProcessingDriftSnapshot.isEligible(statsSnapshot)
             )
-            try? await self.microphoneWriter.updateTrackMetadata { track in
+            await self.microphoneWriter.updateCaptureMetadata { track in
                 track.clockDrift = drift
                 if var eras = track.captureEras, var last = eras.popLast() {
                     last.clockDrift = drift
@@ -6887,7 +6872,10 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
                         clockContexts: [MeetingAudioTrackKind: MeetingRecordingClockContext]) async throws -> MeetingMultiTrackCaptureTee? {
         guard configuration.effectiveSpeakerProcessingMode == .streaming else { return nil }
         guard let consumerFactory else {
-            throw MeetingCaptureError.captureStartFailed(PichiLocalization.text("In-memory transcription is not available for this attempt."))
+            if session.audioStorageMode == .memoryOnly { throw MeetingCapturePCMError.transcriptionStopped }
+            eventHandler(.interrupted(kind: .liveTranscriptionDeferred, trackID: nil,
+                detail: PichiLocalization.text("Audio recording continues. Live transcription will be retried later.")))
+            return nil
         }
         let required: Set<MeetingAudioTrackKind> = configuration.mode == .onlineCall
             ? [.microphone, .applicationAudio] : [.microphone]
@@ -6907,7 +6895,10 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
                 clockContexts: clockContexts)
         } catch {
             await MeetingCaptureEngine.finishConsumers(Array(consumers.values))
-            throw error
+            if Task.isCancelled || session.audioStorageMode == .memoryOnly { throw error }
+            eventHandler(.interrupted(kind: .liveTranscriptionDeferred, trackID: nil,
+                detail: PichiLocalization.text("Audio recording continues. Live transcription will be retried later.")))
+            return nil
         }
     }
 
@@ -7058,9 +7049,11 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
             return true
         }
         guard emit else { return }
-        let detail = PichiLocalization.text("In-memory transcription stopped. Completed text was preserved.")
-        self.eventHandler(.interrupted(kind: .writerBackpressure, trackID: nil, detail: detail))
-        self.eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: detail))
+        self.eventHandler(.interrupted(kind: .liveTranscriptionDeferred, trackID: nil,
+            detail: PichiLocalization.text("Audio recording continues. Live transcription will be retried later.")))
+        // Join both attempt-scoped consumers even if the user records for hours afterwards.
+        // finish() is idempotent and closes no physical capture resource.
+        Task { _ = try? await self.finish() }
     }
 
     /// The platform runtime must be joined before calling finish. Repeated callers join one tail.

@@ -665,14 +665,40 @@ actor MeetingSessionStore: MeetingSessionStoring {
                 .appendingPathComponent("tracks", isDirectory: true)
                 .appendingPathComponent(kind.rawValue, isDirectory: true)
                 .appendingPathComponent("track.json", isDirectory: false)
-            guard self.fileSystem.manager.fileExists(atPath: manifestURL.path),
-                  let data = try? Data(contentsOf: manifestURL, options: .mappedIfSafe),
-                  var track = try? self.decoder.decode(MeetingAudioTrack.self, from: data),
-                  track.kind == kind
-            else { continue }
-
-            track.chunks = track.chunks.map { chunk in
-                self.reconcileChunkFile(chunk, sessionDirectory: sessionDirectory)
+            let header = (try? Data(contentsOf: manifestURL, options: .mappedIfSafe)).flatMap {
+                try? self.decoder.decode(MeetingAudioTrack.self, from: $0)
+            }
+            guard var track = header ?? session.audioTracks.first(where: { $0.kind == kind }), track.kind == kind else { continue }
+            if let original = session.audioTracks.first(where: { $0.kind == kind }), original.id != track.id { continue }
+            let ledger = MeetingAudioChunkLedgerStore(sessionDirectory: sessionDirectory)
+            var byID = Dictionary(track.chunks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for chunk in session.audioTracks.first(where: { $0.id == track.id })?.chunks ?? [] where byID[chunk.id] == nil {
+                byID[chunk.id] = chunk
+            }
+            // The per-chunk journal survives a missing or stale index. Capture partials remain
+            // owned recovery inputs until independently verified, never deleted as index debris.
+            for chunk in (try? ledger.readCaptures(trackID: track.id, kind: kind)) ?? [] { byID[chunk.id] = chunk }
+            for capsule in (try? MeetingAudioFilePCMChunkSink.readRecoveryCapsules(in: sessionDirectory, trackID: track.id, kind: kind)) ?? [] {
+                let chunk = capsule.chunk
+                if byID[chunk.id]?.finalizationState != .finalized { byID[chunk.id] = chunk }
+                var eras = track.captureEras ?? []
+                for era in capsule.captureEras ?? [] where !eras.contains(where: { $0.startSeconds == era.startSeconds }) { eras.append(era) }
+                if !eras.isEmpty { track.captureEras = eras.sorted { $0.startSeconds < $1.startSeconds } }
+            }
+            track.chunks = byID.values.map { input -> MeetingAudioChunk in
+                var chunk = input
+                if chunk.finalizationState == .writing, chunk.captureAnalysisAsset?.presence == .partial {
+                    do {
+                        let recovered = try MeetingAudioFilePCMChunkSink.recoverClosedCapture(chunk, in: sessionDirectory)
+                        chunk.finalizationState = .finalized; chunk.sha256 = recovered.sha256; chunk.byteCount = recovered.byteCount
+                        chunk.captureAnalysisAsset = .init(role: .captureAnalysis, encoding: .linearPCMFloat32CAFV1,
+                            presence: .ready, relativeFilePath: recovered.relativeFilePath, byteCount: recovered.byteCount,
+                            sha256: recovered.sha256, sampleRate: recovered.sampleRate,
+                            channelCount: recovered.channelCount, frameCount: recovered.frameCount)
+                        try? ledger.writeCapture(.init(trackID: track.id, kind: kind, chunk: chunk))
+                    } catch { return chunk }
+                }
+                return self.reconcileChunkFile(chunk, sessionDirectory: sessionDirectory)
             }.sorted { $0.sequence < $1.sequence }
 
             var candidate = session

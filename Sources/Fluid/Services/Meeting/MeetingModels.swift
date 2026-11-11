@@ -80,6 +80,9 @@ nonisolated enum MeetingInterruptionKind: String, Codable, Sendable {
     case captureStoppedUnexpectedly
     case writerBackpressure
     case writerFailure
+    case metadataPersistenceDelayed
+    case metadataPersistenceRecovered
+    case liveTranscriptionDeferred
     case voiceProcessingDeclined
     case voiceProcessingConfigurationChanged
     case voiceProcessingOverload

@@ -184,6 +184,109 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
         } catch { self.state = .cancelled; try? FileManager.default.removeItem(at: paths.partial); return .failure(.underlyingFileError(error.localizedDescription)) }
     }
 
+    func sealForRecovery() throws {
+        if let file = self.audioFile {
+            self.audioFile = nil
+            let status = AudioFileClose(file)
+            if status != noErr { throw MeetingPCMSinkError.writeFailed(status) }
+        }
+    }
+
+    private static let recoveryUserData: UInt32 = 0x70696368 // "pich"
+    func writeRecoveryMetadata(_ data: Data) throws {
+        guard let file = self.audioFile, data.count <= 2 * 1024 * 1024 else {
+            throw MeetingPCMSinkError.finalizationVerificationFailed("recovery metadata unavailable")
+        }
+        let status = data.withUnsafeBytes { bytes -> OSStatus in
+            guard let base = bytes.baseAddress else { return kAudioFileUnspecifiedError }
+            return AudioFileSetUserData(file, Self.recoveryUserData, 0, UInt32(data.count), base)
+        }
+        if status != noErr { throw MeetingPCMSinkError.writeFailed(status) }
+    }
+
+    static func readRecoveryCapsules(in directory: URL, trackID: MeetingAudioTrackID,
+                                     kind: MeetingAudioTrackKind) throws -> [MeetingAudioRecoveryCapsule] {
+        let folder = directory.appendingPathComponent("tracks/\(kind.rawValue)")
+        try Self.rejectSymlink(directory); try Self.rejectSymlink(folder)
+        guard FileManager.default.fileExists(atPath: folder.path) else { return [] }
+        let names = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+        guard names.count <= 20_000 else { throw MeetingPCMSinkError.finalizationVerificationFailed("capture count limit") }
+        var chunks: [MeetingAudioRecoveryCapsule] = []
+        for name in names where name.hasSuffix(".caf") {
+            let url = folder.appendingPathComponent(name)
+            var info = stat()
+            guard lstat(url.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { continue }
+            var optionalFile: AudioFileID?
+            guard AudioFileOpenURL(url as CFURL, .readPermission, 0, &optionalFile) == noErr, let file = optionalFile else { continue }
+            defer { AudioFileClose(file) }
+            var size: UInt32 = 0
+            guard AudioFileGetUserDataSize(file, Self.recoveryUserData, 0, &size) == noErr,
+                  size > 0, size <= 2 * 1024 * 1024 else { continue }
+            var data = Data(count: Int(size))
+            let status = data.withUnsafeMutableBytes { bytes -> OSStatus in
+                guard let base = bytes.baseAddress else { return kAudioFileUnspecifiedError }
+                return AudioFileGetUserData(file, Self.recoveryUserData, 0, &size, base)
+            }
+            guard status == noErr, let capsule = try? JSONDecoder().decode(MeetingAudioRecoveryCapsule.self, from: data),
+                  capsule.trackID == trackID, capsule.kind == kind,
+                  capsule.chunk.relativeFilePath == "tracks/\(kind.rawValue)/\(String(format: "%06d", capsule.chunk.sequence)).caf",
+                  let asset = capsule.chunk.captureAnalysisAsset,
+                  asset.relativeFilePath == "tracks/\(kind.rawValue)/\(name)" || capsule.chunk.relativeFilePath == "tracks/\(kind.rawValue)/\(name)",
+                  capsule.chunk.clockMapping.map({ (try? $0.validated(expectedFrameCount: asset.frameCount)) != nil }) ?? true
+            else { continue }
+            chunks.append(capsule)
+        }
+        return chunks
+    }
+
+    /// Reopen a closed capture after an index failure or a process restart. The original PCM
+    /// remains in place on every failure. Only a verified file is published as a ready asset.
+    static func recoverClosedCapture(_ chunk: MeetingAudioChunk, in sessionDirectory: URL) throws -> MeetingPCMFinalization {
+        guard let asset = chunk.captureAnalysisAsset, let rate = asset.sampleRate,
+              let channels = asset.channelCount, let frames = asset.frameCount,
+              rate.isFinite, (8_000...192_000).contains(rate), (1...8).contains(channels), frames > 0
+        else { throw MeetingPCMSinkError.finalizationVerificationFailed("invalid recovery extent") }
+        func confined(_ relative: String) throws -> URL {
+            let parts = relative.split(separator: "/", omittingEmptySubsequences: false)
+            guard !relative.hasPrefix("/"), relative.hasSuffix(".caf"), !parts.isEmpty,
+                  parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\\") })
+            else { throw MeetingPCMSinkError.invalidRelativePath(relative) }
+            var url = sessionDirectory.standardizedFileURL
+            try Self.rejectSymlink(url)
+            for part in parts { url.appendPathComponent(String(part)); try Self.rejectSymlink(url) }
+            return url
+        }
+        let final = try confined(chunk.relativeFilePath)
+        let partial = try confined(asset.relativeFilePath)
+        let alreadyPublished = FileManager.default.fileExists(atPath: final.path)
+        let input = alreadyPublished ? final : partial
+        var info = stat()
+        guard lstat(input.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
+            throw MeetingPCMSinkError.finalizationVerificationFailed("capture is not a regular file")
+        }
+        let native = try AVAudioFile(forReading: input).fileFormat
+        guard native.sampleRate == rate, Int(native.channelCount) == channels else {
+            throw MeetingPCMSinkError.finalizationVerificationFailed("capture format changed")
+        }
+        let format = Format(rate: rate, channels: UInt32(channels), layout: Self.layoutData(native.channelLayout),
+                            contract: try MeetingPCMFormatContract(audioFormat: native))
+        let identity = try Self.identity(input)
+        let check = try Self.verify(input, format: format, expectedPackets: frames)
+        try Self.fullSync(input)
+        let after = try Self.identity(input)
+        guard identity.dev == after.dev, identity.ino == after.ino, identity.size == after.size else {
+            throw MeetingPCMSinkError.finalizationVerificationFailed("capture changed during recovery")
+        }
+        if !alreadyPublished {
+            guard renameatx_np(AT_FDCWD, partial.path, AT_FDCWD, final.path, UInt32(RENAME_EXCL)) == 0 else {
+                throw MeetingPCMSinkError.underlyingFileError("capture publication failed")
+            }
+            try Self.syncDirectory(final.deletingLastPathComponent())
+        }
+        return .init(relativeFilePath: chunk.relativeFilePath, byteCount: check.bytes, sha256: check.hash,
+                     sampleRate: check.rate, channelCount: check.channels, frameCount: check.frames)
+    }
+
     func cancel() { guard self.state == .open || self.state == .idle else { return }; self.removePartialAndClose(); self.state = .cancelled }
 
     // MARK: - Path / format helpers

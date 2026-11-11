@@ -1,6 +1,40 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Audio recording continues. Live transcription will be retried later.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio recording continues. Live transcription will be retried later."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиозапись продолжается. Расшифровку можно будет повторить позже."
+          }
+        }
+      }
+    },
+    "Audio recording continues. Metadata recovery is pending.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio recording continues. Metadata recovery is pending."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиозапись продолжается. Метаданные будут восстановлены позже."
+          }
+        }
+      }
+    },
     "\n\nClick \"Always Allow\" when the Keychain prompt appears, or open Keychain Access > login > Passwords, locate the FluidVoice entry, and grant access.": {
       "extractionState": "manual",
       "localizations": {
