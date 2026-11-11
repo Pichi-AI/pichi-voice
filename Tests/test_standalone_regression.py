@@ -439,6 +439,9 @@ class StandaloneRunnerTests(unittest.TestCase):
     def test_real_term_joins_descendant_and_preserves_exit_143(self):
         self.verify_real_signal_cleanup(signal.SIGTERM)
 
+    def test_real_hangup_joins_descendant_and_exits_129(self):
+        self.verify_real_signal_cleanup(signal.SIGHUP)
+
     def wait_for_worker(self):
         deadline = time.monotonic() + 3
         while not (self.root / "worker-started").exists() and time.monotonic() < deadline:
