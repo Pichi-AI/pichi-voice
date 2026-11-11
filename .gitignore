@@ -309,6 +309,7 @@ builds/
 !/scripts/dev/macos-regression.py
 !/scripts/dev/asr-baseline-inputs.py
 !/scripts/dev/standalone-regression.py
+!/scripts/dev/verify
 !/scripts/dev/local-api-live.py
 !/scripts/dev/verify-published-upstream-release.py
 !/scripts/dev/package-macos-dmg.py

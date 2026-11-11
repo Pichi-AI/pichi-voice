@@ -48,6 +48,7 @@ python3 -S Tests/test_macos_regression.py
 python3 -S Tests/test_signed_build_product_path.py
 python3 -S Tests/test_asr_baseline_inputs.py
 python3 -S Tests/test_standalone_regression.py
+python3 -S Tests/test_verify.py
 python3 -S Tests/test_local_api_live_harness.py
 python3 -S Tests/test_test_policy.py
 python3 -S scripts/dev/check-test-policy.py

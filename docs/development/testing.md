@@ -62,8 +62,21 @@ Run from the task worktree. These entry points are not interchangeable measures 
 | `bash scripts/dev/mobile.sh build-for-testing` | Compiles mobile app and test targets for the simulator; does not execute tests. |
 | `PICHI_MOBILE_DESTINATION='platform=iOS Simulator,id=<owned-UDID>' bash scripts/dev/mobile.sh test` | Runs the mobile scheme on an explicitly owned simulator. Reserve devices and inspect selected tests before native UI work. |
 | `swift test --package-path Vendor/<Package>` | Tests that package only. Isolate build/cache outputs and inspect prerequisites first. |
+| `python3 -S scripts/dev/verify --changed` | One bounded gate for an integrated candidate, a changed shared contract or an explicit request. It picks a [layer](#gate-layers) from the diff and writes a receipt. An ordinary small change does not need it. |
 
 The [development command reference](codex.md#reproducible-macos-regression) explains report formats, options and opt-in live checks. Do not repeat passing builds after documentation changes, for reassurance or just because a merge commit changes the SHA. Reuse results only when relevant source, resources, configuration, toolchain and inputs are unchanged or equivalence is demonstrated.
+
+## Gate layers
+
+`scripts/dev/verify` picks the layer from the diff against `origin/main`, or takes `--layer L0`, `L1` or `L2`. It writes `.build/verify/<run>/receipt.json` with the revision, each step and its duration, and what was skipped and why.
+
+| Layer | Runs |
+| --- | --- |
+| L0 | `check.sh`, SwiftLint on changed lines |
+| L1 | L0, XCTest and the standalone probes side by side, iOS integration tests when mobile or shared sources changed, tests of a changed `Vendor/` package, the skip registry |
+| L2 | L1 with iOS integration and every `Vendor/` package each time |
+
+A path with no rule takes L1, so a new kind of file cannot skip the app. A red step stays red: nothing retries a test or rewrites a result. XCTest stays serial because about half of its classes change shared settings and parallel workers share one preferences domain, so a parallel run fails at random. L1 and L2 stop when less than 10 GB is free. A heavy layer that cannot run on this machine, or a tree that changes during the run, ends as `incomplete` with exit code 2, never as passed.
 
 ## CI and review
 
