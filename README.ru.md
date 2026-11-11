@@ -29,6 +29,8 @@
 | iOS (iPhone / iPad) | iOS / iPadOS 17 или новее; память и место для выбранной модели | Coming Soon |
 | Android | - | Coming Soon |
 
+Версия для Mac распространяется напрямую в виде DMG с подписью Developer ID и нотариализацией Apple.
+
 ## Начало работы
 
 1. [Скачайте установщик для Mac](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B69-public.1/Pichi-Voice-0.1.0-69-macos-arm64.dmg) для Apple Silicon и macOS 15 или новее.

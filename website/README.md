@@ -12,6 +12,8 @@ The `.openai/hosting.json` identifies the optional Sites preview publication. Ke
 
 ## Release links and copy
 
+Mac distribution is a Developer ID-signed, Apple-notarized DMG downloaded from the product website. Mac App Store submission is not a release requirement, and no separate Store edition is planned. Mobile App Store and TestFlight delivery remain separate.
+
 Enable a direct download only for an actually published compatible package. Show platform icons and Coming Soon for unavailable downloads. The active macOS link targets `Pichi-Voice-0.1.0-69-macos-arm64.dmg` in release `v0.1.0+69-public.1`. The release owner must publish and verify that exact DMG before deploying this change. No release asset is published by this website change. Keep compatibility, installation, build and signing details in the release and development records. Public copy retains local setup requirements, optional-cloud disclosure and the mobile distinction between offline in-person meetings and unavailable phone-call audio access.
 
 The illustrated meeting text is synthetic and is not a screenshot or performance measurement. Application source and website assets remain subject to the repository's GPL-3.0 license; the static directory includes `voice/LICENSE.txt`.
