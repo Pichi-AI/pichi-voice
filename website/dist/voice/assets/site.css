@@ -78,3 +78,9 @@
 
 .story-selectors[hidden]{display:none}
 @media(prefers-reduced-motion:reduce){.story-scene{transition:none}}
+
+/* Voice typing fills an unsent composer, including the completed hold. */
+.scene-1 .story-content{display:flex;flex-direction:column}
+.scene-1 .story-top{flex-shrink:0}
+.scene-1 .story-heading{margin-top:auto}
+.scene-1 .telegram-composer{background:#fff;border:1px solid #cadbe2;border-radius:12px;max-width:none;margin-left:0;min-height:54px}

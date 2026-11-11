@@ -374,3 +374,25 @@ test('motion changes and suspension during streaming cancel work and keep the cu
     b.destroy();
   }
 });
+
+
+for (const route of ['index.html', 'voice/index.html', 'ru/voice/index.html']) {
+  test(`${route}: Telegram completion remains in the unsent draft composer`, () => {
+    const b = browser(route); b.enter(); b.choices[1].emit('click');
+    const scene = b.conversations[1];
+    const draft = scene.querySelector('[data-demo-draft]');
+    assert.equal(draft.attrs['data-message-state'], 'draft');
+    assert.equal(scene.querySelector('.story-heading').textContent, route.startsWith('ru') ? 'Черновик' : 'Draft');
+    b.step(DEMO_DURATION);
+    assert.deepEqual(b.shown(1), b.full(1));
+    assert.equal(draft.attrs['data-message-state'], 'draft');
+    b.step(DEMO_DURATION + COMPLETED_PAUSE - 1);
+    assert.deepEqual(b.shown(1), b.full(1));
+    assert.equal(draft.attrs['data-message-state'], 'draft');
+    assert.equal(scene.querySelectorAll('form').length + scene.querySelectorAll('button').length, 0);
+    b.step(DEMO_DURATION + COMPLETED_PAUSE);
+    assert.equal(b.conversations[2].attrs['data-active'], 'true');
+    assert.equal(draft.attrs['data-message-state'], 'draft');
+    b.destroy();
+  });
+}
