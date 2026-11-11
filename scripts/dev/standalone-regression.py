@@ -249,7 +249,7 @@ SHELL_PROBES = (
     "file_history_publisher", "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
     "fluid_serve", "fluid_typography", "history_decode_recovery", "history_persistence", "hotkey_initialization",
     "local_text_model_catalog", "meeting_capture_pcm", "meeting_capture_activity", "meeting_microphone_capture_contracts", "meeting_pending_speech", "native_window_appearance",
-    "meeting_private_view", "n4_file_private_projection", "meeting_summary_evidence", "meeting_audio_export", "onboarding",
+    "meeting_private_view", "n4_file_private_projection", "meeting_summary_evidence", "onboarding",
     "page_presentation", "participant_input_contrast", "paste_command_event", "paste_key_cache", "paste_read_receipt", "paste_recovery_policy", "private_profile_defaults", "private_profile_logging", "private_profile_stores", "private_ai_idle_unloader", "provider_dictation_capture_options",
     "release_highlights", "settings_owned_copy", "settings_viewport", "speech_model_provider_presentation", "ui_contrast",
     "stats_snapshot", "terminal_service_lifecycle", "voice_edit_cancellation",
