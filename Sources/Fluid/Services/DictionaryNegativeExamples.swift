@@ -140,7 +140,10 @@ nonisolated enum DictionaryNegativeEvidenceResolver {
 actor DictionaryNegativeExampleStore {
     private static let cache = PrivateProfileStoreCache<DictionaryNegativeExampleStore>()
     static var shared: DictionaryNegativeExampleStore {
-        cache.value { profile in DictionaryNegativeExampleStore(
+        scoped(to: PrivateProfileStorage.current)
+    }
+    static func scoped(to selected: PrivateProfileSnapshot) -> DictionaryNegativeExampleStore {
+        cache.value(for: selected) { profile in DictionaryNegativeExampleStore(
             url: profile.rootDirectory.appendingPathComponent("dictionary-negative-examples-v1.plist"), profile: profile) }
     }
     struct Example: Codable, Sendable {
@@ -271,6 +274,15 @@ actor DictionaryNegativeExampleStore {
     func retainedEvidence(id: UUID) -> DictionaryAcousticEvidence? {
         guard self.canAccess else { return nil }
         return (try? self.readEvidence())?.first { $0.id == id }
+    }
+
+    func removeRetainedEvidence(ids: Set<UUID>) throws {
+        guard self.canAccess else { throw PronunciationDictionaryStoreError.staleEvidence }
+        guard !ids.isEmpty, FileManager.default.fileExists(atPath: self.evidenceURL.path) else { return }
+        let all = try self.readEvidence().filter { !ids.contains($0.id) }
+        if all.isEmpty { try FileManager.default.removeItem(at: self.evidenceURL); return }
+        let encoder = PropertyListEncoder(); encoder.outputFormat = .binary
+        try encoder.encode(all).write(to: self.evidenceURL, options: .atomic)
     }
 
     private func readEvidence() throws -> [DictionaryAcousticEvidence] {

@@ -58,8 +58,12 @@ final class DictionaryRejectionService {
          entries: @escaping @MainActor () -> [SettingsStore.CustomDictionaryEntry] = { SettingsStore.shared.customDictionaryEntries + BuiltInDictionary.entries },
          textRejections: DictionaryTextRejectionStore? = nil,
          enabled: @escaping @MainActor () -> Bool = { DictionaryMatcherExperiment.collectTextNegatives }) {
-        let pronunciation = PronunciationDictionaryStore.shared
-        self.negatives = negatives; self.profiles = profiles ?? { await pronunciation.allProfiles() }; self.entries = entries
+        self.negatives = negatives; self.entries = entries
+        if let profiles { self.profiles = profiles }
+        else {
+            let pronunciation = PronunciationDictionaryStore.shared
+            self.profiles = { await pronunciation.allProfiles() }
+        }
         self.textRejections = textRejections ?? .shared; self.enabled = enabled
     }
 

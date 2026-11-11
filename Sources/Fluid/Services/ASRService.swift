@@ -4287,11 +4287,6 @@ final class ASRService: ObservableObject {
             }
             if !isolatedDictionaryCapture, let admission = self.admittedTranscription, PrivateProfileStorage.isReadable(admission.profile) {
                 replacementTrace.remap(to: outputText)
-                let evidence = replacementTrace.replacements.compactMap(\.evidence)
-                if admission.retainHistoryAudio, admission.collectNegatives, !evidence.isEmpty {
-                    do { try await DictionaryNegativeExampleStore.shared.retainEvidence(evidence) }
-                    catch { DebugLogger.shared.warning("Dictionary rejection evidence could not be retained", source: "DictionaryLearning") }
-                }
                 if PrivateProfileStorage.isReadable(admission.profile) { self.retainDictionaryReplacementTrace(replacementTrace) }
             }
             if !isolatedDictionaryCapture {

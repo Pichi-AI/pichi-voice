@@ -11,12 +11,15 @@ import XCTest
 
 @MainActor
 final class ExternalDictationHistoryCorrectionTests: XCTestCase {
-    private func withHistory(_ body: (TranscriptionHistoryStore, TranscriptionHistoryWriter, URL) async throws -> Void) async throws {
+    private func withHistory(removeDictionaryEvidence: (@MainActor (Set<UUID>) async throws -> Void)? = nil,
+                             _ body: (TranscriptionHistoryStore, TranscriptionHistoryWriter, URL) async throws -> Void) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ExternalHistory-\(UUID().uuidString)")
         let suite = "ExternalHistory-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let writer = TranscriptionHistoryWriter(defaults: defaults, url: root.appendingPathComponent("history.sqlite3"))
-        let history = TranscriptionHistoryStore(writer: writer, audioStore: DictationAudioHistoryStore(rootDirectory: root))
+        let evidence = DictionaryNegativeExampleStore(url: root.appendingPathComponent("history-evidence.plist"), collectionEnabled: { true })
+        let history = TranscriptionHistoryStore(writer: writer, audioStore: DictationAudioHistoryStore(rootDirectory: root),
+            removeDictionaryEvidence: removeDictionaryEvidence ?? { try await evidence.removeRetainedEvidence(ids: $0) })
         do {
             try await history.waitUntilLoaded()
             try await body(history, writer, root)
@@ -332,6 +335,74 @@ extension ExternalDictationHistoryCorrectionTests {
         let rejected = DictionaryReplacementTrace.rejection(in: trace.replacements,
             originalRange: candidate?.sourceUTF16Range ?? NSRange(location: NSNotFound, length: 0), replacement: candidate?.correctedText ?? "")
         XCTAssertEqual(rejected?.id, trace.replacements.first?.id)
+    }
+
+    func testDeletingHistoryRemovesPendingEvidenceAndPreservesSavedNegativeKnowledge() async throws {
+        try await self.withHistory { history, _, root in
+            let (entry, profile, alignment) = self.acousticFixture()
+            let trace = DictionaryReplacementTrace.acoustic(output: "Newo потом Newo", alignment: alignment)
+            let evidence = try XCTUnwrap(trace.replacements.first?.evidence)
+            let store = DictionaryNegativeExampleStore(url: root.appendingPathComponent("history-evidence.plist"), collectionEnabled: { true })
+            try await store.retainEvidence([evidence])
+            let revision = await store.revision()
+            try await store.save(DictionaryNegativeCorrection(evidence: evidence, correctedText: "ну", expiresAt: Date().addingTimeInterval(120)), expectedRevision: revision)
+            let id = UUID()
+            history.addEntry(id: id, rawText: trace.text, processedText: trace.text, appName: "Fixture", windowTitle: "Fixture", dictionaryReplacements: trace.replacements)
+            history.deleteEntry(id: id)
+            await history.finishPendingWrites()
+            let pending = await store.retainedEvidence(id: evidence.id)
+            let learned = await store.frames(entryID: entry.id, profileKey: evidence.profileKey, modelKey: profile.modelKey)
+            XCTAssertNil(pending)
+            XCTAssertEqual(learned.count, 1)
+        }
+    }
+
+    func testCaptureEvidenceFollowsAudioHistoryAdmissionAndRevocation() async throws {
+        try await self.withHistory { history, _, root in
+            let prefs = PrivateProfileDefaults.shared
+            let keys = ["DictionarySharedFeatureMatcherEnabled", "DictionaryNegativeLearningEnabled"]
+            let prior = keys.map { prefs.object(forKey: $0) }
+            defer { for (key, value) in zip(keys, prior) { prefs.set(value, forKey: key) } }
+            keys.forEach { prefs.set(true, forKey: $0) }
+            let (_, _, alignment) = self.acousticFixture()
+            let trace = DictionaryReplacementTrace.acoustic(output: "Newo потом Newo", alignment: alignment)
+            let evidence = try XCTUnwrap(trace.replacements.first?.evidence)
+            let store = DictionaryNegativeExampleStore(url: root.appendingPathComponent("history-evidence.plist"), collectionEnabled: { true })
+            for mode in ["allowed", "revoked", "audio-off"] {
+                let output = try PrivateDictationCaptureOutput(id: UUID(), savesHistory: true, savesAudio: mode != "audio-off",
+                    transcriptionModel: "synthetic", history: history, dictionaryEvidence: store)
+                let admission = try XCTUnwrap(output.admission)
+                history.addEntry(rawText: trace.text, processedText: trace.text, appName: "Fixture", windowTitle: "Fixture",
+                    admission: admission, dictionaryReplacements: trace.replacements)
+                if mode == "revoked" { history.clearAllHistory() }
+                output.saveDictionaryEvidence(trace.replacements)
+                let finished = await output.finish()
+                XCTAssertTrue(finished)
+                let retained = await store.retainedEvidence(id: evidence.id)
+                XCTAssertEqual(retained != nil, mode == "allowed")
+                history.clearAllHistory()
+                await history.finishPendingWrites()
+            }
+        }
+    }
+
+    func testEvidenceCleanupFailureRemainsVisibleAndCanRetry() async throws {
+        var attempts = 0
+        try await self.withHistory(removeDictionaryEvidence: { _ in
+            attempts += 1
+            if attempts == 1 { throw NSError(domain: "SyntheticDictionaryEvidenceCleanup", code: 1) }
+        }) { history, _, _ in
+            let (_, _, alignment) = self.acousticFixture()
+            let trace = DictionaryReplacementTrace.acoustic(output: "Newo потом Newo", alignment: alignment)
+            let id = UUID()
+            history.addEntry(id: id, rawText: trace.text, processedText: trace.text, appName: "Fixture", windowTitle: "Fixture", dictionaryReplacements: trace.replacements)
+            history.deleteEntry(id: id)
+            await history.finishPendingWrites()
+            XCTAssertNotNil(history.persistenceError)
+            await history.finishPendingWrites()
+            XCTAssertNil(history.persistenceError)
+            XCTAssertEqual(attempts, 2)
+        }
     }
 
     func testAcousticTraceMarksOnlyActualReplacementAndPreservesModelSpelling() throws {

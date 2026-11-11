@@ -643,6 +643,7 @@ nonisolated struct HistorySearchSelectionRequest: Equatable {
     }
     func finish() async throws { try await self.history.finishRecordingWrite(self) }
     func retryPersistence() async throws { try await self.history.retryRecordingWrite(self) }
+    var acceptsDictionaryEvidence: Bool { self.history.allowsDictionaryEvidence(self) }
 }
 
 // MARK: - Transcription History Store
@@ -658,6 +659,10 @@ final class TranscriptionHistoryStore: ObservableObject {
     private let writer: TranscriptionHistoryWriter
     private let profile: PrivateProfileSnapshot?
     private let audioStore: DictationAudioHistoryStore
+    private let removeDictionaryEvidence: @MainActor (Set<UUID>) async throws -> Void
+    private var pendingDictionaryEvidenceRemoval = Set<UUID>()
+    private var dictionaryEvidenceCleanupTask: Task<Void, Never>?
+    private var dictionaryEvidenceCleanupError: Error?
     private var transitioning = false
     private var retired = false
     private var canAccess: Bool {
@@ -665,6 +670,9 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
     private var recordingWrites: [UUID: DictationHistoryWriteAdmission] = [:]
     var admittedRecordingWriteCount: Int { self.recordingWrites.count }
+    fileprivate func allowsDictionaryEvidence(_ admission: DictationHistoryWriteAdmission) -> Bool {
+        self.validates(admission) && admission.write.saveGeneration == self.audioSaveGeneration
+    }
     private var retainedEntries: [TranscriptionHistoryEntry] = []
     private var loadTask: Task<Void, Never>?
     @Published private var hasLoaded = false
@@ -738,13 +746,19 @@ final class TranscriptionHistoryStore: ObservableObject {
         audioStore: DictationAudioHistoryStore? = nil,
         summaryNow: @escaping () -> Date = Date.init,
         summaryCalendar: @escaping () -> Calendar = { Calendar.current },
-        deleteAllAudioFiles: (() -> Void)? = nil
+        deleteAllAudioFiles: (() -> Void)? = nil,
+        removeDictionaryEvidence: (@MainActor (Set<UUID>) async throws -> Void)? = nil
     ) {
         let selected = profile ?? (writer == nil ? PrivateProfileStorage.current : nil)
         let audioStore = audioStore ?? selected.map(DictationAudioHistoryStore.scoped)
             ?? DictationAudioHistoryStore.shared
         self.profile = selected
         self.audioStore = audioStore
+        if let removeDictionaryEvidence { self.removeDictionaryEvidence = removeDictionaryEvidence }
+        else if let selected {
+            let negatives = DictionaryNegativeExampleStore.scoped(to: selected)
+            self.removeDictionaryEvidence = { try await negatives.removeRetainedEvidence(ids: $0) }
+        } else { self.removeDictionaryEvidence = { _ in } }
         self.writer = writer ?? TranscriptionHistoryWriter(profile: selected)
         self.summaryNow = summaryNow
         self.summaryCalendar = summaryCalendar
@@ -1069,9 +1083,37 @@ final class TranscriptionHistoryStore: ObservableObject {
         admission.audio?.complete()
     }
 
+    private func removeRetainedDictionaryEvidence(from entries: [TranscriptionHistoryEntry]) {
+        self.pendingDictionaryEvidenceRemoval.formUnion(entries.flatMap { $0.dictionaryReplacements.compactMap(\.evidenceID) })
+        self.scheduleDictionaryEvidenceCleanup()
+    }
+
+    private func scheduleDictionaryEvidenceCleanup() {
+        guard !self.pendingDictionaryEvidenceRemoval.isEmpty, self.dictionaryEvidenceCleanupTask == nil else { return }
+        self.dictionaryEvidenceCleanupTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.dictionaryEvidenceCleanupTask = nil }
+            while !self.pendingDictionaryEvidenceRemoval.isEmpty {
+                let ids = self.pendingDictionaryEvidenceRemoval
+                do {
+                    try await self.removeDictionaryEvidence(ids)
+                    self.pendingDictionaryEvidenceRemoval.subtract(ids)
+                    if self.dictionaryEvidenceCleanupError != nil,
+                       self.persistenceError == AppBrand.text("Dictionary feedback could not be removed. Keep the app open and retry.") { self.persistenceError = nil }
+                    self.dictionaryEvidenceCleanupError = nil
+                } catch {
+                    self.dictionaryEvidenceCleanupError = error
+                    if self.canAccess { self.persistenceError = AppBrand.text("Dictionary feedback could not be removed. Keep the app open and retry.") }
+                    return
+                }
+            }
+        }
+    }
+
     /// Delete a specific entry
     func deleteEntry(id: UUID) {
         guard self.canAccess else { return }
+        self.removeRetainedDictionaryEvidence(from: self.entries.filter { $0.id == id })
         self.revokeRecordingWrite(for: id)
         self.invalidateAutomaticAudioBudgetMeasurement()
         if let audio = self.entries.first(where: { $0.id == id })?.audio {
@@ -1094,6 +1136,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     /// Delete multiple entries
     func deleteEntries(ids: Set<UUID>) {
         guard self.canAccess else { return }
+        self.removeRetainedDictionaryEvidence(from: self.entries.filter { ids.contains($0.id) })
         for id in ids { self.revokeRecordingWrite(for: id) }
         self.invalidateAutomaticAudioBudgetMeasurement()
         for entry in self.entries where ids.contains(entry.id) {
@@ -1117,6 +1160,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     /// Clear all history
     func clearAllHistory() {
         guard self.canAccess else { return }
+        self.removeRetainedDictionaryEvidence(from: self.entries)
         for id in self.recordingWrites.keys { self.revokeRecordingWrite(for: id) }
         self.audioSaveGeneration &+= 1
         self.invalidateAutomaticAudioBudgetMeasurement()
@@ -1220,6 +1264,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         }
         self.invalidateAutomaticAudioBudgetMeasurement()
         let removedCount = self.entries.filter { $0.audio != nil }.count
+        self.removeRetainedDictionaryEvidence(from: self.entries.filter { $0.audio != nil })
         self.deleteAllAudioFiles()
         let changed = self.entries.filter { $0.audio != nil }.map { $0.replacingAudio(nil) }
         self.entries = self.entries.map { $0.replacingAudio(nil) }
@@ -1271,6 +1316,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         }
 
         if prunedCount > 0 {
+            self.removeRetainedDictionaryEvidence(from: changed)
             self.entries = updatedEntries
             self.persist(upserts: changed)
             DebugLogger.shared.info("Pruned saved dictation audio (\(prunedCount) entries)", source: "TranscriptionHistoryStore")
@@ -1428,6 +1474,8 @@ final class TranscriptionHistoryStore: ObservableObject {
     func finishPendingWrites() async {
         await self.loadTask?.value
         await self.automaticAudioBudgetTask?.value
+        self.scheduleDictionaryEvidenceCleanup()
+        await self.dictionaryEvidenceCleanupTask?.value
         if let error = await self.writer.drain(), self.canAccess {
             self.persistenceError = AppBrand.format("History could not be saved. Keep FluidVoice open and retry. %@", error.localizedDescription)
         }
@@ -1444,6 +1492,9 @@ final class TranscriptionHistoryStore: ObservableObject {
         await self.loadTask?.value
         await self.todaySummaryTask?.value
         await self.automaticAudioBudgetTask?.value
+        self.scheduleDictionaryEvidenceCleanup()
+        await self.dictionaryEvidenceCleanupTask?.value
+        if let error = self.dictionaryEvidenceCleanupError { self.transitioning = false; throw error }
         if let error = await self.writer.drain() {
             self.transitioning = false
             throw error

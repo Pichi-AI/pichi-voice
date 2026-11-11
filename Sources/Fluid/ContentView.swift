@@ -3633,6 +3633,7 @@ struct ContentView: View {
                 timestamp: historyTimestamp,
                 model: transcriptionModelInfo.model
             )
+            privateOutput.saveDictionaryEvidence(dictionaryReplacementTrace?.replacements ?? [])
         }
         // When FluidVoice itself is frontmost, the bound editor already receives `finalText`.
         let shouldCopyToClipboard = shouldDeliverOutputs &&

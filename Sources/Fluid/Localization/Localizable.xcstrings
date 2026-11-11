@@ -17527,6 +17527,23 @@
         }
       }
     },
+    "Dictionary feedback could not be removed. Keep the app open and retry.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dictionary feedback could not be removed. Keep the app open and retry."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось удалить данные словарной обратной связи. Оставьте приложение открытым и повторите попытку."
+          }
+        }
+      }
+    },
     "Dictionary test text": {
       "extractionState": "manual",
       "localizations": {

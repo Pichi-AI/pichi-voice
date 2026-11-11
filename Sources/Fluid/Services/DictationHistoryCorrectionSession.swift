@@ -75,9 +75,4 @@ final class DictationHistoryCorrectionSession {
             DictionaryNegativeEvidenceResolver.normalized($0.label) != DictionaryNegativeEvidenceResolver.normalized(replacement) }
     }
 
-    func rememberRejection(_ hit: DictionaryHistoryReplacement, corrected: String) async {
-        _ = await DictionaryRejectionService.shared.remember(hit, corrected: corrected, profile: self.profile, isValid: {
-            self.history.entries.first(where: { $0.id == self.entryID })?.rejectionRemainsValid(hit.id) == true
-        })
-    }
 }
