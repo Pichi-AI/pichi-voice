@@ -680,9 +680,9 @@ final class AutomaticDictionaryCorrectionTracker {
         // This is the same explicit user edit as History Save. Mirror it before
         // asynchronous dictionary/audio work, whose failure or Undo must not put
         // the incorrect text back into history.
-        if let repeated, let range = repeated.sourceUTF16Range,
+        if let historyCandidate = candidate ?? repeated, let range = historyCandidate.sourceUTF16Range,
            let originalRange = pending.sourceMap.originalRange(for: range) {
-            self.session?.historyCorrection?.apply(originalDeliveredRange: originalRange, replacement: repeated.correctedText)
+            self.session?.historyCorrection?.apply(originalDeliveredRange: originalRange, replacement: historyCandidate.correctedText)
         }
 
         if let repeated, let range = repeated.sourceUTF16Range,
