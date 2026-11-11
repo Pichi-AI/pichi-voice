@@ -169,6 +169,36 @@ final class ExternalDictationHistoryCorrectionTests: XCTestCase {
 }
 
 extension ExternalDictationHistoryCorrectionTests {
+    func testNegativeLearningDefaultsOnAndHonorsSavedOffChoices() {
+        let prefs = PrivateProfileDefaults.shared
+        let keys = ["DictionarySharedFeatureMatcherEnabled", "DictionaryNegativeLearningEnabled", "DictionaryNegativeComparisonEnabled"]
+        let previous = keys.map { prefs.object(forKey: $0) }
+        defer { for (key, value) in zip(keys, previous) { prefs.set(value, forKey: key) } }
+        keys.forEach { prefs.removeObject(forKey: $0) }
+        XCTAssertTrue(DictionaryMatcherExperiment.collectNegatives)
+        XCTAssertTrue(DictionaryMatcherExperiment.compareNegatives)
+        prefs.set(false, forKey: keys[1]); prefs.set(false, forKey: keys[2])
+        XCTAssertFalse(DictionaryMatcherExperiment.collectNegatives)
+        XCTAssertFalse(DictionaryMatcherExperiment.compareNegatives)
+        prefs.removeObject(forKey: keys[1]); prefs.removeObject(forKey: keys[2]); prefs.set(false, forKey: keys[0])
+        XCTAssertFalse(DictionaryMatcherExperiment.collectNegatives)
+        XCTAssertFalse(DictionaryMatcherExperiment.compareNegatives)
+    }
+
+    func testPersistedProvenanceBoundsEvidenceWithoutLosingRestoreText() {
+        let entryID = UUID(), text = "Newo Newo Newo"
+        let frames = DictionaryMatchFrames(hiddenSize: 1024, values: [Float](repeating: 0.01, count: 65_536))
+        let hits = [0, 5, 10].map { location in
+            DictionaryHistoryReplacement(id: UUID(), entryID: entryID, label: "Newo", heard: "ну", location: location, length: 4,
+                kind: .acoustic, evidence: DictionaryAcousticEvidence(id: UUID(), entryID: entryID, label: "Newo",
+                    profileKey: "synthetic", modelKey: "synthetic", sourceWordRange: 0..<1, frames: frames))
+        }
+        let sanitized = DictionaryHistoryReplacement.sanitized(hits, in: text)
+        XCTAssertEqual(sanitized.count, 3)
+        XCTAssertEqual(sanitized.compactMap(\.evidence).count, 2)
+        XCTAssertEqual(sanitized.last?.heard, "ну")
+    }
+
     private func acousticFixture() -> (SettingsStore.CustomDictionaryEntry, PronunciationDictionaryProfile, DictionaryLearningAlignment) {
         let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Newo")
         let positive = PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 3, modelKey: "parakeet-v2")
@@ -319,6 +349,108 @@ extension ExternalDictationHistoryCorrectionTests {
             XCTAssertEqual(ASRService.applyCustomDictionary(before, rejections: reloaded), "nuufixture потом NewoFixture")
             XCTAssertEqual(SettingsStore.shared.customDictionaryEntries, [entry], "Negative feedback leaves the word and good explicit spelling intact")
         }
+    }
+
+    func testHistoryNativeEditorShowsDictionaryOriginAndSavesNegativeWithoutPositiveEnrollment() async throws {
+        try await self.withHistory { history, _, root in
+            let suite = "HistoryNativeReject-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let entry = SettingsStore.CustomDictionaryEntry(triggers: ["nuufixture"], replacement: "NewoFixture")
+            let text = "NewoFixture, then NewoFixture."
+            let hit = DictionaryHistoryReplacement(id: UUID(), entryID: entry.id, label: entry.replacement, heard: "nuufixture",
+                location: 0, length: entry.replacement.utf16.count, kind: .textRule)
+            let id = UUID()
+            history.addEntry(id: id, rawText: text, processedText: text, appName: "Fixture", windowTitle: "Fixture", dictionaryReplacements: [hit])
+            let textRejections = DictionaryTextRejectionStore(defaults: defaults)
+            let service = DictionaryRejectionService(negatives: DictionaryNegativeExampleStore(url: root.appendingPathComponent("negative.plist"), collectionEnabled: { true }),
+                profiles: { [] }, entries: { [entry] }, textRejections: textRejections, enabled: { true })
+            let priorEntries = SettingsStore.shared.customDictionaryEntries
+            let original = try XCTUnwrap(history.entries.first)
+            let controller = NSHostingController(rootView: HistoryTextComparisonView(entry: original, copy: { _ in }, historyStore: history, rejectionService: service).appTheme(.dark))
+            let window = NSWindow(contentViewController: controller)
+            window.isReleasedWhenClosed = false
+            window.setContentSize(NSSize(width: 800, height: 640))
+            defer { window.contentView = nil; window.close() }
+            controller.view.layoutSubtreeIfNeeded()
+            func textViews(_ view: NSView) -> [DictionarySelectableTextView] {
+                (view as? DictionarySelectableTextView).map { [$0] } ?? view.subviews.flatMap(textViews)
+            }
+            let views = textViews(controller.view)
+            XCTAssertEqual(views.count, 2)
+            for view in views {
+                XCTAssertNotNil(view.attributedString().attribute(.toolTip, at: 0, effectiveRange: nil))
+                XCTAssertNil(view.attributedString().attribute(.toolTip, at: text.utf16.count - entry.replacement.utf16.count - 1, effectiveRange: nil))
+            }
+            let source = try XCTUnwrap(views.last)
+            XCTAssertTrue(source.beginInlineEdit(range: hit.range))
+            source.inlineEditor?.stringValue = "nuufixture"
+            XCTAssertTrue(source.commitInlineEdit())
+            XCTAssertEqual(history.entries[0].sourceTranscriptText, "nuufixture, then NewoFixture.")
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while !textRejections.rejects(entryID: entry.id, label: entry.replacement, heard: hit.heard), ContinuousClock.now < deadline { await Task.yield() }
+            XCTAssertTrue(textRejections.rejects(entryID: entry.id, label: entry.replacement, heard: hit.heard))
+            XCTAssertEqual(SettingsStore.shared.customDictionaryEntries, priorEntries, "Rejecting an inserted word cannot enroll ordinary replacement speech as a new positive")
+        }
+    }
+
+    func testNativeDictionaryHistoryAcceptanceWindow() async throws {
+        guard let directory = ProcessInfo.processInfo.environment["PICHI_CORRECTION_NATIVE_EVIDENCE_DIR"] else {
+            throw XCTSkip("Interactive native evidence is a separate opt-in check")
+        }
+        try await self.withHistory { history, _, root in
+            let (entry, profile, alignment) = self.acousticFixture()
+            var trace = DictionaryReplacementTrace.acoustic(output: "Newo потом Newo", alignment: alignment)
+            let text = "Newo потом Newo. Pech Voice."
+            trace.remap(to: text)
+            let id = UUID()
+            history.addEntry(id: id, rawText: text, processedText: text, appName: "Synthetic editor", windowTitle: "Synthetic acceptance",
+                dictionaryReplacements: trace.replacements)
+            XCTAssertTrue(history.applyWordCorrection(entryID: id, expectedText: text, range: (text as NSString).range(of: "Pech"),
+                replacement: "Pichi", profile: PrivateProfileStorage.current, isOriginal: true))
+            let suite = "NativeHistoryAcceptance-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let service = DictionaryRejectionService(negatives: DictionaryNegativeExampleStore(url: root.appendingPathComponent("negative.plist"), collectionEnabled: { true }),
+                profiles: { [profile] }, entries: { [entry] }, textRejections: DictionaryTextRejectionStore(defaults: defaults), enabled: { true })
+            let dark = ProcessInfo.processInfo.environment["PICHI_CORRECTION_NATIVE_THEME"] != "light"
+            let theme = AppTheme.adaptive(accent: Color(hex: dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight) ?? .purple, colorScheme: dark ? .dark : .light)
+            let controller = NSHostingController(rootView: NativeDictionaryHistoryFixture(history: history, service: service, entryID: id)
+                .appTheme(theme).environment(\.locale, PichiLocalization.locale).environment(\.colorScheme, dark ? .dark : .light))
+            let window = NSWindow(contentViewController: controller)
+            window.title = "Pichi Voice - dictionary correction acceptance"
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            window.setContentSize(NSSize(width: 880, height: 760))
+            window.center(); window.makeKeyAndOrderFront(nil)
+            defer { window.contentView = nil; window.close() }
+            let output = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            try Data("ready".utf8).write(to: output.appendingPathComponent("ready"))
+            let deadline = ContinuousClock.now.advanced(by: .seconds(180))
+            while !FileManager.default.fileExists(atPath: output.appendingPathComponent("finish").path), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            XCTAssertTrue(FileManager.default.fileExists(atPath: output.appendingPathComponent("finish").path), "Native evidence owner must finish the bounded case")
+            if ProcessInfo.processInfo.environment["PICHI_CORRECTION_NATIVE_EXPECT_RESTORE"] == "1" {
+                XCTAssertEqual(history.entries.first?.sourceTranscriptText, "ну потом Newo. Pichi Voice.")
+            }
+        }
+    }
+}
+
+private struct NativeDictionaryHistoryFixture: View {
+    @ObservedObject var history: TranscriptionHistoryStore
+    let service: DictionaryRejectionService
+    let entryID: UUID
+    @Environment(\.theme) private var theme
+    var body: some View {
+        ScrollView {
+            if let entry = self.history.entries.first(where: { $0.id == self.entryID }) {
+                HistoryTextComparisonView(entry: entry, copy: { _ in }, historyStore: self.history, rejectionService: self.service)
+                    .padding(24)
+            }
+        }.background(self.theme.palette.contentBackground)
     }
 }
 
