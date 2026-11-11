@@ -396,3 +396,27 @@ for (const route of ['index.html', 'voice/index.html', 'ru/voice/index.html']) {
     b.destroy();
   });
 }
+
+
+for (const route of ['index.html', 'voice/index.html', 'ru/voice/index.html']) {
+  test(`${route}: named contacts and speakers stay consistent during the product story`, () => {
+    const b = browser(route);
+    const ru = route.startsWith('ru');
+    const contact = ru ? 'Анна Морозова' : 'Emma Carter';
+    const speakers = ru ? ['Анна', 'Алексей', 'Вы'] : ['Emma', 'James', 'You'];
+    assert.ok(b.conversations[0].querySelector('.recipient-chip').textContent.includes(contact));
+    assert.equal(b.conversations[1].querySelector('.contact-identity').querySelector('strong').textContent, contact);
+    for (const index of [2, 3]) {
+      assert.deepEqual(b.conversations[index].querySelectorAll('.speaker').map(node => node.textContent), speakers);
+    }
+    const accessible = b.root.querySelector('[data-demo-accessible]').textContent;
+    assert.ok(accessible.includes(contact));
+    speakers.slice(0, 2).forEach(name => assert.ok(accessible.includes(name + ':')));
+    b.enter(); b.choices[2].emit('click'); b.step(DEMO_DURATION);
+    assert.deepEqual(b.shown(2), b.full(2));
+    assert.deepEqual(b.conversations[2].querySelectorAll('.speaker').map(node => node.textContent), speakers);
+    assert.equal(b.conversations[0].querySelectorAll('button').length, 0);
+    assert.equal(b.conversations[1].querySelectorAll('button').length, 0);
+    b.destroy();
+  });
+}
