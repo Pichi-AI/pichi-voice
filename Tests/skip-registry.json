@@ -37,6 +37,10 @@
    "layer": "manual-private-data",
    "reason": "Set FLUIDVOICE_SHARED_DICTIONARY_FIXTURE to the private local regression corpus"
   },
+  "FluidDictationIntegrationTests/ExternalDictationHistoryCorrectionTests/testNativeDictionaryHistoryAcceptanceWindow()": {
+   "layer": "L4-hardware-or-manual",
+   "reason": "Interactive native evidence is a separate opt-in check"
+  },
   "FluidDictationIntegrationTests/FileExportTests/testConcurrentDocumentsKeepTheirOwnPayloads()": {
    "layer": "L2-needs-runner",
    "reason": "Use a disposable test account or runner and set FLUID_EXPORT_TEST_SANDBOX_TEMP to its Foundation temporary directory"
@@ -129,6 +133,14 @@
    "layer": "diagnostic-tool",
    "reason": "set the FLUIDVOICE_VOICE_PROBE_* variables to run the voice probe"
   },
+  "FluidDictationIntegrationTests/MeetingOwnerVoiceProfileTests/testRealWeSpeakerEnrollmentMatchesOnlyTheEnrolledSyntheticVoice()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
+  },
+  "FluidDictationIntegrationTests/MeetingParakeetNemotronBackendTests/testOnlineStreamingRealModelsWithPacedSyntheticSources()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_ONLINE_STREAMING_REAL_MODELS=1 with two attested synthetic mono16k WAVs"
+  },
   "FluidDictationIntegrationTests/MeetingProviderOptionsTests/testOptInGermanV3AudioProducesOriginalLanguageAndWordTimings()": {
    "layer": "L3-real-model",
    "reason": "Set FLUIDVOICE_MEETING_GERMAN_FIXTURE to a 16 kHz mono German WAV for model verification"
@@ -136,6 +148,10 @@
   "FluidDictationIntegrationTests/MeetingProviderOptionsTests/testOptInMeetingLanguageSettingsSnapshot()": {
    "layer": "L1-visual",
    "reason": "Set FLUIDVOICE_MEETING_SETTINGS_SNAPSHOT for a settings visual check"
+  },
+  "FluidDictationIntegrationTests/MeetingRecordingClockCoreTests/testOptInCapturedClockMetadataReplayWithSyntheticPCM()": {
+   "layer": "diagnostic-tool",
+   "reason": "Set PICHI_CLOCK_REPLAY_SESSION_FILE to replay capture timing with synthetic PCM"
   },
   "FluidDictationIntegrationTests/MeetingRecoveryTests/testRetainedRecoveryCanvasNativeVisuals()": {
    "layer": "L1-visual",
@@ -180,6 +196,10 @@
   "FluidDictationIntegrationTests/MeetingTimelineDriftProbeTests/testCrossPathClockDrift()": {
    "layer": "L4-hardware-or-manual",
    "reason": "FLUIDVOICE_DRIFT_PROBE not set"
+  },
+  "FluidDictationIntegrationTests/MeetingTranscriptAssemblerTests/testOptInSavedMeetingReadingCoverage()": {
+   "layer": "manual-private-data",
+   "reason": "Set PICHI_SPEAKER_AUDIT_ROOT to an authorized read-only metadata snapshot"
   },
   "FluidDictationIntegrationTests/MobileRegisteredModelInferenceTests/testDefaultEightSecondSpeakerWindowsForAllRegisteredModels()": {
    "layer": "L3-real-model",
