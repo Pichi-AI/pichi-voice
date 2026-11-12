@@ -313,7 +313,7 @@
    "layer": "diagnostic-tool",
    "reason": "Supply an external JSON report path for the incremental memory simulation"
   },
-  "FluidDictationIntegrationTests/UpdateBundleValidatorTests/testDeveloperIDReleaseAcceptsApprovedSigningTeams()": {
+  "FluidDictationIntegrationTests/UpdateBundleValidatorTests/testDeveloperIDWithoutHardenedRuntimeAndTimestampIsRejected()": {
    "layer": "L4-signed-release",
    "reason": "A valid Developer ID Application: signing identity is required for signed bundle fixtures."
   },
