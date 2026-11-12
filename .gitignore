@@ -273,6 +273,11 @@ builds/
 !/docs/development/branding.md
 !/docs/development/localization.md
 !/docs/development/analytics.md
+!/docs/development/test-infrastructure-audit.md
+!/docs/development/test-infrastructure-probes.json
+!/docs/development/test-infrastructure-timing.json
+!/docs/development/test-infrastructure-mutations.json
+!/docs/development/test-infrastructure-skips.json
 !/docs/development/local-russian-text-models.md
 !/docs/development/gigaam-dictionary.md
 !/docs/development/meeting-summary-strategy.md

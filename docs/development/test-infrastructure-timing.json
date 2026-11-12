@@ -1,0 +1,2329 @@
+{
+ "revision": "788f26c6",
+ "machine": "Apple M4 Max, 16 cores, 128 GB, macOS 26.6.2, Xcode 27.0",
+ "runs": {
+  "checkSh": [
+   51,
+   50,
+   48
+  ],
+  "swiftlintFull": 3,
+  "swiftformatLintSources": 6,
+  "macosDebugBuildForTestingCold": 105,
+  "macosDebugBuildNoChange": 6,
+  "macosDebugBuildOneFileChangeMedian": 20,
+  "macosReleaseCold": 391,
+  "iosBuildForTestingCold": [
+   218,
+   109
+  ],
+  "iosBuildNoChange": 5,
+  "xctestMacOS": {
+   "seconds": [
+    340,
+    295,
+    293
+   ],
+   "note": "first run downloads models"
+  },
+  "xctestMobileIntegration": [
+   126.9,
+   121.2,
+   116.1
+  ],
+  "xctestMobileUI": {
+   "seconds": [
+    1673,
+    1680
+   ],
+   "passed": 8,
+   "failed": 20,
+   "skipped": 36,
+   "note": "two runs with identical results, second outside ~/Documents; first under load"
+  },
+  "probesSequential": [
+   888,
+   766,
+   771
+  ],
+  "probesParallel8Workers": [
+   102.5,
+   102.0,
+   98.6
+  ],
+  "probesParallel8WorkersSharedModuleCache": [
+   93.5,
+   88.6,
+   91.6
+  ],
+  "probesParallel12WorkersSharedModuleCache": [
+   68.9
+  ],
+  "vendorPackages": {
+   "RussianMorphology": 15,
+   "NativeTextInference": 15,
+   "PichiGigaAM": 32,
+   "TranscribeCpp": 12
+  },
+  "xctestMacOSSerialNewMain": {
+   "revision": "68b935b4 plus pilot tests (claude/xctest-pilot at 916e4c0484454bfa988b9918c8a21156405fc430)",
+   "seconds": 383,
+   "passed": 3472,
+   "failed": 0,
+   "skipped": 86,
+   "location": "outside ~/Documents"
+  },
+  "xctestMacOSParallel": {
+   "revision": "68b935b4 plus pilot tests (claude/xctest-pilot at 916e4c0484454bfa988b9918c8a21156405fc430)",
+   "workers": {
+    "4": {
+     "seconds": 96,
+     "failed": 5
+    },
+    "6": {
+     "seconds": 73,
+     "failed": 6
+    },
+    "8": {
+     "seconds": 67,
+     "failed": 5
+    }
+   },
+   "note": "different tests failed in each run; none failed serially"
+  },
+  "xctestMacOSThreadSanitizer": {
+   "seconds": 610,
+   "passed": 3464,
+   "failed": 2,
+   "skipped": 86,
+   "raceReports": 4,
+   "raceLocation": "test double Gate in PichiGigaAMSourceSelectionTests only"
+  },
+  "compilerWarnings": {
+   "revision": "68b935b4 plus pilot tests (claude/xctest-pilot at 916e4c0484454bfa988b9918c8a21156405fc430)",
+   "unique": 541,
+   "sources": 246,
+   "tests": 292,
+   "vendor": 3,
+   "actorIsolation": 431
+  }
+ },
+ "xctestClasses": [
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingRecoveryTests",
+   "tests": 233,
+   "skipped": 2,
+   "failed": 0,
+   "secondsMedian": 52.61,
+   "secondsMax": 53.44
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingParakeetNemotronBackendTests",
+   "tests": 75,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 39.72,
+   "secondsMax": 42.28
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "NormalAudioCaptureCompatibilityTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 25.63,
+   "secondsMax": 25.63
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "AudioRouteRecoveryIntegrationTests",
+   "tests": 36,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 25.04,
+   "secondsMax": 25.04
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "CustomDictionaryManualEntryTests",
+   "tests": 55,
+   "skipped": 3,
+   "failed": 0,
+   "secondsMedian": 10.4,
+   "secondsMax": 46.53
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "OverlayCaptionPresentationTests",
+   "tests": 14,
+   "skipped": 0,
+   "failed": 1,
+   "secondsMedian": 10.38,
+   "secondsMax": 10.41
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "HotkeyShortcutTests",
+   "tests": 207,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 10.06,
+   "secondsMax": 10.11
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PichiGigaAMIntegrationTests",
+   "tests": 18,
+   "skipped": 2,
+   "failed": 0,
+   "secondsMedian": 8.88,
+   "secondsMax": 8.99
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "DictationE2ETests",
+   "tests": 201,
+   "skipped": 4,
+   "failed": 0,
+   "secondsMedian": 7.53,
+   "secondsMax": 7.63
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "NativeButtonStylesHitTargetTests",
+   "tests": 6,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 5.7,
+   "secondsMax": 5.71
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "DictationContextCaptureTests",
+   "tests": 64,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 5.31,
+   "secondsMax": 5.39
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "SearchIndexCoordinatorTests",
+   "tests": 8,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 4.7,
+   "secondsMax": 4.74
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "FluidServeTests",
+   "tests": 40,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 3.94,
+   "secondsMax": 4.32
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSessionCoordinatorTests",
+   "tests": 12,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 3.84,
+   "secondsMax": 3.92
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingMicrophoneCaptureTests",
+   "tests": 63,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 3.73,
+   "secondsMax": 3.82
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingASRPreparationOwnerTests",
+   "tests": 20,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 2.97,
+   "secondsMax": 2.98
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingInlineCaptionLayoutTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 2.91,
+   "secondsMax": 2.92
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PichiMeetingBufferedCaptionsTests",
+   "tests": 20,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 2.38,
+   "secondsMax": 2.61
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingAutoDetectorTests",
+   "tests": 110,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 2.3,
+   "secondsMax": 2.51
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "AppSearchServiceTests",
+   "tests": 20,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 2.17,
+   "secondsMax": 2.21
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "WindowSizingRegressionTests",
+   "tests": 7,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 2.17,
+   "secondsMax": 2.28
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "AudioHardwareAdversarialTests",
+   "tests": 5,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 2.06,
+   "secondsMax": 2.07
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MediaPlaybackServiceTests",
+   "tests": 39,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 2.0,
+   "secondsMax": 2.32
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PichiMeetingSummaryTests",
+   "tests": 138,
+   "skipped": 8,
+   "failed": 0,
+   "secondsMedian": 1.97,
+   "secondsMax": 2.07
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingVoiceProcessingProbeTests",
+   "tests": 11,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 1.68,
+   "secondsMax": 1.68
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "ParakeetArchiveDownloaderTests",
+   "tests": 33,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 1.65,
+   "secondsMax": 1.67
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingAudioComparisonProbeTests",
+   "tests": 5,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 1.63,
+   "secondsMax": 1.66
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "DictionaryDrawerLayoutTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 1.6,
+   "secondsMax": 1.69
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingReferenceSynchronizerTests",
+   "tests": 47,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 1.53,
+   "secondsMax": 1.55
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MonitorTopologyRecoveryTests",
+   "tests": 13,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 1.39,
+   "secondsMax": 1.4
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "FileTranscriptionAudioTests",
+   "tests": 9,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 1.33,
+   "secondsMax": 1.36
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingLiveCaptionRouteTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 1.22,
+   "secondsMax": 1.22
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingAEC3Tests",
+   "tests": 54,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 1.2,
+   "secondsMax": 1.2
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "SettingsNavigationStateTests",
+   "tests": 34,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 1.06,
+   "secondsMax": 1.15
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingEchoSignalScorerTests",
+   "tests": 21,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 1.01,
+   "secondsMax": 1.02
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingPCMBackendAdmissionTests",
+   "tests": 19,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 1.0,
+   "secondsMax": 1.21
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "UpdatePromptIntegrationTests",
+   "tests": 25,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.99,
+   "secondsMax": 1.37
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingModelResidencyTests",
+   "tests": 21,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.96,
+   "secondsMax": 1.06
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "DirectAudioReliabilityTests",
+   "tests": 49,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.93,
+   "secondsMax": 1.11
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingCanonicalPipelineTests",
+   "tests": 16,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.93,
+   "secondsMax": 1.23
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "UpdateBundleValidatorTests",
+   "tests": 14,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.9,
+   "secondsMax": 0.98
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PasteDeliveryCoordinatorTests",
+   "tests": 36,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.87,
+   "secondsMax": 0.88
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingEpochAudioMaterializerTests",
+   "tests": 6,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.86,
+   "secondsMax": 0.88
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingTextOverlapEchoVerdictProviderTests",
+   "tests": 8,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.84,
+   "secondsMax": 0.84
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MobileRegisteredModelInferenceTests",
+   "tests": 9,
+   "skipped": 8,
+   "failed": 0,
+   "secondsMedian": 0.82,
+   "secondsMax": 0.83
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSystemAudioContinuityFailureEvidenceTests",
+   "tests": 8,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.8,
+   "secondsMax": 0.82
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "KeychainServiceCacheTests",
+   "tests": 26,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.76,
+   "secondsMax": 1.61
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "FileTranscriptionBufferedAudioTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.72,
+   "secondsMax": 0.73
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingTranscriptAssemblerTests",
+   "tests": 55,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.72,
+   "secondsMax": 0.82
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "AudioHardwareRecoveryTests",
+   "tests": 16,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.66,
+   "secondsMax": 0.66
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingBrowserAudioMeasurementTests",
+   "tests": 6,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.66,
+   "secondsMax": 0.67
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingDiarizationModelStoreTests",
+   "tests": 11,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.63,
+   "secondsMax": 0.75
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "SearchIndexCoordinatorSchedulingTests",
+   "tests": 6,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.62,
+   "secondsMax": 0.63
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "VoiceModelDeletionTests",
+   "tests": 34,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.53,
+   "secondsMax": 0.72
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "LLMClientIdleConnectionTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.52,
+   "secondsMax": 0.53
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingRecordingSourceTests",
+   "tests": 29,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.52,
+   "secondsMax": 0.52
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSummaryActivityTests",
+   "tests": 13,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.52,
+   "secondsMax": 0.73
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSummaryProviderTests",
+   "tests": 28,
+   "skipped": 3,
+   "failed": 0,
+   "secondsMedian": 0.49,
+   "secondsMax": 0.49
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingPCMProgressivePipelineTests",
+   "tests": 7,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.44,
+   "secondsMax": 0.62
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "SpeechModelInstallationSnapshotTests",
+   "tests": 16,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.41,
+   "secondsMax": 0.53
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "OllamaChatTransportTests",
+   "tests": 41,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.4,
+   "secondsMax": 0.5
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingVoiceProcessingCaptureTests",
+   "tests": 71,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.37,
+   "secondsMax": 0.37
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingAPIControllerTests",
+   "tests": 10,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.35,
+   "secondsMax": 0.35
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "ParakeetCompactModelSmokeTests",
+   "tests": 8,
+   "skipped": 2,
+   "failed": 0,
+   "secondsMedian": 0.35,
+   "secondsMax": 0.35
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSpeakerVoiceMatcherTests",
+   "tests": 9,
+   "skipped": 2,
+   "failed": 0,
+   "secondsMedian": 0.34,
+   "secondsMax": 0.34
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "ASRServiceMeetingASRScopeTests",
+   "tests": 14,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.33,
+   "secondsMax": 0.42
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingLiveStartupCancellationTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.31,
+   "secondsMax": 0.41
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingNemotronRealModelSmokeTests",
+   "tests": 3,
+   "skipped": 3,
+   "failed": 0,
+   "secondsMedian": 0.31,
+   "secondsMax": 0.31
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingPrivacyPublicationTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.31,
+   "secondsMax": 0.31
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingTranscriptionBackendTests",
+   "tests": 31,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.31,
+   "secondsMax": 0.31
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingStage05SCKFrameAdapterTests",
+   "tests": 24,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.3,
+   "secondsMax": 0.31
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "AnalyticsDatabaseTests",
+   "tests": 26,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.29,
+   "secondsMax": 0.33
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingProcessingSerializationGateTests",
+   "tests": 6,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.26,
+   "secondsMax": 0.36
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "HoldToMutePresentationTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.25,
+   "secondsMax": 0.25
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PrivateAIDictationTokenBudgetTests",
+   "tests": 10,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.25,
+   "secondsMax": 0.35
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PronunciationModelRevisionTests",
+   "tests": 13,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.25,
+   "secondsMax": 0.25
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingAudioChunkSinkTests",
+   "tests": 16,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.22,
+   "secondsMax": 0.22
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingHistorySnapshotTests",
+   "tests": 7,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.22,
+   "secondsMax": 0.42
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingLiveBoundaryTests",
+   "tests": 5,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.22,
+   "secondsMax": 0.23
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingManualRecordingEndTests",
+   "tests": 16,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.22,
+   "secondsMax": 0.22
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingPrivacyPreparationLifecycleTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.22,
+   "secondsMax": 0.32
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingProviderOptionsTests",
+   "tests": 28,
+   "skipped": 2,
+   "failed": 0,
+   "secondsMedian": 0.22,
+   "secondsMax": 0.22
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingBrowserPostCallTests",
+   "tests": 9,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.21,
+   "secondsMax": 0.21
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingCaptureStorageAdmissionTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.21,
+   "secondsMax": 0.21
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingExistingAudioReplayTests",
+   "tests": 2,
+   "skipped": 2,
+   "failed": 0,
+   "secondsMedian": 0.21,
+   "secondsMax": 0.21
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSystemAudioContinuityHardwareTests",
+   "tests": 2,
+   "skipped": 2,
+   "failed": 0,
+   "secondsMedian": 0.21,
+   "secondsMax": 0.21
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "ASRServiceFolderImportTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.2,
+   "secondsMax": 0.21
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "SearchIndexTests",
+   "tests": 16,
+   "skipped": 2,
+   "failed": 0,
+   "secondsMedian": 0.19,
+   "secondsMax": 0.19
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "UpdateAppReplacementTests",
+   "tests": 20,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.19,
+   "secondsMax": 1.19
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "LocalAPIRequestLifetimeTests",
+   "tests": 7,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.18,
+   "secondsMax": 0.31
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "ASRServiceMeetingCaptureResidencyTests",
+   "tests": 6,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.16,
+   "secondsMax": 0.28
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "LocalAIModelResidencyTests",
+   "tests": 10,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.16,
+   "secondsMax": 0.36
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PichiGigaAMSourceSelectionTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.15,
+   "secondsMax": 0.15
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingMenuBarStartTests",
+   "tests": 16,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.14,
+   "secondsMax": 0.24
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSummaryInputTests",
+   "tests": 11,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.14,
+   "secondsMax": 0.14
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "ZeppelinDataLayerTests",
+   "tests": 10,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.13,
+   "secondsMax": 0.13
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "LLMClientStreamingTests",
+   "tests": 5,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.12,
+   "secondsMax": 0.12
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingDesktopTranscriptParagraphTests",
+   "tests": 10,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.12,
+   "secondsMax": 0.12
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingEchoVetoTests",
+   "tests": 10,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.12,
+   "secondsMax": 0.13
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "SpokenSendTests",
+   "tests": 48,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.12,
+   "secondsMax": 0.12
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "TranscriptionExecutorCancellationTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.12,
+   "secondsMax": 0.12
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PichiTextModelEvalTests",
+   "tests": 5,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.11,
+   "secondsMax": 0.11
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "GigaAMEncoderDictionaryLiveTests",
+   "tests": 1,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.1,
+   "secondsMax": 0.1
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingBrowserAudioHardwareTests",
+   "tests": 1,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.1,
+   "secondsMax": 0.1
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSpeakerHardwareAdmissionTests",
+   "tests": 1,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.1,
+   "secondsMax": 0.1
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "ModelTemperatureSupportTests",
+   "tests": 21,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.1,
+   "secondsMax": 0.21
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "ParakeetCompactModelDemoTests",
+   "tests": 1,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.1,
+   "secondsMax": 0.1
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "CompactSpeechModelArchiveTransportTests",
+   "tests": 14,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.09,
+   "secondsMax": 0.1
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "ParakeetArchiveInstallerTests",
+   "tests": 8,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.09,
+   "secondsMax": 0.1
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PichiMeetingSummaryLifetimeTests",
+   "tests": 6,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.09,
+   "secondsMax": 0.19
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "S1MiniProviderTests",
+   "tests": 22,
+   "skipped": 3,
+   "failed": 0,
+   "secondsMedian": 0.09,
+   "secondsMax": 0.1
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "SettingsBackupRoundTripTests",
+   "tests": 12,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.09,
+   "secondsMax": 0.1
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "ParakeetSpeechModelCatalogTests",
+   "tests": 15,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.08,
+   "secondsMax": 0.08
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "TypingServiceTransientPasteboardTests",
+   "tests": 25,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.08,
+   "secondsMax": 0.08
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingLiveAudioFIFOTests",
+   "tests": 6,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.07,
+   "secondsMax": 0.08
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PrivateAIProviderPromptFormatTests",
+   "tests": 10,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.07,
+   "secondsMax": 0.07
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "EditModeRouteTests",
+   "tests": 14,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.05,
+   "secondsMax": 0.05
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "GigaAMModelStoreDownloadTests",
+   "tests": 16,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.05,
+   "secondsMax": 0.06
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingModelPreparationQueueTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.05,
+   "secondsMax": 0.05
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingNemotronModelLocatorTests",
+   "tests": 12,
+   "skipped": 3,
+   "failed": 0,
+   "secondsMedian": 0.05,
+   "secondsMax": 0.06
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingAudioChunkLedgerTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.04,
+   "secondsMax": 0.05
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingOverlayGeometryTests",
+   "tests": 16,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.04,
+   "secondsMax": 0.04
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSessionModelTests",
+   "tests": 80,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.04,
+   "secondsMax": 0.04
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "NemotronProviderResidencyTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.04,
+   "secondsMax": 0.04
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "CloudTextProviderTests",
+   "tests": 13,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.03,
+   "secondsMax": 0.03
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "FillerWordDefaultsTests",
+   "tests": 11,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.03,
+   "secondsMax": 0.04
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "HoldToMuteTests",
+   "tests": 24,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.03,
+   "secondsMax": 0.03
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "LLMClientRequestBodyTests",
+   "tests": 26,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.03,
+   "secondsMax": 0.03
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingAnalysisManifestTests",
+   "tests": 15,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.03,
+   "secondsMax": 0.03
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingApplicationAudioFilterTests",
+   "tests": 5,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.03,
+   "secondsMax": 0.03
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingStage05EvidenceTests",
+   "tests": 15,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.03,
+   "secondsMax": 0.03
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PichiLocalizationPresentationTests",
+   "tests": 8,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.03,
+   "secondsMax": 0.04
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PichiLocalizationTests",
+   "tests": 20,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.03,
+   "secondsMax": 0.03
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "AudioTopologyDiagnosticsTests",
+   "tests": 27,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.03
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "DashboardLayoutTests",
+   "tests": 9,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.03
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingGlobalSpeakerStitcherTests",
+   "tests": 13,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.02
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingProcessingConfigurationTests",
+   "tests": 17,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.02
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingResultSidecarTests",
+   "tests": 20,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.03
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingStage05LiveAdapterRuntimeTests",
+   "tests": 5,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.02
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "SimpleUpdaterTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.02
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "UpdateRollbackBackupTests",
+   "tests": 11,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.03
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "WaveformSimulationTests",
+   "tests": 10,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.02
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "WhisperLanguageSelectionTests",
+   "tests": 23,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.03
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "AudioBufferConverterTests",
+   "tests": 7,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "FeedbackClientTests",
+   "tests": 7,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "LLMClientIdleOwnershipTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "LocalAPISettingsToggleTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingAgentLocalizationTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingAudioChunkLedgerRecoveryTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingCorrectionUndoRegistrationTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingEchoDetectorTests",
+   "tests": 6,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingEraBatchTests",
+   "tests": 16,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.02
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingLiveMemoryGateTests",
+   "tests": 5,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingLiveReplayTests",
+   "tests": 7,
+   "skipped": 3,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingLiveTranscriptSnapshotTests",
+   "tests": 10,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.02
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingNearFieldGateTests",
+   "tests": 7,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingPhase4ClassificationTests",
+   "tests": 9,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingReferenceAttributionContractsTests",
+   "tests": 18,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSCKPairedDiagnosticsTests",
+   "tests": 20,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingScreenCaptureRecoveryTests",
+   "tests": 7,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingStage05TimingFailureRecordTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSystemAudioContinuityProtocolTests",
+   "tests": 6,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PasteboardOwnershipRegressionTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "ProgressiveFileDownloaderTests",
+   "tests": 5,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "SpeakerLabeledTranscriptionPolicyTests",
+   "tests": 21,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.06
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "TranscriptionExecutionStatusTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "UpdateInstallationPipelineTests",
+   "tests": 13,
+   "skipped": 9,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.02
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "ASRServiceMicrophonePermissionTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "AppleSpeechLocaleSelectionTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "AudioBudgetMeasurementGateTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "AudioEngineRetirementDrainTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.11
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "ClockDomainProbeTests",
+   "tests": 1,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "DeliveryTargetAssessmentTests",
+   "tests": 5,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "FileExportTests",
+   "tests": 6,
+   "skipped": 2,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "FluidAudioProviderWordTimingTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "LocalTextModelDiscoveryTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingAudioAssetCompatibilityTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingCaptureLanguageAdmissionTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingEchoCandidateTextTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingFallbackEchoProbeTests",
+   "tests": 2,
+   "skipped": 2,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingLiveBoundedQueueTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingLiveBubbleComposerTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingLiveEchoFilterTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingLiveProvisionalContainmentTests",
+   "tests": 1,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingLiveSilenceEndpointTests",
+   "tests": 1,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingLiveTimeConversionTests",
+   "tests": 5,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingOverlayPresentationReducerTests",
+   "tests": 6,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingOverlayVisibilityTests",
+   "tests": 1,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingPCMStoragePolicyTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingPageActionAvailabilityTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingPhase4LiveGatingTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSCKPairedHardwareTests",
+   "tests": 1,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSetupSourceSelectionTests",
+   "tests": 10,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSpeakerAccuracyNoteTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingSpeakerEmbeddingIndexTests",
+   "tests": 7,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingTimelineDriftProbeTests",
+   "tests": 1,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingTimelineMigrationTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingTranscriptDisplayProjectionTests",
+   "tests": 1,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingTurnSelectionTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MeetingWindowSelectorTests",
+   "tests": 11,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "MobileInferenceTestAssetsTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "OverlayFailureStateTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "PrivateAIResidencyEvidenceTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "SpeakerTranscriptSegmentTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "SpeakerTurnMergingTests",
+   "tests": 12,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "StripThinkingTagsTests",
+   "tests": 5,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "SupportedFileExtensionsTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "TemperatureSupportTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "TextInsertionModeMigrationTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "VoiceProcessingAsrQualityTests",
+   "tests": 1,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "VoiceProcessingDuckingProbeTests",
+   "tests": 1,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "FluidDictationIntegrationTests",
+   "class": "VoiceProcessingSpeechDuckingTests",
+   "tests": 1,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  }
+ ],
+ "mobileClasses": [
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MeetingLiveCaptionNativeScrollTests",
+   "tests": 15,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 70.43,
+   "secondsMax": 70.46
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileSetupTransactionTests",
+   "tests": 18,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 9.05,
+   "secondsMax": 9.05
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileKioskRecordingTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 4.95,
+   "secondsMax": 5.09
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileKioskAccessTests",
+   "tests": 18,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 4.38,
+   "secondsMax": 4.45
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MeetingInlineCaptionBoundsTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 2.49,
+   "secondsMax": 3.25
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileSpeakerAdmissionTests",
+   "tests": 15,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 1.3,
+   "secondsMax": 1.31
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobilePCMRuntimeCoverageTests",
+   "tests": 20,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.68,
+   "secondsMax": 0.68
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileEncryptedPresentationTests",
+   "tests": 5,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.38,
+   "secondsMax": 0.38
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MeetingOwnerVoiceEnrollmentCaptureTests",
+   "tests": 13,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.32,
+   "secondsMax": 0.33
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileAudioStorageTests",
+   "tests": 3,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.25,
+   "secondsMax": 0.27
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "TranscriptionExecutorResponsivenessTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.24,
+   "secondsMax": 0.24
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MeetingOwnerVoiceProfileTests",
+   "tests": 10,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.21,
+   "secondsMax": 0.23
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileDebugAudioInputTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.15,
+   "secondsMax": 0.15
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileFirstUseModelTests",
+   "tests": 17,
+   "skipped": 2,
+   "failed": 0,
+   "secondsMedian": 0.11,
+   "secondsMax": 0.12
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MeetingSavedTranscriptPresentationTests",
+   "tests": 18,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.1,
+   "secondsMax": 0.1
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileConfigurationSnapshotTests",
+   "tests": 5,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.06,
+   "secondsMax": 0.07
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileMeetingEndToEndTests",
+   "tests": 43,
+   "skipped": 10,
+   "failed": 0,
+   "secondsMedian": 0.06,
+   "secondsMax": 0.07
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MeetingLiveCaptionPresentationTests",
+   "tests": 28,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.02
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobilePCMAdmissionTests",
+   "tests": 6,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.02
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobilePrivacyPersistenceTests",
+   "tests": 10,
+   "skipped": 7,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.02
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileSharingCleanupTests",
+   "tests": 9,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.02,
+   "secondsMax": 0.02
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileExecutionStatusTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileLocalizationRenderingTests",
+   "tests": 8,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileNemotronFP16DiagnosticTests",
+   "tests": 5,
+   "skipped": 2,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileProtectedDeliveryHTTPTests",
+   "tests": 7,
+   "skipped": 7,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileRegisteredModelInferenceTests",
+   "tests": 9,
+   "skipped": 8,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "WhisperDiagnosticsTests",
+   "tests": 17,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.01,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileCaptureRoutePolicyTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileInferenceTestAssetsTests",
+   "tests": 4,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.01
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileMicrophoneSelectionTests",
+   "tests": 3,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileOwnerVoiceComparisonTests",
+   "tests": 5,
+   "skipped": 1,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileRecordingActivityPlanTests",
+   "tests": 6,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "MobileScreenAwakeRegistryTests",
+   "tests": 2,
+   "skipped": 0,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  },
+  {
+   "bundle": "PichiVoiceMobileIntegrationTests",
+   "class": "PhysicalDevicePrerequisiteTests",
+   "tests": 3,
+   "skipped": 3,
+   "failed": 0,
+   "secondsMedian": 0.0,
+   "secondsMax": 0.0
+  }
+ ]
+}
