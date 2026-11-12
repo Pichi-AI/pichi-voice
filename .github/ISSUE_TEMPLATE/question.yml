@@ -1,0 +1,24 @@
+name: Question or installation help
+description: Ask about installing or using Pichi Voice. English and Russian welcome.
+title: "[QUESTION] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues and the user guide first. You can write in English or Russian.
+        Use the private security reporting link for suspected vulnerabilities.
+        Do not attach private recordings, transcripts, credentials or unredacted logs.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question / Вопрос
+      description: What are you trying to do, and what have you already tried?
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Device, OS and app version / Устройство, ОС и версия приложения
+      placeholder: "MacBook Air M2, macOS 15.5, Pichi Voice 0.1.0 (71)"
+    validations:
+      required: false
