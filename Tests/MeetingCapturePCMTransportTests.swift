@@ -184,44 +184,36 @@ struct MeetingCapturePCMTransportTests {
     }
 
     static func testDesktopWriterRejection() async throws {
+        // 91865f5b moved conversion and the streaming consumer into the shared clock-aware tee (covered by
+        // testMultiTrackCaptureTee). The microphone callback keeps the writer and live-handler tee: a rejected buffer
+        // is never offered to live interpretation, defers live transcription once, and never closes the recording.
         let writer = MeetingMacCaptureWriterProbe(rejectCall: 2)
-        let consumer = MeetingMacCaptureConsumerProbe()
         let events = MeetingMacCaptureEventProbe()
-        let tee = try MeetingMacCaptureTeeProbe(writer: writer, consumer: consumer,
+        let tee = MeetingMacCaptureTeeProbe(writer: writer,
             event: { events.record($0) }, live: { _, _ in events.presented() })
         tee.deliver(try nativeSample(frames: 2048, startFrame: 0))
-        let accepted = consumer.received
-        try require(!accepted.isEmpty && accepted.allSatisfy { $0 > 0 }, "the first native buffer reaches converted streaming PCM")
+        try require(events.snapshot.1 == 1 && events.snapshot.0.isEmpty && !tee.hasDeferredLiveTranscription,
+            "the first native buffer reaches the writer and live interpretation")
         // 512/48k is 10.7 ms, smaller than the converter's 20 ms discontinuity guard.
         tee.deliver(try nativeSample(frames: 512, startFrame: 2048))
         tee.deliver(try nativeSample(frames: 512, startFrame: 2560))
         tee.deliver(try nativeSample(frames: 512, startFrame: 3072))
-        try require(tee.isTerminal, "writer rejection must close streaming admission and retain a Stop failure")
-        try require(writer.calls == 2 && consumer.received == accepted,
-            "PCM after the rejected buffer must never be compressed onto the previous streaming prefix")
-        try require(events.snapshot.0 == [.writerBackpressure, .captureStoppedUnexpectedly] && events.snapshot.1 == 1,
-            "writer rejection emits one terminal interruption and no later live progress")
+        try require(tee.hasDeferredLiveTranscription, "writer rejection must defer live transcription")
+        try require(writer.calls == 4,
+            "recording keeps offering later measured buffers to the writer after a rejected buffer")
+        try require(events.snapshot.0 == [.liveTranscriptionDeferred] && events.snapshot.1 == 3,
+            "writer rejection emits one deferral; only accepted buffers reach live progress, never the rejected one")
 
-        let legacyWriter = MeetingMacCaptureWriterProbe(rejectCall: 2)
-        let legacyEvents = MeetingMacCaptureEventProbe()
-        let legacy = try MeetingMacCaptureTeeProbe(writer: legacyWriter, consumer: nil,
-            event: { legacyEvents.record($0) }, live: { _, _ in legacyEvents.presented() })
-        for (frames, start) in [(2048, 0), (512, 2048), (512, 2560)] {
-            legacy.deliver(try nativeSample(frames: frames, startFrame: Int64(start)))
-        }
-        try require(legacyWriter.calls == 3 && !legacy.isTerminal && legacyEvents.snapshot.0.isEmpty
-            && legacyEvents.snapshot.1 == 2, "legacy writer-only rejection behavior remains unchanged")
-
-        let rejected = MeetingMacCaptureConsumerProbe(accepts: false)
-        let rejectingWriter = MeetingMacCaptureWriterProbe(rejectCall: 0)
+        let rejectingWriter = MeetingMacCaptureWriterProbe(rejectCall: 1)
         let rejectedEvents = MeetingMacCaptureEventProbe()
-        let failed = try MeetingMacCaptureTeeProbe(writer: rejectingWriter, consumer: rejected,
+        let rejected = MeetingMacCaptureTeeProbe(writer: rejectingWriter,
             event: { rejectedEvents.record($0) }, live: { _, _ in rejectedEvents.presented() })
-        failed.deliver(try nativeSample(frames: 2048, startFrame: 0))
-        failed.deliver(try nativeSample(frames: 512, startFrame: 2048))
-        try require(failed.isTerminal && rejectingWriter.calls == 1 && rejected.received.count == 1
-            && rejectedEvents.snapshot.0 == [.writerBackpressure, .captureStoppedUnexpectedly],
-            "writer and consumer rejection share identical once-only terminal semantics")
+        rejected.deliver(try nativeSample(frames: 2048, startFrame: 0))
+        rejected.deliver(try nativeSample(frames: 512, startFrame: 2048))
+        try require(rejected.hasDeferredLiveTranscription && rejectingWriter.calls == 2
+            && rejectedEvents.snapshot.0 == [.liveTranscriptionDeferred] && rejectedEvents.snapshot.1 == 1,
+            "a first-buffer rejection shares the same once-only deferral semantics")
+
         let enteredWriter = DispatchSemaphore(value: 0)
         let resumeWriter = DispatchSemaphore(value: 0)
         let closingWriter = MeetingMacCaptureWriterProbe(rejectCall: 1, beforeEnqueue: {
@@ -229,8 +221,7 @@ struct MeetingCapturePCMTransportTests {
             _ = resumeWriter.wait(timeout: .now() + 3)
         })
         let closingEvents = MeetingMacCaptureEventProbe()
-        let closingConsumer = MeetingMacCaptureConsumerProbe()
-        let closing = try MeetingMacCaptureTeeProbe(writer: closingWriter, consumer: closingConsumer,
+        let closing = MeetingMacCaptureTeeProbe(writer: closingWriter,
             event: { closingEvents.record($0) }, live: { _, _ in closingEvents.presented() })
         let admitted = Task.detached {
             closing.deliver(try nativeSample(frames: 512, startFrame: 0))
@@ -245,11 +236,11 @@ struct MeetingCapturePCMTransportTests {
         closing.closeForStop()
         resumeWriter.signal()
         try await admitted.value
-        try require(closing.hasFailureForStop && closingConsumer.received.isEmpty,
-            "an already admitted sink rejection remains visible to Stop after it closes intake")
-        try require(closingEvents.snapshot.0.isEmpty && closingEvents.snapshot.1 == 0,
-            "normal Stop suppresses duplicate interruption events without suppressing the PCM failure")
-        print("Desktop source callback: native-rate writer rejection, Stop race, closed intake, terminal evidence and unchanged legacy path passed.")
+        try require(closingEvents.snapshot.0.isEmpty && closingEvents.snapshot.1 == 0 && !closing.hasDeferredLiveTranscription,
+            "normal Stop suppresses a duplicate interruption for an already admitted rejection and offers it no live PCM")
+        closing.deliver(try nativeSample(frames: 512, startFrame: 512))
+        try require(closingWriter.calls == 1 && closingEvents.snapshot.1 == 0, "closed intake accepts no later buffer")
+        print("Desktop source callback: writer rejection defers live transcription once, Stop race and closed intake passed.")
     }
 
     static func main() async throws {

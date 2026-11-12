@@ -911,6 +911,8 @@ struct MeetingSpeakerAttributionTests {
         self.check(oldRoundTrip == oldPolicy && oldRoundTrip.fingerprint == oldFingerprint)
         var priorObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         priorObject.removeValue(forKey: "enableCompleteReadingAssignment")
+        // Encodings from before ad76f332 carry no token-emission context flag.
+        priorObject.removeValue(forKey: "enableTokenEmissionContext")
         priorObject.removeValue(forKey: "enableIncomingGapReading")
         priorObject.removeValue(forKey: "enableProvisionalSpeakerIdentities")
         priorObject.removeValue(forKey: "enableStableSpeakerOpening")
@@ -929,6 +931,8 @@ struct MeetingSpeakerAttributionTests {
             from: JSONEncoder().encode(priorPolicy)).fingerprint == priorPolicy.fingerprint)
         var beforeAcoustic = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         beforeAcoustic.removeValue(forKey: "enableCompleteReadingAssignment")
+        // Encodings from before ad76f332 carry no token-emission context flag.
+        beforeAcoustic.removeValue(forKey: "enableTokenEmissionContext")
         beforeAcoustic.removeValue(forKey: "enableIncomingGapReading")
         beforeAcoustic.removeValue(forKey: "enableProvisionalSpeakerIdentities")
         beforeAcoustic.removeValue(forKey: "enableStableSpeakerOpening")
@@ -946,6 +950,8 @@ struct MeetingSpeakerAttributionTests {
             from: JSONEncoder().encode(frozen)) == frozen)
         var beforeTurnBoundaries = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         beforeTurnBoundaries.removeValue(forKey: "enableCompleteReadingAssignment")
+        // Encodings from before ad76f332 carry no token-emission context flag.
+        beforeTurnBoundaries.removeValue(forKey: "enableTokenEmissionContext")
         beforeTurnBoundaries.removeValue(forKey: "enableIncomingGapReading")
         beforeTurnBoundaries.removeValue(forKey: "enableProvisionalSpeakerIdentities")
         beforeTurnBoundaries.removeValue(forKey: "enableStableSpeakerOpening")

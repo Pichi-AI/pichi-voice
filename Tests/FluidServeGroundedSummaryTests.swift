@@ -296,7 +296,9 @@ struct FluidServeGroundedSummaryTests {
         let meeting = entries[0].meeting
         check(FluidServeMeetings.transcript(for: meeting) == MeetingTranscriptExporter.text(for: session),
               "CLI text shares the application's foreground, estimate, multi-speaker and corrected labels")
-        let expectedLabels = ["You", "First", "Unknown speaker", "First"]
+        // The ambiguous overlapping fragment receives its reading participant (609e715e); its acoustic uncertainty
+        // stays on the canonical member, so the shared label is the continuing owner rather than "Unknown speaker".
+        let expectedLabels = ["You", "First", "You", "First"]
         check(meeting.turns.map { FluidServeMeetings.speakerLabel(for: $0, in: meeting) } == expectedLabels,
               "Labels retain unknown/background states and resolved owner/merged aliases")
         let show = FluidServeCommand.run(arguments: ["meet", "show", "latest"], root: root, accessEnabled: true)
@@ -435,9 +437,14 @@ struct FluidServeGroundedSummaryTests {
         let after = try MeetingTranscriptExporter.json(for: session)
         check(try JSONSerialization.jsonObject(with: before) as! NSDictionary == JSONSerialization.jsonObject(with: after) as! NSDictionary,
               "Reading projection never changes JSON evidence semantics")
+        // Complete reading assignment (609e715e) gives every readable member a reading participant, so an unresolved
+        // word beside unsafe evidence now joins its continuing speaker's turn instead of staying a separate paragraph.
+        // What unsafe, manual or nonlegacy evidence must still never do is borrow the legacy bridge or alter a member:
+        // every canonical member stays exact and in order, and no estimate marker is projected.
         func staysSplit(_ rows: [MeetingTranscriptSegment], in changed: MeetingSession? = nil, line: UInt = #line) {
-            check(MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed ?? session).count == rows.count,
-                  "Unsafe, manual or nonlegacy evidence must remain a boundary at line \(line)")
+            let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed ?? session)
+            check(paragraphs.flatMap(\.segments) == rows && !paragraphs.contains(where: \.containsLegacySpeakerBridge),
+                  "Unsafe, manual or nonlegacy evidence must not take the legacy bridge at line \(line)")
         }
         for index in 0..<3 {
             var rows = originals; rows[index].revision = 1; staysSplit(rows)
@@ -612,11 +619,14 @@ struct FluidServeGroundedSummaryTests {
                         segment("to", 43, speaker: nil), segment("First continues.", 44)]
         session.transcriptSegments = dialogue
         let dialogueTurns = MeetingTranscriptExporter.displayParagraphs(for: dialogue, in: session)
-        check(dialogueTurns.map(\.segments) == [Array(dialogue[0...1]), [dialogue[2]], [dialogue[3]], [dialogue[4]], [dialogue[5]]],
-              "Actual speaker switches and unknown attribution remain distinct turns")
-        check(MeetingTranscriptExporter.text(for: session).contains("[00:43] to")
+        // Complete reading assignment (609e715e) gives an unresolved word between two turns of one speaker to
+        // that continuing participant; a real speaker switch still opens a new turn.
+        check(dialogueTurns.map(\.segments) == [Array(dialogue[0...1]), [dialogue[2]], Array(dialogue[3...5])],
+              "Actual speaker switches remain distinct turns; an unresolved word joins its continuing speaker")
+        check(MeetingTranscriptExporter.text(for: session).contains("[00:42] First: First again. to First continues.")
               && !MeetingTranscriptExporter.text(for: session).contains("Unknown speaker"),
-              "An unresolved word keeps its text and time without an invented participant caption")
+              "An unresolved word keeps its text without an invented participant caption")
+        check(dialogueTurns[2].segments[1].speakerID == nil, "Reading assignment leaves the stored member's evidence unchanged")
 
         let changedSource = [segment("Source one.", 0), segment("Source two.", 1, source: UUID())]
         check(MeetingTranscriptExporter.displayParagraphs(for: changedSource, in: session).count == 2,
