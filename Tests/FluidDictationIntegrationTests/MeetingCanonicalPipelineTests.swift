@@ -1166,6 +1166,10 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         let recording = RecordingSessionStore(wrapping: MeetingSessionStore(rootDirectory: root))
         try await recording.create(session)
         let directory = try await recording.sessionDirectory(for: session.id)
+        // A finalized chunk of a real recording has its file, and the store checks it on restore.
+        let chunkURL = chunk.fileURL(relativeTo: directory)
+        try FileManager.default.createDirectory(at: chunkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 7, count: Int(chunk.byteCount)).write(to: chunkURL)
         let checkpointURL = directory.appendingPathComponent("checkpoint.json")
         try Data("checkpoint".utf8).write(to: checkpointURL)
 
