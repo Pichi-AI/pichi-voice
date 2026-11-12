@@ -180,6 +180,12 @@
    "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
    "reason": "After #157 the full comparison does not save a usable report within 5 seconds. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:fluid_serve",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Behavior changed after 609e715e: an unresolved word joins its neighbour's turn and an ambiguous overlapping fragment reads as \"You\" instead of \"Unknown speaker\". The probe keeps the old expectations until the owner of #115 confirms the new behavior; the same change is quarantined in the XCTest entries owned by #115.",
+   "expires": "2026-11-26"
   }
  ]
 }
