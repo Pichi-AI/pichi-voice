@@ -159,7 +159,7 @@ final class SimpleUpdater: ObservableObject {
         defaults: UserDefaults = .standard,
         promptPresenter: UpdatePromptPresenter = .shared,
         installationAdmission: @escaping @MainActor () throws -> (@MainActor () -> Void) = {
-            try SimpleUpdater.reserveInstallation(using: ASRService.shared)
+            try SimpleUpdater.reserveInstallation(using: AppServices.shared.asr)
         }
     ) {
         self.updateSession = session

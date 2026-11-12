@@ -169,6 +169,24 @@ final class MacUpdaterLifecycleTests: XCTestCase {
         await context.cleanup()
     }
 
+    func testDefaultUpdaterAdmissionProtectsTheApplicationCaptureService() async throws {
+        let context = try Context(useDefaultAdmission: true)
+        defer { context.close() }
+        context.updater.checkForUpdatesAutomatically()
+        try await wait { context.updater.downloadState == .ready("0.1.0 (71)") }
+        var installs = 0
+        context.updater.installStagedForTesting = { _, _ in installs += 1 }
+        let lease = try context.asr.acquireExclusiveActivity(.meeting)
+        defer { context.asr.releaseExclusiveActivity(lease) }
+        do {
+            try await context.updater.checkAndUpdate(owner: "Pichi-AI", repo: "pichi-voice")
+            XCTFail("The default composition must observe the application's capture lease")
+        } catch {}
+        XCTAssertEqual(installs, 0)
+        XCTAssertEqual(context.asr.activeExclusiveActivity, .meeting)
+        await context.cleanup()
+    }
+
     func testPendingCaptureFinalizationAndTrainingRejectInstallationWithoutOwningAudio() throws {
         let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
         for state in ["running", "starting", "finalizing", "training", "recovering"] {
@@ -269,11 +287,12 @@ private final class Context {
     let fixture = Transport()
     let session: URLSession
     let presenter = UpdatePromptPresenter()
-    let asr = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+    let asr: ASRService
     let updater: SimpleUpdater
     let temporaryDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("MacUpdaterLifecycleTests-" + UUID().uuidString)
 
-    init() throws {
+    init(useDefaultAdmission: Bool = false) throws {
+        asr = useDefaultAdmission ? AppServices.shared.asr : ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
         defaults = try XCTUnwrap(UserDefaults(suiteName: token))
         defaults.set(false, forKey: SettingsStore.UpdateKeys.showUpdatePopups)
         let configuration = URLSessionConfiguration.ephemeral
@@ -282,9 +301,13 @@ private final class Context {
         session = URLSession(configuration: configuration)
         TransportProtocol.register(fixture, token: token)
         let service = asr
-        updater = SimpleUpdater(session: session, defaults: defaults, promptPresenter: presenter, installationAdmission: {
-            try SimpleUpdater.reserveInstallation(using: service)
-        })
+        if useDefaultAdmission {
+            updater = SimpleUpdater(session: session, defaults: defaults, promptPresenter: presenter)
+        } else {
+            updater = SimpleUpdater(session: session, defaults: defaults, promptPresenter: presenter, installationAdmission: {
+                try SimpleUpdater.reserveInstallation(using: service)
+            })
+        }
         try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: false)
         updater.downloadTemporaryDirectoryForTesting = temporaryDirectory
         updater.updatesEnabledForTesting = true
