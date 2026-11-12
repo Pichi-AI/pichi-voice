@@ -49,17 +49,47 @@ final nonisolated class UpdateBundleValidatorTests: XCTestCase {
         }
     }
 
-    func testDeveloperIDReleaseAcceptsApprovedSigningTeams() throws {
+    func testDeveloperIDWithoutHardenedRuntimeAndTimestampIsRejected() throws {
         try self.withFixture(developerID: true) { fixture in
-            let approved: Set<String> = ["V4J43B279J", "537RRRT57V"]
-            let result = try UpdateBundleValidator.validate(
+            XCTAssertThrowsError(try UpdateBundleValidator.validate(
                 at: fixture.bundle,
                 expectation: self.expectation,
-                policy: .developerID(allowedTeamIDs: approved)
-            )
-            XCTAssertTrue(approved.contains(result.teamIdentifier))
-            XCTAssertEqual(result.version, self.version)
-            XCTAssertEqual(result.build, "27")
+                policy: .developerID(allowedTeamIDs: [fixture.team])
+            )) { XCTAssertEqual($0 as? UpdateBundleValidator.ValidationError, .missingRuntimeOrTimestamp) }
+        }
+    }
+
+    func testReleaseTrustRequiresRuntimeTimestampAndSuccessfulNotarization() throws {
+        var assessments = 0
+        for (flags, timestamp): (UInt32, Date?) in [(0, Date()), (0x10000, nil)] {
+            XCTAssertThrowsError(try UpdateBundleValidator.validateReleaseTrust(flags: flags, timestamp: timestamp) { assessments += 1 }) {
+                XCTAssertEqual($0 as? UpdateBundleValidator.ValidationError, .missingRuntimeOrTimestamp)
+            }
+        }
+        XCTAssertEqual(assessments, 0)
+        XCTAssertThrowsError(try UpdateBundleValidator.validateReleaseTrust(flags: 0x10000, timestamp: Date()) {
+            assessments += 1
+            throw UpdateBundleValidator.ValidationError.notarizationRejected
+        }) { XCTAssertEqual($0 as? UpdateBundleValidator.ValidationError, .notarizationRejected) }
+        XCTAssertEqual(assessments, 1)
+        XCTAssertNoThrow(try UpdateBundleValidator.validateReleaseTrust(flags: 0x10000, timestamp: Date()) { assessments += 1 })
+        XCTAssertEqual(assessments, 2)
+    }
+
+    func testReleaseAssessmentUsesSystemTicketAndGatekeeperChecksAndRejectsEitherFailure() throws {
+        let app = URL(fileURLWithPath: "/synthetic/Pichi Voice.app")
+        var calls: [(String, [String])] = []
+        try UpdateBundleValidator.assessRelease(at: app) { executable, arguments, _, cancellable in
+            XCTAssertTrue(cancellable)
+            calls.append((executable, arguments))
+        }
+        XCTAssertEqual(calls.map(\.0), ["/usr/bin/syspolicy_check", "/usr/sbin/spctl"])
+        XCTAssertEqual(calls[0].1, ["distribution", app.path])
+        XCTAssertEqual(calls[1].1, ["--assess", "--type", "execute", "--verbose=2", app.path])
+        for failed in ["/usr/bin/syspolicy_check", "/usr/sbin/spctl"] {
+            XCTAssertThrowsError(try UpdateBundleValidator.assessRelease(at: app) { executable, _, _, _ in
+                if executable == failed { throw URLError(.noPermissionsToReadFile) }
+            }) { XCTAssertEqual($0 as? UpdateBundleValidator.ValidationError, .notarizationRejected) }
         }
     }
 

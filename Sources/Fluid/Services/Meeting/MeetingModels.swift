@@ -80,6 +80,9 @@ nonisolated enum MeetingInterruptionKind: String, Codable, Sendable {
     case captureStoppedUnexpectedly
     case writerBackpressure
     case writerFailure
+    case metadataPersistenceDelayed
+    case metadataPersistenceRecovered
+    case liveTranscriptionDeferred
     case voiceProcessingDeclined
     case voiceProcessingConfigurationChanged
     case voiceProcessingOverload
@@ -1825,6 +1828,7 @@ nonisolated struct MeetingCaptureStopResult: Sendable {
     var tracks: [MeetingAudioTrack]
     var stoppedAt: Date
     var stoppedHostTime: UInt64? = nil
+    var transcriptionDeferred: Bool = false
 }
 
 nonisolated struct MeetingProcessingResult: Codable, Sendable {

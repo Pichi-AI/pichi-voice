@@ -305,6 +305,51 @@ extension MeetingAudioClockMapping {
         return try Self(frameCount: count, spans: result).validated()
     }
 
+    /// Simplifies one completed chunk's ORIGINAL measurements for persistence. Do not compact
+    /// incrementally: every original breakpoint must constrain the final chord, so rounding
+    /// errors cannot accumulate across packets. Both sides of a gap remain exact boundaries.
+    func compacted() throws -> Self {
+        _ = try self.validated()
+        // Capture emits integer nanoseconds. Preserve other rational clocks unchanged rather
+        // than rescaling their measurements and spending part of the error allowance there.
+        guard self.spans.count > 1,
+              self.spans.allSatisfy({ $0.hostStart.timescale == 1_000_000_000 && $0.hostEnd.timescale == 1_000_000_000 }),
+              var active = self.spans.first else { return self }
+        var result: [MeetingAudioClockSpan] = []
+        result.reserveCapacity(self.spans.count)
+        // Use local integer deltas, never subtraction of large absolute Double uptimes. The
+        // 0.1 ns margin covers floating-point arithmetic within the bounded one-hour chord.
+        let errorTicks = 0.9
+        let maximumChordTicks: Int64 = 3_600_000_000_000
+        func slopeBounds(_ span: MeetingAudioClockSpan) -> (Double, Double) {
+            let width = span.frameEnd - span.frameStart
+            let ticks = Double(span.hostEnd.value - span.hostStart.value)
+            return ((ticks - errorTicks) / width, (ticks + errorTicks) / width)
+        }
+        var (minimumSlope, maximumSlope) = slopeBounds(active)
+        for span in self.spans.dropFirst() {
+            let width = span.frameEnd - active.frameStart
+            let ticks = span.hostEnd.value - active.hostStart.value
+            let slope = Double(ticks) / width
+            if !span.discontinuityBefore, active.frameEnd == span.frameStart,
+               active.hostEnd.value == span.hostStart.value,
+               ticks <= maximumChordTicks, slope >= minimumSlope, slope <= maximumSlope {
+                // The endpoint's exact chord satisfies EVERY preceding original breakpoint.
+                // Add this breakpoint's corridor before considering the next endpoint.
+                minimumSlope = max(minimumSlope, (Double(ticks) - errorTicks) / width)
+                maximumSlope = min(maximumSlope, (Double(ticks) + errorTicks) / width)
+                active.frameEnd = span.frameEnd
+                active.hostEnd = span.hostEnd
+            } else {
+                result.append(active)
+                active = span
+                (minimumSlope, maximumSlope) = slopeBounds(active)
+            }
+        }
+        result.append(active)
+        return try Self(version: self.version, frameCount: self.frameCount, spans: result).validated()
+    }
+
     static func mediaTime(_ seconds: Double) -> MeetingMediaTime {
         guard seconds.isFinite, seconds >= 0, seconds < Double(Int64.max) / 1_000_000_000 - 1 else {
             return MeetingMediaTime(value: 0, timescale: 0)
