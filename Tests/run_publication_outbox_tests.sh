@@ -59,10 +59,14 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Services/Meeting/MeetingSummaryInput.swift \
     Sources/Fluid/Services/Meeting/MeetingSavedSummary.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
+    Sources/Fluid/Services/Meeting/MeetingAudioChunkLedger.swift Sources/Fluid/Services/Meeting/MeetingPCMSourceTimeline.swift \
+    Sources/Fluid/Services/Meeting/Backend/MeetingAudioChunkSink.swift Sources/Fluid/Services/Meeting/Backend/MeetingAudioFilePCMChunkSink.swift \
+    Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift \
     Tests/Support/StandaloneMeetingProcessingDependencies.swift \
     Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
+    Sources/Fluid/Services/Meeting/Backend/MeetingReadingSpeakerResolver.swift \
     "$task_test_dir/AttributionTypes.swift" "$task_test_dir/ApplicationSupport.swift" \
     Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationSource.swift \
     Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationPayload.swift \

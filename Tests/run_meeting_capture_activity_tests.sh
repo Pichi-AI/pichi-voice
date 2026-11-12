@@ -10,14 +10,17 @@ import sys
 source = Path('Sources/Fluid/Services/Meeting/MeetingSpeechActivityDetector.swift').read_text()
 Path(sys.argv[1]).write_text(source[:source.index('/// Offline B2 diagnostic combination.')])
 PY
+# MeetingPCMSourceTimeline.swift (120) and the PCM transport use the capture-clock value contracts.
+python3 Tests/Support/write_capture_clock_standalone_types.py "$task_test_dir/CaptureClockTypes.swift"
 python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift" --synthetic-brand
-xcrun swiftc -swift-version 6 -default-isolation MainActor -parse-as-library \
+xcrun swiftc -swift-version 6 -parse-as-library \
     -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/ActivityDetector.swift" \
     "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift \
     Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift \
     Sources/Fluid/Services/Meeting/Platform/MeetingCapturePCMTransport.swift \
+    Sources/Fluid/Services/Meeting/MeetingPCMSourceTimeline.swift "$task_test_dir/CaptureClockTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \
     Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift \
     Tests/MeetingCaptureSpeechActivityTests.swift -o "$task_test_dir/tests"
