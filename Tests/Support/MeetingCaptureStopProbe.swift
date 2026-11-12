@@ -266,6 +266,8 @@ extension MeetingCapturePCMTransportTests {
                         let result = try await task.value
                         // 9751bfd2: a desktop streaming-consumer failure is a recoverable processing event; the recording
                         // already closed, so only a runtime failure (or an iOS finalizer failure) remains a Stop failure.
+                        // This probe proves only that such a Stop no longer fails. Its continuity is not connected to the
+                        // tee, so it cannot observe that the deferral is recorded; `transcriptionDeferred` stays unchecked.
                         try require(failure == "none" || (platform == "desktop" && failure == "consumer"),
                             "A runtime or finalizer failure must remain terminal")
                         if platform == "desktop" { try require(result.stoppedHostTime != nil, "Desktop Stop records the joined host-clock boundary") }
