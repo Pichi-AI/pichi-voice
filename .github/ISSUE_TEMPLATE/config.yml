@@ -1,5 +1,11 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/Pichi-AI/pichi-voice/security/advisories/new
+    about: Keep vulnerability details and sensitive data out of public issues.
+  - name: User guide / Руководство пользователя
+    url: https://github.com/Pichi-AI/pichi-voice/blob/main/SUPPORT.md
+    about: Find the English and Russian guides and advice for sharing diagnostics safely.
   - name: Pichi Voice contribution guide
     url: https://github.com/Pichi-AI/pichi-voice/blob/main/CONTRIBUTING.md
     about: Read the downstream contribution scope, testing principles and review expectations.

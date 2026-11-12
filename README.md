@@ -6,7 +6,7 @@
 
 Voice typing on Mac, local meeting recording and transcription on Mac, iPhone and iPad. Spend less time typing and keep control of your recordings.
 
-[Русский](README.ru.md) · [Website](https://pichi.ai/voice) · [Releases](https://github.com/Pichi-AI/pichi-voice/releases) · [User guide](docs/product/user-guide.md) · [Support](SUPPORT.md)
+[Русский](README.ru.md) · [Website](https://pichi.ai/voice) · [Releases](https://github.com/Pichi-AI/pichi-voice/releases) · [User guide](docs/product/user-guide.md) · [Support](SUPPORT.md) · [Security](SECURITY.md)
 
 ## What you can do
 
@@ -24,7 +24,7 @@ Compatible speech models support Russian and English. Other languages, speed and
 
 | Platform | Requirements | Download |
 | --- | --- | --- |
-| macOS | macOS 15 or later; Apple Silicon | [Download Mac installer](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B69-public.1/Pichi-Voice-0.1.0-69-macos-arm64.dmg) |
+| macOS | macOS 15 or later; Apple Silicon | [Download Mac installer](https://github.com/Pichi-AI/pichi-voice/releases/latest/download/Pichi-Voice.dmg) |
 | Windows | - | Coming Soon |
 | iOS (iPhone / iPad) | iOS / iPadOS 17 or later; memory and storage for the selected model | Coming Soon |
 | Android | - | Coming Soon |
@@ -33,7 +33,7 @@ The Mac app is distributed directly as a Developer ID-signed, Apple-notarized DM
 
 ## Get started
 
-1. [Download the Mac installer](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B69-public.1/Pichi-Voice-0.1.0-69-macos-arm64.dmg) for Apple Silicon and macOS 15 or later.
+1. [Download the Mac installer](https://github.com/Pichi-AI/pichi-voice/releases/latest/download/Pichi-Voice.dmg) for Apple Silicon and macOS 15 or later.
 2. Open the disk image and drag Pichi Voice to Applications. Open Pichi Voice from Applications.
 3. Complete the guided setup when Pichi Voice opens. Grant microphone access, Accessibility for typing into other apps, and screen/system-audio access for computer-audio recording.
 4. Select and download a speech model for your language while online.
@@ -60,6 +60,8 @@ Model downloads and optional services still use the network. Exported files are 
 Read [privacy and data handling](docs/product/privacy.md) and the [mobile privacy policy](https://pichi.ai/voice/privacy).
 
 ## Build and contribute
+
+Questions, bug reports, translations, documentation and code contributions are welcome in English or Russian. [Open an issue](https://github.com/Pichi-AI/pichi-voice/issues/new/choose) or follow the [fork and pull request guide](CONTRIBUTING.md#your-first-pull-request). The project maintainer reviews and accepts changes. Please follow the [code of conduct](CODE_OF_CONDUCT.md).
 
 ```sh
 git clone https://github.com/Pichi-AI/pichi-voice.git
