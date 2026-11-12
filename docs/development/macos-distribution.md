@@ -58,7 +58,9 @@ Each new public release includes both that alias and its versioned DMG, with
 identical bytes, plus exact corresponding source, `release-manifest.json` and
 `SHA256SUMS`. Keep earlier public releases and tags immutable. A different source
 commit or artifact needs a new release tag, never replacement assets. This does
-not change iOS delivery. Build 71 below is the planned example, not evidence of
+not change iOS delivery. Publication must advance the latest stable version and
+numeric build, so the website alias cannot accidentally downgrade its download.
+The helper rechecks this immediately before publishing. Build 71 below is the planned example, not evidence of
 publication or acceptance.
 
 ### Freeze the reviewed source and archive once

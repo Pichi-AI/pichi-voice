@@ -44,6 +44,7 @@ class Boundaries(m.Commands):
         self.repo_public = True
         self.tag_sha = None
         self.release = None
+        self.latest_release = None
         self.asset_data = {}
         self.uncertain = set()
         self.before_write_failure = set()
@@ -144,7 +145,8 @@ class Boundaries(m.Commands):
             self.release["published_at"] = "2026-11-12T00:00:00Z"
             return copy.deepcopy(self.release), 200
         if endpoint == "releases/latest":
-            return copy.deepcopy(self.release), 200
+            latest = self.latest_release or (self.release if self.release and not self.release["draft"] else None)
+            return copy.deepcopy(latest) if latest else {"message": "Not Found"}, 200 if latest else 404
         raise AssertionError((endpoint, method, body))
 
     def download(self, endpoint, output):
@@ -457,6 +459,35 @@ class ReleaseTests(unittest.TestCase):
         self.boundaries.repo_public = False
         with self.assertRaises(m.ReleaseError): self.github.draft(self.output, expected)
         self.assertIsNone(self.boundaries.tag_sha)
+
+    def test_publication_refuses_equal_older_or_unrecognized_latest_identity(self):
+        expected = self.prepared()
+        self.github.draft(self.output, expected)
+        self.evidence()
+        for tag in (self.release.tag, "v0.1.0+72-public.1", "v0.2.0+1-public.1", "runtime-assets"):
+            self.boundaries.latest_release = {"draft": False, "prerelease": False, "tag_name": tag}
+            before = len(self.boundaries.calls)
+            with self.subTest(tag=tag), self.assertRaises(m.ReleaseError):
+                self.github.publish(self.output, expected)
+            self.assertTrue(self.boundaries.release["draft"])
+            self.assertFalse(any("PATCH" in call for call in self.boundaries.calls[before:]))
+
+    def test_latest_release_is_rechecked_immediately_before_publication(self):
+        expected = self.prepared()
+        self.github.draft(self.output, expected)
+        self.evidence()
+        original = self.github.assets
+        def verification_with_concurrent_release(*args, **kwargs):
+            result = original(*args, **kwargs)
+            self.boundaries.latest_release = {"draft": False, "prerelease": False, "tag_name": "v0.1.0+72-public.1"}
+            return result
+        with patch.object(self.github, "assets", side_effect=verification_with_concurrent_release), self.assertRaises(m.ReleaseError):
+            self.github.publish(self.output, expected)
+        self.assertTrue(self.boundaries.release["draft"])
+
+    def test_publication_advances_an_existing_older_stable_release(self):
+        self.boundaries.latest_release = {"draft": False, "prerelease": False, "tag_name": "v0.1.0+69-public.1"}
+        self.github.require_newer_stable_release()
 
     def test_uncertain_failed_write_reread_without_blind_retry(self):
         expected = self.prepared()

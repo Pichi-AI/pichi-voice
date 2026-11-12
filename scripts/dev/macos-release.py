@@ -504,13 +504,28 @@ class GitHub:
         self.tag()
         value = self.find()
         require(value is not None and value["draft"] is True, "Publish requires an existing draft; public releases are immutable")
+        self.require_newer_stable_release()
         self.assets(value, expected, complete=True)
         self.tag()
         current = self.find()
         require(current and current["id"] == value["id"] and current["draft"], "Draft changed before publication")
+        self.require_newer_stable_release()
         self.reconcile(lambda: self.api(f"releases/{value['id']}", method="PATCH", body={"draft": False, "make_latest": "true"}),
                        self.find, lambda result: result is not None and result["id"] == value["id"] and result["draft"] is False)
         self.verify(expected)
+
+    def require_newer_stable_release(self):
+        latest = self.api("releases/latest", missing=True)
+        if latest is None:
+            return
+        require(isinstance(latest, dict) and latest.get("draft") is False and latest.get("prerelease") is False,
+                "Invalid latest stable release")
+        tag = latest.get("tag_name")
+        match = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)\+([0-9]+)-public\.[0-9]+", tag) if isinstance(tag, str) else None
+        require(match is not None, "Latest stable release identity is not recognized")
+        previous = tuple(int(value) for value in match.groups())
+        candidate = tuple(int(value) for value in self.release.args.version.split(".")) + (int(self.release.args.build),)
+        require(candidate > previous, "A public release must advance the latest version/build; the website must not downgrade")
 
     def verify(self, expected):
         self.repository()
