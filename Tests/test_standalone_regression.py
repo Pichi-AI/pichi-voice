@@ -792,7 +792,8 @@ sys.exit(status)
         self.assertEqual(status, 128 + number, (directory / "descendant.log").read_text())
         self.assertEqual(report["counts"], {"total": 3, "passed": 0, "failed": 2, "skipped": 1})
         for row in report["results"][:2]:
-            self.assertIn(row["exitCode"], [-signal.SIGTERM, -signal.SIGKILL])
+            # The whole row names a cleanup error when a group could not be stopped.
+            self.assertIn(row["exitCode"], [-signal.SIGTERM, -signal.SIGKILL], row)
             self.assertEqual(row["runnerExitCode"], 128 + number)
             self.assertEqual(row["reason"], "interrupted")
         self.assertFalse((self.root / "later-executed").exists())
@@ -938,7 +939,7 @@ sys.exit(status)
         self.assertIn("synthetic log close failure", report["results"][0]["logError"])
         for row in report["results"]:
             self.assertEqual(row["reason"], "interrupted")
-            self.assertIn(row["exitCode"], [-signal.SIGTERM, -signal.SIGKILL])
+            self.assertIn(row["exitCode"], [-signal.SIGTERM, -signal.SIGKILL], row)
         self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
 
     def test_sequential_interrupt_keeps_a_retained_marker(self):
