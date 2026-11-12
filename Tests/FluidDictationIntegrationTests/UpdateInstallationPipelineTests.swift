@@ -29,18 +29,28 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
     func testSigningFixturePrerequisiteRejectsMissingAndMalformedCertificateOU() {
         XCTAssertNil(Fixture.certificateTeamIdentifier(from: [:]))
         for value: Any in [42, Data([0x01]), ["V4J43B279J"], ""] {
-            let values: [String: Any] = [kSecOIDOrganizationalUnitName as String:
-                [kSecPropertyKeyType as String: kSecPropertyTypeString, kSecPropertyKeyValue as String: value]]
+            let values = self.certificateProperties(team: value)
             XCTAssertFalse(Fixture.acceptsCertificateTeam(values))
         }
-        let wrongType: [String: Any] = [kSecOIDOrganizationalUnitName as String:
-            [kSecPropertyKeyType as String: kSecPropertyTypeNumber, kSecPropertyKeyValue as String: "V4J43B279J"]]
+        let wrongType = self.certificateProperties(team: "LU46F7HGJM", type: kSecPropertyTypeNumber as String)
         XCTAssertNil(Fixture.certificateTeamIdentifier(from: wrongType))
     }
 
-    private func certificateProperties(team: String) -> [String: Any] {
-        [kSecOIDOrganizationalUnitName as String:
-            [kSecPropertyKeyType as String: kSecPropertyTypeString, kSecPropertyKeyValue as String: team]]
+    func testSigningFixtureRejectsDuplicateSubjectOrganizationalUnits() {
+        var values = self.certificateProperties(team: "LU46F7HGJM")
+        var subject = values[kSecOIDX509V1SubjectName as String] as? [String: Any] ?? [:]
+        let entry = (subject[kSecPropertyKeyValue as String] as? [[String: Any]])?.first ?? [:]
+        subject[kSecPropertyKeyValue as String] = [entry, entry]
+        values[kSecOIDX509V1SubjectName as String] = subject
+        XCTAssertNil(Fixture.certificateTeamIdentifier(from: values))
+    }
+
+    private func certificateProperties(team: Any, type: String = kSecPropertyTypeString as String) -> [String: Any] {
+        [kSecOIDX509V1SubjectName as String: [
+            kSecPropertyKeyType as String: kSecPropertyTypeSection,
+            kSecPropertyKeyValue as String: [[kSecPropertyKeyLabel as String: kSecOIDOrganizationalUnitName,
+                                            kSecPropertyKeyType as String: type, kSecPropertyKeyValue as String: team]],
+        ]]
     }
 
     func testConfiguredProductionTrustRejectsUnsignedBundlesWithoutTouchingThem() throws {
@@ -397,7 +407,7 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
                 var certificate: SecCertificate?
                 guard SecIdentityCopyCertificate(identity, &certificate) == errSecSuccess, let certificate,
                       let summary = SecCertificateCopySubjectSummary(certificate) as String?, summary.hasPrefix(prefix),
-                      let values = SecCertificateCopyValues(certificate, [kSecOIDOrganizationalUnitName] as CFArray, nil) as? [String: Any],
+                      let values = SecCertificateCopyValues(certificate, [kSecOIDX509V1SubjectName] as CFArray, nil) as? [String: Any],
                       Self.acceptsCertificateTeam(values)
                 else { continue }
                 var trust: SecTrust?
@@ -412,7 +422,11 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
         }
 
         static func certificateTeamIdentifier(from values: [String: Any]) -> String? {
-            guard let property = values[kSecOIDOrganizationalUnitName as String] as? [String: Any],
+            guard let subject = values[kSecOIDX509V1SubjectName as String] as? [String: Any],
+                  subject[kSecPropertyKeyType as String] as? String == kSecPropertyTypeSection as String,
+                  let entries = subject[kSecPropertyKeyValue as String] as? [[String: Any]] else { return nil }
+            let organizationalUnits = entries.filter { $0[kSecPropertyKeyLabel as String] as? String == kSecOIDOrganizationalUnitName as String }
+            guard organizationalUnits.count == 1, let property = organizationalUnits.first,
                   property[kSecPropertyKeyType as String] as? String == kSecPropertyTypeString as String,
                   let team = property[kSecPropertyKeyValue as String] as? String, !team.isEmpty else { return nil }
             return team

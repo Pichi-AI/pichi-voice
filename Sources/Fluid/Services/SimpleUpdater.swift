@@ -702,6 +702,7 @@ final class SimpleUpdater: ObservableObject {
     }
 
     private func installApprovedUpdate(version: String, channel: Bool) {
+        let approvedRevision = self.channelRevision
         self.installTask = Task {
             defer { self.installTask = nil }
             do {
@@ -715,6 +716,7 @@ final class SimpleUpdater: ObservableObject {
             } catch SimpleUpdateError.updateAlreadyInProgress {
                 return
             } catch is CancellationError {
+                if self.channelRevision != approvedRevision { self.checkForUpdatesManually() }
                 return
             } catch {
                 if Task.isCancelled || self.cancellationRequested || (error as? URLError)?.code == .cancelled { return }
