@@ -231,6 +231,7 @@ final class SimpleUpdater: ObservableObject {
     var downloadTemporaryDirectoryForTesting: URL?
     var currentVersionForTesting: String?
     var currentBuildForTesting: String?
+    var currentBundleInformationForTesting: [String: Any]?
     #endif
     private let updateSession: URLSession
     private let updateDefaults: UserDefaults
@@ -285,17 +286,32 @@ final class SimpleUpdater: ObservableObject {
         #if DEBUG
         if let currentVersionForTesting { return currentVersionForTesting }
         #endif
-        return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        return self.currentBundleInformation["CFBundleShortVersionString"] as? String ?? "unknown"
     }
 
     private var currentAppBuild: String {
         #if DEBUG
         if let currentBuildForTesting { return currentBuildForTesting }
         #endif
-        return Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        return self.currentBundleInformation["CFBundleVersion"] as? String ?? ""
     }
 
-    private var currentComparableVersion: String { "\(self.currentAppVersion)+\(self.currentAppBuild)-public.1" }
+    private var currentBundleInformation: [String: Any] {
+        #if DEBUG
+        if let currentBundleInformationForTesting { return currentBundleInformationForTesting }
+        #endif
+        return Bundle.main.infoDictionary ?? [:]
+    }
+
+    private var currentComparableVersion: String { "v\(self.currentAppVersion)+\(self.currentAppBuild)-public.1" }
+    private func installedSemanticVersion() throws -> SemanticVersion {
+        let value = self.isPichiDistribution ? self.currentComparableVersion : self.currentAppVersion
+        // Unknown installed build metadata must fail closed, never compare as build zero.
+        guard !self.isPichiDistribution || UpdateReleaseSelection.pichiVersion(value) != nil,
+              let version = self.parseSemanticVersion(value) else { throw SimpleUpdateError.noSuitableRelease }
+        return version
+    }
+
     private var isPichiDistribution: Bool {
         AppBrand.repositoryOwner == "Pichi-AI" && AppBrand.repositoryName == "pichi-voice"
     }
@@ -540,13 +556,7 @@ final class SimpleUpdater: ObservableObject {
             throw SimpleUpdateError.noSuitableRelease
         }
 
-        let currentVersionString = self.currentComparableVersion
-        let current = self.parseSemanticVersion(currentVersionString) ?? SemanticVersion(
-            major: 0,
-            minor: 0,
-            patch: 0,
-            prerelease: []
-        )
+        let current = try self.installedSemanticVersion()
         let latestTag = latest.tag_name
         guard let latestVersion = self.parseSemanticVersion(latestTag) else {
             throw SimpleUpdateError.noSuitableRelease
@@ -779,13 +789,7 @@ final class SimpleUpdater: ObservableObject {
             throw SimpleUpdateError.noSuitableRelease
         }
 
-        let currentVersionString = self.currentComparableVersion
-        let current = self.parseSemanticVersion(currentVersionString) ?? SemanticVersion(
-            major: 0,
-            minor: 0,
-            patch: 0,
-            prerelease: []
-        )
+        let current = try self.installedSemanticVersion()
         let latestTag = latest.tag_name
         guard let latestVersion = self.parseSemanticVersion(latestTag) else {
             throw SimpleUpdateError.noSuitableRelease
