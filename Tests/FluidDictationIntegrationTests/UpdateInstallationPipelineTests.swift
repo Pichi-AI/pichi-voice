@@ -43,9 +43,8 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
             [kSecPropertyKeyType as String: kSecPropertyTypeString, kSecPropertyKeyValue as String: team]]
     }
 
-    func testUnconfiguredProductionUpdaterTrustRejectsPreparationWithoutTouchingSyntheticBundles() throws {
-        // The downstream production policy is intentionally empty. An available
-        // development identity must not turn this into an installation success.
+    func testConfiguredProductionTrustRejectsUnsignedBundlesWithoutTouchingThem() throws {
+        XCTAssertEqual(AppBrand.distribution.expectedSigningTeam, "LU46F7HGJM")
         let manager = FileManager.default
         let root = manager.temporaryDirectory.appendingPathComponent("UpdateDisabledTrustTests-" + UUID().uuidString)
         defer { try? manager.removeItem(at: root) }
@@ -66,7 +65,9 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
             installedExpectation: .init(bundleIdentifier: Fixture.identifier, version: Fixture.installedVersion, build: Fixture.installedBuild),
             expectedVersion: Fixture.incomingVersion, backupURL: backup, isRollback: false)) { error in
             let underlying = (error as? UpdateAppReplacement.Failure)?.underlyingError ?? error
-            XCTAssertEqual(underlying as? UpdateBundleValidator.ValidationError, .invalidExpectation)
+            guard case .invalidSignature? = underlying as? UpdateBundleValidator.ValidationError else {
+                return XCTFail("Configured trust must still reject the unsigned fixture: \(underlying)")
+            }
         }
         for bundle in [installed, incoming] {
             XCTAssertEqual(try Data(contentsOf: bundle.appendingPathComponent("Contents/Info.plist")), plist)
@@ -250,30 +251,32 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
         static let installedVersion = "1.6.10-beta.7"
         static let installedBuild = "26"
         static let incomingVersion = "1.6.10-beta.8"
-        static let approvedTeams: Set<String> = ["V4J43B279J", "537RRRT57V"]
+        static let approvedTeams = Set([AppBrand.distribution.expectedSigningTeam].compactMap { $0 })
 
         let root: URL
         let installed: URL
         let incoming: URL
         let backup: URL
         let candidateVersion: String
+        let simulateReleaseAssessment: Bool
         var lockURL: URL { self.installed.deletingLastPathComponent().appendingPathComponent(".fluidvoice-update-\(self.installed.lastPathComponent).lock") }
 
         init(incomingDeveloperID: Bool = true, candidateVersion: String = Self.incomingVersion) throws {
-            // Positive pipeline fixtures additionally require configured production
-            // distribution trust. The current downstream deliberately disables it.
-            guard AppBrand.updatesEnabled else {
-                throw XCTSkip("Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally disabled.")
+            guard AppBrand.distribution.updatesEnabled, !Self.approvedTeams.isEmpty else {
+                throw XCTSkip("Signed pipeline fixtures require configured distribution trust.")
             }
             // Admit every required identity before creating or signing a bundle.
             // A trusted certificate from another team is not a pipeline fixture prerequisite.
             let installedIdentity = try Self.signingIdentity(developerID: false)
-            let incomingIdentity = incomingDeveloperID ? try Self.signingIdentity(developerID: true) : installedIdentity
+            // Only the external release/notary authority is substituted. Real local
+            // development signatures still seal all fixture metadata and resources.
+            let incomingIdentity = installedIdentity
             self.root = FileManager.default.temporaryDirectory.appendingPathComponent("UpdateInstallationPipelineTests-" + UUID().uuidString, isDirectory: true)
             self.installed = self.root.appendingPathComponent("Applications/Fixture.app")
             self.incoming = self.root.appendingPathComponent("Downloads/Incoming.app")
             self.backup = self.root.appendingPathComponent("Backups/Previous.app")
             self.candidateVersion = candidateVersion
+            self.simulateReleaseAssessment = incomingDeveloperID
             do {
                 try self.makeBundle(at: self.installed, version: Self.installedVersion, build: Self.installedBuild, payload: "installed", identity: installedIdentity)
                 try self.makeBundle(at: self.incoming, version: candidateVersion, build: "27", payload: "incoming", identity: incomingIdentity)
@@ -297,7 +300,19 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
                 installedExpectation: .init(bundleIdentifier: Self.identifier, version: installedVersion, build: installedBuild),
                 expectedVersion: expectedVersion,
                 backupURL: self.backup,
-                isRollback: isRollback
+                isRollback: isRollback,
+                validateBundle: { url, expectation, policy in
+                    if !isRollback, expectation.version == expectedVersion {
+                        guard case let .developerID(teams) = policy else {
+                            throw NSError(domain: "FixtureExpectedDeveloperIDPolicy", code: 1)
+                        }
+                        if self.simulateReleaseAssessment {
+                            return try UpdateBundleValidator.validate(at: url, expectation: expectation,
+                                policy: .appleDevelopment(allowedTeamIDs: teams))
+                        }
+                    }
+                    return try UpdateBundleValidator.validate(at: url, expectation: expectation, policy: policy)
+                }
             )
         }
 

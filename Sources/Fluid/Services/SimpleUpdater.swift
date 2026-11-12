@@ -47,17 +47,43 @@ enum SimpleUpdateError: Error, LocalizedError {
     }
 }
 
-struct UpdateOperationGate {
+@MainActor
+final class UpdateOperationGate {
+    nonisolated deinit {}
     private(set) var isActive = false
+    private(set) var commitStarted = false
+    private var terminationAllowed = true
+    private var terminationWaiters: [CheckedContinuation<Void, Never>] = []
 
-    mutating func begin() -> Bool {
+    func begin() -> Bool {
         guard !self.isActive else { return false }
         self.isActive = true
+        self.commitStarted = false
+        self.terminationAllowed = false
         return true
     }
 
-    mutating func finish() {
+    func beginCommit() -> Bool {
+        guard self.isActive, !self.commitStarted else { return false }
+        self.commitStarted = true
+        return true
+    }
+
+    func finish() {
         self.isActive = false
+        self.allowTermination()
+    }
+
+    func allowTermination() {
+        self.terminationAllowed = true
+        let waiters = self.terminationWaiters
+        self.terminationWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitForTermination() async {
+        guard self.isActive, !self.terminationAllowed else { return }
+        await withCheckedContinuation { self.terminationWaiters.append($0) }
     }
 }
 
@@ -158,6 +184,7 @@ final class SimpleUpdater: ObservableObject {
         session: URLSession = .shared,
         defaults: UserDefaults = .standard,
         promptPresenter: UpdatePromptPresenter = .shared,
+        operationGate: UpdateOperationGate = .init(),
         installationAdmission: @escaping @MainActor () throws -> (@MainActor () -> Void) = {
             try SimpleUpdater.reserveInstallation(using: AppServices.shared.asr)
         }
@@ -165,6 +192,7 @@ final class SimpleUpdater: ObservableObject {
         self.updateSession = session
         self.updateDefaults = defaults
         self.updatePrompts = promptPresenter
+        self.updateOperationGate = operationGate
         self.installationAdmission = installationAdmission
     }
 
@@ -185,7 +213,6 @@ final class SimpleUpdater: ObservableObject {
     private var downloadGeneration = UUID()
     private var installTask: Task<Void, Never>?
     private var cancellationRequested = false
-    private var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
     private var failedInstallation: PreparedInstallation?
     private var previousSelections: [String: UpdateReleaseSelection] = [:]
     private var previousSelectionsRevision: Int?
@@ -247,7 +274,7 @@ final class SimpleUpdater: ObservableObject {
     private let fileManager = FileManager.default
     private let maxRollbackBackups = 3
     private let rollbackBackupDirectoryName = "RollbackBackups"
-    private var updateOperationGate = UpdateOperationGate()
+    private let updateOperationGate: UpdateOperationGate
     private var updateStatusWindow: NSWindow?
 
     private var installedAppName: String {
@@ -923,9 +950,6 @@ final class SimpleUpdater: ObservableObject {
         self.releaseInstallationAdmission?()
         self.releaseInstallationAdmission = nil
         self.canCancelUpdate = false
-        let waiters = self.cancellationWaiters
-        self.cancellationWaiters.removeAll()
-        waiters.forEach { $0.resume() }
         self.updateOperationGate.finish()
         self.isUpdateInProgress = false
         self.dismissUpdateInstallStatus()
@@ -1202,7 +1226,10 @@ final class SimpleUpdater: ObservableObject {
         expectedBuild: String? = nil,
         backupURL: URL,
         isRollback: Bool,
-        commit: Bool = true
+        commit: Bool = true,
+        validateBundle: @escaping @Sendable (URL, UpdateBundleValidator.Expectation, UpdateBundleValidator.SigningPolicy) throws -> UpdateBundleValidator.ValidatedBundle = {
+            try UpdateBundleValidator.validate(at: $0, expectation: $1, policy: $2)
+        }
     ) throws -> PreparedInstallation {
         let teams = Self.allowedTeamIDs
         guard isRollback || expectedVersion != nil, installedExpectation.version != nil, installedExpectation.build != nil
@@ -1213,11 +1240,7 @@ final class SimpleUpdater: ObservableObject {
             replacementAppURL: downloadedAppURL,
             validateInstalledApp: { url in
                 do {
-                    _ = try UpdateBundleValidator.validate(
-                        at: url,
-                        expectation: installedExpectation,
-                        policy: .installedApp(allowedTeamIDs: teams)
-                    )
+                    _ = try validateBundle(url, installedExpectation, .installedApp(allowedTeamIDs: teams))
                 } catch UpdateBundleValidator.ValidationError.versionMismatch {
                     throw SimpleUpdateError.installedAppChanged
                 } catch UpdateBundleValidator.ValidationError.buildMismatch {
@@ -1228,18 +1251,12 @@ final class SimpleUpdater: ObservableObject {
         var backupCreated = false
         do {
             try Task.checkCancellation()
-            _ = try UpdateBundleValidator.validate(
-                at: replacement.stagedAppURL,
-                expectation: .init(bundleIdentifier: installedExpectation.bundleIdentifier, version: expectedVersion, build: expectedBuild),
-                policy: isRollback ? .installedApp(allowedTeamIDs: teams) : .developerID(allowedTeamIDs: teams)
-            )
+            _ = try validateBundle(replacement.stagedAppURL,
+                .init(bundleIdentifier: installedExpectation.bundleIdentifier, version: expectedVersion, build: expectedBuild),
+                isRollback ? .installedApp(allowedTeamIDs: teams) : .developerID(allowedTeamIDs: teams))
             do {
                 try UpdateRollbackBackup.create(installedAppURL: installedAppURL, backupURL: backupURL) { url in
-                    _ = try UpdateBundleValidator.validate(
-                        at: url,
-                        expectation: installedExpectation,
-                        policy: .installedApp(allowedTeamIDs: teams)
-                    )
+                    _ = try validateBundle(url, installedExpectation, .installedApp(allowedTeamIDs: teams))
                 }
                 backupCreated = true
             } catch let failure as UpdateRollbackBackup.Failure where failure.retainedDirectoryURL != nil {
@@ -1331,6 +1348,7 @@ final class SimpleUpdater: ObservableObject {
             // admission to Cancel. The filesystem exchange itself is indivisible.
             try Task.checkCancellation()
             guard !self.cancellationRequested else { throw CancellationError() }
+            guard self.updateOperationGate.beginCommit() else { throw SimpleUpdateError.updateAlreadyInProgress }
             self.canCancelUpdate = false
             self.updateStatusWindow?.contentView?.subviews.compactMap { $0 as? UpdateCancelButton }.forEach { $0.isEnabled = false }
             try await Task.detached(priority: .utility) { try installation.replacement.commit() }.value
@@ -1383,6 +1401,7 @@ final class SimpleUpdater: ObservableObject {
                 if let cleanupWarning {
                     DebugLogger.shared.warning("SimpleUpdater: Update completed; cleanup failed: \(cleanupWarning)", source: "SimpleUpdater")
                 }
+                self.updateOperationGate.allowTermination()
                 UpdateTerminationScheduler.requestTermination()
             }
         }
@@ -1419,6 +1438,7 @@ final class SimpleUpdater: ObservableObject {
                 ? "The new app could not start. Your previous version has been restored. Please try again."
                 : "The app could not restart. Your previous version is saved at \(installation.backupURL.path)."
         )
+        self.updateOperationGate.allowTermination()
     }
 }
 
@@ -1461,7 +1481,7 @@ extension SimpleUpdater {
     }
 
     func cancelPendingUpdate() async {
-        if self.isUpdateInProgress && !self.canCancelUpdate && self.releaseInstallationAdmission != nil { return }
+        if self.updateOperationGate.isActive && self.updateOperationGate.commitStarted { return }
         self.cancellationRequested = true
         self.installTask?.cancel()
         if self.releaseInstallationAdmission == nil {
@@ -1469,9 +1489,7 @@ extension SimpleUpdater {
             let retained = await self.discardDownload()
             if !retained.isEmpty { self.downloadState = .failed(SimpleUpdateError.stagingCleanupFailed(retained.map(\.path).sorted().joined(separator: ", ")).localizedDescription) }
         }
-        if self.isUpdateInProgress {
-            await withCheckedContinuation { self.cancellationWaiters.append($0) }
-        }
+        await self.updateOperationGate.waitForTermination()
     }
 
     /// Normal quit joins background transport/staging before AppKit exits.
@@ -1480,9 +1498,9 @@ extension SimpleUpdater {
         let check = self.checkTask
         self.cancelUpdateCheck()
         await check?.value
-        if self.isUpdateInProgress && !self.canCancelUpdate && self.releaseInstallationAdmission != nil { return }
         let observer = self.downloadObserver
         await self.cancelPendingUpdate()
+        await self.updateOperationGate.waitForTermination()
         await observer?.value
         self.downloadObserver = nil
     }

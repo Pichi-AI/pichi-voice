@@ -4,13 +4,43 @@ import XCTest
 
 @MainActor
 final class MacUpdaterLifecycleTests: XCTestCase {
+    func testQuitWaitsForCommittedRelaunchBeforeAllowingTermination() async {
+        await self.assertTerminationBarrier(recoveredFailure: false)
+    }
+
+    func testQuitWaitsForRecoveryBeforeReleasingTheOperation() async {
+        await self.assertTerminationBarrier(recoveredFailure: true)
+    }
+
+    private func assertTerminationBarrier(recoveredFailure: Bool) async {
+        let gate = UpdateOperationGate()
+        XCTAssertTrue(gate.begin())
+        XCTAssertTrue(gate.beginCommit())
+        let token = UUID().uuidString
+        guard let defaults = UserDefaults(suiteName: token) else { return XCTFail("Fixture defaults unavailable") }
+        defer { defaults.removePersistentDomain(forName: token) }
+        let updater = SimpleUpdater(defaults: defaults, promptPresenter: UpdatePromptPresenter(), operationGate: gate)
+        var returned = false
+        let quit = Task { @MainActor in
+            await updater.shutdownForTermination()
+            returned = true
+        }
+        await Task.yield()
+        XCTAssertFalse(returned, "Quit must not abandon the owner while commit/relaunch/recovery is held")
+        if recoveredFailure { gate.finish() } else { gate.allowTermination() }
+        await quit.value
+        XCTAssertTrue(returned)
+        XCTAssertEqual(gate.isActive, !recoveredFailure, "Successful relaunch keeps capture admission closed until the old process exits")
+        gate.finish()
+    }
+
     func testSelectionUsesBuildAndExcludesDraftRuntimeWrongArtifactAndBeta() async throws {
         let context = try Context()
         defer { context.close() }
         context.fixture.releases = [
-            release(69), release(71), release(100, draft: true),
-            release(120, tag: "runtime-v0.1.0"), release(130, wrongAsset: true),
-            release(140, beta: true), release(150, wrongURL: true),
+            fixtureRelease(69), fixtureRelease(71), fixtureRelease(100, draft: true),
+            fixtureRelease(120, tag: "runtime-v0.1.0"), fixtureRelease(130, wrongAsset: true),
+            fixtureRelease(140, beta: true), fixtureRelease(150, wrongURL: true),
         ]
         let result = try await context.updater.checkForUpdate(owner: "Pichi-AI", repo: "pichi-voice")
         XCTAssertTrue(result.hasUpdate)
@@ -114,7 +144,7 @@ final class MacUpdaterLifecycleTests: XCTestCase {
         XCTAssertEqual(context.updater.downloadState, .idle)
         XCTAssertGreaterThanOrEqual(context.fixture.cancelCount, 1)
         context.fixture.holdDownloads = false
-        context.fixture.releases = [release(72, beta: true)]
+        context.fixture.releases = [fixtureRelease(72, beta: true)]
         context.updater.checkForUpdatesAutomatically()
         try await wait { context.updater.downloadState == .ready("0.1.0 (72)") }
         XCTAssertEqual(context.updater.availableUpdateVersion, "0.1.0 (72)")
@@ -211,7 +241,7 @@ final class MacUpdaterLifecycleTests: XCTestCase {
         context.defaults.set(false, forKey: SettingsStore.UpdateKeys.automaticUpdateDownloads)
         context.updater.checkForUpdatesAutomatically()
         try await wait { !context.updater.isCheckingForUpdates }
-        var changed = release(71)
+        var changed = fixtureRelease(71)
         var assets = changed["assets"] as! [[String: Any]]
         assets[0]["digest"] = "sha256:" + String(repeating: "0", count: 64)
         changed["assets"] = assets
@@ -227,7 +257,7 @@ final class MacUpdaterLifecycleTests: XCTestCase {
     func testDigestMismatchNeverReachesExtraction() async throws {
         let context = try Context()
         defer { context.close() }
-        var changed = release(71)
+        var changed = fixtureRelease(71)
         var assets = changed["assets"] as! [[String: Any]]
         assets[0]["digest"] = "sha256:" + String(repeating: "0", count: 64)
         changed["assets"] = assets
@@ -270,7 +300,7 @@ final class MacUpdaterLifecycleTests: XCTestCase {
     }
 }
 
-private nonisolated func release(_ build: Int, tag: String? = nil, draft: Bool = false, beta: Bool = false, wrongAsset: Bool = false, wrongURL: Bool = false) -> [String: Any] {
+private nonisolated func fixtureRelease(_ build: Int, tag: String? = nil, draft: Bool = false, beta: Bool = false, wrongAsset: Bool = false, wrongURL: Bool = false) -> [String: Any] {
     let tag = tag ?? "v0.1.0+\(build)-\(beta ? "beta" : "public").1"
     let asset = "Pichi-Voice-0.1.0-\(build)-macos-arm64.dmg"
     return ["tag_name": tag, "draft": draft, "prerelease": beta, "assets": [[
@@ -338,7 +368,7 @@ private final class Context {
 
 private final nonisolated class Transport: @unchecked Sendable {
     private let lock = NSLock()
-    private var entries: [[String: Any]] = [release(71)]
+    private var entries: [[String: Any]] = [fixtureRelease(71)]
     private var hold = false
     private var status = 200
     private var downloads = 0
