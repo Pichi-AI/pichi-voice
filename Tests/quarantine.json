@@ -1,4 +1,221 @@
 {
-  "version": 1,
-  "entries": []
+ "version": 1,
+ "entries": [
+  {
+   "test": "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testPronunciationDefaultsOnWithoutEnablingDiagnosticsAndPreservesOff()",
+   "owner": "#151 codex/correction-history-unification-20261110-7f3c35b8dc",
+   "reason": "Expectation is out of date after an intended change. Commit 28ef7efe (\"learn from explicit false-positive rejections\") made DictionaryNegativeLearningEnabled/ComparisonEnabled default to true...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "FluidDictationIntegrationTests/FluidServeTests/testReaderPrintsTheSameTranscriptAsTheApp()",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Expectation is out of date after an intended change. #115 (609e715e, 'Assign a reading participant to every admitted speech fragment') made the exporter give every readable fragment a participant. The unresolved '[00:30]...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testDisablingFluidMeetDuringModelPreparationDoesNotStartCapture()",
+   "owner": "#138 unify live meeting processing (commit 3731cb52)",
+   "reason": "Expectation is out of date after an intended change. 3731cb52 registered Parakeet v2 (the default model) as a meeting provider, so registeredModelsExistOnDisk is now true when v2 is installed and the coordinator skips...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testFluidMeetLongTranscriptRendersWithoutSideEffects()",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Expectation is out of date after an intended change. The unresolved anonymous passage now receives a reading participant caption instead of staying '[02:40] text' with no caption; this is exactly the behaviour #115...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testMicrophoneButtonActionRoutesThroughCoordinatorAndAttemptControl()",
+   "owner": "#138 unify live meeting processing (commit 3731cb52)",
+   "reason": "Expectation is out of date after an intended change. The test (added in #114 on 11-06) uses languageCode 'es' to avoid the English caption model, relying on the then-unregistered v2 default. 3731cb52 registered...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testHarnessPinsEnglishBackendWhenAmbientSelectionIsRussianOnly()",
+   "owner": "#138 unify live meeting processing (commit 3731cb52)",
+   "reason": "Expectation is out of date after an intended change. 3731cb52 registers Parakeet v2 under its own backend id local-parakeet-tdt-v2-v1, so a recording with the default v2 model now records that id instead of the old...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "FluidDictationIntegrationTests/MeetingSessionModelTests/testLegacyNilAttributionStateWithAmbiguousOverlapFallsBackToUnknownSpeaker()",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Expectation is out of date after an intended change. Confirmed same cause as 8-13: the exporter's new reading resolution (MeetingReadingSpeakerResolver, 609e715e) gives unresolved/ambiguous segments a stable 'Speaker 1'...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "FluidDictationIntegrationTests/MeetingSessionModelTests/testMarkdownExportIncludesTitleAndChronologicalSpeakerTurns()",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Expectation is out of date after an intended change. Unresolved 'Next steps' now gets the continuing reading participant, so it merges into the Speaker 1 turn instead of opening a separate '### [01:05]' turn. This is the...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "FluidDictationIntegrationTests/MeetingSessionModelTests/testOverlappingEvidenceWithoutReadingContextRemainsUnknown()",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Expectation is out of date after an intended change. Same cause: overlapping evidence with no reading context now falls back to one stable generated 'Speaker 1' participant (fallbackSpeaker in the exporter) rather than an...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "FluidDictationIntegrationTests/MeetingSessionModelTests/testTextFormatMatchesTimestampFormatAndLegacyUnassignedSpeaker()",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Expectation is out of date after an intended change. The unassigned 'No speaker text' segment is now assigned the same reading participant as the preceding segment, so the two lines merge into one '[00:04] Speaker 1: ...'...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "FluidDictationIntegrationTests/MeetingSessionModelTests/testTimingUncertainAttributionStateLabel()",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Expectation is out of date after an intended change. timingUncertain segments with no speaker now receive a generated 'Speaker 1' reading participant; #115 docs explicitly say acoustic uncertainty remains evidence but not...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "FluidDictationIntegrationTests/MeetingSessionModelTests/testUnassignedAttributionStateLabel()",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Expectation is out of date after an intended change. An .unassigned segment with no evidence now gets a generated 'Speaker 1' participant in the export, by design of #115 (complete reading ownership); the test expects the...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "FluidDictationIntegrationTests/PichiLocalizationPresentationTests/testUnknownSpeakerSummaryInputAndFingerprintStayStableAcrossUILocalePresentation()",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Expectation is out of date after an intended change. Same cause: the unknown speaker is now a generated reading participant labelled 'Speaker 1' (localized format 'Speaker %lld') rather than 'Unknown speaker'....",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "FluidDictationIntegrationTests/SettingsBackupRoundTripTests/testMeetingLocationOnboardingStepResumesWithoutResettingCompletedSetup()",
+   "owner": "#112 codex/mute-stream-integration-20261105-efd24f29ef",
+   "reason": "Expectation is out of date after an intended change. Commit b964d2e3 ('Add shared owner voice enrollment to desktop onboarding') added an onboarding step and raised the onboardingCurrentStep clamp from 7 to 8 in...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "PichiVoiceMobileIntegrationTests/MeetingSavedTranscriptPresentationTests/testActualSpeakerIDsAndKnownToUnknownStateRemainBoundaries()",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Fails on iOS since reading participants were assigned to every fragment. Not analysed one by one.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "PichiVoiceMobileIntegrationTests/MeetingSavedTranscriptPresentationTests/testLegacyOrphanWordsReadWithinTheirSameSpeakerTurnInBothLanguages()",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Fails on iOS since reading participants were assigned to every fragment. Not analysed one by one.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "PichiVoiceMobileIntegrationTests/MeetingSavedTranscriptPresentationTests/testParagraphPlaybackRefusesStaleOrCrossBoundaryMemberSelections()",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Fails on iOS since reading participants were assigned to every fragment. Not analysed one by one.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "PichiVoiceMobileIntegrationTests/MeetingSavedTranscriptPresentationTests/testReturningSpeakerStartsANewTurnAndUnknownWordsDoNotInheritIdentity()",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "Fails on iOS since reading participants were assigned to every fragment. Not analysed one by one.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "PichiVoiceMobileIntegrationTests/MobileSetupTransactionTests/testBackgroundAndEnrollmentJoinTheCanonicalVoiceInstallation()",
+   "owner": "test-infra",
+   "reason": "Fails on a clean simulator on 2026-11-12. The cause is not analysed yet.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:dictation_capture_admission",
+   "owner": "#117 codex/ctc-emission-utterances-20261106",
+   "reason": "The probe harness is out of date. #117 added ASRWordTimingProvenance (used by TranscriptionProvider.swift), which the generated AdmissionTests sources do not include.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:dictionary_training_save",
+   "owner": "#101 codex/consistent-corrections-20261105-1512772559",
+   "reason": "The probe harness is out of date. #101 added DictionaryCorrectionReplacementPlan and TextMap after DictionaryTrainingSpellingPolicy in DictionaryCorrectionEditPolicy.swift; the probe compiles that tail...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:file_operation_isolation",
+   "owner": "#117 codex/ctc-emission-utterances-20261106",
+   "reason": "The probe harness is out of date. #117 added ASRWordTimingProvenance referenced from TranscriptionProvider.swift:146, not provided by the probe's source list.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:fluid_serve",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "The probe harness is out of date. #115 gave MeetingSpeakerAttribution init(readingParticipant:source:policy:) three arguments and the exporter now calls it that way, but the probe's stub init takes fewer.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:gigaam_artifact_ownership",
+   "owner": "#117 codex/ctc-emission-utterances-20261106",
+   "reason": "The probe harness is out of date. #117 introduced GigaAMWordTiming, used in PichiGigaAMProvider.swift, which the probe does not compile in.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:meeting_asr_prepared_provider",
+   "owner": "#120 codex/unified-meeting-clock-20261106",
+   "reason": "The probe harness is out of date. #120 added MeetingRecordingTimePolicy, now referenced from MeetingProcessingConfiguration.swift, missing from the probe's source set.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:meeting_backup_refresh",
+   "owner": "#138 unify live meeting processing",
+   "reason": "The probe harness is out of date. #138 made PichiMeetingProviderFactory's descriptors reference ParakeetSpeechModelCatalog.v3/v2/pro; the probe slices the factory but does not compile...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:meeting_capture_activity",
+   "owner": "#120 codex/unified-meeting-clock-20261106",
+   "reason": "The probe harness is out of date. #120 introduced MeetingCaptureClockMetadata, used in MeetingCapturePCMTransport.swift, which the probe does not supply.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:meeting_capture_pcm",
+   "owner": "#120 codex/unified-meeting-clock-20261106",
+   "reason": "The probe harness is out of date. #120 removed the InRoom enqueueForTranscription method and the 'self.stopRequestedAt = (session.id, Date())' line, which the script's declaration()/assert lookups still...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:meeting_pending_speech",
+   "owner": "#120 codex/unified-meeting-clock-20261106",
+   "reason": "The probe harness is out of date. Same as meeting_capture_activity: MeetingCaptureClockMetadata added by #120 is not in the probe's sources.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:meeting_speaker_attribution",
+   "owner": "#117 codex/ctc-emission-utterances-20261106",
+   "reason": "The probe harness is out of date. #117 added ASRWordTimingProvenance to MeetingCanonicalEvidenceTypes.swift (absent at 234f3b08), a type the probe does not define.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:meeting_streaming_echo",
+   "owner": "#117 codex/ctc-emission-utterances-20261106",
+   "reason": "The probe harness is out of date. #117 added ASRWordTimingProvenance, which the generated ActualEchoContracts.swift does not declare.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:private_capture_feedback",
+   "owner": "#112 codex/mute-stream-integration-20261105-efd24f29ef",
+   "reason": "The probe harness is out of date. #112 added SettingsStore.applyingMeetingRecordingPreferences(to:), now called from AppServices+MeetingMenuBar.startMeetingRecordingFromMenuBar, but the probe's...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:private_profile_defaults",
+   "owner": "#112 codex/mute-stream-integration-20261105-efd24f29ef",
+   "reason": "The probe harness is out of date. #112 widened the onboardingCurrentStep clamp in SettingsStore from min(7) to min(8) (extra voice enrollment step), while the probe still expects 7; the product change...",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:publication_composition",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "The probe harness is out of date. Same as fluid_serve: #115 changed the speakerAttribution init(readingParticipant:source:policy:) signature used by MeetingTranscriptExporter.swift:937.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:publication_outbox",
+   "owner": "#115 codex/speaker-assignment-20261106",
+   "reason": "The probe harness is out of date. Same as fluid_serve: #115 changed the speakerAttribution init(readingParticipant:source:policy:) signature used by MeetingTranscriptExporter.swift:937.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:test-meeting-microphone-privacy",
+   "owner": "#120 codex/unified-meeting-clock-20261106",
+   "reason": "The probe harness is out of date. #120 added MeetingRecordingClockContext, used by MeetingMicrophonePrivacyGate.swift:84, which the probe does not include.",
+   "expires": "2026-11-26"
+  }
+ ]
 }
