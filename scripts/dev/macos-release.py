@@ -279,7 +279,9 @@ class Release:
 
     @contextmanager
     def mounted(self, image):
-        root = Path(tempfile.mkdtemp(prefix="pichi-release-mount-"))
+        # macOS reports canonical /private/var paths even when TMPDIR uses /var.
+        # Use that same identity for attach, verification and cleanup.
+        root = Path(tempfile.mkdtemp(prefix="pichi-release-mount-")).resolve()
         mount = root / "image"
         mount.mkdir()
         attempted = False
