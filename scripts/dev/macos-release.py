@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import uuid
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPSHandler, HTTPRedirectHandler, Request, build_opener
 
@@ -32,6 +33,7 @@ BUNDLE = "ai.pichi.voice"
 ALIAS = "Pichi-Voice-macos-arm64.dmg"
 MANIFEST = "release-manifest.json"
 CHECKSUMS = "SHA256SUMS"
+PUBLICATION_LOCK = "pichi-macos-publication-lock"
 SHA = re.compile(r"[0-9a-f]{40}")
 
 
@@ -73,7 +75,8 @@ def regular(path):
 
 class Commands:
     def run(self, args, *, cwd=None, input=None, check=True, capture_output=True, text=False):
-        result = subprocess.run(args, cwd=cwd, input=input, capture_output=capture_output, text=text, timeout=300)
+        result = subprocess.run(args, cwd=cwd, input=input, capture_output=capture_output, text=text,
+                                timeout=300, start_new_session=True)
         if check:
             require(result.returncode == 0, f"Command failed: {args[0]} {args[1]} (details remain private)")
         return result
@@ -84,6 +87,23 @@ class Commands:
                                      "-H", "Accept: application/octet-stream"],
                                     stdout=stream, stderr=subprocess.PIPE, timeout=600)
         require(result.returncode == 0, "Authenticated asset download failed")
+
+
+@contextmanager
+def defer_cancellation():
+    """Finish owned cleanup before observing terminal cancellation."""
+    pending = []
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    for sig in previous:
+        signal.signal(sig, lambda number, _frame: pending.append(number))
+    try:
+        yield
+    finally:
+        active_error = sys.exc_info()[0] is not None
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+        if pending and not active_error:
+            raise KeyboardInterrupt
 
 
 class Source:
@@ -273,16 +293,17 @@ class Release:
             # Detach our unique mountpoint even if attach failed after mounting or
             # returned malformed output. A failed detach is safe only when native
             # state independently confirms that this mountpoint is absent.
-            if attempted:
-                result = self.commands.run(["hdiutil", "detach", str(mount)], check=False)
-                if result.returncode:
-                    info = plistlib.loads(self.commands.run(["hdiutil", "info", "-plist"]).stdout)
-                    require(isinstance(info, dict) and isinstance(info.get("images"), list),
-                            f"Cannot determine owned mount state at {mount}; preserve scratch")
-                    require(not any(e.get("mount-point") == str(mount) for image_info in info["images"]
-                                    for e in image_info.get("system-entities", [])),
-                            f"Owned image detach failed at {mount}; preserve scratch and detach manually")
-            shutil.rmtree(root)
+            with defer_cancellation():
+                if attempted:
+                    result = self.commands.run(["hdiutil", "detach", str(mount)], check=False)
+                    if result.returncode:
+                        info = plistlib.loads(self.commands.run(["hdiutil", "info", "-plist"]).stdout)
+                        require(isinstance(info, dict) and isinstance(info.get("images"), list),
+                                f"Cannot determine owned mount state at {mount}; preserve scratch")
+                        require(not any(e.get("mount-point") == str(mount) for image_info in info["images"]
+                                        for e in image_info.get("system-entities", [])),
+                                f"Owned image detach failed at {mount}; preserve scratch and detach manually")
+                shutil.rmtree(root)
 
     def verify_dmg(self, image, frozen):
         regular(image)
@@ -379,6 +400,9 @@ class GitHub:
         if missing and code == 404:
             return None
         require(result.returncode == 0 and 200 <= code < 300, "GitHub request failed; reconcile before retry")
+        if code == 204:
+            require(method == "DELETE" and not data.strip(), "Unexpected empty GitHub response")
+            return None
         return parse_json(data)
 
     def pages(self, endpoint):
@@ -501,6 +525,44 @@ class GitHub:
     def publish(self, directory, expected):
         validate_evidence(self.release.args.evidence, self.release.args.source, digest(Path(directory) / MANIFEST))
         self.repository()
+        value = self.find()
+        require(value is not None and value["draft"] is True, "Publish requires an existing draft; public releases are immutable")
+        with self.publication_lock():
+            self.publish_locked(directory, expected)
+
+    @contextmanager
+    def publication_lock(self):
+        # GitHub creates refs atomically. A unique tag object distinguishes even
+        # two operators releasing the same source commit without sharing a lock.
+        obj = self.api("git/tags", method="POST", body={
+            "tag": PUBLICATION_LOCK, "message": f"Pichi Voice publication {self.release.tag}\n{uuid.uuid4()}\n",
+            "object": self.release.args.source, "type": "commit"})
+        require(isinstance(obj, dict) and isinstance(obj.get("sha"), str) and SHA.fullmatch(obj["sha"]),
+                "Publication lock object was not confirmed")
+        owned_sha = obj["sha"]
+        endpoint = "git/ref/tags/" + PUBLICATION_LOCK
+        def read():
+            value = self.api(endpoint, missing=True)
+            if value is not None:
+                require(isinstance(value, dict) and value.get("ref") == "refs/tags/" + PUBLICATION_LOCK,
+                        "Publication lock identity is invalid")
+                require(isinstance(value.get("object"), dict) and isinstance(value["object"].get("sha"), str)
+                        and SHA.fullmatch(value["object"]["sha"]), "Publication lock object is invalid")
+            return value
+        def owned(value):
+            return value is not None and value.get("object", {}).get("sha") == owned_sha
+        try:
+            self.reconcile(lambda: self.api("git/refs", method="POST", body={
+                "ref": "refs/tags/" + PUBLICATION_LOCK, "sha": owned_sha}), read, owned)
+            yield
+        finally:
+            with defer_cancellation():
+                current = read()
+                if owned(current):
+                    self.reconcile(lambda: self.api("git/refs/tags/" + PUBLICATION_LOCK, method="DELETE"),
+                                   read, lambda value: value is None)
+
+    def publish_locked(self, directory, expected):
         self.tag()
         value = self.find()
         require(value is not None and value["draft"] is True, "Publish requires an existing draft; public releases are immutable")

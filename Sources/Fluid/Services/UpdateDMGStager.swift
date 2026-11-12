@@ -6,6 +6,7 @@ nonisolated enum UpdateDMGStager {
     static let maximumAppBytes: Int64 = 4 * 1024 * 1024 * 1024
     struct Operations: Sendable {
         var run: @Sendable (String, [String], URL, Bool) throws -> Void = UpdateDMGStager.run
+        var isMounted: @Sendable (URL, URL) throws -> Bool = UpdateDMGStager.isMounted
         var copy: @Sendable (URL, URL) throws -> Void = { source, destination in
             try FileManager.default.copyItem(at: source, to: destination)
         }
@@ -41,12 +42,35 @@ nonisolated enum UpdateDMGStager {
             if attached {
                 do { try operations.run("/usr/bin/hdiutil", ["detach", mount.path], root, false) }
                 catch {
-                    // Do not recursively remove a potentially mounted filesystem.
-                    throw Failure(retainedRoot: root, underlying: error)
+                    let detachError = error
+                    do {
+                        // An attach rejected before mounting also makes detach fail.
+                        // Confirm that case before allowing the caller to remove scratch.
+                        if try operations.isMounted(root, mount) {
+                            throw Failure(retainedRoot: root, underlying: detachError)
+                        }
+                    } catch let failure as Failure { throw failure }
+                    catch { throw Failure(retainedRoot: root, underlying: error) }
                 }
             }
             throw original
         }
+    }
+
+    static func isMounted(root: URL, mount: URL) throws -> Bool {
+        var parent = stat()
+        var child = stat()
+        guard lstat(root.path, &parent) == 0, parent.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        if lstat(mount.path, &child) != 0 {
+            if errno == ENOENT { return false }
+            throw CocoaError(.fileReadUnknown)
+        }
+        guard child.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else { throw CocoaError(.fileReadUnknown) }
+        // A hdiutil image has its own device. The ordinary empty mountpoint is
+        // on the staging directory's device after a rejected attach/detach.
+        return child.st_dev != parent.st_dev
     }
 
     private static func requireBoundedBundle(_ app: URL) throws {

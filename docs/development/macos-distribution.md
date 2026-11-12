@@ -63,6 +63,15 @@ numeric build, so the website alias cannot accidentally downgrade its download.
 The helper rechecks this immediately before publishing. Build 71 below is the planned example, not evidence of
 publication or acceptance.
 
+All release owners publish through the helper. Its atomic GitHub ref
+`refs/tags/pichi-macos-publication-lock` serializes stable publication across
+machines, including the final latest check and anonymous verification. Never
+manually change GitHub Latest while a publication owns that ref. A failed owner
+releases only its own unique lock object. After a crash, inspect the lock's tag
+object and coordinate with its owner before removing a stale ref; age alone does
+not establish that it is safe to remove. Terminal cancellation is deferred during
+owned image detach, mount-state reconciliation and lock cleanup.
+
 ### Freeze the reviewed source and archive once
 
 Integrate the updater, signed distribution configuration and release tooling,

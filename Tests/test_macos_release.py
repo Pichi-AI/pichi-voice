@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import signal
 import subprocess
 import tarfile
 import tempfile
@@ -45,6 +46,7 @@ class Boundaries(m.Commands):
         self.tag_sha = None
         self.release = None
         self.latest_release = None
+        self.lock_sha = None
         self.asset_data = {}
         self.uncertain = set()
         self.before_write_failure = set()
@@ -115,7 +117,8 @@ class Boundaries(m.Commands):
             value, code = self.api(endpoint, method, body)
             if method != "GET" and method in self.uncertain:
                 raise subprocess.TimeoutExpired(args, 300)
-            return self.result(args, f"HTTP/2.0 {code} Synthetic\r\nContent-Type: application/json\r\n\r\n".encode() + json.dumps(value).encode(), code=0 if code < 400 else 1)
+            data = b"" if code == 204 else json.dumps(value).encode()
+            return self.result(args, f"HTTP/2.0 {code} Synthetic\r\nContent-Type: application/json\r\n\r\n".encode() + data, code=0 if code < 400 else 1)
         raise AssertionError("Unexpected external command: " + repr(args))
 
     def api(self, endpoint, method, body):
@@ -124,11 +127,25 @@ class Boundaries(m.Commands):
             return {"message": "rejected"}, 503
         if endpoint == "":
             return {"full_name": m.REPO, "private": not self.repo_public, "visibility": "public" if self.repo_public else "private"}, 200
+        if endpoint == "git/tags" and method == "POST":
+            return {"sha": hashlib.sha256(json.dumps(body).encode()).hexdigest()[:40]}, 201
+        if endpoint == "git/ref/tags/" + m.PUBLICATION_LOCK:
+            if self.lock_sha is None:
+                return {"message": "Not Found"}, 404
+            return {"ref": "refs/tags/" + m.PUBLICATION_LOCK, "object": {"type": "tag", "sha": self.lock_sha}}, 200
+        if endpoint == "git/refs/tags/" + m.PUBLICATION_LOCK and method == "DELETE":
+            self.lock_sha = None
+            return None, 204
         if endpoint.startswith("git/ref/tags/"):
             if self.tag_sha is None:
                 return {"message": "Not Found"}, 404
             return {"ref": "refs/tags/" + self.tag, "object": {"type": "commit", "sha": self.tag_sha}}, 200
         if endpoint == "git/refs":
+            if body["ref"] == "refs/tags/" + m.PUBLICATION_LOCK:
+                if self.lock_sha is not None:
+                    return {"message": "Reference already exists"}, 422
+                self.lock_sha = body["sha"]
+                return {}, 201
             self.tag_sha = body["sha"]
             return {}, 201
         if endpoint == "releases" and method == "GET":
@@ -363,6 +380,20 @@ class ReleaseTests(unittest.TestCase):
                 shutil.rmtree(mount.parent)
             self.boundaries.mounts.clear()
 
+    def test_terminal_cancellation_during_detach_is_deferred_until_cleanup(self):
+        previous = signal.getsignal(signal.SIGINT)
+        def interrupt(args):
+            if args[:2] == ["hdiutil", "detach"]:
+                signal.raise_signal(signal.SIGINT)
+            return False
+        self.boundaries.native_failure = interrupt
+        with self.assertRaises(KeyboardInterrupt):
+            self.release.verify_dmg(self.image, m.inventory(self.app))
+        self.assertFalse(self.boundaries.mounts)
+        self.assertIs(signal.getsignal(signal.SIGINT), previous)
+        attempts = [Path(c[c.index("-mountpoint") + 1]) for c in self.boundaries.calls if c[:2] == ["hdiutil", "attach"]]
+        self.assertTrue(all(not mount.parent.exists() for mount in attempts))
+
     def test_detach_failure_after_no_mount_is_confirmed_and_cleaned(self):
         self.boundaries.detach_failure = True
         self.boundaries.native_failure = lambda args: args[:2] == ["hdiutil", "attach"]
@@ -439,6 +470,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(writes, len([c for c in self.boundaries.calls if c[:3] == ["gh", "release", "upload"]]))
         self.assertEqual(writes, 5)
         self.evidence()
+        self.boundaries.uncertain.discard("POST")
         with patch.object(m, "public_download", side_effect=self.public) as public:
             self.github.publish(self.output, expected)
             self.assertEqual(public.call_count, 6)  # Entire five assets plus website latest alias.
@@ -449,6 +481,38 @@ class ReleaseTests(unittest.TestCase):
             self.assertFalse(any("--method" in c and c[c.index("--method") + 1] in ("POST", "PATCH")
                                  or c[:3] == ["gh", "release", "upload"] for c in self.boundaries.calls[before:]))
         self.assertEqual(self.boundaries.tag_sha, self.revision)
+
+    def test_publication_lock_prevents_another_owner_and_is_released_after_failure(self):
+        with self.github.publication_lock():
+            owner = self.boundaries.lock_sha
+            self.assertIsNotNone(owner)
+            with self.assertRaises(m.ReleaseError):
+                with self.github.publication_lock():
+                    self.fail("A second publisher acquired an active lock")
+            self.assertEqual(self.boundaries.lock_sha, owner)
+        self.assertIsNone(self.boundaries.lock_sha)
+        with self.assertRaisesRegex(RuntimeError, "failure"):
+            with self.github.publication_lock():
+                raise RuntimeError("failure")
+        self.assertIsNone(self.boundaries.lock_sha)
+
+    def test_publication_lock_blocks_a_publisher_after_final_latest_check(self):
+        expected = self.prepared()
+        self.github.draft(self.output, expected)
+        self.evidence()
+        original = self.github.require_newer_stable_release
+        checks = []
+        def check_then_attempt_concurrent_publish():
+            original()
+            checks.append(True)
+            if len(checks) == 2:
+                with self.assertRaises(m.ReleaseError):
+                    with self.github.publication_lock():
+                        self.fail("The competing release must wait for this publication")
+        with patch.object(self.github, "require_newer_stable_release", side_effect=check_then_attempt_concurrent_publish), patch.object(m, "public_download", side_effect=self.public):
+            self.github.publish(self.output, expected)
+        self.assertFalse(self.boundaries.release["draft"])
+        self.assertIsNone(self.boundaries.lock_sha)
 
     def test_wrong_tag_and_private_repository_never_mutated(self):
         expected = self.prepared()

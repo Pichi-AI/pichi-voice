@@ -1461,7 +1461,7 @@ extension SimpleUpdater {
     }
 
     func cancelPendingUpdate() async {
-        if self.isUpdateInProgress && !self.canCancelUpdate { return }
+        if self.isUpdateInProgress && !self.canCancelUpdate && self.releaseInstallationAdmission != nil { return }
         self.cancellationRequested = true
         self.installTask?.cancel()
         if self.releaseInstallationAdmission == nil {
@@ -1472,6 +1472,19 @@ extension SimpleUpdater {
         if self.isUpdateInProgress {
             await withCheckedContinuation { self.cancellationWaiters.append($0) }
         }
+    }
+
+    /// Normal quit joins background transport/staging before AppKit exits.
+    /// A committed replacement keeps ownership until its relaunch callback finishes.
+    func shutdownForTermination() async {
+        let check = self.checkTask
+        self.cancelUpdateCheck()
+        await check?.value
+        if self.isUpdateInProgress && !self.canCancelUpdate && self.releaseInstallationAdmission != nil { return }
+        let observer = self.downloadObserver
+        await self.cancelPendingUpdate()
+        await observer?.value
+        self.downloadObserver = nil
     }
 
     @discardableResult

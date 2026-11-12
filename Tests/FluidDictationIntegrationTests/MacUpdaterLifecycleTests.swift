@@ -75,6 +75,26 @@ final class MacUpdaterLifecycleTests: XCTestCase {
         await context.cleanup()
     }
 
+    func testTerminationJoinsBackgroundDownloadAndReleasesItsWorkspace() async throws {
+        let context = try Context()
+        defer { context.close() }
+        context.fixture.holdDownloads = true
+        context.updater.checkForUpdatesAutomatically()
+        try await wait { context.fixture.downloadCount == 1 }
+        await context.updater.shutdownForTermination()
+        XCTAssertGreaterThanOrEqual(context.fixture.cancelCount, 1)
+        XCTAssertEqual(context.updater.downloadState, .idle)
+        XCTAssertFalse(context.updater.isCheckingForUpdates)
+        let contents = try FileManager.default.contentsOfDirectory(at: context.temporaryDirectory, includingPropertiesForKeys: [.isDirectoryKey])
+        XCTAssertFalse(try contents.contains { try $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true })
+        context.fixture.holdDownloads = false
+        context.updater.checkForUpdatesAutomatically()
+        try await wait { context.updater.downloadState == .ready("0.1.0 (71)") }
+        await context.updater.shutdownForTermination()
+        XCTAssertEqual(context.fixture.downloadCount, 2)
+        await context.cleanup()
+    }
+
     func testHTTPFailureCanRetryAndChannelMutationJoinsCancelledDownload() async throws {
         let context = try Context()
         defer { context.close() }

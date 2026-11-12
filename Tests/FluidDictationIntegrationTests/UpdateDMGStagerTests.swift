@@ -85,6 +85,30 @@ final nonisolated class UpdateDMGStagerTests: XCTestCase {
         }
         XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("mount").path))
     }
+
+    func testRejectedAttachWithoutMountCanBeCleanedAndRetried() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        var operations = fixture.operations
+        operations.run = { _, _, _, _ in throw SimpleUpdateError.unzipFailed }
+        operations.isMounted = UpdateDMGStager.isMounted
+        XCTAssertThrowsError(try UpdateDMGStager.stage(image: fixture.image, root: fixture.root, appName: "Pichi Voice.app", operations: operations)) {
+            XCTAssertFalse($0 is UpdateDMGStager.Failure, "A rejected image must not invent a retained mount")
+        }
+        try FileManager.default.removeItem(at: fixture.root.appendingPathComponent("mount"))
+        _ = try UpdateDMGStager.stage(image: fixture.image, root: fixture.root, appName: "Pichi Voice.app", operations: fixture.operations)
+    }
+
+    func testUnknownMountStatePreservesRecoveryInsteadOfRemovingFiles() throws {
+        let fixture = try Fixture(kind: .detachFails)
+        defer { fixture.cleanup() }
+        var operations = fixture.operations
+        operations.isMounted = { _, _ in throw CocoaError(.fileReadNoPermission) }
+        XCTAssertThrowsError(try UpdateDMGStager.stage(image: fixture.image, root: fixture.root, appName: "Pichi Voice.app", operations: operations)) {
+            XCTAssertTrue($0 is UpdateDMGStager.Failure)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("mount/Pichi Voice.app/payload").path))
+    }
 }
 
 private final nonisolated class Fixture: @unchecked Sendable {
@@ -119,7 +143,7 @@ private final nonisolated class Fixture: @unchecked Sendable {
                 if kind == .detachFails { throw URLError(.cannotCloseFile) }
                 for entry in try FileManager.default.contentsOfDirectory(at: mount, includingPropertiesForKeys: nil) { try FileManager.default.removeItem(at: entry) }
             }
-        })
+        }, isMounted: { [self] _, _ in kind == .detachFails })
     }
     func cleanup() { try? FileManager.default.removeItem(at: root) }
 }
