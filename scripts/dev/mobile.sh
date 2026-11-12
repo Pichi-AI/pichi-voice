@@ -15,6 +15,6 @@ args=(-project Fluid.xcodeproj -scheme PichiVoiceMobile -configuration Debug -de
 case "$mode" in
     build) xcodebuild "${args[@]}" build ;;
     build-for-testing) xcodebuild "${args[@]}" build-for-testing ;;
-    test) xcodebuild "${args[@]}" test ;;
+    test) xcodebuild "${args[@]}" "${@:2}" test ;;
     *) printf 'Usage: bash scripts/dev/mobile.sh [build|build-for-testing|test]\n' >&2; exit 2 ;;
 esac

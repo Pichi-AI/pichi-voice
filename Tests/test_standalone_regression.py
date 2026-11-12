@@ -57,10 +57,10 @@ class StandaloneRunnerTests(unittest.TestCase):
         self.assertEqual(len(pending), 1)
         self.assertEqual(pending[0].interpreter, "sh")
         self.assertFalse(pending[0].requires_ui)
-        self.assertEqual(len(RUNNER.PROBES), 106)
-        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 71)
-        self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 18)
-        self.assertEqual(sum(probe.interpreter == "bash" for probe in RUNNER.PROBES), 17)
+        self.assertEqual(len(RUNNER.PROBES), 117)
+        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 74)
+        self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 22)
+        self.assertEqual(sum(probe.interpreter == "bash" for probe in RUNNER.PROBES), 21)
         for name, interpreter in (("account_session", "sh"), ("mobile_account", "sh"), ("publication_consent", "bash"), ("publication_outbox", "bash"), ("sensitive_topic_classifier", "bash"), ("sensitive_policy_settings", "bash")):
             matching = [probe for probe in RUNNER.PROBES if probe.name == name]
             self.assertEqual(len(matching), 1)
@@ -439,6 +439,9 @@ class StandaloneRunnerTests(unittest.TestCase):
     def test_real_term_joins_descendant_and_preserves_exit_143(self):
         self.verify_real_signal_cleanup(signal.SIGTERM)
 
+    def test_real_hangup_joins_descendant_and_exits_129(self):
+        self.verify_real_signal_cleanup(signal.SIGHUP)
+
     def wait_for_worker(self):
         deadline = time.monotonic() + 3
         while not (self.root / "worker-started").exists() and time.monotonic() < deadline:
@@ -703,6 +706,266 @@ sys.exit(status)
             with RUNNER.run_lock(self.root):
                 pass
         self.assertFalse(marker.exists())
+
+    def rendezvous_probe(self, name, other, attempts=500):
+        # Passes only when the other probe is running at the same time.
+        return self.probe(name, f'touch {name}-started\n'
+                                f'i=0\nwhile [ ! -f {other}-started ]; do\n'
+                                f'  i=$((i + 1)); [ "$i" -lt {attempts} ] || exit 7; sleep 0.01\ndone')
+
+    def test_parallel_jobs_overlap_and_keep_selection_order(self):
+        probes = [self.rendezvous_probe("first", "second"), self.rendezvous_probe("second", "first")]
+        status, report, _ = self.run_probes(probes, jobs=2)
+        self.assertEqual(status, 0, report)
+        self.assertEqual(report["jobs"], 2)
+        self.assertEqual([row["name"] for row in report["results"]], ["first", "second"])
+        self.assertEqual(report["counts"], {"total": 2, "passed": 2, "failed": 0, "skipped": 0})
+        self.assertTrue(all(row["durationSeconds"] > 0 for row in report["results"]))
+        self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+
+    def test_one_job_never_overlaps(self):
+        status, report, _ = self.run_probes([self.rendezvous_probe("first", "second", attempts=20),
+                                             self.probe("second", "touch second-started")])
+        self.assertEqual(status, 1)
+        self.assertEqual(report["results"][0]["exitCode"], 7)
+
+    def test_probes_sharing_build_storage_never_overlap(self):
+        probes = [self.rendezvous_probe("first", "second", attempts=20), self.probe("second", "touch second-started"),
+                  self.probe("third")]
+        with patch.object(RUNNER, "EXCLUSIVE_PROBES", (frozenset({"first", "second"}),)):
+            status, report, _ = self.run_probes(probes, jobs=3)
+        self.assertEqual(status, 1)
+        self.assertEqual(report["results"][0]["exitCode"], 7, "A held-back probe must not start while its partner runs")
+        self.assertEqual([row["name"] for row in report["results"]], ["first", "second", "third"])
+        self.assertEqual(report["results"][1]["status"], "PASS")
+
+    def test_registered_exclusive_probes_exist(self):
+        names = {probe.name for probe in RUNNER.PROBES}
+        for group in RUNNER.EXCLUSIVE_PROBES:
+            self.assertLessEqual(group, names)
+
+    def test_parallel_failure_does_not_stop_other_probes(self):
+        status, report, directory = self.run_probes(
+            [self.probe("bad", "echo broken; exit 3"), self.probe("good"), self.probe("later", "touch later-executed")], jobs=2)
+        self.assertEqual(status, 1)
+        self.assertEqual(report["counts"], {"total": 3, "passed": 2, "failed": 1, "skipped": 0})
+        self.assertEqual(report["results"][0]["exitCode"], 3)
+        self.assertIn("broken", (directory / "bad.log").read_text())
+        self.assertTrue((self.root / "later-executed").exists())
+
+    def test_parallel_skips_ui_and_fails_a_missing_script(self):
+        ui = self.probe("ui", "touch ui-ran", requires_ui=True)
+        status, report, _ = self.run_probes([ui, RUNNER.Probe("Tests/run_absent_tests.sh", "sh"), self.probe("good")], jobs=3)
+        self.assertEqual(status, 1)
+        self.assertEqual([row["status"] for row in report["results"]], ["SKIP", "FAIL", "PASS"])
+        self.assertFalse((self.root / "ui-ran").exists())
+
+    def test_parallel_launch_failure_is_recorded(self):
+        probe = self.probe("broken")
+        with patch.object(RUNNER.subprocess, "Popen", side_effect=OSError("synthetic launch failure")):
+            status, report, _ = self.run_probes([probe], jobs=2)
+        self.assertEqual(status, 1)
+        self.assertIn("synthetic launch failure", report["results"][0]["reason"])
+
+    def test_parallel_background_descendant_is_not_a_success_or_left_running(self):
+        probe = self.worker_probe(wait=False)
+        with patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.05):
+            status, report, _ = self.run_probes([probe, self.probe("good")], jobs=2)
+        self.assertEqual(status, 1)
+        self.assertEqual(report["results"][0]["exitCode"], 0)
+        self.assertIn("unjoined", report["results"][0]["reason"])
+        self.assertEqual(report["results"][1]["status"], "PASS")
+        self.assert_worker_joined()
+        self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+
+    def verify_parallel_signal_cleanup(self, number):
+        probes = [self.worker_probe(), self.probe("sibling", "touch sibling-started\nsleep 30"),
+                  self.probe("later", "touch later-executed")]
+        sender = threading.Thread(target=lambda: (self.wait_for_worker(), self.wait_for_sibling(), os.kill(os.getpid(), number)),
+                                  daemon=True)
+        sender.start()
+        try:
+            with patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.05):
+                status, report, directory = self.run_probes(probes, jobs=2)
+        finally:
+            sender.join(timeout=4)
+        self.assertEqual(status, 128 + number, (directory / "descendant.log").read_text())
+        self.assertEqual(report["counts"], {"total": 3, "passed": 0, "failed": 2, "skipped": 1})
+        for row in report["results"][:2]:
+            self.assertIn(row["exitCode"], [-signal.SIGTERM, -signal.SIGKILL])
+            self.assertEqual(row["runnerExitCode"], 128 + number)
+            self.assertEqual(row["reason"], "interrupted")
+        self.assertFalse((self.root / "later-executed").exists())
+        self.assert_worker_joined()
+        self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+
+    def wait_for_sibling(self):
+        deadline = time.monotonic() + 3
+        while not (self.root / "sibling-started").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    def test_parallel_interrupt_joins_every_running_group(self):
+        self.verify_parallel_signal_cleanup(signal.SIGINT)
+
+    def test_parallel_term_joins_every_running_group(self):
+        self.verify_parallel_signal_cleanup(signal.SIGTERM)
+
+    def test_parallel_incomplete_cleanup_blocks_remaining_and_following_suites(self):
+        marker = self.root / ".build" / RUNNER.PROCESS_MARKER
+        probes = [self.probe("first"), self.probe("second"), self.probe("later", "touch later-executed")]
+        with patch.object(RUNNER, "live_process_group", side_effect=OSError("synthetic inspection failure")):
+            status, report, _ = self.run_probes(probes, jobs=2)
+        self.assertEqual(status, 1)
+        self.assertEqual(report["counts"], {"total": 3, "passed": 0, "failed": 2, "skipped": 1})
+        self.assertFalse((self.root / "later-executed").exists())
+        self.assertTrue(marker.exists())
+        self.assertIn("processGroups", json.loads(marker.read_text()))
+        with patch.object(RUNNER, "live_process_group", return_value=True):
+            with self.assertRaisesRegex(ValueError, "previous probe still owns"):
+                with RUNNER.run_lock(self.root):
+                    self.fail("A new suite must not compete with an owned process")
+        with patch.object(RUNNER, "live_process_group", return_value=False):
+            with RUNNER.run_lock(self.root):
+                pass
+        self.assertFalse(marker.exists())
+
+    def test_parallel_ordinary_failure_stops_running_probes(self):
+        worker = self.worker_probe()
+
+        def broken_output(message, **options):
+            if message == "RUN later":
+                self.wait_for_worker()
+                raise BrokenPipeError("synthetic closed output")
+
+        with patch.object(RUNNER, "print", side_effect=broken_output, create=True), \
+             patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.05):
+            with self.assertRaises(BrokenPipeError):
+                RUNNER.run_suite(self.root, [worker, self.probe("later", "touch later-executed")],
+                                 revision="synthetic-revision", jobs=2)
+        self.assertFalse((self.root / "later-executed").exists())
+        self.assert_worker_joined()
+        self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+
+    def test_parallel_unrecorded_owner_stops_at_once_and_blocks_new_probes(self):
+        marker_next = Path(RUNNER.PROCESS_MARKER).with_suffix(".next").name
+        original = RUNNER.owned_file
+        failed = []
+
+        def refuse_first_record(path, flags):
+            if path.name == marker_next and not failed:
+                failed.append(path)
+                raise OSError("synthetic marker failure")
+            return original(path, flags)
+
+        probes = [self.probe("slow", "sleep 30"), self.probe("later", "touch later-executed")]
+        with patch.object(RUNNER, "owned_file", side_effect=refuse_first_record), \
+             patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.05):
+            status, report, _ = self.run_probes(probes, jobs=2)
+        self.assertEqual(status, 1)
+        self.assertEqual(report["results"][0]["status"], "FAIL")
+        self.assertIn("synthetic marker failure", report["results"][0]["reason"])
+        self.assertLess(report["results"][0]["durationSeconds"], 10)
+        self.assertEqual(report["results"][1]["status"], "SKIP")
+        self.assertFalse((self.root / "later-executed").exists())
+
+    def test_parallel_failed_cleanup_after_unrecorded_owner_republishes_the_marker(self):
+        marker = self.root / ".build" / RUNNER.PROCESS_MARKER
+        marker_next = Path(RUNNER.PROCESS_MARKER).with_suffix(".next").name
+        original = RUNNER.owned_file
+        failed = []
+        started = []
+
+        def refuse_first_record(path, flags):
+            if path.name == marker_next and not failed:
+                failed.append(path)
+                raise OSError("synthetic marker failure")
+            return original(path, flags)
+
+        original_popen = RUNNER.subprocess.Popen
+
+        def recording_popen(*args, **options):
+            process = original_popen(*args, **options)
+            started.append(process)
+            return process
+
+        self.addCleanup(lambda: [os.killpg(item.pid, signal.SIGKILL) for item in started if item.poll() is None])
+        with patch.object(RUNNER, "owned_file", side_effect=refuse_first_record), \
+             patch.object(RUNNER.subprocess, "Popen", side_effect=recording_popen), \
+             patch.object(RUNNER, "stop_process_group", side_effect=OSError("synthetic cleanup failure")):
+            status, report, _ = self.run_probes([self.probe("slow", "sleep 30")], jobs=2)
+        self.assertEqual(status, 1)
+        self.assertEqual(report["results"][0]["cleanupError"], "synthetic cleanup failure")
+        self.assertNotIn("ownershipError", report)
+        self.assertIn(started[0].pid, json.loads(marker.read_text())["processGroups"])
+
+    def test_parallel_log_close_failure_does_not_stop_other_groups_from_joining(self):
+        original_open = Path.open
+
+        class FailingLog:
+            def __init__(self, stream):
+                self.stream = stream
+
+            def fileno(self):
+                return self.stream.fileno()
+
+            def write(self, data):
+                return self.stream.write(data)
+
+            def close(self):
+                self.stream.close()
+                raise OSError("synthetic log close failure")
+
+        def open_log(path, *args, **options):
+            stream = original_open(path, *args, **options)
+            return FailingLog(stream) if path.name == "first.log" else stream
+
+        probes = [self.probe("first", "touch first-started\nsleep 30"), self.probe("second", "touch second-started\nsleep 30")]
+
+        def interrupt_when_started():
+            deadline = time.monotonic() + 3
+            while not all((self.root / name).exists() for name in ["first-started", "second-started"]) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            os.kill(os.getpid(), signal.SIGINT)
+
+        sender = threading.Thread(target=interrupt_when_started, daemon=True)
+        sender.start()
+        try:
+            with patch.object(Path, "open", open_log), patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.05):
+                status, report, _ = self.run_probes(probes, jobs=2)
+        finally:
+            sender.join(timeout=4)
+        self.assertEqual(status, 130)
+        self.assertIn("synthetic log close failure", report["results"][0]["logError"])
+        for row in report["results"]:
+            self.assertEqual(row["reason"], "interrupted")
+            self.assertIn(row["exitCode"], [-signal.SIGTERM, -signal.SIGKILL])
+        self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+
+    def test_sequential_interrupt_keeps_a_retained_marker(self):
+        marker = self.root / ".build" / RUNNER.PROCESS_MARKER
+
+        def incomplete(*args):
+            marker.write_text(json.dumps({"processGroup": 123456}))
+            raise OSError("synthetic incomplete cleanup")
+
+        def interrupt_later(message, **options):
+            if message.startswith("SKIP later"):
+                raise KeyboardInterrupt()
+
+        with patch.object(RUNNER, "run_owned_process", side_effect=incomplete), \
+             patch.object(RUNNER, "print", side_effect=interrupt_later, create=True):
+            status, _, _ = self.run_probes([self.probe("first"), self.probe("later")])
+        self.assertEqual(status, 130)
+        self.assertTrue(marker.exists(), "A retained owner must survive an interrupted report")
+        with patch.object(RUNNER, "live_process_group", return_value=False):
+            with RUNNER.run_lock(self.root):
+                pass
+
+    def test_job_count_rejects_zero_and_negative_values(self):
+        self.assertEqual(RUNNER.job_count("4"), 4)
+        for value in ("0", "-1"):
+            with self.assertRaises(RUNNER.argparse.ArgumentTypeError):
+                RUNNER.job_count(value)
 
     def test_registry_drift_or_interpreter_change_requires_review(self):
         probe = self.probe("known")

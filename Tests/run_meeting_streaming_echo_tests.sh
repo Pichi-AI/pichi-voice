@@ -20,6 +20,8 @@ def declaration(text, marker):
 meeting = Path('Sources/Fluid/Services/Meeting')
 values = 'import Foundation\n'
 values += 'typealias MeetingAudioTrackID = UUID\ntypealias MeetingTranscriptSegmentID = UUID\n'
+# MeetingFinalTextUnit carries the provider's word-timing provenance (117); copy its actual value type.
+values += declaration((meeting / 'MeetingPersistedMetadata.swift').read_text(), 'nonisolated struct ASRWordTimingProvenance:')
 values += (meeting / 'Backend/MeetingCanonicalEvidenceTypes.swift').read_text()
 manifest = (meeting / 'Backend/MeetingAnalysisManifest.swift').read_text()
 values += declaration(manifest, 'nonisolated enum MeetingAnalysisManifestSchema')
@@ -45,6 +47,7 @@ nonisolated struct MeetingTranscriptSegment: Sendable {
     let nativeTiming: MeetingTranscriptNativeTiming?
     let nativePrecision: MeetingTextUnitPrecision?
     let nativeSpeakerAssignment: MeetingBackendSpeakerAssignment?
+    var nativeWordTimingProvenance: ASRWordTimingProvenance? = nil
     var isLikelyEcho: Bool? = nil
 }
 nonisolated struct MeetingPCMTranscriptBatch: Sendable {

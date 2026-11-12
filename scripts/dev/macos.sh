@@ -17,11 +17,16 @@ pichi_destination='platform=macOS,arch=arm64'
 pichi_test_args=(
     -skip-testing:FluidDictationIntegrationTests/DictationE2ETests/testDictationEndToEnd_whisperTiny_transcribesFixture
 )
+# A separate directory keeps the regression identity from replacing the product of macos.sh build.
+pichi_derived_data="$pichi_root/.build/Xcode"
+if [[ "$pichi_action" == "regression" ]]; then
+    pichi_derived_data="$pichi_root/.build/XcodeRegression"
+fi
 pichi_args=(
     -project Fluid.xcodeproj
     -scheme Fluid
     -destination "$pichi_destination"
-    -derivedDataPath "$pichi_root/.build/Xcode"
+    -derivedDataPath "$pichi_derived_data"
     -clonedSourcePackagesDirPath "$pichi_root/.build/SourcePackages"
     CODE_SIGN_IDENTITY=
     CODE_SIGNING_REQUIRED=NO
@@ -49,10 +54,17 @@ if [[ "$pichi_action" == "regression" ]]; then
         printf '%s\n' 'Working tree: clean' >> "$pichi_run/run.txt"
     fi
     printf 'Regression artifacts: %s\n' "$pichi_run"
+    case "$pichi_root" in
+        "$HOME"/Documents/*)
+            printf '%s\n' 'Warning: this worktree is under ~/Documents. macOS can block the test host in open() here.' \
+                'If the host hangs, use a worktree outside ~/Documents.' >&2
+            ;;
+    esac
     touch "$pichi_run/build-start"
     # Debug is required for the existing test-host launch and language overrides.
     pichi_build_status=0
-    xcodebuild "${pichi_args[@]}" -configuration Debug \
+    # Tests write settings and caches under their bundle identity. Keep them away from manual Debug builds.
+    xcodebuild "${pichi_args[@]}" -configuration Debug PICHI_BUNDLE_IDENTIFIER=ai.pichi.voice.regression \
         -resultBundlePath "$pichi_run/build.xcresult" build-for-testing \
         2>&1 | tee "$pichi_run/build.log" || pichi_build_status=$?
     if [[ "$pichi_build_status" -ne 0 ]]; then
@@ -61,9 +73,10 @@ if [[ "$pichi_action" == "regression" ]]; then
         exit "$pichi_build_status"
     fi
     pichi_xctestrun="$(python3 -S scripts/dev/macos-regression.py configure \
-        "$pichi_root/.build/Xcode/Build/Products" "$pichi_run/build-start" "$pichi_run_id")"
+        "$pichi_derived_data/Build/Products" "$pichi_run/build-start" "$pichi_run_id")"
     pichi_test_status=0
     xcodebuild -xctestrun "$pichi_xctestrun" -destination "$pichi_destination" \
+        -derivedDataPath "$pichi_derived_data" \
         -resultBundlePath "$pichi_run/tests.xcresult" -parallel-testing-enabled NO \
         "${pichi_test_args[@]}" test-without-building 2>&1 | tee "$pichi_run/test.log" \
         || pichi_test_status=$?

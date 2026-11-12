@@ -54,9 +54,13 @@ def interruption_status(error):
     return 128 + (error.signal_number if isinstance(error, RunTermination) else signal.SIGINT)
 
 
+# A closed terminal sends HUP. Probes run in their own sessions, so only this process can stop them.
+HANDLED_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+
+
 @contextmanager
 def defer_interrupts():
-    previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, set(HANDLED_SIGNALS))
     try:
         yield
     finally:
@@ -92,7 +96,7 @@ def suite_signal_handlers():
                 number, pending = pending, None
                 deliver(number)
 
-    originals = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
+    originals = {number: signal.getsignal(number) for number in HANDLED_SIGNALS}
     failure = None
     try:
         with defer_interrupts():
@@ -116,7 +120,7 @@ def suite_signal_handlers():
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, previous)
         if queued and failure is None:
-            deliver(signal.SIGTERM if signal.SIGTERM in queued else signal.SIGINT)
+            deliver(next(number for number in HANDLED_SIGNALS if number in queued))
 
 
 def process_group_exists(group):
@@ -237,6 +241,22 @@ class Probe:
         return [interpreters[self.interpreter], self.script]
 
 
+# Discovery covers Tests/run_* only, so checks that live elsewhere are listed here by hand.
+# The continuity driver test reads macOS Chrome paths, so it cannot run in the Linux check.
+OTHER_PROBES = (
+    Probe("Tests/test_published_upstream_release.py", "python3"),
+    Probe("scripts/dev/test-meeting-microphone-privacy.sh", "bash"),
+    Probe("scripts/dev/test-memory-audio-archive.sh", "bash"),
+    Probe("scripts/dev/test-nemotron-compile-owner.sh", "bash"),
+    Probe("scripts/dev/test-retained-diarization-scope.sh", "bash"),
+    Probe("scripts/test_dictation_default_provider.sh", "sh"),
+    Probe("scripts/test_dictation_target.sh", "sh"),
+    Probe("scripts/test_paste_clipboard.sh", "sh"),
+    Probe("tools/test_meeting_continuity_driver.py", "python3"),
+    Probe("tools/test_meeting_continuity_fixture.py", "python3"),
+    Probe("tools/test_meeting_playback_stage05_signal_gate.py", "python3"),
+)
+
 # Registration is explicit: a new probe needs a reviewed interpreter/UI classification.
 # This reviewed orchestrator invokes the complete CI sequence; it is not a leaf probe.
 ORCHESTRATOR_SCRIPTS = {"Tests/run_ci_checks.sh"}
@@ -282,9 +302,17 @@ PROBES = tuple(sorted(
        Probe("Tests/run_sensitive_policy_settings_tests.sh", "bash"),
        Probe("Tests/run_privacy_idle_preparation_tests.sh", "bash"),
        Probe("Tests/run_upstream_sync_tests.sh", "bash"),
-       Probe("Tests/run_update_prompt_tests.sh", "sh", requires_ui=True)],
+       Probe("Tests/run_update_prompt_tests.sh", "sh", requires_ui=True), *OTHER_PROBES],
     key=lambda probe: probe.name,
 ))
+
+
+# Probes that share mutable build storage never overlap, whatever --jobs asks for.
+EXCLUSIVE_PROBES = (frozenset({"meeting_privacy_context", "transcript_privacy"}),)
+
+
+def overlaps_running(name, running_names):
+    return any(name in group and group & running_names for group in EXCLUSIVE_PROBES)
 
 
 def validate_registry(root, probes=PROBES):
@@ -293,7 +321,7 @@ def validate_registry(root, probes=PROBES):
         raise ValueError("Standalone registry contains duplicate paths or names")
     discovered = {str(path.relative_to(root)) for path in (root / "Tests").glob("run_*")
                   if path.suffix in (".sh", ".py") and str(path.relative_to(root)) not in ORCHESTRATOR_SCRIPTS}
-    if registered != discovered:
+    if registered - {probe.script for probe in OTHER_PROBES} != discovered:
         raise ValueError(f"Standalone registry mismatch: unregistered={sorted(discovered - registered)}, missing={sorted(registered - discovered)}")
     for probe in probes:
         path = root / probe.script
@@ -334,8 +362,9 @@ def run_lock(root):
                 pass
             else:
                 with os.fdopen(descriptor, "r") as source:
-                    group = json.load(source)["processGroup"]
-                if live_process_group(group):
+                    recorded = json.load(source)
+                groups = recorded["processGroups"] if "processGroups" in recorded else [recorded["processGroup"]]
+                if any(live_process_group(group) for group in groups):
                     raise ValueError("A previous probe still owns this worktree's build storage")
                 marker.unlink()
             yield
@@ -347,17 +376,18 @@ def timestamp():
     return datetime.now(timezone.utc).isoformat()
 
 
-def run_suite(root, probes, *, include_ui=False, revision="unknown", dirty=False):
+def run_suite(root, probes, *, include_ui=False, revision="unknown", dirty=False, jobs=1):
     state = {}
     try:
         with suite_signal_handlers() as protect_creation:
             return _run_suite(root, probes, include_ui=include_ui, revision=revision, dirty=dirty,
-                              protect_creation=protect_creation, state=state)
+                              protect_creation=protect_creation, state=state, jobs=jobs)
     except (KeyboardInterrupt, RunTermination) as error:
         code = interruption_status(error)
         if state:
             report = state["report"]
             with defer_interrupts():
+                state.get("stop_running", lambda _: None)(error)
                 state["record_interruption"](error)
                 state["finish"](True, code)
         else:
@@ -367,7 +397,7 @@ def run_suite(root, probes, *, include_ui=False, revision="unknown", dirty=False
         return code, report
 
 
-def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation, state):
+def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation, state, jobs=1):
     root = root.resolve()
     with run_lock(root):
         base = root / ".build/standalone-regression"
@@ -377,7 +407,7 @@ def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation, s
         directory = Path(tempfile.mkdtemp(prefix=f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{revision[:8]}-", dir=base))
         report = {"version": 1, "revision": revision, "workingTree": "dirty" if dirty else "clean",
                   "platform": platform.system(), "startedAt": timestamp(), "status": "RUNNING",
-                  "artifactDirectory": str(directory), "uiOptIn": include_ui, "results": []}
+                  "artifactDirectory": str(directory), "uiOptIn": include_ui, "jobs": jobs, "results": []}
         print(f"Standalone artifacts: {directory}", flush=True)
 
         def save():
@@ -430,48 +460,197 @@ def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation, s
         interrupted = False
         interrupt_code = 130
         abort_reason = None
-        try:
-            for probe in probes:
-                row = make_row(probe)
-                report["results"].append(row)
-                log = directory / row["log"]
-                if interrupted or abort_reason or (probe.requires_ui and not include_ui):
-                    row.update(status="SKIP", reason="not run after interruption" if interrupted else (abort_reason or "UI probe requires --include-ui"))
-                    log.write_text(f"SKIP: {row['reason']}\n")
-                elif not (root / probe.script).is_file():
-                    row.update(status="FAIL", reason="registered script missing")
-                    log.write_text(f"FAIL: {row['reason']}\n")
-                else:
-                    save()
-                    print(f"RUN {probe.name}", flush=True)
-                    start = time.monotonic()
-                    with log.open("wb") as stream:
+        running = {}
+        unjoined = set()
+
+        def publish_ownership():
+            # Every running or unjoined group stays recorded, so no later suite can compete with it.
+            marker = root / ".build" / PROCESS_MARKER
+            groups = sorted(set(running) | unjoined)
+            if not groups:
+                marker.unlink(missing_ok=True)
+                return
+            # A crash or a full disk must not leave a truncated record of live groups.
+            replacement = marker.with_suffix(".next")
+            with os.fdopen(owned_file(replacement, os.O_WRONLY | os.O_CREAT | os.O_TRUNC), "w") as output:
+                output.write(json.dumps({"processGroups": groups}) + "\n")
+            try:
+                os.close(owned_file(marker, os.O_RDONLY))
+            except FileNotFoundError:
+                pass
+            os.replace(replacement, marker)
+
+        def report_parallel_row(name, row):
+            print(f"{row['status']} {name}", flush=True)
+            save()
+
+        def start_parallel_probe(probe):
+            nonlocal abort_reason
+            row = make_row(probe)
+            report["results"].append(row)
+            log = directory / row["log"]
+            if abort_reason or (probe.requires_ui and not include_ui):
+                row.update(status="SKIP", reason=abort_reason or "UI probe requires --include-ui")
+                log.write_text(f"SKIP: {row['reason']}\n")
+                report_parallel_row(probe.name, row)
+                return
+            if not (root / probe.script).is_file():
+                row.update(status="FAIL", reason="registered script missing")
+                log.write_text(f"FAIL: {row['reason']}\n")
+                report_parallel_row(probe.name, row)
+                return
+            save()
+            print(f"RUN {probe.name}", flush=True)
+            stream = log.open("wb")
+            process = None
+            started = time.monotonic()
+            try:
+                # The owner is recorded before a deferred signal can be delivered.
+                with protect_creation():
+                    process = subprocess.Popen(probe.command, cwd=root, stdin=subprocess.DEVNULL, stdout=stream,
+                                               stderr=subprocess.STDOUT, start_new_session=True)
+                    running[process.pid] = {"name": probe.name, "process": process, "row": row, "stream": stream,
+                                            "started": started}
+                    publish_ownership()
+            except (OSError, ValueError) as error:
+                row["reason"] = str(error)
+                stream.write(f"Runner error: {error}\n".encode())
+                stream.write(traceback.format_exc().encode())
+                abort_reason = None if process is None else "not run while previous process cleanup is incomplete"
+                if process is not None:
+                    # Ownership could not be recorded, so this probe stops now and nothing new may start.
+                    running.pop(process.pid, None)
+                    try:
+                        stop_process_group(process)
+                    except (OSError, subprocess.SubprocessError) as cleanup_error:
+                        row["cleanupError"] = str(cleanup_error)
+                        unjoined.add(process.pid)
                         try:
-                            code, ownership_error = run_owned_process(probe.command, root, stream, protect_creation)
-                            row.update(status="PASS" if code == 0 and not ownership_error else "FAIL", exitCode=code)
-                            if ownership_error:
-                                row["reason"] = ownership_error
-                        except (OSError, ValueError, subprocess.SubprocessError) as error:
-                            row.update(status="FAIL", reason=str(error), exitCode=getattr(error, "child_exit_code", None))
-                            stream.write(f"Runner error: {error}\n".encode())
-                            stream.write(traceback.format_exc().encode())
-                            if (root / ".build" / PROCESS_MARKER).exists():
-                                abort_reason = "not run while previous process cleanup is incomplete"
-                        except (KeyboardInterrupt, RunTermination) as error:
-                            interrupt_code = interruption_status(error)
-                            row.update(status="FAIL", exitCode=getattr(error, "child_exit_code", None),
-                                       runnerExitCode=interrupt_code, reason="interrupted")
-                            if hasattr(error, "cleanup_error"):
-                                row["cleanupError"] = error.cleanup_error
-                            if hasattr(error, "inspection_error"):
-                                row["inspectionError"] = error.inspection_error
-                            interrupted = True
-                    row["durationSeconds"] = round(time.monotonic() - start, 3)
-                print(f"{row['status']} {probe.name}", flush=True)
-                save()
+                            # The earlier marker may predate this process, so record the live group now.
+                            publish_ownership()
+                        except (OSError, ValueError) as marker_error:
+                            report["ownershipError"] = str(marker_error)
+                stream.close()
+                row.update(status="FAIL", exitCode=None if process is None else process.returncode,
+                           durationSeconds=round(time.monotonic() - started, 3))
+                report_parallel_row(probe.name, row)
+
+        def finish_parallel_probe(group):
+            nonlocal abort_reason
+            entry = running[group]
+            process, row = entry["process"], entry["row"]
+            code = process.returncode
+            reason = row.get("reason")
+            try:
+                if live_process_group(group):
+                    stop_process_group(process)
+                    reason = "Probe left unjoined descendant processes"
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                reason = str(error)
+                unjoined.add(group)
+                abort_reason = "not run while previous process cleanup is incomplete"
+            del running[group]
+            entry["stream"].close()
+            row.update(status="PASS" if code == 0 and not reason else "FAIL", exitCode=code,
+                       durationSeconds=round(time.monotonic() - entry["started"], 3))
+            if reason:
+                row["reason"] = reason
+            publish_ownership()
+            report_parallel_row(entry["name"], row)
+
+        def stop_parallel_probes(error):
+            if not running:
+                return
+            code = interruption_status(error)
+            with defer_interrupts():
+                for group, entry in list(running.items()):
+                    process, row = entry["process"], entry["row"]
+                    try:
+                        stop_process_group(process)
+                    except (OSError, subprocess.SubprocessError) as cleanup_error:
+                        row["cleanupError"] = str(cleanup_error)
+                        unjoined.add(group)
+                    try:
+                        entry["stream"].close()
+                    except OSError as close_error:
+                        # Later groups must still be stopped, so the error is only recorded.
+                        row["logError"] = str(close_error)
+                    row.update(status="FAIL", exitCode=process.returncode, runnerExitCode=code, reason="interrupted",
+                               durationSeconds=round(time.monotonic() - entry["started"], 3))
+                    del running[group]
+                try:
+                    publish_ownership()
+                except (OSError, ValueError) as marker_error:
+                    # The earlier record stays in place. Losing it could admit a competing suite.
+                    report["ownershipError"] = str(marker_error)
+
+        state["stop_running"] = stop_parallel_probes
+
+        def run_parallel():
+            pending = list(probes)
+            try:
+                while pending or running:
+                    # Starting strictly in order keeps the report's unstarted tail correct.
+                    names = {entry["name"] for entry in running.values()}
+                    while pending and len(running) < jobs and not overlaps_running(pending[0].name, names):
+                        names.add(pending[0].name)
+                        start_parallel_probe(pending.pop(0))
+                    finished = [group for group, entry in running.items() if entry["process"].poll() is not None]
+                    for group in finished:
+                        finish_parallel_probe(group)
+                    if running and not finished:
+                        time.sleep(0.02)
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                # A broken report or pipe must not orphan the probes that are still running.
+                stop_parallel_probes(error)
+                raise
+
+        try:
+            if jobs > 1:
+                run_parallel()
+            else:
+                for probe in probes:
+                    row = make_row(probe)
+                    report["results"].append(row)
+                    log = directory / row["log"]
+                    if interrupted or abort_reason or (probe.requires_ui and not include_ui):
+                        row.update(status="SKIP", reason="not run after interruption" if interrupted else (abort_reason or "UI probe requires --include-ui"))
+                        log.write_text(f"SKIP: {row['reason']}\n")
+                    elif not (root / probe.script).is_file():
+                        row.update(status="FAIL", reason="registered script missing")
+                        log.write_text(f"FAIL: {row['reason']}\n")
+                    else:
+                        save()
+                        print(f"RUN {probe.name}", flush=True)
+                        start = time.monotonic()
+                        with log.open("wb") as stream:
+                            try:
+                                code, ownership_error = run_owned_process(probe.command, root, stream, protect_creation)
+                                row.update(status="PASS" if code == 0 and not ownership_error else "FAIL", exitCode=code)
+                                if ownership_error:
+                                    row["reason"] = ownership_error
+                            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                                row.update(status="FAIL", reason=str(error), exitCode=getattr(error, "child_exit_code", None))
+                                stream.write(f"Runner error: {error}\n".encode())
+                                stream.write(traceback.format_exc().encode())
+                                if (root / ".build" / PROCESS_MARKER).exists():
+                                    abort_reason = "not run while previous process cleanup is incomplete"
+                            except (KeyboardInterrupt, RunTermination) as error:
+                                interrupt_code = interruption_status(error)
+                                row.update(status="FAIL", exitCode=getattr(error, "child_exit_code", None),
+                                           runnerExitCode=interrupt_code, reason="interrupted")
+                                if hasattr(error, "cleanup_error"):
+                                    row["cleanupError"] = error.cleanup_error
+                                if hasattr(error, "inspection_error"):
+                                    row["inspectionError"] = error.inspection_error
+                                interrupted = True
+                        row["durationSeconds"] = round(time.monotonic() - start, 3)
+                    print(f"{row['status']} {probe.name}", flush=True)
+                    save()
         except (KeyboardInterrupt, RunTermination) as error:
             interrupted = True
             interrupt_code = interruption_status(error)
+            stop_parallel_probes(error)
             record_interruption(error)
         while True:
             try:
@@ -482,11 +661,19 @@ def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation, s
                 interrupted = True
                 interrupt_code = interruption_status(error)
 
+def job_count(value):
+    count = int(value)
+    if count < 1:
+        raise argparse.ArgumentTypeError("--jobs must be at least 1")
+    return count
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--list", action="store_true", help="List registered probes without running them")
     parser.add_argument("--only", action="append", metavar="NAME", help="Run a named probe; repeat for several")
     parser.add_argument("--include-ui", action="store_true", help="Also run the update prompt probe, which can activate UI")
+    parser.add_argument("--jobs", type=job_count, default=1, help="Run this many probes at once")
     arguments = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     try:
@@ -505,7 +692,8 @@ def main():
         os.environ["DEVELOPER_DIR"] = developer
         revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
         dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True).strip())
-        status, _ = run_suite(root, probes, include_ui=arguments.include_ui, revision=revision, dirty=dirty)
+        status, _ = run_suite(root, probes, include_ui=arguments.include_ui, revision=revision, dirty=dirty,
+                              jobs=arguments.jobs)
         return status
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"Standalone regression setup failed: {error}", file=sys.stderr)

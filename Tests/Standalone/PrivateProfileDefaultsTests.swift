@@ -177,18 +177,19 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
         expect(defaults.string(forKey: "MobileSetupSelectedModel") == "guest-model", "guest wizard model preserved privately")
         expect(defaults.bool(forKey: "MeetingPIIRedactionRequested"), "guest privacy choice preserved privately")
 
-        // Exact desktop production property; existing steps keep their saved IDs.
+        // Exact desktop production property; existing steps keep their saved IDs. The owner voice enrollment
+        // step (b964d2e3) widened the range from 7 to 8, so the clamp now sits at that step.
         PrivateProfileStorage.select(guest)
         let onboarding = DesktopOnboardingStepProjection(defaults: defaults)
         defaults.set(true, forKey: "OnboardingCompleted")
-        for step in 0...7 {
+        for step in 0...8 {
             onboarding.onboardingCurrentStep = step
             expect(DesktopOnboardingStepProjection(defaults: defaults).onboardingCurrentStep == step, "saved onboarding step \(step) preserved")
         }
         onboarding.onboardingCurrentStep = Int.max
-        expect(onboarding.onboardingCurrentStep == 7, "desktop setter clamps at optional account step")
+        expect(onboarding.onboardingCurrentStep == 8, "desktop setter clamps at the owner voice enrollment step")
         defaults.set(Int.max, forKey: "OnboardingCurrentStep")
-        expect(onboarding.onboardingCurrentStep == 7, "desktop getter clamps future stored step")
+        expect(onboarding.onboardingCurrentStep == 8, "desktop getter clamps future stored step")
         onboarding.onboardingCurrentStep = -1
         expect(onboarding.onboardingCurrentStep == 0, "desktop negative step clamps at zero")
         expect(defaults.bool(forKey: "OnboardingCompleted"), "new step does not reset completed installations")
