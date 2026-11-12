@@ -859,6 +859,10 @@
 		C011AB000000000000000003 /* PichiCallObservation in Frameworks */ = {isa = PBXBuildFile; productRef = C011AB000000000000000002; };
 		C011AB000000000000000004 /* PichiCallObservation in Frameworks */ = {isa = PBXBuildFile; productRef = C011AB000000000000000002; };
 		C011AB000000000000000005 /* PichiCallObservation in Frameworks */ = {isa = PBXBuildFile; productRef = C011AB000000000000000002; };
+		A11C71100000000000000002 /* MacUpdaterLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11C71100000000000000001 /* MacUpdaterLifecycleTests.swift */; };
+		A11C71100000000000000012 /* UpdateDMGStagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11C71100000000000000011 /* UpdateDMGStagerTests.swift */; };
+		A11C71100000000000000022 /* UpdateReleaseSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11C71100000000000000021 /* UpdateReleaseSelectionTests.swift */; };
+		A11C71100000000000000032 /* UpdateDownloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11C71100000000000000031 /* UpdateDownloadTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1082,6 +1086,10 @@
 		A5B5E6DADC27DE8E247EC335 /* MeetingCaptureStorageAdmissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/FluidDictationIntegrationTests/MeetingCaptureStorageAdmissionTests.swift; sourceTree = SOURCE_ROOT; };
 		C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationContextCaptureTests.swift; sourceTree = "<group>"; };
 		E01100000000000000000001 /* EditModeRouteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditModeRouteTests.swift; sourceTree = "<group>"; };
+		A11C71100000000000000001 /* MacUpdaterLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUpdaterLifecycleTests.swift; sourceTree = "<group>"; };
+		A11C71100000000000000011 /* UpdateDMGStagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateDMGStagerTests.swift; sourceTree = "<group>"; };
+		A11C71100000000000000021 /* UpdateReleaseSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateReleaseSelectionTests.swift; sourceTree = "<group>"; };
+		A11C71100000000000000031 /* UpdateDownloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateDownloadTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -1247,6 +1255,10 @@
 				638F1FFFB1312BFC70B34815 /* MeetingPrivacyPublicationTests.swift */,
 				7CDB0A262F3C4D5600FB7CAD /* Helpers */,
 				7CDB0A272F3C4D5600FB7CAD /* Resources */,
+				A11C71100000000000000001 /* MacUpdaterLifecycleTests.swift */,
+				A11C71100000000000000011 /* UpdateDMGStagerTests.swift */,
+				A11C71100000000000000021 /* UpdateReleaseSelectionTests.swift */,
+				A11C71100000000000000031 /* UpdateDownloadTests.swift */,
 				D1C7A7100000000000000001 /* UpdatePromptIntegrationTests.swift */,
 				A11C71000000000000000001 /* MacUpdateDistributionTests.swift */,
 				4263717D7203AAA6B63D9330 /* SettingsBackupRoundTripTests.swift */,
@@ -1713,6 +1725,10 @@
 				F55932CD21E9D28005AE10C0 /* MeetingCaptureStorageAdmissionTests.swift in Sources */,
 				4824DB2261B409107AADB327 /* MeetingPrivacyPublicationTests.swift in Sources */,
 				7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */,
+				A11C71100000000000000002 /* MacUpdaterLifecycleTests.swift in Sources */,
+				A11C71100000000000000012 /* UpdateDMGStagerTests.swift in Sources */,
+				A11C71100000000000000022 /* UpdateReleaseSelectionTests.swift in Sources */,
+				A11C71100000000000000032 /* UpdateDownloadTests.swift in Sources */,
 				D1C7A7100000000000000002 /* UpdatePromptIntegrationTests.swift in Sources */,
 				A11C71000000000000000002 /* MacUpdateDistributionTests.swift in Sources */,
 				75454216C2DD7BBBB1D76D42 /* SettingsBackupRoundTripTests.swift in Sources */,

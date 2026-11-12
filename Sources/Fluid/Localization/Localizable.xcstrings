@@ -68122,6 +68122,108 @@
           }
         }
       }
+    },
+    "Download updates automatically": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download updates automatically"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загружать обновления автоматически"
+          }
+        }
+      }
+    },
+    "Download verified updates in the background. Installation and restart require your approval.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download verified updates in the background. Installation and restart require your approval."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загружать проверенные обновления в фоне. Установка и перезапуск требуют вашего подтверждения."
+          }
+        }
+      }
+    },
+    "Downloading update…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloading update…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка обновления…"
+          }
+        }
+      }
+    },
+    "Update downloaded and verified. Install when you are ready.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update downloaded and verified. Install when you are ready."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновление загружено и проверено. Установите его, когда будете готовы."
+          }
+        }
+      }
+    },
+    "Update download failed. Try again from View Update.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update download failed. Try again from View Update."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось загрузить обновление. Повторите попытку через «Посмотреть обновление»."
+          }
+        }
+      }
+    },
+    "Finish the current recording, transcription, microphone preview, or voice model operation, then try installing again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish the current recording, transcription, microphone preview, or voice model operation, then try installing again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завершите текущую запись, расшифровку, проверку микрофона или операцию с голосовой моделью, затем повторите установку."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
