@@ -8,6 +8,7 @@ import AppKit
 // The same defaults keys and Codable records are used by desktop and mobile targets.
 extension SettingsStore {
     enum UpdateKeys {
+        static let automaticUpdateDownloads = "AutomaticUpdateDownloads"
         static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
         static let showUpdatePopups = "ShowUpdatePopups"
         static let popupPreferenceRevision = "UpdatePopupPreferenceRevision"

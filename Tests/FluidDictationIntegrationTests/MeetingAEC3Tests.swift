@@ -1403,6 +1403,7 @@ final class MeetingAEC3Tests: XCTestCase {
             await committer.waitForPendingCommits()
             XCTAssertFalse(gate.admitsTranscript())
             XCTAssertEqual(live.count, 0, "tail retention cannot reopen live capture after Stop or producer loss")
+            XCTAssertTrue(committer.hasDeferredLiveAudio, "Captured raw tails excluded from ASR must remain explicit even with no pending live offers")
             let track = await writer.stop()
             XCTAssertEqual(track.captureEras?.last?.echoProtection, .unfiltered)
             try self.assertRawCapture(track, directory: directory, frames: 5 * 480)
@@ -1459,7 +1460,10 @@ final class MeetingAEC3Tests: XCTestCase {
             track: Self.microphoneTrack(),
             sessionDirectory: directory,
             chunkDuration: 60,
-            eventHandler: { _ in }
+            eventHandler: { _ in },
+            persistenceHook: { operation in
+                if case .manifest = operation { throw MeetingAudioChunkLedgerError.durabilityFailure("synthetic metadata failure") }
+            }
         )
         let failures = AECTerminalRecorder()
         let committer = MeetingAECOutputCommitter(
@@ -1467,10 +1471,6 @@ final class MeetingAEC3Tests: XCTestCase {
             transcriptGate: MeetingMicrophoneTranscriptGate(.unprotected),
             liveAudioHandler: nil,
             terminalFailure: { failure in failures.append(failure) }
-        )
-        try FileManager.default.setAttributes(
-            [.posixPermissions: NSNumber(value: Int16(0o500))],
-            ofItemAtPath: trackDirectory.path
         )
         let sample = try XCTUnwrap(MeetingAECPCMAdapter.synthesize(
             samples: [Float](repeating: 0.1, count: 480),

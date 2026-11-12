@@ -42,6 +42,7 @@ python3 -S Tests/test_localization_catalog.py
 python3 -S Tests/test_build_identity.py
 python3 -S scripts/dev/check-xcode-build-settings.py
 python3 -S Tests/test_xcode_build_settings.py
+python3 -B -S Tests/test_macos_release.py
 python3 -B -S Tests/test_sensitive_topic_packaging.py
 python3 -B -S Tests/test_mobile_framework_metadata.py
 python3 -S Tests/test_macos_regression.py

@@ -109,8 +109,18 @@ nonisolated protocol MeetingAudioChunkSink: AnyObject, Sendable {
     /// guarantees the final path is never created.
     func finalize() -> Result<MeetingPCMFinalization, MeetingPCMSinkError>
 
+    /// Close the capture handle without hashing, syncing, publishing or deleting its PCM.
+    /// A sealed partial is an owned recovery input, independent of optional indexing work.
+    func sealForRecovery() throws
+    func writeRecoveryMetadata(_ data: Data) throws
+
     /// Abandons the in-progress chunk and removes any partial artifact. After `cancel()` — and
     /// after any unresolved write failure — the final (non-`.partial`) path must never come into
     /// existence for this instance.
     func cancel()
+}
+
+nonisolated extension MeetingAudioChunkSink {
+    func sealForRecovery() throws {}
+    func writeRecoveryMetadata(_ data: Data) throws {}
 }

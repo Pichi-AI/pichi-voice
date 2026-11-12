@@ -159,7 +159,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private let redactorProvider: @MainActor () throws -> (any TranscriptTextRedacting)?
     private let preferredMicrophoneUID: @MainActor () -> String?
 
-    private enum DegradeReason { case silence, sourceLoss, startupWriterFailure, sticky }
+    private enum DegradeReason { case silence, sourceLoss, startupWriterFailure, metadata, sticky }
 
     private var degradeReason: DegradeReason?
     private var silenceWatchdogActive = false
@@ -571,6 +571,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         // The existing storage/admission owner resolves security policy for every
         // recording entry point before backend checks or microphone permission work.
         var configuration = configuration
+        var speechDeferredAtStart = false
         let persistencePolicy = try await self.store.prepareCapturePersistencePolicy()
         if persistencePolicy.requiresPIIRedaction {
             guard configuration.piiRedactionEnabled == true else {
@@ -592,12 +593,14 @@ final class MeetingSessionCoordinator: ObservableObject {
                 selectedModelID: selectedModelID, savedBackendID: savedBackendID)
         if configuration.transcriptionBackendID == nil,
            PichiMeetingProviderFactory.registeredLanguageCodes(for: selectedModelID) != nil {
-            _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
-                asrModel: selectedModelID,
-                languageCode: configuration.languageCode,
-                speakerLabelsEnabled: configuration.speakerLabelsEnabled ?? true,
-                speakerProcessingMode: configuration.effectiveSpeakerProcessingMode
-            ))
+            do {
+                _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(asrModel: selectedModelID,
+                    languageCode: configuration.languageCode, speakerLabelsEnabled: configuration.speakerLabelsEnabled ?? true,
+                    speakerProcessingMode: configuration.effectiveSpeakerProcessingMode))
+            } catch {
+                if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+                speechDeferredAtStart = true
+            }
         }
         guard self.startReservation == reservation,
               self.activeSession?.id == passiveOffer?.id,
@@ -613,19 +616,28 @@ final class MeetingSessionCoordinator: ObservableObject {
         // Reject unsupported strict input through the real backend factory before download
         // owners or microphone permission prompts run. Repeat after prompts in case selection
         // changed while they were open; final preparation still binds the exact session request.
-        let initialDescriptor = try self.processing.validateRecordingInput(
-            configuration: configuration, backendID: requestedBackendID)
+        let initialDescriptor: MeetingBackendDescriptor?
+        do { initialDescriptor = try self.processing.validateRecordingInput(configuration: configuration, backendID: requestedBackendID) }
+        catch {
+            if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+            initialDescriptor = nil; speechDeferredAtStart = true
+        }
         var validationSnapshot = PichiMeetingProviderFactory.validationConfiguration(
             backendID: requestedBackendID, languageCode: configuration.languageCode,
             preferredASRModel: selectedSpeechModel,
             diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
             speakerProcessingMode: configuration.effectiveSpeakerProcessingMode)
         validationSnapshot.recordingTimePolicy = self.capture.recordingTimePolicy
-        try initialDescriptor?.validateSpeakerProcessingMode(configuration: validationSnapshot, mode: configuration.mode)
+        do { try initialDescriptor?.validateSpeakerProcessingMode(configuration: validationSnapshot, mode: configuration.mode) }
+        catch {
+            if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+            speechDeferredAtStart = true
+        }
         // Explicit registered requests require a preinstalled artifact. Capture its identity
         // before any dependency work or permission prompt and retain this exact snapshot.
         let explicitRecordingConfiguration: MeetingFinalProcessingConfiguration?
         if configuration.transcriptionBackendID != nil {
+          do {
             var snapshot = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: requestedBackendID,
                 languageCode: configuration.languageCode, preferredASRModel: selectedSpeechModel,
                 diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
@@ -637,6 +649,10 @@ final class MeetingSessionCoordinator: ObservableObject {
                 captureMode: configuration.mode)
             try self.validateFrozenRecordingConfiguration(snapshot)
             explicitRecordingConfiguration = snapshot
+          } catch {
+            if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+            explicitRecordingConfiguration = nil; speechDeferredAtStart = true
+          }
         } else { explicitRecordingConfiguration = nil }
         // Permission prompts are outside the exclusive audio lease. A prompt can remain
         // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
@@ -649,7 +665,15 @@ final class MeetingSessionCoordinator: ObservableObject {
         // A missing installation still uses the existing download owner before admission.
         if configuration.transcriptionBackendID == nil,
            PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: selectedModelID) != true {
-            try await self.validateRecordingModels()
+            if configuration.audioStorageMode != .memoryOnly, Self.usesPCMProcessing(configuration) {
+                speechDeferredAtStart = true
+            } else {
+                do { try await self.validateRecordingModels() }
+                catch {
+                    if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+                    speechDeferredAtStart = true
+                }
+            }
         }
         try Task.checkCancellation()
         guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
@@ -677,10 +701,13 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         let dependencyDescriptor = initialDescriptor
             ?? PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.settings.selectedSpeechModel.rawValue)
-        if configuration.speakerLabelsEnabled != false, let dependencyDescriptor,
+        if configuration.audioStorageMode == .memoryOnly, configuration.speakerLabelsEnabled != false, let dependencyDescriptor,
            CPUArchitecture.isAppleSilicon || !dependencyDescriptor.allowsTranscriptOnlyOnUnsupportedHardware || Self.usesPCMProcessing(configuration) {
-            try await self.prepareRecordingSpeakerResources(for: dependencyDescriptor,
-                configuration: validationSnapshot)
+            do { try await self.prepareRecordingSpeakerResources(for: dependencyDescriptor, configuration: validationSnapshot) }
+            catch {
+                if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+                speechDeferredAtStart = true
+            }
         }
         try Task.checkCancellation()
         guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
@@ -703,11 +730,19 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
 
         let publicationConfiguration = configuration
-        let recordingRedactor = configuration.piiRedactionEnabled == true ? try self.redactorProvider() : nil
+        let recordingRedactor: (any TranscriptTextRedacting)?
+        do { recordingRedactor = configuration.piiRedactionEnabled == true ? try self.redactorProvider() : nil }
+        catch {
+            if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+            recordingRedactor = nil; speechDeferredAtStart = true
+        }
         if configuration.piiRedactionEnabled == true {
             // Explicit meeting/input metadata is user-authored. Only recognized speech is
             // redacted; warming NER here would also delay microphone admission.
-            guard recordingRedactor != nil else { throw MeetingPrivacyPublicationError.redactorUnavailable }
+            if recordingRedactor == nil {
+                if configuration.audioStorageMode == .memoryOnly { throw MeetingPrivacyPublicationError.redactorUnavailable }
+                speechDeferredAtStart = true
+            }
         }
         let lease = try await self.audioArbiter.acquireMeetingCapture()
         let recordingSessionID = UUID()
@@ -733,13 +768,20 @@ final class MeetingSessionCoordinator: ObservableObject {
               self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
             recordingModelID = selectedModelID
             recordingBackendID = requestedBackendID
-            let admittedPCMDescriptor = try self.processing.validateRecordingInput(
-                configuration: configuration, backendID: recordingBackendID)
-            if configuration.speakerLabelsEnabled != false,
+            let admittedPCMDescriptor: MeetingBackendDescriptor?
+            do { admittedPCMDescriptor = try self.processing.validateRecordingInput(configuration: configuration, backendID: recordingBackendID) }
+            catch {
+                if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+                admittedPCMDescriptor = nil; speechDeferredAtStart = true
+            }
+            if configuration.audioStorageMode == .memoryOnly, !speechDeferredAtStart, configuration.speakerLabelsEnabled != false,
                let descriptor = admittedPCMDescriptor ?? PichiMeetingProviderFactory.registeredBackendDescriptor(for: recordingModelID),
                CPUArchitecture.isAppleSilicon || !descriptor.allowsTranscriptOnlyOnUnsupportedHardware || Self.usesPCMProcessing(configuration) {
-                try await self.prepareRecordingSpeakerResources(for: descriptor,
-                    configuration: validationSnapshot)
+                do { try await self.prepareRecordingSpeakerResources(for: descriptor, configuration: validationSnapshot) }
+                catch {
+                    if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+                    speechDeferredAtStart = true
+                }
                 try Task.checkCancellation()
             guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
                 guard self.startReservation == reservation,
@@ -747,9 +789,12 @@ final class MeetingSessionCoordinator: ObservableObject {
                       self.settings.meetingTranscriptionBackendID == savedBackendID,
                       self.terminationTask == nil, !self.isMutatingSession else { throw CancellationError() }
             }
-            if let explicitRecordingConfiguration {
+            if speechDeferredAtStart {
+                recordingASRConfiguration = validationSnapshot
+            } else if let explicitRecordingConfiguration {
                 recordingASRConfiguration = explicitRecordingConfiguration
             } else {
+              do {
                 recordingASRConfiguration = try await PichiMeetingProviderFactory.frozenConfiguration(
                     backendID: recordingBackendID,
                     languageCode: configuration.languageCode,
@@ -757,13 +802,19 @@ final class MeetingSessionCoordinator: ObservableObject {
                     diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
                     speakerProcessingMode: configuration.effectiveSpeakerProcessingMode
                 )
+              } catch {
+                if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+                recordingASRConfiguration = validationSnapshot; speechDeferredAtStart = true
+              }
                 guard self.startReservation == reservation,
                       self.settings.selectedSpeechModel.rawValue == recordingModelID,
                       self.settings.meetingTranscriptionBackendID == savedBackendID,
                       self.terminationTask == nil, !self.isMutatingSession else { throw CancellationError() }
             }
-            _ = try MeetingProviderOptions.resolve(recordingASRConfiguration)
-            try self.validateFrozenRecordingConfiguration(recordingASRConfiguration)
+            if !speechDeferredAtStart {
+                _ = try MeetingProviderOptions.resolve(recordingASRConfiguration)
+                try self.validateFrozenRecordingConfiguration(recordingASRConfiguration)
+            }
             recordingLiveModelID = PichiMeetingProviderFactory.liveModelID(backendID: recordingBackendID,
                 configuration: recordingASRConfiguration, selectedModelID: recordingModelID)
             if !Self.usesPCMProcessing(configuration),
@@ -910,7 +961,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                   self.terminationTask == nil,
                   !Task.isCancelled
             else { throw CancellationError() }
-            if Self.usesPCMProcessing(configuration) {
+            if Self.usesPCMProcessing(configuration), !speechDeferredAtStart {
+              do {
                 self.memoryCheckpointGeneration = generation
                 _ = try await self.processing.prepareMemoryAudio(
                     session: session, sessionDirectory: sessionDirectory, privacyRedactor: recordingRedactor, checkpoint: { [weak self] batch in
@@ -940,7 +992,20 @@ final class MeetingSessionCoordinator: ObservableObject {
                     await pendingSpeechCapture?.awaitConfidentNonSpeech(source: kind == .microphone ? .you : .them,
                         start: start, end: end) ?? false
                 })
+              } catch {
+                if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+                await self.processing.cancelMemoryAudio(sessionID: session.id)
+                self.memoryCheckpointGeneration = nil
+                speechDeferredAtStart = true
+              }
             }
+            if speechDeferredAtStart {
+                self.handleCaptureEvent(.interrupted(kind: .liveTranscriptionDeferred, trackID: nil,
+                    detail: PichiLocalization.text("Audio recording continues. Live transcription will be retried later.")), generation: generation)
+                session = self.activeSession ?? session
+            }
+            guard self.startReservation == reservation, self.operationGeneration == generation,
+                  self.terminationTask == nil, !Task.isCancelled else { throw CancellationError() }
             captureStartAttempted = true
             if DebugLogger.diagnosticsEnabled {
                 DebugLogger.shared.info("captureID=\(reservation) phase=capture_requested uptimeMs=\(Int64(ProcessInfo.processInfo.systemUptime * 1000))", source: "MeetingCaptureStartup")
@@ -1005,7 +1070,12 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.activeSession = session
             self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
             self.state = startedDegraded ? .recordingDegraded(session.id) : .recording(session.id)
-            try await self.store.save(session)
+            do { try await self.store.save(session) }
+            catch {
+                self.handleCaptureEvent(.interrupted(kind: .metadataPersistenceDelayed, trackID: nil,
+                    detail: PichiLocalization.text("Audio recording continues. Metadata recovery is pending.")), generation: generation)
+                session = self.activeSession ?? session
+            }
             guard self.startReservation == reservation,
                   self.operationGeneration == generation, !Task.isCancelled
             else {
@@ -2553,7 +2623,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             session,
             generation: generation,
             retainedLanguage: session.languageCode,
-            hadVisibleTranscript: false
+            hadVisibleTranscript: false,
+            deferFailedLiveTranscription: session.audioStorageMode != .memoryOnly && session.events.contains(where: { $0.kind == .liveTranscriptionDeferred })
         )
         profileSucceeded = true
         #if DEBUG && os(macOS)
@@ -2628,8 +2699,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                 }
             }, failed: { [weak self] generation in
                 guard let self, self.captureGeneration == generation else { return }
-                self.handleCaptureEvent(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil,
-                                                    detail: "Sensitive data redaction stopped. Recording was interrupted."), generation: generation)
+                self.handleCaptureEvent(.interrupted(kind: self.activeSession?.audioStorageMode == .memoryOnly ? .captureStoppedUnexpectedly : .liveTranscriptionDeferred,
+                    trackID: nil, detail: PichiLocalization.text("Audio recording continues. Live transcription will be retried later.")), generation: generation)
             })
     }
 
@@ -2800,7 +2871,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         generation: UUID,
         retainedLanguage: String,
         hadVisibleTranscript: Bool,
-        requestedLanguageCode: String? = nil
+        requestedLanguageCode: String? = nil,
+        deferFailedLiveTranscription: Bool = false
     ) async throws -> MeetingSession {
         let diagnosticStarted = ContinuousClock.now
         var diagnosticStage = MeetingProcessingStage.pending
@@ -2833,6 +2905,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         #endif
         var session = inputSession
         do {
+            if deferFailedLiveTranscription { throw MeetingCapturePCMError.transcriptionStopped }
             let sessionDirectory = try await self.store.sessionDirectory(for: session.id)
             var processingSession = session
             processingSession.languageCode = requestedLanguageCode ?? session.languageCode
@@ -2863,9 +2936,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             session.resultSidecarReference = result.resultSidecarReference
             let discardedMemoryPCM = session.audioStorageMode == .memoryOnly && session.transcriptIsComplete == false
                 && session.events.contains(where: { $0.kind == .writerBackpressure })
-            session.transcriptIsComplete = (result.resultSidecarReference != nil || Self.usesPCMProcessing(session))
-                ? result.isComplete && !discardedMemoryPCM
-                : nil
+            let lostCaptureInput = session.audioTracks.contains { $0.health.droppedSampleCount > 0 }
+            session.transcriptIsComplete = lostCaptureInput ? false : ((result.resultSidecarReference != nil || Self.usesPCMProcessing(session))
+                ? result.isComplete && !discardedMemoryPCM : nil)
             if result.resultSidecarReference != nil || Self.usesPCMProcessing(session) {
                 session.transcriptTimeDomain = .meetingRelative
             }
@@ -3158,6 +3231,37 @@ final class MeetingSessionCoordinator: ObservableObject {
                 self.degradeReason = nil
             }
         case let .interrupted(kind, trackID, detail):
+            if kind == .liveTranscriptionDeferred {
+                if session.events.contains(where: { $0.kind == .liveTranscriptionDeferred }) { return }
+                let live = self.liveTranscriptionCoordinator
+                self.liveTranscriptionCoordinator = nil
+                let pending = self.pendingSpeechCapture
+                pending?.stop(); self.pendingSpeechCapture = nil; self.pendingSpeech = .empty
+                let previousCleanup = self.pendingSpeechTeardownTask
+                let publication = self.livePrivacyPublication
+                let processing = self.processing, id = session.id
+                self.pendingSpeechTeardownTask = Task {
+                    await previousCleanup?.value
+                    await pending?.stopAndWait()
+                    await publication.stop()
+                    await live?.stop()
+                    await processing.cancelMemoryAudio(sessionID: id)
+                }
+                self.liveTranscript.availability = .unavailable(reason: PichiLocalization.text("Audio recording continues. Live transcription will be retried later."))
+                self.liveTranscript.partials.removeAll()
+                session.transcriptIsComplete = false
+                self.memoryCheckpointGeneration = nil
+            }
+            if kind == .metadataPersistenceRecovered {
+                if self.degradeReason == .metadata, session.state == .preparing { self.degradeReason = nil }
+                if self.degradeReason == .metadata, session.state == .recordingDegraded,
+                   !session.audioTracks.contains(where: { $0.health.status == .degraded }) {
+                    session.state = .recording; self.state = .recording(session.id); self.degradeReason = nil
+                }
+                session.updatedAt = Date(); self.activeSession = session
+                if session.state != .preparing { self.enqueuePersistence(session) }
+                return
+            }
             if session.state == .preparing {
                 switch kind {
                 case .writerFailure:
@@ -3168,6 +3272,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                         health.detail = detail
                         self.startupTrackHealth[trackID] = health
                     }
+                case .metadataPersistenceDelayed:
+                    if self.degradeReason == nil { self.degradeReason = .metadata }
                 case .sourceLost:
                     self.degradeReason = self.degradeReason ?? .sourceLoss
                 case .sourceRecovered:
@@ -3218,6 +3324,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                 self.state = .recordingDegraded(session.id)
                 if kind == .sourceLost, self.degradeReason != .sticky {
                     self.degradeReason = .sourceLoss
+                } else if kind == .metadataPersistenceDelayed, self.degradeReason == nil || self.degradeReason == .metadata {
+                    self.degradeReason = .metadata
                 } else {
                     self.degradeReason = .sticky
                 }
@@ -3482,6 +3590,13 @@ final class MeetingSessionCoordinator: ObservableObject {
     private static func apply(_ stopResult: MeetingCaptureStopResult, to session: inout MeetingSession) {
         session.audioTracks = stopResult.tracks
         session.endedAt = stopResult.stoppedAt
+        if stopResult.transcriptionDeferred {
+            session.transcriptIsComplete = false
+            if !session.events.contains(where: { $0.kind == .liveTranscriptionDeferred }) {
+                session.events.append(.init(id: UUID(), occurredAt: stopResult.stoppedAt, kind: .liveTranscriptionDeferred,
+                    trackID: nil, detail: PichiLocalization.text("Transcription can be retried from the saved audio.")))
+            }
+        }
         if session.timebase.recordingTimePolicy == .hostMonotonicV1 {
             session.timebase.endedHostTime = stopResult.stoppedHostTime ?? mach_absolute_time()
         }

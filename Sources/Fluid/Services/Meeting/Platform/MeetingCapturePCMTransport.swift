@@ -13,14 +13,16 @@ final nonisolated class MeetingPCMIntakeGate: @unchecked Sendable {
     private let lock = NSLock()
     private let maximumBytes: Int
     private let maximumSeconds: Double
+    private let closeOnRejection: Bool
     private var accepting = true
     private var queuedBytes = 0
     private var queuedSeconds: Double = 0
 
-    init(maximumBytes: Int = 2 * 1024 * 1024, maximumSeconds: Double = 2) {
+    init(maximumBytes: Int = 2 * 1024 * 1024, maximumSeconds: Double = 2, closeOnRejection: Bool = true) {
         precondition(maximumBytes > 0 && maximumSeconds.isFinite && maximumSeconds > 0)
         self.maximumBytes = maximumBytes
         self.maximumSeconds = maximumSeconds
+        self.closeOnRejection = closeOnRejection
     }
 
     func reserve(frames: Int, channels: Int, sampleRate: Double) -> Reservation? {
@@ -29,12 +31,12 @@ final nonisolated class MeetingPCMIntakeGate: @unchecked Sendable {
             guard frames > 0, channels > 0, channels <= 8,
                   sampleRate.isFinite, sampleRate >= 8_000, sampleRate <= 192_000,
                   frames <= 65_536
-            else { self.accepting = false; return nil }
+            else { if self.closeOnRejection { self.accepting = false }; return nil }
             let bytes = frames * channels * MemoryLayout<Float>.stride
             let seconds = Double(frames) / sampleRate
             guard bytes <= self.maximumBytes - self.queuedBytes,
                   seconds <= self.maximumSeconds - self.queuedSeconds + 0.000_001
-            else { self.accepting = false; return nil }
+            else { if self.closeOnRejection { self.accepting = false }; return nil }
             self.queuedBytes += bytes
             self.queuedSeconds += seconds
             return Reservation(bytes: bytes, seconds: seconds)
