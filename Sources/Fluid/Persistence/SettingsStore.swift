@@ -2720,6 +2720,16 @@ final class SettingsStore: ObservableObject {
         set { self.showInDock = !newValue }
     }
 
+    var automaticUpdateDownloads: Bool {
+        get { self.defaults.object(forKey: Keys.automaticUpdateDownloads) as? Bool ?? true }
+        set {
+            guard newValue != self.automaticUpdateDownloads else { return }
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.automaticUpdateDownloads)
+            Task { @MainActor in SimpleUpdater.shared.automaticDownloadPreferenceDidChange() }
+        }
+    }
+
     var autoUpdateCheckEnabled: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.autoUpdateCheckEnabled)
@@ -3622,6 +3632,7 @@ final class SettingsStore: ObservableObject {
             transcriptionSoundIndependentVolume: false,
             autoUpdateCheckEnabled: self.autoUpdateCheckEnabled,
             showUpdatePopups: self.showUpdatePopups,
+            automaticUpdateDownloads: self.automaticUpdateDownloads,
             betaReleasesEnabled: self.betaReleasesEnabled,
             enableDebugLogs: self.enableDebugLogs,
             shareAnonymousAnalytics: self.shareDetailedAnalytics,
@@ -3783,6 +3794,9 @@ final class SettingsStore: ObservableObject {
         self.transcriptionStartSound = payload.transcriptionStartSound
         self.transcriptionSoundVolume = payload.transcriptionSoundVolume
         self.autoUpdateCheckEnabled = payload.autoUpdateCheckEnabled
+        if let automaticUpdateDownloads = payload.automaticUpdateDownloads {
+            self.automaticUpdateDownloads = automaticUpdateDownloads
+        }
         if let showUpdatePopups = payload.showUpdatePopups {
             self.showUpdatePopups = showUpdatePopups
         }

@@ -19,6 +19,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         guard !self.restartInProgress else { return }
         self.restartInProgress = true
         Task { @MainActor in
+            await SimpleUpdater.shared.shutdownForTermination()
             await TranscriptionHistoryStore.shared.finishPendingWrites()
             guard TranscriptionHistoryStore.shared.persistenceError == nil else {
                 self.restartInProgress = false
@@ -139,6 +140,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         self.applyMainWindowRestorability()
         if Self.restartPrepared { return .terminateNow }
         Task { @MainActor in
+            await SimpleUpdater.shared.shutdownForTermination()
             await TranscriptionHistoryStore.shared.finishPendingWrites()
             if let error = TranscriptionHistoryStore.shared.persistenceError {
                 let alert = NSAlert()

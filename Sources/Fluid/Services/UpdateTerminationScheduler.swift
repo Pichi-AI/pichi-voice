@@ -51,10 +51,17 @@ enum SupersededInstanceRetirement {
         }
     }
 
+    nonisolated static func permitsLegacyRetirement(owner: String, repo: String) -> Bool {
+        owner == "altic-dev" && repo == "FluidVoice"
+    }
+
     /// One bounded pass, repeated on later launches only until one completes. Fixed builds close
     /// their own progress window and are never asked or forced to quit by a later copy.
     static func start() {
-        guard let bundleIdentifier = Bundle.main.bundleIdentifier,
+        // This workaround belongs to old FluidVoice releases. A second Pichi
+        // instance must never terminate another instance that may be capturing PCM.
+        guard Self.permitsLegacyRetirement(owner: AppBrand.repositoryOwner, repo: AppBrand.repositoryName),
+              let bundleIdentifier = Bundle.main.bundleIdentifier,
               ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
               !UserDefaults.standard.bool(forKey: Self.completedDefaultsKey)
         else { return }

@@ -61,6 +61,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let autoUpdateCheckEnabled: Bool
     // Missing in older backups; preserve the user's current preference on restore.
     var showUpdatePopups: Bool? = nil
+    var automaticUpdateDownloads: Bool? = nil
     let betaReleasesEnabled: Bool
     let enableDebugLogs: Bool
     let shareAnonymousAnalytics: Bool
