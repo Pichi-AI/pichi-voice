@@ -5,5 +5,6 @@
   "markAsset": "PichiBrandMark",
   "menuBarAsset": "PichiMenuBarIcon",
   "localizePackagedTagline": true,
-  "updatesEnabled": false
+  "updatesEnabled": true,
+  "expectedSigningTeam": "LU46F7HGJM"
 }

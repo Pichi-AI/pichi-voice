@@ -79,21 +79,6 @@ nonisolated final class DictionaryCaptureEvidenceFile: @unchecked Sendable {
     deinit { self.close() }
 }
 
-nonisolated struct DictionaryAcousticEvidence: Sendable {
-    let id: UUID
-    let entryID: UUID
-    let label: String
-    let profileKey: String
-    let modelKey: String
-    let sourceWordRange: Range<Int>
-    let frames: DictionaryMatchFrames
-    var matchFrameRange: Range<Int>? = nil
-
-    func aligned(to wordRange: Range<Int>, label: String) -> Self {
-        Self(id: self.id, entryID: self.entryID, label: label, profileKey: self.profileKey, modelKey: self.modelKey, sourceWordRange: wordRange, frames: self.frames, matchFrameRange: self.matchFrameRange)
-    }
-}
-
 nonisolated struct DictionaryNegativeCorrection: Sendable {
     let evidence: DictionaryAcousticEvidence
     let correctedText: String
@@ -155,7 +140,10 @@ nonisolated enum DictionaryNegativeEvidenceResolver {
 actor DictionaryNegativeExampleStore {
     private static let cache = PrivateProfileStoreCache<DictionaryNegativeExampleStore>()
     static var shared: DictionaryNegativeExampleStore {
-        cache.value { profile in DictionaryNegativeExampleStore(
+        scoped(to: PrivateProfileStorage.current)
+    }
+    static func scoped(to selected: PrivateProfileSnapshot) -> DictionaryNegativeExampleStore {
+        cache.value(for: selected) { profile in DictionaryNegativeExampleStore(
             url: profile.rootDirectory.appendingPathComponent("dictionary-negative-examples-v1.plist"), profile: profile) }
     }
     struct Example: Codable, Sendable {
@@ -170,6 +158,7 @@ actor DictionaryNegativeExampleStore {
     private var retired = false
     private var canAccess: Bool { !self.retired && self.profile.map(PrivateProfileStorage.isReadable) != false }
     private let url: URL
+    private var evidenceURL: URL { self.url.deletingPathExtension().appendingPathExtension("evidence.plist") }
     private var generation = UUID()
     private let collectionEnabled: @Sendable () -> Bool
 
@@ -264,13 +253,56 @@ actor DictionaryNegativeExampleStore {
         return ((try? self.read()) ?? []).filter { $0.entryID == entryID && $0.profileKey == profileKey && $0.modelKey == modelKey }.map(\.frames)
     }
 
-    func save(_ correction: DictionaryNegativeCorrection, expectedRevision: UUID) throws {
+    /// Bounded support for later explicit History feedback. Ordinary history rows
+    /// retain only IDs. Called only when capture already permits audio history.
+    func retainEvidence(_ candidates: [DictionaryAcousticEvidence]) throws {
+        guard self.canAccess, self.collectionEnabled() else { throw PronunciationDictionaryStoreError.staleEvidence }
+        var all = try self.readEvidence()
+        for evidence in candidates.prefix(64) where evidence.frames.isValid && evidence.modelKey.utf8.count <= 1024 && evidence.profileKey.utf8.count <= 2048 {
+            all.removeAll { $0.id == evidence.id }
+            all.append(evidence)
+        }
+        all = Array(all.suffix(32))
+        guard !all.isEmpty else { return }
+        let encoder = PropertyListEncoder(); encoder.outputFormat = .binary
+        let data = try encoder.encode(all)
+        guard data.count <= 32_000_000 else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+        try FileManager.default.createDirectory(at: self.evidenceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: self.evidenceURL, options: .atomic)
+    }
+
+    func retainedEvidence(id: UUID) -> DictionaryAcousticEvidence? {
+        guard self.canAccess else { return nil }
+        return (try? self.readEvidence())?.first { $0.id == id }
+    }
+
+    func removeRetainedEvidence(ids: Set<UUID>) throws {
+        guard self.canAccess else { throw PronunciationDictionaryStoreError.staleEvidence }
+        guard !ids.isEmpty, FileManager.default.fileExists(atPath: self.evidenceURL.path) else { return }
+        let all = try self.readEvidence().filter { !ids.contains($0.id) }
+        if all.isEmpty { try FileManager.default.removeItem(at: self.evidenceURL); return }
+        let encoder = PropertyListEncoder(); encoder.outputFormat = .binary
+        try encoder.encode(all).write(to: self.evidenceURL, options: .atomic)
+    }
+
+    private func readEvidence() throws -> [DictionaryAcousticEvidence] {
+        guard self.canAccess else { throw PronunciationDictionaryStoreError.staleEvidence }
+        guard FileManager.default.fileExists(atPath: self.evidenceURL.path) else { return [] }
+        let size = try self.evidenceURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max
+        guard size <= 32_000_000 else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+        let all = try PropertyListDecoder().decode([DictionaryAcousticEvidence].self, from: Data(contentsOf: self.evidenceURL))
+        guard all.count <= 32, all.allSatisfy({ $0.frames.isValid }) else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+        return all
+    }
+
+    @discardableResult
+    func save(_ correction: DictionaryNegativeCorrection, expectedRevision: UUID) throws -> Bool {
         guard self.canAccess else { throw PronunciationDictionaryStoreError.staleEvidence }
         guard self.generation == expectedRevision, self.collectionEnabled(), correction.expiresAt > Date() else { throw PronunciationDictionaryStoreError.staleEvidence }
         let e = correction.evidence
         guard e.frames.isValid else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
         var all = try read()
-        if all.contains(where: { $0.id == e.id }) { return }
+        if all.contains(where: { $0.id == e.id }) { return false }
         // Six examples per word; 32 globally. Only frame features are persisted, no PCM or transcript.
         all.removeAll { $0.entryID == e.entryID && $0.profileKey != e.profileKey }
         while all.filter({ $0.entryID == e.entryID }).count >= 6 {
@@ -283,12 +315,14 @@ actor DictionaryNegativeExampleStore {
         guard data.count <= 32_000_000 else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
         try FileManager.default.createDirectory(at: self.url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: self.url, options: .atomic)
+        return true
     }
 
     func clear() throws {
         guard self.canAccess else { throw PronunciationDictionaryStoreError.staleEvidence }
         self.generation = UUID()
         if FileManager.default.fileExists(atPath: self.url.path) { try FileManager.default.removeItem(at: self.url) }
+        if FileManager.default.fileExists(atPath: self.evidenceURL.path) { try FileManager.default.removeItem(at: self.evidenceURL) }
     }
 
     func remove(id: UUID) throws {

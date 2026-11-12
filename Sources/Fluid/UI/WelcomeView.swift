@@ -64,6 +64,7 @@ struct OnboardingFlowView: View {
     @ObservedObject private var accountSession = AppServices.shared.accountSession
     @ObservedObject private var installations = SpeechModelInstallationSnapshot.shared
     @StateObject private var aiSetup = OnboardingAISetupController.live
+    @StateObject private var ownerVoice = MeetingOwnerVoiceEnrollmentModel(audioArbiter: AppServices.shared.meetingAudioActivityArbiter)
 
     @Binding var currentStep: Int
     let accessibilityEnabled: Bool
@@ -91,6 +92,10 @@ struct OnboardingFlowView: View {
     @State private var onboardingMicrophoneLevel: CGFloat = 0
     @State private var lastOnboardingMicrophoneLevelUpdate: TimeInterval = 0
     @State private var microphonePreviewTask: Task<Void, Never>?
+    @State private var ownerVoiceStartTask: Task<Void, Never>?
+    @State private var ownerVoiceSpeechRestoreTask: Task<Void, Never>?
+    @State private var ownerVoiceSpeechModelToRestore: SettingsStore.SpeechModel?
+    @State private var ownerVoiceProfile = PrivateProfileStorage.current
     @State private var microphonePreviewGeneration: UInt64 = 0
     @State private var onboardingMicrophoneRefreshGeneration: UInt64 = 0
     @State private var isOnboardingFlowVisible = false
@@ -148,6 +153,7 @@ struct OnboardingFlowView: View {
         case aiEnhancement = 5
         case meetingLocation = 6
         case account = 7
+        case ownerVoice = 8
 
         var analyticsStep: AnalyticsOnboardingStep {
             switch self {
@@ -155,6 +161,7 @@ struct OnboardingFlowView: View {
             case .language: .language
             case .voiceModel: .voiceModel
             case .permissions: .permissions
+            case .ownerVoice: .ownerVoice
             case .playground: .playground
             case .aiEnhancement: .aiEnhancement
             case .meetingLocation: .meetingLocation
@@ -172,6 +179,8 @@ struct OnboardingFlowView: View {
                 return "Choose Voice Engine"
             case .permissions:
                 return "Enable Access"
+            case .ownerVoice:
+                return "My voice"
             case .aiEnhancement:
                 return "Set Up AI Enhancement"
             case .playground:
@@ -193,6 +202,8 @@ struct OnboardingFlowView: View {
                 return "Choose the best local engine for your language."
             case .permissions:
                 return AppBrand.text("Allow FluidVoice to listen and type into other apps.")
+            case .ownerVoice:
+                return "Set up your voice so matching speech is labelled You in future recordings. The voice profile stays on this device."
             case .aiEnhancement:
                 return "Optional: Configure AI post-processing or skip this step."
             case .playground:
@@ -215,6 +226,10 @@ struct OnboardingFlowView: View {
 
     private var isAccountBusy: Bool {
         self.isAccountActionInProgress || self.isLeavingAccountAsGuest || self.accountSession.state == .signingIn
+    }
+
+    private var isOwnerVoiceBusy: Bool {
+        self.ownerVoiceStartTask != nil || self.ownerVoiceSpeechRestoreTask != nil || self.ownerVoice.isBusy
     }
 
     private var progressValue: Double {
@@ -358,6 +373,8 @@ struct OnboardingFlowView: View {
             return self.isVoiceModelReady
         case .permissions:
             return self.isPermissionsReady
+        case .ownerVoice:
+            return !self.isOwnerVoiceBusy && self.ownerVoice.hasProfile
         case .aiEnhancement:
             return self.isAIReady
         case .playground:
@@ -430,6 +447,12 @@ struct OnboardingFlowView: View {
             AnalyticsService.shared.recordOnboardingStepViewed(self.step.analyticsStep, origin: origin)
         }
         .onChange(of: self.currentStep) { _, _ in
+            if self.step != .ownerVoice {
+                self.ownerVoiceStartTask?.cancel()
+                self.ownerVoiceSpeechRestoreTask?.cancel()
+                self.ownerVoiceSpeechModelToRestore = nil
+                self.ownerVoice.cancelIfVisible()
+            }
             if self.step != .voiceModel {
                 self.cancelOnboardingModelPreparation()
             }
@@ -443,6 +466,12 @@ struct OnboardingFlowView: View {
                 self.step.analyticsStep,
                 origin: self.settings.analyticsOnboardingOrigin
             )
+        }
+        .onChange(of: self.ownerVoice.phase) { _, _ in
+            if !self.ownerVoice.isBusy { self.restoreSpeechAfterOwnerVoiceIfNeeded() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)) { _ in
+            self.cancelOwnerVoiceWorkForConceal()
         }
         .onChange(of: self.isMicrophoneReady) { _, isReady in
             guard self.step == .permissions else { return }
@@ -473,6 +502,10 @@ struct OnboardingFlowView: View {
             }
         }
         .onDisappear {
+            self.ownerVoiceStartTask?.cancel()
+            self.ownerVoiceSpeechRestoreTask?.cancel()
+            self.ownerVoiceSpeechModelToRestore = nil
+            self.ownerVoice.cancelIfVisible()
             self.isOnboardingFlowVisible = false
             self.onboardingMicrophoneRefreshGeneration &+= 1
             self.cancelOnboardingModelPreparation()
@@ -517,7 +550,9 @@ struct OnboardingFlowView: View {
                 .foregroundStyle(self.theme.palette.secondaryText)
 
             HStack {
-                Text("Step \(self.step.rawValue + 1) of \(Step.allCases.count)")
+                Text(PichiLocalization.format("Step %lld of %lld",
+                    DesktopOnboardingNavigation.stepNumber(at: self.step.rawValue, includesAccount: self.includesAccountStep),
+                    DesktopOnboardingNavigation.orderedSteps(includesAccount: self.includesAccountStep).count))
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(self.theme.palette.secondaryText)
                 Spacer()
@@ -543,6 +578,8 @@ struct OnboardingFlowView: View {
             self.voiceModelStep
         case .permissions:
             self.permissionsStep
+        case .ownerVoice:
+            self.ownerVoiceStep
         case .aiEnhancement:
             self.aiEnhancementStep
         case .playground:
@@ -916,7 +953,7 @@ struct OnboardingFlowView: View {
         canSkip: Bool = false,
         skipAction: (() -> Void)? = nil
     ) -> some View {
-        let canNavigateBack = !self.isModelPreparationInProgress && !self.asr.isRunning && !self.isRecordingAnyShortcut && !self.isAccountBusy
+        let canNavigateBack = !self.isModelPreparationInProgress && !self.asr.isRunning && !self.isRecordingAnyShortcut && !self.isAccountBusy && !self.isOwnerVoiceBusy
 
         return HStack {
             self.cinematicFooterButton(
@@ -2286,14 +2323,86 @@ struct OnboardingFlowView: View {
         }
     }
 
+    private func startOwnerVoiceEnrollment() {
+        guard self.step == .ownerVoice, !self.isOwnerVoiceBusy,
+              PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(self.ownerVoiceProfile) else { return }
+        // The permission page owns a live microphone preview. Join its stop before
+        // the shared voice transaction acquires the same application audio lease.
+        self.stopOnboardingMicrophonePreview()
+        let previewStop = self.microphonePreviewTask
+        let microphone = self.onboardingInputDevices.first { $0.uid == self.selectedOnboardingInputUID }.map {
+            MeetingMicrophoneIdentity(captureDeviceID: $0.uid, coreAudioUID: $0.uid, displayName: $0.name)
+        }
+        self.ownerVoiceStartTask = Task { @MainActor in
+            defer { self.ownerVoiceStartTask = nil }
+            await previewStop?.value
+            guard !Task.isCancelled, self.isOnboardingFlowVisible, self.step == .ownerVoice,
+                  PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(self.ownerVoiceProfile) else { return }
+            self.ownerVoiceSpeechModelToRestore = self.settings.selectedSpeechModel
+            self.ownerVoice.start(microphone: microphone)
+        }
+    }
+
+    private func cancelOwnerVoiceEnrollment() {
+        self.ownerVoiceStartTask?.cancel()
+        self.ownerVoiceSpeechRestoreTask?.cancel()
+        self.ownerVoice.cancel()
+    }
+
+    private func cancelOwnerVoiceWorkForConceal() {
+        self.ownerVoiceStartTask?.cancel()
+        self.ownerVoiceSpeechRestoreTask?.cancel()
+        self.ownerVoiceSpeechModelToRestore = nil
+        // An admitted capture remains owned by the shared transaction and root Stop.
+    }
+
+    private func restoreSpeechAfterOwnerVoiceIfNeeded() {
+        guard self.ownerVoiceSpeechRestoreTask == nil, let model = self.ownerVoiceSpeechModelToRestore else { return }
+        let profile = self.ownerVoiceProfile
+        guard self.isOnboardingFlowVisible, self.step == .ownerVoice,
+              self.settings.selectedSpeechModel == model, PrivateProfileStorage.acceptsNewWork,
+              PrivateProfileStorage.isReadable(profile) else {
+            self.ownerVoiceSpeechModelToRestore = nil
+            return
+        }
+        guard !self.asr.isAsrReady else { self.ownerVoiceSpeechModelToRestore = nil; return }
+        // Shared audio handback may leave ASR cold while optional AI preparation holds
+        // ordinary residency. Use normal onboarding readiness after enrollment has joined.
+        self.ownerVoiceSpeechRestoreTask = Task { @MainActor in
+            defer { self.ownerVoiceSpeechRestoreTask = nil }
+            do {
+                try Task.checkCancellation()
+                guard self.isOnboardingFlowVisible, self.step == .ownerVoice,
+                      self.settings.selectedSpeechModel == model, PrivateProfileStorage.acceptsNewWork,
+                      PrivateProfileStorage.isReadable(profile) else { return }
+                try await self.asr.ensureAsrReady(source: .onboarding)
+                try Task.checkCancellation()
+                if self.settings.selectedSpeechModel == model, PrivateProfileStorage.acceptsNewWork,
+                   PrivateProfileStorage.isReadable(profile) { self.ownerVoiceSpeechModelToRestore = nil }
+            } catch {
+                guard !Task.isCancelled, self.isOnboardingFlowVisible, self.step == .ownerVoice,
+                      self.settings.selectedSpeechModel == model, PrivateProfileStorage.acceptsNewWork,
+                      PrivateProfileStorage.isReadable(profile) else { return }
+                self.asr.errorTitle = PichiLocalization.text("Voice Model Setup Failed")
+                self.asr.errorMessage = error.localizedDescription
+                self.asr.showError = true
+            }
+        }
+    }
+
     private func goBack() {
         self.activeShortcutRecordingTarget = nil
         self.shortcutRecordingMessage = nil
-        guard !self.isAccountBusy else { return }
+        guard !self.isAccountBusy, !self.isOwnerVoiceBusy else { return }
         self.currentStep = DesktopOnboardingNavigation.previous(before: self.currentStep, includesAccount: self.includesAccountStep)
     }
 
     private func goNext(outcome: AnalyticsOnboardingOutcome = .continued) {
+        guard !self.isOwnerVoiceBusy else { return }
+        if self.step == .ownerVoice, self.ownerVoiceSpeechModelToRestore != nil, !self.asr.isAsrReady {
+            self.restoreSpeechAfterOwnerVoiceIfNeeded()
+            return
+        }
         self.completeCurrentStep(outcome: outcome)
         self.activeShortcutRecordingTarget = nil
         self.shortcutRecordingMessage = nil
@@ -2418,6 +2527,86 @@ private extension OnboardingFlowView {
                 self.goNext(outcome: .completed)
             }
         )
+    }
+
+    private var ownerVoiceStep: some View {
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
+                OnboardingFittedContent(width: 760) {
+                    VStack(spacing: self.theme.metrics.spacing.lg) {
+                        FluidOnboardingCompactAppIconMark()
+                            .padding(.bottom, self.theme.metrics.spacing.sm)
+                        Text(PichiLocalization.text("My voice"))
+                            .font(self.theme.typography.title)
+                            .foregroundStyle(self.theme.palette.primaryText)
+                            .multilineTextAlignment(.center)
+                        Text(PichiLocalization.text("Set up your voice so matching speech is labelled You in future recordings. The voice profile stays on this device."))
+                            .font(self.theme.typography.body)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                        MeetingOwnerVoiceSettingsContent(model: self.ownerVoice, microphone: nil, layout: .setup)
+                            .fluidOnboardingStepCard()
+                            .frame(maxWidth: 560, alignment: .leading)
+                        if self.ownerVoiceStartTask != nil {
+                            ProgressView(PichiLocalization.text("Preparing microphone…"))
+                        }
+                        if self.ownerVoiceSpeechRestoreTask != nil {
+                            ProgressView(PichiLocalization.text("Loading..."))
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, self.theme.metrics.spacing.xxl)
+                    .padding(.vertical, self.theme.metrics.spacing.xl)
+                }
+                self.ownerVoiceFooter
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .accessibilityIdentifier("onboarding.owner-voice")
+    }
+
+    @ViewBuilder private var ownerVoiceFooter: some View {
+        if !self.isOwnerVoiceBusy {
+            let sampleIsReady = self.ownerVoice.phase == .ready
+            let speechNeedsRetry = self.ownerVoiceSpeechModelToRestore != nil && !self.asr.isAsrReady
+            self.cinematicFooter(
+                continueTitle: speechNeedsRetry ? "Try again" : sampleIsReady ? "Save" : self.ownerVoice.hasProfile ? "Continue" : "Record",
+                canContinue: true,
+                continueAction: self.forThisStep {
+                    if speechNeedsRetry { self.restoreSpeechAfterOwnerVoiceIfNeeded() }
+                    else if sampleIsReady { self.ownerVoice.save() }
+                    else if self.ownerVoice.hasProfile { self.goNext(outcome: .completed) }
+                    else { self.startOwnerVoiceEnrollment() }
+                },
+                skipTitle: sampleIsReady || self.ownerVoice.hasProfile ? "Record again" : "Not now",
+                canSkip: true,
+                skipAction: self.forThisStep {
+                    if sampleIsReady || self.ownerVoice.hasProfile { self.startOwnerVoiceEnrollment() }
+                    else { self.goNext(outcome: .skipped) }
+                }
+            )
+        } else {
+            HStack {
+                self.cinematicFooterButton(title: "Cancel", kind: .back, isEnabled: true) {
+                    self.cancelOwnerVoiceEnrollment()
+                }
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("ownerVoice.cancel")
+                Spacer()
+                if self.ownerVoice.phase == .recording {
+                    let longEnough = self.ownerVoice.seconds >= MeetingOwnerVoiceEnrollmentCapture.recommendedSeconds
+                    self.cinematicFooterButton(title: longEnough ? "Done" : "Stop", kind: longEnough ? .next : .skip, isEnabled: true) {
+                        self.ownerVoice.finishRecording()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("ownerVoice.stop")
+                }
+            }
+            .padding(.horizontal, FluidOnboardingLayout.footerHorizontalInset)
+            .padding(.bottom, FluidOnboardingLayout.footerBottomInset)
+        }
     }
 
     var meetingLocationStep: some View {

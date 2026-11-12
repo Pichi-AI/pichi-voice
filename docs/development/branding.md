@@ -53,7 +53,7 @@ The helper does not install, launch, sign, publish or overwrite an existing dist
 
 ## Trusted service policy
 
-`Sources/Fluid/Branding/brand-distribution.json` belongs to the built/signed bundle, not the runtime appearance store. It supplies asset names, the release repository, optional feedback endpoint and updater policy. Missing/corrupt resources fail closed to neutral appearance and disabled services. An imported public repository link is only a visible link; update checks use the trusted distribution repository.
+`Sources/Fluid/Branding/brand-distribution.json` belongs to the built/signed bundle, not the runtime appearance store. It supplies asset names, the release repository, optional feedback endpoint, optional HTTPS `privacyPolicyURL` and updater policy. Mobile Settings shows the configured privacy policy link for guests as well as signed-in accounts. Missing/corrupt resources fail closed to neutral appearance and disabled services. An imported public repository link is only a visible link; update checks use the trusted distribution repository.
 
 Pichi ships with app updates disabled. Enabling updates in a trusted distribution requires a single validated GitHub repository, an expected signing team and a valid current code signature matching that team. Unsigned developer builds remain disabled. The existing updater still verifies downloaded app signatures. Runtime packages cannot enable updates, redirect telemetry, change consent or submit private data to a different endpoint. Analytics is independently configured through trusted bundle/build settings; see its development documentation when enabled.
 

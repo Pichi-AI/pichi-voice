@@ -2,6 +2,20 @@
 import XCTest
 
 final class MeetingProcessingConfigurationTests: XCTestCase {
+    func testRecordingClockPolicyPinsNewAttemptsWithoutChangingLegacyIdentity() throws {
+        let legacy = MeetingFinalProcessingConfiguration()
+        XCTAssertNil(legacy.recordingTimePolicy)
+        XCTAssertFalse(legacy.identityFingerprint.contains("recordingTimePolicy"))
+        let encoded = try JSONEncoder().encode(legacy)
+        XCTAssertFalse(String(decoding: encoded, as: UTF8.self).contains("recordingTimePolicy"))
+        XCTAssertEqual(try JSONDecoder().decode(MeetingFinalProcessingConfiguration.self, from: encoded).identityFingerprint,
+                       legacy.identityFingerprint)
+        let unified = MeetingFinalProcessingConfiguration(recordingTimePolicy: .hostMonotonicV1)
+        XCTAssertNotEqual(unified.identityFingerprint, legacy.identityFingerprint)
+        XCTAssertEqual(try JSONDecoder().decode(MeetingFinalProcessingConfiguration.self,
+            from: JSONEncoder().encode(unified)), unified)
+    }
+
     func testSpeakerProcessingModeMigratesWithoutChangingLegacyIdentity() throws {
         let original = MeetingFinalProcessingConfiguration()
         XCTAssertNil(original.speakerProcessingMode)

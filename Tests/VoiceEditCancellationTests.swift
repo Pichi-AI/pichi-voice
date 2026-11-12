@@ -28,6 +28,8 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
 @MainActor final class RewriteDouble {
     var originalText = "original"
     var rewrittenText = ""
+    // A message makes the model return nothing, which routes to showEditModeFailure.
+    var lastErrorMessage: String?
     var requests = 0
     var clears = 0
     var respond: CheckedContinuation<Void, Never>?
@@ -35,7 +37,7 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
     func processRewriteRequest(_: String) async {
         self.requests += 1
         await withCheckedContinuation { self.respond = $0 }
-        self.rewrittenText = "rewrite"
+        self.rewrittenText = self.lastErrorMessage == nil ? "rewrite" : ""
     }
 
     func clearState() { self.originalText = ""; self.rewrittenText = ""; self.clears += 1 }
@@ -99,6 +101,8 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
 
     func showTextDeliveryFailure(_: DeliveryFailure, transcript:String) { self.failures += 1; self.failedTranscript=transcript }
     func hideOverlayAfterOutput() { self.hides += 1 }
+    var editModeFailures: [String] = []
+    func showEditModeFailure(_ message: String) { self.editModeFailures.append(message) }
 }
 
 @main enum VoiceEditCancellationTests {
@@ -163,6 +167,18 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
             precondition(owner.rewriteModeService.clears == (outcome == "failure" ? 0 : 1))
             PrivateProfileStorage.select(profile)
         }
+        // A model failure reaches the edit failure surface, unless the user already cancelled.
+        for cancelled in [false, true] {
+            let owner = VoiceEditOwner()
+            owner.rewriteModeService.lastErrorMessage = "model failed"
+            let task = Task { await owner.processRewriteWithVoiceInstruction("rewrite", appInfo: context, lifecycleID: 7) }
+            await waitUntil { owner.rewriteModeService.respond != nil }
+            if cancelled { owner.cancelledOutputLifecycleID = 7 }
+            owner.rewriteModeService.respond?.resume()
+            await task.value
+            precondition(owner.editModeFailures == (cancelled ? [] : ["model failed"]))
+            precondition(owner.asr.deliveries == 0 && owner.failures == 0)
+        }
         // A new capture/draft during the awaited model/focus steps cannot change this output.
         for fails in [false,true] {
             NotchContentState.shared.recordingTargetContext = .init(pid:1,window:10,element:10)
@@ -181,6 +197,6 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
             precondition(owner.rewriteModeService.rewrittenText=="newer pending draft" && owner.rewriteModeService.clears==0)
             precondition(fails ? owner.failedTranscript=="rewrite" : owner.menuBarManager.finishes==1)
         }
-        print("Voice Edit cancellation: 12 production-path scenarios passed, including profile concealment and closed admission")
+        print("Voice Edit cancellation: 14 production-path scenarios passed, including profile concealment and closed admission")
     }
 }

@@ -62,7 +62,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
                 let snapshot = try XCTUnwrap(snapshot)
                 let configuration = try snapshot.configuration(applications: loaded.applications, microphones: [self.mic])
                 XCTAssertEqual(configuration.mode, mode)
-                XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, mode == .inRoom ? .streaming : .afterRecording)
+                XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, .streaming)
                 XCTAssertEqual(configuration.audioStorageMode, .retainedFiles)
                 XCTAssertEqual(configuration.piiRedactionEnabled, true)
                 XCTAssertEqual(configuration.languageCode, "ru")
@@ -100,7 +100,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode))
     }
 
-    func testSourceSnapshotPreservesExplicitSpeakerPreferencesAndLanguageFallback() throws {
+    func testSourceSnapshotUsesLivePolicyDespiteLegacyPreferencesAndPreservesLanguageFallback() throws {
         let suite = "SourceExplicitPolicy.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -116,9 +116,64 @@ final class MeetingRecordingSourceTests: XCTestCase {
             for mode in MeetingCaptureMode.allCases {
                 snapshot.defaults.mode = mode
                 let configuration = try snapshot.configuration(applications: snapshot.applications, microphones: [self.mic])
-                XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, preference)
+                XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, .streaming)
                 XCTAssertEqual(configuration.languageCode, MeetingFinalProcessingConfiguration.defaultLanguageCode)
             }
+        }
+    }
+
+    func testResolvedRecordingSourcesFreezeCurrentPreferencesWithoutChangingCaptureIdentity() throws {
+        let suite = "ResolvedRecordingPolicy.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults, initializeDesktop: false)
+        settings.selectedSpeechModel = .gigaam
+        for mode in MeetingCaptureMode.allCases {
+            let selected = MeetingCaptureConfiguration(mode: mode, title: "Synthetic source", languageCode: "ru",
+                platform: mode == .onlineCall ? .init(identifier: "zoom", displayName: "Zoom") : nil,
+                application: mode == .onlineCall ? self.zoom : nil,
+                applicationAudioScope: mode == .onlineCall ? .selectedApplication : nil,
+                microphone: self.mic, chunkDuration: 180, timestampDefaultTitle: true,
+                transcriptionBackendID: "synthetic-explicit-backend", requiresEncryptedPersistence: true)
+            for saveAudio in [false, true] {
+                for labels in [false, true] {
+                    for preference: MeetingSpeakerProcessingMode in [.afterRecording, .streaming] {
+                        for privacy in [false, true] {
+                            settings.meetingSaveAudio = saveAudio
+                            settings.meetingSpeakerLabelsEnabled = labels
+                            settings.meetingSpeakerProcessingMode = preference
+                            settings.meetingPIIRedactionEnabled = privacy
+                            let configured = settings.applyingMeetingRecordingPreferences(to: selected)
+                            XCTAssertEqual(configured.audioStorageMode, saveAudio ? .retainedFiles : .memoryOnly)
+                            XCTAssertEqual(configured.speakerLabelsEnabled, labels)
+                            XCTAssertEqual(configured.speakerProcessingMode, labels ? .streaming : nil)
+                            XCTAssertEqual(configured.piiRedactionEnabled, privacy)
+                            var identity = configured
+                            identity.audioStorageMode = selected.audioStorageMode
+                            identity.speakerLabelsEnabled = selected.speakerLabelsEnabled
+                            identity.speakerProcessingMode = selected.speakerProcessingMode
+                            identity.piiRedactionEnabled = selected.piiRedactionEnabled
+                            XCTAssertEqual(identity, selected, "Resolved sources, title, language, backend, chunk size and encryption requirement must remain exact")
+                            // Construction has finished before the asynchronous capture attempt.
+                            settings.meetingSaveAudio = !saveAudio
+                            settings.meetingSpeakerLabelsEnabled = !labels
+                            settings.meetingSpeakerProcessingMode = preference == .streaming ? .afterRecording : .streaming
+                            settings.meetingPIIRedactionEnabled = !privacy
+                            XCTAssertEqual(configured.audioStorageMode, saveAudio ? .retainedFiles : .memoryOnly)
+                            XCTAssertEqual(configured.speakerLabelsEnabled, labels)
+                            XCTAssertEqual(configured.piiRedactionEnabled, privacy)
+                            XCTAssertEqual(configured.speakerProcessingMode, labels ? .streaming : nil)
+                        }
+                    }
+                }
+            }
+            defaults.removeObject(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode)
+            settings.meetingSpeakerLabelsEnabled = true
+            let automatic = settings.applyingMeetingRecordingPreferences(to: selected)
+            XCTAssertEqual(automatic.effectiveSpeakerProcessingMode, .streaming,
+                "The current supported backend default must reach each actual source topology")
+            XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode),
+                "Applying a default must not write a new user choice")
         }
     }
 

@@ -9,6 +9,7 @@ let package = Package(
         .macOS("15.0"),
     ],
     dependencies: [
+        .package(path: "Vendor/PichiCallObservation"),
         .package(path: "Vendor/NativeTextInference"),
         .package(path: "Vendor/WebRTCAudioProcessing"),
         .package(path: "Vendor/PichiGigaAM"),
@@ -31,6 +32,7 @@ let package = Package(
         .executableTarget(
             name: "FluidVoice",
             dependencies: [
+                .product(name: "PichiCallObservation", package: "PichiCallObservation"),
                 .product(name: "NativeTextInference", package: "NativeTextInference"),
                 "AppUpdater",
                 "CoreAudioCaptureSupport",

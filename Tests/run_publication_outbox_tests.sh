@@ -35,6 +35,8 @@ if len(versions) != 1:
 with Path(sys.argv[1]).open('a') as target:
     target.write('\nnonisolated enum MeetingProcessingPipeline { ' + versions[0] + ' }\n')
 PY_SUPPORT
+# The fixtures compare generated titles across interface languages, so Bundle.main needs the real entry.
+python3 -B Tests/Support/write_localized_title_resources.py "$task_test_dir" "In-room meeting"
 python3 Tests/Support/write_attribution_standalone_types.py "$task_test_dir/AttributionTypes.swift"
 xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     -module-cache-path "$task_test_dir/ModuleCache" \
@@ -57,6 +59,8 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Services/Meeting/MeetingSummaryInput.swift \
     Sources/Fluid/Services/Meeting/MeetingSavedSummary.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
+    Tests/Support/StandaloneMeetingProcessingDependencies.swift \
+    Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
     "$task_test_dir/AttributionTypes.swift" "$task_test_dir/ApplicationSupport.swift" \

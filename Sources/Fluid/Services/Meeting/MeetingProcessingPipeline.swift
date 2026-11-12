@@ -20,6 +20,11 @@ protocol MeetingProcessingControlling: AnyObject {
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
                             preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
                             confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            privacyRedactor: (any TranscriptTextRedacting)?,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            trackPreview: @escaping @MainActor @Sendable (MeetingAudioTrackKind, MeetingLivePartial?) async throws -> Void,
+                            trackConfidentlyNonSpeech: MeetingTrackConfidentNonSpeechQuery?) async throws
     func cancelMemoryAudio(sessionID: MeetingSessionID) async
     func process(
         session: MeetingSession,
@@ -29,6 +34,17 @@ protocol MeetingProcessingControlling: AnyObject {
 }
 
 extension MeetingProcessingControlling {
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            privacyRedactor: (any TranscriptTextRedacting)?,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            trackPreview: @escaping @MainActor @Sendable (MeetingAudioTrackKind, MeetingLivePartial?) async throws -> Void,
+                            trackConfidentlyNonSpeech: MeetingTrackConfidentNonSpeechQuery?) async throws {
+        try await self.prepareMemoryAudio(session: session, sessionDirectory: sessionDirectory,
+            privacyRedactor: privacyRedactor, checkpoint: checkpoint,
+            preview: { try await trackPreview(.microphone, $0) },
+            confidentlyNonSpeech: trackConfidentlyNonSpeech.map { query in { start, end in await query(.microphone, start, end) } })
+    }
+
     /// Recording admission can pass its exact privacy capability through async model
     /// preparation. Older controllers keep their existing preparation implementation.
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
@@ -1547,7 +1563,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }
         let retainedPin = try await withTaskCancellationHandler { try await pinTask.value } onCancel: { pinTask.cancel() }
         try Task.checkCancellation()
-        if let retainedPin, retainedPin.privacyFingerprint != attemptRedactor?.checkpointIdentity {
+        if let retainedPin, retainedPin.privacyFingerprint != attemptRedactor?.checkpointIdentity
+            || retainedPin.configuration.recordingTimePolicy != session.timebase.recordingTimePolicy {
             throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
         }
 
@@ -1610,7 +1627,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         //
         // The request is frozen first, so the host capability handed to the factory can be bound to
         // this exact value.
-        let configuration: MeetingFinalProcessingConfiguration
+        var configuration: MeetingFinalProcessingConfiguration
         if let retainedPin {
             configuration = retainedPin.configuration
         } else {
@@ -1623,6 +1640,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 speakerProcessingMode: session.effectiveSpeakerProcessingMode
             )
         }
+        configuration.recordingTimePolicy = session.timebase.recordingTimePolicy
         let request = MeetingBackendRequest(
             attemptID: Self.resolvedAttemptID(session: session),
             session: session,
@@ -1964,6 +1982,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 if current.nativePrecision != .word, next.nativePrecision != .word,
                    current.speakerAttribution == nil, next.speakerAttribution == nil,
                    current.nativeTiming == nil, next.nativeTiming == nil,
+                   current.nativeWordTimingProvenance == nil, next.nativeWordTimingProvenance == nil,
                    current.nativeUnitID == nil, next.nativeUnitID == nil,
                    current.nativeSpeakerAssignment == nil, next.nativeSpeakerAssignment == nil,
                    nextKey == currentKey, gap <= maximumGapSeconds, combinedDuration <= maximumDurationSeconds {
@@ -2034,6 +2053,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         attemptID: UUID,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
+        if let policy = session.timebase.recordingTimePolicy {
+            throw MeetingRecordingTimePolicyError.legacyProcessingUnsupported(policy)
+        }
         let asrService = self.asrServiceProvider()
         guard !asrService.isRunning else { throw MeetingProcessingError.dictationActive }
 

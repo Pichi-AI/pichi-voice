@@ -29,23 +29,32 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
     func testSigningFixturePrerequisiteRejectsMissingAndMalformedCertificateOU() {
         XCTAssertNil(Fixture.certificateTeamIdentifier(from: [:]))
         for value: Any in [42, Data([0x01]), ["V4J43B279J"], ""] {
-            let values: [String: Any] = [kSecOIDOrganizationalUnitName as String:
-                [kSecPropertyKeyType as String: kSecPropertyTypeString, kSecPropertyKeyValue as String: value]]
+            let values = self.certificateProperties(team: value)
             XCTAssertFalse(Fixture.acceptsCertificateTeam(values))
         }
-        let wrongType: [String: Any] = [kSecOIDOrganizationalUnitName as String:
-            [kSecPropertyKeyType as String: kSecPropertyTypeNumber, kSecPropertyKeyValue as String: "V4J43B279J"]]
+        let wrongType = self.certificateProperties(team: "LU46F7HGJM", type: kSecPropertyTypeNumber as String)
         XCTAssertNil(Fixture.certificateTeamIdentifier(from: wrongType))
     }
 
-    private func certificateProperties(team: String) -> [String: Any] {
-        [kSecOIDOrganizationalUnitName as String:
-            [kSecPropertyKeyType as String: kSecPropertyTypeString, kSecPropertyKeyValue as String: team]]
+    func testSigningFixtureRejectsDuplicateSubjectOrganizationalUnits() {
+        var values = self.certificateProperties(team: "LU46F7HGJM")
+        var subject = values[kSecOIDX509V1SubjectName as String] as? [String: Any] ?? [:]
+        let entry = (subject[kSecPropertyKeyValue as String] as? [[String: Any]])?.first ?? [:]
+        subject[kSecPropertyKeyValue as String] = [entry, entry]
+        values[kSecOIDX509V1SubjectName as String] = subject
+        XCTAssertNil(Fixture.certificateTeamIdentifier(from: values))
     }
 
-    func testUnconfiguredProductionUpdaterTrustRejectsPreparationWithoutTouchingSyntheticBundles() throws {
-        // The downstream production policy is intentionally empty. An available
-        // development identity must not turn this into an installation success.
+    private func certificateProperties(team: Any, type: String = kSecPropertyTypeString as String) -> [String: Any] {
+        [kSecOIDX509V1SubjectName as String: [
+            kSecPropertyKeyType as String: kSecPropertyTypeSection,
+            kSecPropertyKeyValue as String: [[kSecPropertyKeyLabel as String: kSecOIDOrganizationalUnitName,
+                                            kSecPropertyKeyType as String: type, kSecPropertyKeyValue as String: team]],
+        ]]
+    }
+
+    func testConfiguredProductionTrustRejectsUnsignedBundlesWithoutTouchingThem() throws {
+        XCTAssertEqual(AppBrand.distribution.expectedSigningTeam, "LU46F7HGJM")
         let manager = FileManager.default
         let root = manager.temporaryDirectory.appendingPathComponent("UpdateDisabledTrustTests-" + UUID().uuidString)
         defer { try? manager.removeItem(at: root) }
@@ -66,7 +75,9 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
             installedExpectation: .init(bundleIdentifier: Fixture.identifier, version: Fixture.installedVersion, build: Fixture.installedBuild),
             expectedVersion: Fixture.incomingVersion, backupURL: backup, isRollback: false)) { error in
             let underlying = (error as? UpdateAppReplacement.Failure)?.underlyingError ?? error
-            XCTAssertEqual(underlying as? UpdateBundleValidator.ValidationError, .invalidExpectation)
+            guard case .invalidSignature? = underlying as? UpdateBundleValidator.ValidationError else {
+                return XCTFail("Configured trust must still reject the unsigned fixture: \(underlying)")
+            }
         }
         for bundle in [installed, incoming] {
             XCTAssertEqual(try Data(contentsOf: bundle.appendingPathComponent("Contents/Info.plist")), plist)
@@ -107,6 +118,27 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fixture.installed.appendingPathComponent("Contents/Info.plist")), originalPlist)
         try fixture.assertOriginalUnchanged()
         XCTAssertEqual(try fixture.payload(fixture.incoming), "tampered incoming")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.backup.path))
+        try fixture.assertNoStage()
+    }
+
+    func testSameMarketingVersionInstallsOnlyTheApprovedBuildAndKeepsPreviousBuild() throws {
+        let fixture = try Fixture(candidateVersion: Fixture.installedVersion)
+        defer { fixture.cleanup() }
+        let installation = try fixture.prepare(expectedVersion: Fixture.installedVersion)
+        XCTAssertEqual(try fixture.validated(fixture.installed).build, "27")
+        XCTAssertEqual(try fixture.validated(fixture.backup).build, Fixture.installedBuild)
+        try installation.replacement.recover()
+        try fixture.assertOriginalUnchanged()
+    }
+
+    func testUnapprovedBuildCannotReplaceOriginalOrCreateBackup() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        XCTAssertThrowsError(try fixture.prepare(expectedBuild: "28")) {
+            XCTAssertEqual($0 as? UpdateBundleValidator.ValidationError, .buildMismatch)
+        }
+        try fixture.assertOriginalUnchanged()
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.backup.path))
         try fixture.assertNoStage()
     }
@@ -250,30 +282,32 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
         static let installedVersion = "1.6.10-beta.7"
         static let installedBuild = "26"
         static let incomingVersion = "1.6.10-beta.8"
-        static let approvedTeams: Set<String> = ["V4J43B279J", "537RRRT57V"]
+        static let approvedTeams = Set([AppBrand.distribution.expectedSigningTeam].compactMap { $0 })
 
         let root: URL
         let installed: URL
         let incoming: URL
         let backup: URL
         let candidateVersion: String
+        let simulateReleaseAssessment: Bool
         var lockURL: URL { self.installed.deletingLastPathComponent().appendingPathComponent(".fluidvoice-update-\(self.installed.lastPathComponent).lock") }
 
         init(incomingDeveloperID: Bool = true, candidateVersion: String = Self.incomingVersion) throws {
-            // Positive pipeline fixtures additionally require configured production
-            // distribution trust. The current downstream deliberately disables it.
-            guard AppBrand.updatesEnabled else {
-                throw XCTSkip("Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally disabled.")
+            guard AppBrand.distribution.updatesEnabled, !Self.approvedTeams.isEmpty else {
+                throw XCTSkip("Signed pipeline fixtures require configured distribution trust.")
             }
             // Admit every required identity before creating or signing a bundle.
             // A trusted certificate from another team is not a pipeline fixture prerequisite.
             let installedIdentity = try Self.signingIdentity(developerID: false)
-            let incomingIdentity = incomingDeveloperID ? try Self.signingIdentity(developerID: true) : installedIdentity
+            // Only the external release/notary authority is substituted. Real local
+            // development signatures still seal all fixture metadata and resources.
+            let incomingIdentity = installedIdentity
             self.root = FileManager.default.temporaryDirectory.appendingPathComponent("UpdateInstallationPipelineTests-" + UUID().uuidString, isDirectory: true)
             self.installed = self.root.appendingPathComponent("Applications/Fixture.app")
             self.incoming = self.root.appendingPathComponent("Downloads/Incoming.app")
             self.backup = self.root.appendingPathComponent("Backups/Previous.app")
             self.candidateVersion = candidateVersion
+            self.simulateReleaseAssessment = incomingDeveloperID
             do {
                 try self.makeBundle(at: self.installed, version: Self.installedVersion, build: Self.installedBuild, payload: "installed", identity: installedIdentity)
                 try self.makeBundle(at: self.incoming, version: candidateVersion, build: "27", payload: "incoming", identity: incomingIdentity)
@@ -289,16 +323,32 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
             installedVersion: String = Self.installedVersion,
             installedBuild: String = Self.installedBuild,
             expectedVersion: String? = Self.incomingVersion,
+            expectedBuild: String? = "27",
             isRollback: Bool = false
         ) throws -> SimpleUpdater.PreparedInstallation {
-            try SimpleUpdater.prepareValidatedInstallation(
+            let assessments = PipelineValidationLog()
+            let result = try SimpleUpdater.prepareValidatedInstallation(
                 installedAppURL: self.installed,
                 downloadedAppURL: self.incoming,
                 installedExpectation: .init(bundleIdentifier: Self.identifier, version: installedVersion, build: installedBuild),
                 expectedVersion: expectedVersion,
+                expectedBuild: expectedBuild,
                 backupURL: self.backup,
-                isRollback: isRollback
+                isRollback: isRollback,
+                validateBundle: { url, expectation, policy in
+                    if case let .developerID(teams) = policy {
+                        assessments.recordReleaseAssessment()
+                        if self.simulateReleaseAssessment {
+                            return try UpdateBundleValidator.validate(at: url, expectation: expectation,
+                                policy: .appleDevelopment(allowedTeamIDs: teams))
+                        }
+                    }
+                    return try UpdateBundleValidator.validate(at: url, expectation: expectation, policy: policy)
+                }
             )
+            XCTAssertEqual(assessments.releaseAssessments, isRollback ? 0 : 1,
+                "The production pipeline must request Developer ID authority for an incoming release")
+            return result
         }
 
         func validated(_ bundle: URL) throws -> UpdateBundleValidator.ValidatedBundle {
@@ -357,7 +407,7 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
                 var certificate: SecCertificate?
                 guard SecIdentityCopyCertificate(identity, &certificate) == errSecSuccess, let certificate,
                       let summary = SecCertificateCopySubjectSummary(certificate) as String?, summary.hasPrefix(prefix),
-                      let values = SecCertificateCopyValues(certificate, [kSecOIDOrganizationalUnitName] as CFArray, nil) as? [String: Any],
+                      let values = SecCertificateCopyValues(certificate, [kSecOIDX509V1SubjectName] as CFArray, nil) as? [String: Any],
                       Self.acceptsCertificateTeam(values)
                 else { continue }
                 var trust: SecTrust?
@@ -372,7 +422,11 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
         }
 
         static func certificateTeamIdentifier(from values: [String: Any]) -> String? {
-            guard let property = values[kSecOIDOrganizationalUnitName as String] as? [String: Any],
+            guard let subject = values[kSecOIDX509V1SubjectName as String] as? [String: Any],
+                  subject[kSecPropertyKeyType as String] as? String == kSecPropertyTypeSection as String,
+                  let entries = subject[kSecPropertyKeyValue as String] as? [[String: Any]] else { return nil }
+            let organizationalUnits = entries.filter { $0[kSecPropertyKeyLabel as String] as? String == kSecOIDOrganizationalUnitName as String }
+            guard organizationalUnits.count == 1, let property = organizationalUnits.first,
                   property[kSecPropertyKeyType as String] as? String == kSecPropertyTypeString as String,
                   let team = property[kSecPropertyKeyValue as String] as? String, !team.isEmpty else { return nil }
             return team
@@ -414,4 +468,11 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
             }
         }
     }
+}
+
+private final nonisolated class PipelineValidationLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var releaseAssessments: Int { self.lock.withLock { self.count } }
+    func recordReleaseAssessment() { self.lock.withLock { self.count += 1 } }
 }

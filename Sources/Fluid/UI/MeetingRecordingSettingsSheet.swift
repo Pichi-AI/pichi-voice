@@ -30,6 +30,7 @@ struct MeetingRecordingSettingsSheet: View {
     @Binding var retentionPolicy: MeetingAudioRetentionPolicy
     @ObservedObject private var dismissalAdvisor = MeetingAutoDetectDismissalAdvisor.shared
     @ObservedObject private var appServices = AppServices.shared
+    @ObservedObject private var settings = SettingsStore.shared
 
     let applications: [MeetingApplicationOption]
     let microphones: [MeetingMicrophoneOption]
@@ -327,7 +328,12 @@ struct MeetingRecordingSettingsSheet: View {
                 }
             }
 
-            MeetingModelSettingsSection(onModelImported: self.onModelImported)
+            let processingMode = self.settings.meetingSpeakerProcessingMode(for: self.draft.mode)
+            if let store = PichiMeetingProviderFactory.speakerModelStore(for: self.settings.selectedSpeechModel.rawValue,
+                speakerProcessingMode: processingMode) {
+                MeetingModelSettingsSection(store: store, processingMode: processingMode,
+                    onModelImported: self.onModelImported)
+            }
 
             FluidManagementGroup(title: PichiLocalization.text("My voice")) {
                 MeetingOwnerVoiceSettingsContent(audioArbiter: self.appServices.meetingAudioActivityArbiter,

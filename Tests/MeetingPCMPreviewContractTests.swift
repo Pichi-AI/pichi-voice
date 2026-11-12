@@ -2,6 +2,7 @@ import Foundation
 
 // Minimal compile context for testing the actual protocol's existential dispatch and
 // compatibility default, independently of the app, CoreML, audio and model weights.
+nonisolated protocol MeetingIdlePreparedResource: Sendable {}
 nonisolated struct ASRTranscriptionResult: Sendable { let text: String }
 nonisolated struct ASRWordTiming: Sendable {}
 nonisolated struct ASRSegmentTiming: Codable, Sendable {}

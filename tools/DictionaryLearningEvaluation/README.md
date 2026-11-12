@@ -4,7 +4,7 @@ Offline diagnostics for the production FluidAudio encoder/search APIs. These too
 
 ## Run
 
-Check `xcode-select -p`; use a full Xcode developer directory for Swift commands. From the FluidVoice root:
+Check `xcode-select -p`; use a full Xcode developer directory for Swift commands. From the Pichi Voice repository root:
 
 ```sh
 export DEVELOPER_DIR=/Applications/Xcode-beta6.app/Contents/Developer

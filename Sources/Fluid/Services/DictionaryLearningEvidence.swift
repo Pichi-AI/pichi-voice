@@ -11,6 +11,8 @@ nonisolated struct DictionaryLearningFeatureFrames: Equatable, Sendable {
 nonisolated struct DictionaryLearningAlignment: Sendable {
     let modelKey: String
     let words: [ASRWordTiming]
+    /// Exact provider output before any acoustic dictionary substitution.
+    var originalText: String? = nil
     var acousticOutput: String? = nil
     var acousticEvidence: [DictionaryAcousticEvidence] = []
     /// New spellings that voice matching replaced in this dictation, learned unless the user undoes them.
@@ -130,6 +132,33 @@ nonisolated enum DictionaryLearningAlignmentResolver {
     private static let contextTokenLimit = 8
     private static let maximumContextSamples = 238_080
 
+    /// The same conservative lexical alignment used for audio evidence, without
+    /// needing PCM or inventing timing for a persisted history correction.
+    static func textRange(in source: String, delivered: String, selected: NSRange) -> NSRange? {
+        guard source.utf16.count <= 100_000, delivered.utf16.count <= 100_000,
+              DictionaryCorrectionReplacementPlan.isValid(selected, in: delivered) else { return nil }
+        if source == delivered { return selected }
+        let before = self.tokens(in: source), after = self.tokens(in: delivered)
+        guard before.count + after.count <= 2048,
+              let first = after.firstIndex(where: { NSIntersectionRange($0.range, selected).length > 0 }),
+              let last = after.lastIndex(where: { NSIntersectionRange($0.range, selected).length > 0 }),
+              after[first].range.location >= selected.location,
+              NSMaxRange(after[last].range) <= NSMaxRange(selected),
+              let mapped = try? self.sourceRange(raw: before.map(\.text), delivered: after.map(\.text), selected: first..<(last + 1)),
+              !mapped.isEmpty, mapped.lowerBound >= 0, mapped.upperBound <= before.count else { return nil }
+        let lexical = NSUnionRange(before[mapped.lowerBound].range, before[mapped.upperBound - 1].range)
+        let prefixLength = after[first].range.location - selected.location
+        let suffixLength = NSMaxRange(selected) - NSMaxRange(after[last].range)
+        guard prefixLength <= 8, suffixLength <= 8, lexical.location >= prefixLength,
+              NSMaxRange(lexical) + suffixLength <= source.utf16.count else { return nil }
+        let prefix = (delivered as NSString).substring(with: NSRange(location: selected.location, length: prefixLength))
+        let suffix = (delivered as NSString).substring(with: NSRange(location: NSMaxRange(after[last].range), length: suffixLength))
+        guard !prefix.contains(where: { $0.isWhitespace }), !suffix.contains(where: { $0.isWhitespace }),
+              (source as NSString).substring(with: NSRange(location: lexical.location - prefixLength, length: prefixLength)) == prefix,
+              (source as NSString).substring(with: NSRange(location: NSMaxRange(lexical), length: suffixLength)) == suffix else { return nil }
+        return NSRange(location: lexical.location - prefixLength, length: lexical.length + prefixLength + suffixLength)
+    }
+
     static func resolve(
         recording: DictionaryLearningRecording,
         deliveredTextBeforeEdit: String,
@@ -165,6 +194,12 @@ nonisolated enum DictionaryLearningAlignmentResolver {
             delivered: delivered.map(\.text),
             selected: first..<(last + 1)
         )
+        // An ASR timing can cover several lexical tokens (for example a compound
+        // name). It has no timing for a selected subpart. Including its whole
+        // interval would teach the neighbouring word as this word's pronunciation.
+        guard (sourceTokens.lowerBound == 0 || wordIndices[sourceTokens.lowerBound - 1] != wordIndices[sourceTokens.lowerBound]),
+              (sourceTokens.upperBound == wordIndices.count || wordIndices[sourceTokens.upperBound - 1] != wordIndices[sourceTokens.upperBound])
+        else { throw DictionaryLearningAlignmentError.invalidTiming }
         let wordRange = wordIndices[sourceTokens.lowerBound]..<(wordIndices[sourceTokens.upperBound - 1] + 1)
         return try self.makeEvidence(
             recording: recording,
@@ -286,11 +321,29 @@ nonisolated enum DictionaryLearningAlignmentResolver {
         let words = recording.alignment.words
         let selected = words[wordRange]
         let duration = Double(recording.samples.count) / Double(DictionaryLearningRecording.sampleRate)
-        guard selected.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start }),
+        func validTiming(_ word: ASRWordTiming) -> Bool {
+            word.start.isFinite && word.end.isFinite && word.start >= 0 && word.end > word.start &&
+                word.start < duration && word.end <= duration + 0.08
+        }
+        guard selected.allSatisfy(validTiming),
               zip(selected, selected.dropFirst()).allSatisfy({ $0.start <= $1.start && $0.end <= $1.end }),
-              let first = selected.first, let last = selected.last,
-              first.start < duration, last.end <= duration + 0.08
+              let first = selected.first, let last = selected.last
         else { throw DictionaryLearningAlignmentError.invalidTiming }
+        // A valid focal interval must also exclude adjacent ASR words. Do not
+        // clip an overlap at an invented midpoint, or expand into a timing gap:
+        // neither establishes where speech belonging to this word really ends.
+        if wordRange.lowerBound > 0 {
+            let previous = words[wordRange.lowerBound - 1]
+            guard validTiming(previous), previous.end <= first.start else {
+                throw DictionaryLearningAlignmentError.invalidTiming
+            }
+        }
+        if wordRange.upperBound < words.count {
+            let next = words[wordRange.upperBound]
+            guard validTiming(next), last.end <= next.start else {
+                throw DictionaryLearningAlignmentError.invalidTiming
+            }
+        }
         let start = Int((first.start * Double(DictionaryLearningRecording.sampleRate)).rounded(.down))
         let end = min(recording.samples.count, Int((last.end * Double(DictionaryLearningRecording.sampleRate)).rounded(.up)))
         guard end > start else { throw DictionaryLearningAlignmentError.invalidTiming }

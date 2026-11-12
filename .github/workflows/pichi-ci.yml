@@ -36,6 +36,23 @@ jobs:
           persist-credentials: false
       - run: bash scripts/dev/setup.sh --allow-primary
 
+  lint:
+    name: SwiftLint on changed lines
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Lint changed Swift lines
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          python3 -S scripts/dev/lint-changed.py --base "origin/$BASE_REF" \
+            --swiftlint "docker run --rm --volume $PWD:$PWD --workdir $PWD ghcr.io/realm/swiftlint:0.65.1@sha256:f47e083201e47a136cda5ae847595bfe00226c444ca226fa74fa5dc648a9b057"
+
   macos:
     name: macOS integration tests
     if: (github.event_name == 'workflow_dispatch' && inputs.run_macos) || vars.PICHI_VOICE_MACOS_CI == 'true'

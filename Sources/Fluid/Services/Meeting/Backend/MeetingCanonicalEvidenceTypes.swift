@@ -165,6 +165,8 @@ nonisolated struct MeetingFinalTextUnit: Equatable, Identifiable {
     let analysisSpanIDs: [String]
     /// Whatever the backend actually reported. `nil` when it reports none — never substituted.
     let confidence: Double?
+    /// Semantic origin of native word times; never inferred from a short duration.
+    let wordTimingProvenance: ASRWordTimingProvenance?
 
     init(
         id: String,
@@ -176,7 +178,8 @@ nonisolated struct MeetingFinalTextUnit: Equatable, Identifiable {
         analysisEnd: TimeInterval,
         speaker: MeetingBackendSpeakerAssignment,
         analysisSpanIDs: [String],
-        confidence: Double? = nil
+        confidence: Double? = nil,
+        wordTimingProvenance: ASRWordTimingProvenance? = nil
     ) {
         self.id = id
         self.trackID = trackID
@@ -188,6 +191,7 @@ nonisolated struct MeetingFinalTextUnit: Equatable, Identifiable {
         self.speaker = speaker
         self.analysisSpanIDs = analysisSpanIDs
         self.confidence = confidence
+        self.wordTimingProvenance = wordTimingProvenance
     }
 
     /// Initial acoustic projection changes only the assignment, preserving native source facts.
@@ -195,7 +199,7 @@ nonisolated struct MeetingFinalTextUnit: Equatable, Identifiable {
         Self(id: self.id, trackID: self.trackID, analysisEpochID: self.analysisEpochID,
             precision: self.precision, text: self.text, analysisStart: self.analysisStart,
             analysisEnd: self.analysisEnd, speaker: assignment, analysisSpanIDs: self.analysisSpanIDs,
-            confidence: self.confidence)
+            confidence: self.confidence, wordTimingProvenance: self.wordTimingProvenance)
     }
 }
 

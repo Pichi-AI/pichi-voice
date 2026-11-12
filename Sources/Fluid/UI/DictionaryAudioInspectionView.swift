@@ -20,6 +20,20 @@ final class DictionaryInspectionPlayback: NSObject, ObservableObject, AVAudioPla
     }
 
     func play(_ audio: DictionaryAudioInspection, cut: DictionaryAudioCut?, id: String) {
+        self.play(id: id) { try await DictionaryAudioInspector.shared.wav(audio, cut: cut) }
+    }
+
+    func playSavedSample(_ capture: PronunciationEnrollmentCapture, entryID: UUID, profileLabel: String,
+                         store: PronunciationDictionaryStore, id: String, isCurrent: @escaping @MainActor () -> Bool) {
+        self.play(id: id, isCurrent: isCurrent) {
+            let samples = try await store.savedAudioSamples(for: capture, dictionaryEntryID: entryID, expectedProfileLabel: profileLabel)
+            try Task.checkCancellation()
+            return try await DictionaryAudioInspector.shared.wav(samples: samples)
+        }
+    }
+
+    private func play(id: String, isCurrent: @escaping @MainActor () -> Bool = { true },
+                      load: @escaping @MainActor () async throws -> Data) {
         let wasPlaying = self.playing == id
         self.stop()
         guard !wasPlaying else { return }
@@ -28,8 +42,9 @@ final class DictionaryInspectionPlayback: NSObject, ObservableObject, AVAudioPla
         self.playing = id
         self.task = Task { [weak self] in
             do {
-                let data = try await DictionaryAudioInspector.shared.wav(audio, cut: cut)
+                let data = try await load()
                 guard let self, !Task.isCancelled, self.generation == generation else { return }
+                guard isCurrent() else { self.stop(); return }
                 let player = try AVAudioPlayer(data: data)
                 player.delegate = self
                 self.player = player

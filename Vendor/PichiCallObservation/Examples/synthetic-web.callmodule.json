@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "example.synthetic-call",
+  "displayName": "Synthetic conferencing service",
+  "version": "1.0.0",
+  "browserBundleIdentifiers": ["com.google.Chrome"],
+  "urlRules": [{"host": "call.example.com", "pathPrefixes": ["/room"], "excludedPathPrefixes": ["/room/settings"]}],
+  "callRules": {
+    "connected": [{"labels": ["Leave call"]}],
+    "ended": [{"labels": ["Rejoin"]}],
+    "ringing": [{"labels": ["Answer call"]}],
+    "held": [{"labels": ["Resume call"]}]
+  },
+  "microphoneRules": {
+    "muted": [{"labels": ["Turn on microphone"], "ancestorIdentifier": "self.call.toolbar", "allowsShortcutSuffix": true}],
+    "unmuted": [{"labels": ["Turn off microphone"], "ancestorIdentifier": "self.call.toolbar", "allowsShortcutSuffix": true}]
+  },
+  "pushToTalkChords": [{"keyCode": 49, "modifiers": ["option"]}]
+}

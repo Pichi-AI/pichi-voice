@@ -2,13 +2,13 @@
 
 ## Starting point
 
-Pichi Voice starts from FluidVoice commit `7daffb529fb9f7c8d075f686a2d3da34695a66e4`, dated October 6, 2026. Development begins in a private, independent repository. It can later become public without discarding the commit history or the upstream relationship maintained by Git.
+Pichi Voice started from FluidVoice commit `7daffb529fb9f7c8d075f686a2d3da34695a66e4`, dated October 6, 2026, in an independent development repository. Public packaging preserves the commit history and the upstream relationship maintained by Git. Product-facing instructions live in the [Pichi Voice README](../../README.md) and [user guide](../product/user-guide.md).
 
 The repository preserves [GPL-3.0](../../LICENSE) and upstream copyright notices. A private development repository does not change the source license. Before distribution, review the obligations for the app and the separate licenses for weights, runtimes, and datasets. The public FluidVoice repository does not contain the private Fluid Intelligence runtime described in its README.
 
 ## Small downstream changes
 
-The target is FluidVoice with Pichi branding, additional Russian speech models, custom dictionaries, and selected features. Keep the downstream changes narrow so upstream fixes remain practical to merge.
+Pichi Voice extends the upstream contracts with its product identity, mobile and local meeting workflows, additional Russian speech models and custom dictionaries. Keep the downstream changes narrow so upstream fixes remain practical to merge.
 
 ```mermaid
 flowchart LR
@@ -94,7 +94,7 @@ For each batch, save a reviewable update report in `docs/development/` with:
 3. Concrete extension-boundary decisions. Check provider and meeting registries, model/artifact snapshots, cancellation, resource ownership, shared service operations, branding and localization. Refactor only when the conflict or contract change identifies a specific limitation; follow [AGENTS.md](../../AGENTS.md#architecture-requirements-for-every-agent).
 4. Checks actually run against the combined result, with downstream and inherited upstream regressions listed separately. Recheck Codex files, private-data ignores, workflow guards and app/model update configuration. Reject duplicate Xcode build settings and verify the emitted Debug/Release bundle identities after version bumps; the [1.6.11 rehearsal](upstream-sync-1.6.11.md) found a silent identity override in an otherwise successful build.
 5. Independent automated review of the integrated revision, corrected findings and remaining limitations. Portable checks include offline synthetic Git regressions for the sync helper; they do not compile the app or verify model inference.
-6. Interactive evidence from the exact frozen signed revision when permissions, capture, typing, UI or model behavior is tested. Follow the signing and screenshot rules in [AGENTS.md](../../AGENTS.md#verification). An earlier revision's permission or capture result cannot establish the new revision's result.
+6. Interactive evidence from the exact frozen signed revision when permissions, capture, typing, UI or model behavior is tested. Follow the signing and screenshot procedure in [Native acceptance](agent-workflow.md#native-acceptance). An earlier revision's permission or capture result cannot establish the new revision's result.
 
 Portable checks and standalone projections establish only their reported scope, not compilation of the actual native app. Reuse actual pure declarations in test harnesses wherever possible and match the production immutable configuration contracts. After shared service or input changes, compare app and helper use of the same canonical formatter, fingerprint and prompt version across languages, time zones, fractional seconds and current, stale, absent and future values. Extend the existing input source boundary rather than duplicating an implementation. Complete the required actual native app and affected target builds available on the verification host before E2E, then freeze and verify the exact bundle and signature under the rules above. Record an unavailable build as an unresolved gate.
 

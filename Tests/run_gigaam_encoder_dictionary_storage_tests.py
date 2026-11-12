@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory(prefix="encoder-storage-", dir=root / ".build")
     tests = temporary / "StorageTests.swift"; tests.write_text(test)
     sources = ["GigaAMEncoderDictionaryStorage.swift", "GigaAMEncoderDictionary.swift", "GigaAMDictionaryLexicalEvidence.swift",
                "DictionaryAudioInspection.swift", "DictionaryLearningEvidence.swift", "DictionaryAudioSpan.swift",
-               "DictionaryStampMatcher.swift", "DictionaryReplacementProtection.swift"]
+               "DictionaryStampMatcher.swift", "DictionaryReplacementProtection.swift", "DictionaryCorrectionEditPolicy.swift"]
     for isolation in ([], ["-default-isolation", "MainActor"]):
         executable = temporary / ("tests-main-actor" if isolation else "tests-default")
         subprocess.run(["xcrun", "swiftc", "-O", "-swift-version", "5", "-parse-as-library", "-D", "GIGAAM_ENCODER_STORAGE_STANDALONE",

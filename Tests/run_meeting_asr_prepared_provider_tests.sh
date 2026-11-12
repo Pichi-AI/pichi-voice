@@ -19,6 +19,8 @@ if ! xcrun swiftc -parse-as-library -swift-version 5 -strict-concurrency=targete
     -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/PipelineVersion.swift" \
     Sources/Fluid/Services/ASRActivityLease.swift \
+    Tests/Support/StandaloneMeetingProcessingDependencies.swift \
+    Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift \
     Sources/Fluid/Services/Meeting/MeetingASRPreparationOwner.swift \
     Sources/Fluid/Services/Meeting/MeetingASRPreparedScope.swift \

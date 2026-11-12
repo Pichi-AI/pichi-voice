@@ -6,6 +6,38 @@ import SwiftUI
 import XCTest
 
 final class MeetingProviderOptionsTests: XCTestCase {
+    @MainActor
+    func testEveryOfferedMeetingModelUsesTheSharedLiveContractWithoutSubstitution() throws {
+        let registry = MeetingTranscriptionBackendRegistry.makeDefault()
+        for model in PichiMeetingProviderFactory.retranscriptionModels {
+            let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue), model.rawValue)
+            let language = try XCTUnwrap(PichiMeetingProviderFactory.defaultLanguageCode(for: model.rawValue))
+            XCTAssertEqual(registry.descriptor(for: descriptor.id), descriptor)
+            XCTAssertTrue(descriptor.supportedInputs.isSuperset(of: [.boundedMicrophonePCM, .boundedMultiTrackPCM]))
+            XCTAssertTrue(descriptor.supportedSpeakerProcessingModes.contains(.streaming))
+            XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
+                selectedModelID: model.rawValue, savedBackendID: .legacyCompatibility), descriptor.id)
+            let configuration = PichiMeetingProviderFactory.configuration(asrModel: model.rawValue,
+                languageCode: language, artifactFingerprintOverride: "synthetic-pinned-export", speakerProcessingMode: .streaming)
+            XCTAssertEqual(configuration.asrModel, model.rawValue)
+            XCTAssertEqual(configuration.asrArtifactFingerprint, "synthetic-pinned-export")
+            XCTAssertEqual(try MeetingProviderOptions.resolve(configuration).model, model)
+            XCTAssertEqual(try PichiMeetingProviderFactory.modelLocator(for: configuration).profile, .experimentalFast128FP16CPU)
+            for mode in MeetingCaptureMode.allCases {
+                XCTAssertNoThrow(try descriptor.validatePCMInput(configuration: configuration, mode: mode))
+                XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(configuration,
+                    isAppleSilicon: true, captureMode: mode))
+            }
+        }
+        let incompatible = PichiMeetingProviderFactory.validationConfiguration(backendID: .parakeetV2,
+            languageCode: "ru", preferredASRModel: .parakeetTDTv2, diarizationEnabled: true,
+            speakerProcessingMode: .streaming)
+        XCTAssertEqual(incompatible.asrModel, SettingsStore.SpeechModel.parakeetTDTv2.rawValue)
+        XCTAssertThrowsError(try MeetingProviderOptions.resolve(incompatible)) {
+            XCTAssertEqual($0 as? MeetingProviderOptionsError, .unsupportedLanguageCode("ru"))
+        }
+    }
+
     func testDefaultMeetingConfigurationResolvesToPinnedParakeetTDTv2EnglishPolicy() throws {
         let options = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration())
         XCTAssertEqual(options.model, .parakeetTDTv2)

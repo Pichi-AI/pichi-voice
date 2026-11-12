@@ -138,10 +138,13 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
          policy: MeetingSpeakerAttributionPolicy = .standard, limits: Limits = .init(),
          priorSpeakers: [MeetingSessionSpeaker] = []) throws {
         _ = try policy.validated()
-        let lookahead = max(
+        let acousticLookahead = max(
             policy.enableNeighborResolution ? policy.maximumUnknownRunSeconds + 2 * policy.maximumNeighborGapSeconds : 0,
             policy.enableBriefInterruption ? policy.maximumInterruptionWordSeconds + policy.maximumNeighborGapSeconds
                 + policy.maximumBriefInterruptionSeconds + policy.maximumBriefInterruptionGapSeconds : 0)
+        let lookahead = max(acousticLookahead,
+            policy.enableCompleteReadingAssignment ? MeetingReadingSpeakerResolver.contextRadiusSeconds : 0,
+            policy.enableTokenEmissionContext ? policy.maximumEmissionContextSeconds : 0)
         guard limits.maximumRetainedWords > 0, limits.maximumRetainedSeconds.isFinite,
               limits.maximumRetainedSeconds > lookahead,
               limits.maximumActivityIntervals > 0,
@@ -516,6 +519,21 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         trackKind: MeetingAudioTrackKind = .microphone,
         resetBefore: Set<MeetingTranscriptSegmentID> = [], allowRecovery: Bool = true
     ) throws {
+        if self.policy.enableCompleteReadingAssignment {
+            let assembler = MeetingTranscriptAssembler(speakerNameFormat: self.speakerNameFormat)
+            let reading = try MeetingReadingSpeakerResolver.resolve(segments: resolved, speakers: self.speakers,
+                policy: self.policy,
+                contextualBarrierEpochIDs: allowRecovery ? [] : [self.epoch],
+                resetBeforeIDs: resetBefore,
+                scopeForSegment: { _ in self.epoch },
+                fallbackSpeaker: { assembler.readingFallbackSpeaker(attemptID: self.attemptID,
+                    epoch: $0, trackKind: trackKind) })
+            guard reading.speakers.count <= self.limits.maximumSpeakers else { throw Failure.speakerLimit }
+            resolved = reading.segments
+            self.speakers = MeetingSessionSpeaker.numberingGeneratedParticipants(reading.speakers,
+                speakerNameFormat: self.speakerNameFormat)
+            return
+        }
         if self.policy.enableStableSpeakerOpening {
             try self.applyExistingParticipantContext(to: &resolved, resetBefore: resetBefore,
                 allowContext: allowRecovery)
@@ -771,6 +789,31 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         contextualBarrierEpochIDs: Set<MeetingAnalysisEpochID> = [],
         epochForSegment: (MeetingTranscriptSegment) -> MeetingAnalysisEpochID?
     ) throws -> MeetingPCMTranscriptBatch {
+        if let policy, policy.enableCompleteReadingAssignment {
+            _ = try policy.validated()
+            guard transcript.speakers.count <= MeetingSessionSpeaker.maximumParticipants else { throw Failure.speakerLimit }
+            for segment in transcript.segments {
+                try Task.checkCancellation()
+                let timing = Self.timing(segment)
+                guard let epoch = epochForSegment(segment), epoch.trackID == segment.sourceTrackID,
+                      epoch.ordinal >= 0, epoch.generation >= 0,
+                      MeetingEvidenceInterval.isValid(start: timing.start, end: timing.end) else { throw Failure.invalidWord }
+                guard segment.text.utf8.count + (segment.originalText?.utf8.count ?? 0)
+                    <= Limits().maximumRetainedTextBytes else { throw Failure.retainedTextLimit }
+            }
+            let assembler = MeetingTranscriptAssembler(speakerNameFormat: speakerNameFormat)
+            let reading = try MeetingReadingSpeakerResolver.resolve(segments: transcript.segments,
+                speakers: transcript.speakers, policy: policy, barriersByTrack: barriersByTrack,
+                contextualBarrierEpochIDs: contextualBarrierEpochIDs, scopeForSegment: epochForSegment,
+                fallbackSpeaker: { assembler.readingFallbackSpeaker(attemptID: attemptID, epoch: $0,
+                    trackKind: trackKinds[$0.trackID] ?? .microphone) })
+            var result = transcript
+            result.segments = reading.segments
+            result.speakers = MeetingSessionSpeaker.numberingGeneratedParticipants(reading.speakers,
+                speakerNameFormat: speakerNameFormat)
+            result.speakerNameFormat = speakerNameFormat
+            return result
+        }
         guard let policy, policy.enableProvisionalSpeakerIdentities || policy.enableStableSpeakerOpening else { return transcript }
         _ = try policy.validated()
         guard transcript.speakers.count <= MeetingSessionSpeaker.maximumParticipants else { throw Failure.speakerLimit }

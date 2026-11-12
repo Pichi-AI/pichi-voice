@@ -60,8 +60,17 @@ nonisolated enum MeetingModelInstaller {
         else {
             throw InstallError.wrongPackage
         }
-        return stride(from: 0, to: data.count, by: MemoryLayout<UInt32>.size).map { offset in
-            Float(bitPattern: UInt32(littleEndian: data.subdata(in: offset..<offset + 4).withUnsafeBytes { $0.load(as: UInt32.self) }))
+        return try data.withUnsafeBytes { try self.decodeSilenceEmbedding($0) }
+    }
+
+    /// Converts the fixed-size host asset after its trust check. Byte storage has no
+    /// UInt32 alignment guarantee, including small Data values and rebased buffers.
+    static func decodeSilenceEmbedding(_ bytes: UnsafeRawBufferPointer) throws -> [Float] {
+        guard bytes.count == Self.silenceEmbeddingDimensions * MemoryLayout<UInt32>.size else {
+            throw InstallError.wrongPackage
+        }
+        return stride(from: 0, to: bytes.count, by: MemoryLayout<UInt32>.size).map { offset in
+            Float(bitPattern: UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self)))
         }
     }
 

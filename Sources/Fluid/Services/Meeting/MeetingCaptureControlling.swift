@@ -3,6 +3,7 @@ import CoreMedia
 import Foundation
 
 nonisolated protocol MeetingCaptureControlling: Sendable {
+    var recordingTimePolicy: MeetingRecordingTimePolicy? { get }
     /// Any user-facing permission request must complete before the coordinator reserves
     /// the exclusive ASR meeting lease.
     func preflightPermissions() async throws
@@ -16,8 +17,23 @@ nonisolated protocol MeetingCaptureControlling: Sendable {
     ) async throws -> MeetingCaptureStartResult
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult
+    #if os(macOS)
+    func setMicrophoneManuallyMuted(_ muted: Bool, sessionID: MeetingSessionID) async throws
+    #endif
     func shutdownForTermination() async
 }
+
+nonisolated extension MeetingCaptureControlling {
+    var recordingTimePolicy: MeetingRecordingTimePolicy? { nil }
+}
+
+#if os(macOS)
+nonisolated extension MeetingCaptureControlling {
+    func setMicrophoneManuallyMuted(_ muted: Bool, sessionID: MeetingSessionID) async throws {
+        throw MeetingCaptureError.noActiveCapture
+    }
+}
+#endif
 
 
 nonisolated enum MeetingCaptureError: LocalizedError {
@@ -99,11 +115,22 @@ nonisolated enum MeetingCaptureEvent: Sendable {
     /// Presentation-only status. The writer owns persisted capture eras; this cannot restart capture.
     case microphoneEchoProtectionChanged(MeetingMicrophoneEchoProtection)
     #if os(macOS)
-    /// Observed conference mute status. Unknown/checking means local microphone capture is denied.
+    /// Effective microphone recording status after local intent and conference transitions.
     case microphoneMuteStateChanged(MeetingMicrophoneMuteState)
     #endif
     case chunkFinalized(trackID: MeetingAudioTrackID, chunk: MeetingAudioChunk, format: MeetingAudioFormat)
     case interrupted(kind: MeetingInterruptionKind, trackID: MeetingAudioTrackID?, detail: String?)
     /// `ack` is `nil` for downgrades — the mic is already dead, no race to gate on.
     case captureMethodChanged(trackID: MeetingAudioTrackID, method: MeetingAudioTrackCaptureMethod, ack: MeetingCaptureMethodChangeAck?)
+}
+
+/// Capture-side receipt independent of UI/event-delivery scheduling. Stop must carry a
+/// processing omission even if the MainActor has not consumed the notification yet.
+final nonisolated class MeetingCaptureContinuityState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var deferred = false
+    func observe(_ event: MeetingCaptureEvent) {
+        if case .interrupted(.liveTranscriptionDeferred, _, _) = event { self.lock.withLock { self.deferred = true } }
+    }
+    var transcriptionDeferred: Bool { self.lock.withLock { self.deferred } }
 }

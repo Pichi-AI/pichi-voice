@@ -1,0 +1,14 @@
+Whisper speech recognition models
+
+Original model: OpenAI Whisper
+Source and license: https://github.com/openai/whisper
+License: MIT, Copyright (c) 2022 OpenAI
+
+The mobile provider offers Whisper Tiny. Its default Q8_0 GGUF export is
+downloaded separately from handy-computer/whisper-tiny-gguf on Hugging Face:
+https://huggingface.co/handy-computer/whisper-tiny-gguf
+Legacy GGML imports are supported separately. The inference runtime has its
+own TranscribeCpp and ggml notices.
+
+The original model license is reproduced in Whisper-LICENSE.txt. The app does
+not claim to have trained the original model or to be endorsed by OpenAI.

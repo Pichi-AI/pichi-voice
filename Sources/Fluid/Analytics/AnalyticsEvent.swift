@@ -154,6 +154,7 @@ enum AnalyticsOnboardingStep: String {
     case language
     case voiceModel = "voice_model"
     case permissions
+    case ownerVoice = "owner_voice"
     case playground
     case aiEnhancement = "ai_enhancement"
     case meetingLocation = "meeting_location"

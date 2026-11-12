@@ -70,7 +70,7 @@ final nonisolated class MeetingMuteControlLocator {
 
     private enum ReadFailure: Error { case budget, transport, ambiguous }
 
-    private struct Reader {
+    struct Reader {
         static let timeout: Float = 0.025
         let deadline = ContinuousClock.now.advanced(by: .milliseconds(160))
         var attributesRemaining = 1200

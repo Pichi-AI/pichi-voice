@@ -90,6 +90,7 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
 
     private let id = UUID()
     private let lock = NSLock()
+    private var sharedScope: SharedScope?
     private var preparation: ScopeOperation?
     private var worker: Task<Void, Never>?
     private var prepared = false
@@ -110,6 +111,104 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
     /// final command, and cancellation before first use has no native work to abandon.
     static func deferred(using scope: @escaping ScopeOperation) -> MeetingStreamingPCMController {
         MeetingStreamingPCMController(scope: scope)
+    }
+
+    /// Both physical sources share one prepared resource stack. The bounded transports
+    /// still own independent windows; finishing either source waits for joined cleanup of
+    /// the complete attempt. Capture must finish all sources concurrently.
+    static func deferredTracks(
+        trackIDs: [MeetingAudioTrackID],
+        using scope: @escaping SharedScopeOperation
+    ) throws -> [MeetingAudioTrackID: MeetingStreamingPCMController] {
+        guard !trackIDs.isEmpty, Set(trackIDs).count == trackIDs.count else {
+            throw MeetingStreamingPCMControllerError.invalidScope
+        }
+        let controllers = Dictionary(uniqueKeysWithValues: trackIDs.map {
+            ($0, MeetingStreamingPCMController(scope: { _ in
+                throw MeetingStreamingPCMControllerError.invalidScope
+            }))
+        })
+        let shared = SharedScope(controllers: controllers, operation: scope)
+        for controller in controllers.values { controller.sharedScope = shared }
+        return controllers
+    }
+
+    typealias SharedScopeOperation = @Sendable (
+        @escaping @Sendable ([MeetingAudioTrackID: any MeetingPreparedStreamingPCMProcessing]) async throws -> Void
+    ) async throws -> Void
+
+    private final class WeakController: @unchecked Sendable {
+        weak var value: MeetingStreamingPCMController?
+        init(_ value: MeetingStreamingPCMController) { self.value = value }
+    }
+
+    private final class SharedScope: @unchecked Sendable {
+        private let lock = NSLock()
+        private let controllers: [MeetingAudioTrackID: WeakController]
+        private var operation: SharedScopeOperation?
+        private var worker: Task<Void, Never>?
+        private var cancelled = false
+
+        init(controllers: [MeetingAudioTrackID: MeetingStreamingPCMController],
+             operation: @escaping SharedScopeOperation) {
+            self.controllers = controllers.mapValues(WeakController.init)
+            self.operation = operation
+        }
+
+        func start() -> Task<Void, Never>? {
+            self.lock.withLock {
+                if let worker { return worker }
+                guard !self.cancelled, let operation = self.operation else { return nil }
+                self.operation = nil
+                let controllers = self.controllers.compactMapValues(\.value)
+                let expectedCount = self.controllers.count
+                let worker = Task.detached(priority: .userInitiated) {
+                    var failure: Error?
+                    do {
+                        guard controllers.count == expectedCount else {
+                            throw MeetingStreamingPCMControllerError.invalidScope
+                        }
+                        try Task.checkCancellation()
+                        try await operation { sessions in
+                            guard Set(sessions.keys) == Set(controllers.keys) else {
+                                throw MeetingStreamingPCMControllerError.invalidScope
+                            }
+                            try await withThrowingTaskGroup(of: Void.self) { group in
+                                for (trackID, controller) in controllers {
+                                    guard let session = sessions[trackID] else {
+                                        throw MeetingStreamingPCMControllerError.invalidScope
+                                    }
+                                    group.addTask {
+                                        try await withTaskCancellationHandler {
+                                            try await MeetingStreamingPCMCallContext.$controllerID.withValue(controller.id) {
+                                                try await controller.run(session)
+                                            }
+                                        } onCancel: { controller.cancel() }
+                                    }
+                                }
+                                do { while try await group.next() != nil {} }
+                                catch { group.cancelAll(); throw error }
+                            }
+                        }
+                        try Task.checkCancellation()
+                    } catch { failure = error }
+                    for controller in controllers.values { controller.complete(error: failure) }
+                }
+                self.worker = worker
+                return worker
+            }
+        }
+
+        var currentWorker: Task<Void, Never>? { self.lock.withLock { self.worker } }
+
+        func cancel() {
+            let worker = self.lock.withLock { () -> Task<Void, Never>? in
+                self.cancelled = true
+                self.operation = nil
+                return self.worker
+            }
+            worker?.cancel()
+        }
     }
 
     static func prepare(using scope: @escaping ScopeOperation) async throws -> MeetingStreamingPCMController {
@@ -148,7 +247,7 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
     /// Closing atomically prevents a racing first command from opening an abandoned scope.
     func cancelIfUnstarted() -> Bool {
         self.lock.withLock {
-            guard self.worker == nil else { return false }
+            guard self.worker == nil, self.sharedScope == nil else { return false }
             self.closed = true
             self.preparation = nil
             return true
@@ -164,6 +263,12 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
     }
 
     private func startIfNeeded() {
+        if let shared = self.sharedScope {
+            let worker = shared.start()
+            self.lock.withLock { self.worker = worker }
+            if worker == nil { self.complete(error: CancellationError()) }
+            return
+        }
         self.lock.withLock {
             guard self.worker == nil, !self.closed, let scope = self.preparation else { return }
             self.preparation = nil
@@ -245,9 +350,13 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
         } onCancel: { self.cancel() }
     }
 
-    private func join() async { await self.lock.withLock { self.worker }?.value }
+    private func join() async {
+        let worker = self.sharedScope?.currentWorker ?? self.lock.withLock { self.worker }
+        await worker?.value
+    }
 
     private func cancel() {
+        self.sharedScope?.cancel()
         let state = self.lock.withLock { () -> (Task<Void, Never>?, CheckedContinuation<Command?, Never>?) in
             self.closed = true
             self.preparation = nil

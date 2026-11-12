@@ -53,6 +53,7 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
         let pts: TimeRecord
         let duration: TimeRecord
         let epoch: UInt64
+        var clockPacket: MeetingCaptureClockMetadata.Packet? = nil
     }
 
     private struct Packet: @unchecked Sendable {
@@ -195,6 +196,11 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
               sample.duration.isValid, sample.duration.isNumeric, sample.duration.seconds.isFinite,
               sample.duration > .zero else { throw Failure.invalidInput }
         _ = try MeetingPCMFormatContract(audioFormat: buffer.format)
+        if let packet = sample.clockPacket {
+            _ = try packet.mapping.validated(expectedFrameCount: Int64(frames))
+            guard let start = packet.mapping.spans.first?.hostStart,
+                  abs(start.seconds - sample.pts.seconds) <= 1e-9 else { throw Failure.invalidInput }
+        }
         let buffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
         let interleaved = buffer.format.isInterleaved
         guard buffers.count == (interleaved ? 1 : channels) else { throw Failure.invalidInput }
@@ -207,7 +213,8 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
         guard (layout?.count ?? 0) <= 4096 else { throw Failure.invalidInput }
         let header = try JSONEncoder().encode(Header(version: 1, asbd: asbd, layout: layout,
             frames: buffer.frameLength, bufferBytes: buffers.map(\.mDataByteSize), bufferChannels: buffers.map(\.mNumberChannels),
-            pts: TimeRecord(sample.pts), duration: TimeRecord(sample.duration), epoch: input.epoch))
+            pts: TimeRecord(sample.pts), duration: TimeRecord(sample.duration), epoch: input.epoch,
+            clockPacket: sample.clockPacket))
         guard header.count <= maximumHeaderBytes, payloadBytes <= maximumRecordBytes - min(maximumRecordBytes, 8 + header.count)
         else { throw Failure.invalidInput }
         let memoryBytes = Int(buffer.frameCapacity) * channels * 4 + header.count + 512
@@ -340,7 +347,13 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
             payload.withUnsafeBytes { bytes in target.copyMemory(from: bytes.baseAddress!.advanced(by: offset), byteCount: count) }
             offset += count
         }
-        let sample = MeetingLiveSampleCopy.Sample(buffer: buffer, pts: header.pts.time, duration: header.duration.time)
+        if let packet = header.clockPacket {
+            _ = try packet.mapping.validated(expectedFrameCount: Int64(header.frames))
+            guard let start = packet.mapping.spans.first?.hostStart,
+                  abs(start.seconds - header.pts.time.seconds) <= 1e-9 else { throw Failure.corruptRecord }
+        }
+        let sample = MeetingLiveSampleCopy.Sample(buffer: buffer, pts: header.pts.time,
+            duration: header.duration.time, clockPacket: header.clockPacket)
         let input = Input(sample: sample, epoch: header.epoch)
         _ = try packet(input, maximumRecordBytes: 1024 * 1024)
         return input

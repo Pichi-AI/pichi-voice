@@ -3,26 +3,31 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import PichiCallObservation
 @preconcurrency import ScreenCaptureKit
 
 nonisolated struct MeetingMicrophoneMuteObservation: Sendable {
     let state: MeetingMicrophoneMuteState
-    /// Raw mach_absolute_time units. Positive freshness starts before AX and native capture.
+    /// Raw mach_absolute_time units. A visual transition starts before AX and native capture.
     let observedAtHostTime: UInt64
     let generation: UInt64
     /// A passive key event can arrive after a newer frame. Its acquisition boundary must
     /// narrow earlier approvals independently of observation freshness. Zero revokes all.
     var unsafeStartHostTime: UInt64? = nil
+    /// Historical PTT refinement ends at the first rendered unmute following that release,
+    /// so later legitimate closed epochs are not clipped by an old keyboard event.
+    var refinementUntilHostTime: UInt64? = nil
 }
 
 /// Best-effort observation of the selected conference's actual microphone control. It never
-/// opens an audio device, requests a permission, persists an image or grants an unknown state.
+/// opens an audio device, requests a permission or persists an image. Missing observations
+/// preserve the last state; a new attempt starts unmuted by the recording policy.
 /// The capture owner must apply its bounded quarantine before every microphone PCM sink.
 final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
     typealias Handler = @Sendable (MeetingMicrophoneMuteObservation) -> Void
     private static let nativeRequests = NativeRequestLease()
     private static let nativeTimeoutSeconds = 3.0
-    private static let maximumPositiveAge = 0.65
+    private static let maximumSnapshotAge = 0.65
 
     private let application: MeetingApplicationIdentity?
     private let handler: Handler
@@ -40,13 +45,13 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
     private var unboundGeometry: [UInt32: (frame: CGRect, title: String?)] = [:]
     private var boundWindowID: UInt32?
     private var boundDocumentURL: String?
-    private var geometryRevision: UInt64?
-    private var lastPositiveAt: UInt64?
-    private var lastState = MeetingMicrophoneMuteState.checking
-    private var lastObservationAt: UInt64 = 0
-    private var ptt = MeetingMutePTTState()
+    private var transition = MeetingMuteTransitionState()
+    private var lastPublishedState: MeetingMicrophoneMuteState?
+    private let renderedStatus: (any MeetingRenderedAudioStatusObserving)?
+    private let platform: MeetingMuteControlLocator.Platform?
+    private let pushToTalkChords: [CommunicationPushToTalkChord]
+    private var ownedChord: CommunicationPushToTalkChord?
     private var pttListener: MeetingMutePTTListener?
-    private var activationObserver: NSObjectProtocol?
 
     private struct PendingRequest {
         let id: UUID
@@ -73,44 +78,50 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         }
     }
 
-    init(application: MeetingApplicationIdentity?, handler: @escaping Handler) {
+    init(application: MeetingApplicationIdentity?, controlPlatform: MeetingMuteControlLocator.Platform? = nil,
+         renderedStatus: (any MeetingRenderedAudioStatusObserving)? = nil,
+         pushToTalkChords: [CommunicationPushToTalkChord] = [.init()], handler: @escaping Handler) {
         self.application = application
         self.handler = handler
+        self.platform = controlPlatform
+        self.renderedStatus = renderedStatus
+        self.pushToTalkChords = pushToTalkChords
     }
 
     deinit {
         self.timer?.cancel()
         self.pttListener?.stop()
-        if let observer = self.activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
     }
 
-    func start() {
+    func start(externallyDriven: Bool = false) {
         self.queue.async { [weak self] in
             guard let self, !self.started, !self.stopped else { return }
             self.started = true
             self.running = true
+            DebugLogger.shared.info("Meeting mute observer started: accessibilityTrusted=\(AXIsProcessTrusted())", source: "MeetingMicrophoneMuteMonitor")
             self.generation &+= 1
-            self.publish(.checking, at: mach_absolute_time())
+            self.publish(.unmuted, at: mach_absolute_time())
             guard self.platform != nil, self.application?.processID.map({ $0 > 0 }) == true else {
-                self.publish(.unknown, at: mach_absolute_time())
                 return
             }
-            let listener = MeetingMutePTTListener { [weak self] event in
-                self?.queue.async { [weak self] in self?.handlePTT(event) }
+            if !externallyDriven {
+                let listener = MeetingMutePTTListener { [weak self] event in self?.handleSharedPTT(event) }
+                self.pttListener = listener
+                _ = listener.start()
             }
-            self.pttListener = listener
-            _ = listener.start()
-            self.activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
-                forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: nil
-            ) { [weak self] _ in
-                self?.queue.async { [weak self] in self?.checkPTTFocus() }
-            }
+            guard !externallyDriven else { return }
             let timer = DispatchSource.makeTimerSource(queue: self.queue)
             timer.schedule(deadline: .now(), repeating: .milliseconds(250), leeway: .milliseconds(20))
             timer.setEventHandler { [weak self] in self?.poll() }
             self.timer = timer
             timer.resume()
         }
+    }
+
+    func requestPoll() { self.queue.async { [weak self] in self?.poll() } }
+
+    func handleSharedPTT(_ event: MeetingMutePTTListener.Event) {
+        self.queue.async { [weak self] in self?.handlePTT(event) }
     }
 
     /// After this returns, no observation callback from this monitor can execute. A late SDK
@@ -120,72 +131,54 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
             self.queue.async {
                 guard !self.stopped else { continuation.resume(); return }
                 self.stopped = true
-                let wasRunning = self.running
                 self.running = false
                 self.generation &+= 1
                 self.timer?.cancel()
                 self.timer = nil
                 self.pttListener?.stop()
                 self.pttListener = nil
-                if let observer = self.activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
-                self.activationObserver = nil
                 self.pending = nil
                 self.content = nil
                 self.unboundGeometry.removeAll()
                 self.locator.invalidate()
-                self.lastPositiveAt = nil
-                if wasRunning { self.publish(.unknown, at: mach_absolute_time(), whileStopped: true) }
+                self.renderedStatus?.invalidate()
                 continuation.resume()
             }
         }
     }
 
-    private var platform: MeetingMuteControlLocator.Platform? {
-        switch self.application?.bundleIdentifier {
-        case "us.zoom.xos": return .zoom
-        case "com.google.Chrome": return .googleMeet
-        default: return nil
-        }
-    }
-
     private func poll() {
-        guard self.running else { return }
-        self.checkPTTFocus()
+        guard self.running, self.platform != nil, AXIsProcessTrusted() else { return }
         let began = mach_absolute_time()
-        if let lastPositiveAt = self.lastPositiveAt,
-           Self.elapsed(since: lastPositiveAt, until: began) > Self.maximumPositiveAge {
-            self.publish(.unknown, at: began)
+        if self.transition.temporaryUnmute, let pid = self.application?.processID,
+           (NSWorkspace.shared.frontmostApplication?.processIdentifier != pid
+                || !(self.renderedStatus?.ownsFocusedWindow(processID: pid) == true || self.locator.ownsFocusedWindow(processID: pid))) {
+            self.ownedChord = nil
+            if self.transition.retireTemporaryGrant(at: began) { self.publish(.muted, at: began, unsafeStart: began, refineBoundary: true) }
+        }
+        if let renderedStatus = self.renderedStatus, let pid = self.application?.processID {
+            let snapshot = renderedStatus.sample(processID: pid, boundWindowID: self.boundWindowID)
+            if let windowID = snapshot.callWindowID {
+                if snapshot.state != nil || snapshot.temporaryHUDVisible == true { self.boundWindowID = windowID }
+                var changed = self.transition.observe(snapshot.state, at: began)
+                changed = self.transition.observeTemporaryHUD(snapshot.temporaryHUDVisible, at: began,
+                    corroboratedUnmute: snapshot.state == .unmuted) || changed
+                if changed { self.publishTransition(at: began) }
+                // The local tile supplies an explicit rendered state without capturing an icon.
+                if snapshot.state != nil || snapshot.temporaryHUDVisible == true { return }
+            }
         }
         if var pending = self.pending {
             let age = Self.elapsed(since: pending.started, until: began)
-            if age > (pending.metadata ? Self.nativeTimeoutSeconds : Self.maximumPositiveAge), !pending.timedOut {
+            if age > (pending.metadata ? Self.nativeTimeoutSeconds : Self.maximumSnapshotAge), !pending.timedOut {
                 pending.timedOut = true
                 self.pending = pending
-                self.publish(.unknown, at: began)
             }
-            // A timed-out native request is not replaced while it still owns the lease.
             return
         }
-        guard self.platform != nil, AXIsProcessTrusted(), CGPreflightScreenCaptureAccess() else {
-            self.publish(.unknown, at: began)
-            return
-        }
-        guard self.content != nil else {
-            self.requestMetadata(at: began)
-            return
-        }
-        guard let control = self.resolveControl() else {
-            self.publish(.unknown, at: mach_absolute_time())
-            return
-        }
-        if self.geometryRevision != control.geometryRevision {
-            self.geometryRevision = control.geometryRevision
-            self.publish(.unknown, at: mach_absolute_time())
-        }
-        // A negative action is safe to close immediately. Only pixels may affirm the muted icon.
-        if control.semanticState != .unmuted, self.lastState == .unmuted {
-            self.publish(.unknown, at: mach_absolute_time())
-        }
+        guard CGPreflightScreenCaptureAccess() else { return }
+        guard self.content != nil else { self.requestMetadata(at: began); return }
+        guard let control = self.resolveControl() else { return }
         self.requestImage(control, began: began)
     }
 
@@ -194,7 +187,7 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         guard now - self.lastMetadataAttempt >= 1 else { return }
         self.lastMetadataAttempt = now
         guard let id = Self.nativeRequests.acquire() else {
-            self.publish(.unknown, at: began); return
+            return
         }
         let request = PendingRequest(id: id, generation: self.generation, started: began, metadata: true)
         self.pending = request
@@ -205,7 +198,7 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
                 self.pending = nil
                 guard !request.timedOut,
                       Self.elapsed(since: began, until: mach_absolute_time()) <= Self.nativeTimeoutSeconds,
-                      let content else { self.publish(.unknown, at: mach_absolute_time()); return }
+                      let content else { return }
                 self.content = content
             }
         }
@@ -236,7 +229,7 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
                 geometry = (currentFrame, currentTitle ?? window.title)
             } else {
                 // A stale SCK rectangle must not prevent first binding after a move or resize.
-                // Missing current geometry remains unknown until the next bounded refresh.
+                // Missing current geometry supplies no transition until the next bounded refresh.
                 guard let current = self.unboundGeometry[window.windowID] else { return nil }
                 geometry = current
             }
@@ -277,10 +270,10 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         guard let content = self.content,
               let window = content.windows.first(where: { $0.windowID == control.windowID }),
               let display = content.displays.first(where: { $0.frame.contains(control.iconFrame) }) else {
-            self.publish(.unknown, at: mach_absolute_time()); return
+            return
         }
         guard let id = Self.nativeRequests.acquire() else {
-            self.publish(.unknown, at: mach_absolute_time()); return
+            return
         }
         let request = PendingRequest(id: id, generation: self.generation, started: began, metadata: false)
         self.pending = request
@@ -297,34 +290,35 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
             self?.queue.async { [weak self] in
                 guard let self, self.running, self.generation == request.generation, self.pending?.id == id else { return }
                 self.pending = nil
-                guard Self.elapsed(since: began, until: mach_absolute_time()) <= Self.maximumPositiveAge,
+                guard Self.elapsed(since: began, until: mach_absolute_time()) <= Self.maximumSnapshotAge,
                       let image, let fresh = self.resolveControl(),
                       fresh.windowID == control.windowID, fresh.geometryRevision == control.geometryRevision,
                       let sample = MeetingMuteIconProof.sample(image) else {
-                    self.publish(.unknown, at: mach_absolute_time()); return
+                    return
                 }
                 let visual = MeetingMuteIconProof.classify(rgb: sample)
-                if visual == .muted { self.ptt.confirmedMuted(captureStarted: began) }
-                var state = MeetingMuteObservationPolicy.state(before: control.semanticState, after: fresh.semanticState, visual: visual)
-                if state == .unmuted,
-                   (!self.ptt.permitsPositive(captureStarted: began)
-                    || Self.elapsed(since: began, until: mach_absolute_time()) > Self.maximumPositiveAge) {
-                    state = .unknown
-                }
-                let timestamp = state == .unmuted ? began : mach_absolute_time()
-                self.publish(state, at: timestamp)
+                let state = MeetingMuteObservationPolicy.state(before: control.semanticState, after: fresh.semanticState, visual: visual)
+                if self.transition.observe(state, at: began) { self.publishTransition(at: began) }
             }
         }
     }
 
+    private func publishTransition(at snapshotStart: UInt64) {
+        let muted = self.transition.state == .muted
+        let processedAt = mach_absolute_time()
+        self.publish(self.transition.state, at: muted ? processedAt : snapshotStart,
+            unsafeStart: muted ? snapshotStart : nil)
+    }
+
     private func publish(_ state: MeetingMicrophoneMuteState, at time: UInt64,
-        unsafeStart: UInt64? = nil, whileStopped: Bool = false) {
-        guard self.running || whileStopped else { return }
-        self.lastState = state
-        self.lastObservationAt = time
-        self.lastPositiveAt = state == .unmuted ? time : nil
+        unsafeStart: UInt64? = nil, refinementUntil: UInt64? = nil, refineBoundary: Bool = false) {
+        guard self.running,
+              self.lastPublishedState != state || refineBoundary else { return }
+        self.lastPublishedState = state
         self.handler(MeetingMicrophoneMuteObservation(state: state, observedAtHostTime: time,
-            generation: self.generation, unsafeStartHostTime: unsafeStart))
+            generation: self.generation, unsafeStartHostTime: unsafeStart, refinementUntilHostTime: refinementUntil))
+        // The synchronous capture handler installs its negative fence before returning.
+        if state == .muted { self.transition.negativeWasProcessed(at: mach_absolute_time()) }
     }
 
     private func handlePTT(_ event: MeetingMutePTTListener.Event) {
@@ -332,36 +326,38 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         let now = mach_absolute_time()
         switch event {
         case .disabled:
-            if self.ptt.release(at: now) { self.publish(.unknown, at: now, unsafeStart: 0) }
-        case let .key(held, timestamp):
+            self.ownedChord = nil
+            if self.transition.retireTemporaryGrant(at: now) { self.publish(.muted, at: now, unsafeStart: now, refineBoundary: true) }
+        case let .modifiersChanged(timestamp, flags):
+            guard let owned = self.ownedChord, !MeetingPTTChordMatcher.modifiersMatch(owned, flags: flags) else { return }
+            self.ownedChord = nil
+            self.releasePTT(timestamp: timestamp, processedAt: now)
+        case let .key(held, timestamp, code, flags):
             if held {
+                guard let chord = MeetingPTTChordMatcher.chord(in: self.pushToTalkChords, keyCode: code, flags: flags) else { return }
                 guard let pid = self.application?.processID,
                       NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
-                      self.locator.ownsFocusedWindow(processID: pid) else { return }
-                self.ptt.keyDown(at: timestamp.map(Self.hostTime(nanoseconds:)),
-                    persistentlyUnmuted: self.lastState == .unmuted, latestObservation: self.lastObservationAt)
+                      self.renderedStatus?.ownsFocusedWindow(processID: pid) == true || self.locator.ownsFocusedWindow(processID: pid) else { return }
+                self.ownedChord = chord
+                self.transition.keyDown(at: timestamp.map(Self.hostTime(nanoseconds:)))
             } else {
-                let boundary = MeetingMutePTTState.releaseBoundary(
-                    eventTime: timestamp.map(Self.hostTime(nanoseconds:)), processedAt: now)
-                if self.ptt.release(at: boundary.fence) {
-                    self.publish(.unknown, at: now, unsafeStart: boundary.unsafeStart)
-                }
+                guard self.ownedChord?.keyCode == code else { return }
+                self.ownedChord = nil
+                self.releasePTT(timestamp: timestamp, processedAt: now)
             }
         }
     }
 
-    private func checkPTTFocus() {
-        guard self.ptt.held, self.ptt.possiblePTT else { return }
-        guard let pid = self.application?.processID,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
-              self.locator.ownsFocusedWindow(processID: pid) else {
-            let now = mach_absolute_time()
-            if self.ptt.release(at: now) { self.publish(.unknown, at: now, unsafeStart: 0) }
-            return
-        }
+    private func releasePTT(timestamp: UInt64?, processedAt now: UInt64) {
+        guard let observation = self.transition.releaseObservation(
+            eventTime: timestamp.map(Self.hostTime(nanoseconds:)), processedAt: now,
+            generation: self.generation) else { return }
+        self.publish(observation.state, at: observation.observedAtHostTime,
+                     unsafeStart: observation.unsafeStartHostTime,
+                     refinementUntil: observation.refinementUntilHostTime, refineBoundary: true)
     }
 
-    private static func hostTime(nanoseconds: UInt64) -> UInt64 {
+    static func hostTime(nanoseconds: UInt64) -> UInt64 {
         let divisor = UInt64(self.timebase.numer), multiplier = UInt64(self.timebase.denom)
         return (nanoseconds / divisor) * multiplier + (nanoseconds % divisor) * multiplier / divisor
     }
@@ -370,7 +366,7 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
         var info = mach_timebase_info_data_t(); mach_timebase_info(&info); return info
     }()
 
-    private static func elapsed(since start: UInt64, until end: UInt64) -> Double {
+    static func elapsed(since start: UInt64, until end: UInt64) -> Double {
         guard end >= start else { return .infinity }
         return Double(end - start) * Double(self.timebase.numer) / Double(self.timebase.denom) / 1_000_000_000
     }
@@ -378,10 +374,10 @@ final nonisolated class MeetingMicrophoneMuteMonitor: @unchecked Sendable {
 
 nonisolated enum MeetingMuteObservationPolicy {
     static func state(before: MeetingMuteSemanticState, after: MeetingMuteSemanticState,
-        visual: MeetingMuteVisualState) -> MeetingMicrophoneMuteState {
+        visual: MeetingMuteVisualState) -> MeetingMicrophoneMuteState? {
         if visual == .muted { return .muted }
         if before == .unmuted, after == .unmuted, visual == .unmuted { return .unmuted }
-        return .unknown
+        return nil
     }
 }
 #endif

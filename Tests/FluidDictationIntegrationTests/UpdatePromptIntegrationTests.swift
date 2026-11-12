@@ -6,6 +6,7 @@ import XCTest
 final class UpdatePromptIntegrationTests: XCTestCase {
     func testUnconfiguredDistributionRejectsUpdateOperations() async {
         let updater = SimpleUpdater()
+        updater.updatesEnabledForTesting = false
         do {
             _ = try await updater.checkForUpdate(owner: "example", repo: "unused")
             XCTFail("No distribution feed is configured")
@@ -28,12 +29,12 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         context.defaults.set(true, forKey: SettingsStore.UpdateKeys.betaReleasesEnabled)
         let lastCheck = Date(timeIntervalSince1970: 1234)
         context.defaults.set(lastCheck, forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate)
-        context.fixture.setReply(version: "v0.0.1", downloadable: true)
+        context.fixture.setReply(version: "v0.0.1+1-public.1", downloadable: true)
         var installs = 0
         context.updater.simulationInstallHandler = { installs += 1 }
 
         do {
-            try await context.updater.installPreviousRelease(version: "v0.0.1")
+            try await context.updater.installPreviousRelease(version: "v0.0.1+1-public.1")
             XCTFail("An unconfigured distribution must fail before release discovery")
         } catch {
             XCTAssertEqual(error.localizedDescription, SimpleUpdateError.distributionNotConfigured.localizedDescription)
@@ -50,9 +51,9 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
         for (version, downloadable, expected) in [
-            ("v0.0.1", true, ["v0.0.1"]),
-            ("v99.0.0", true, []),
-            ("v0.0.1", false, []),
+            ("v0.0.1+1-public.1", true, ["v0.0.1+1-public.1"]),
+            ("v99.0.0+1-public.1", true, []),
+            ("v0.0.1+1-public.1", false, []),
         ] {
             context.fixture.setReply(version: version, downloadable: downloadable)
             let options = try await context.updater.fetchRecentReleaseBuildOptions(
@@ -61,7 +62,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
             XCTAssertEqual(options.map(\.version), expected)
             XCTAssertFalse(context.updater.isUpdateInProgress, "Listing versions never starts installation")
         }
-        context.fixture.setReply(version: "v0.0.1", downloadable: true, archiveRepository: "unrelated-app")
+        context.fixture.setReply(version: "v0.0.1+1-public.1", downloadable: true, archiveRepository: "unrelated-app")
         let unrelated = try await context.updater.fetchRecentReleaseBuildOptions(
             owner: AppBrand.repositoryOwner, repo: AppBrand.repositoryName, olderThanCurrent: true
         )
@@ -72,15 +73,15 @@ final class UpdatePromptIntegrationTests: XCTestCase {
     func testSelectedRollbackInstallsOnlyTheExactOlderRelease() async throws {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
-        context.fixture.setReply(version: "v0.0.1", downloadable: true)
+        context.fixture.setReply(version: "v0.0.1+1-public.1", downloadable: true)
         var installs = 0
         context.updater.simulationInstallHandler = { installs += 1 }
-        try await context.updater.installPreviousRelease(version: "v0.0.1")
+        try await context.updater.installPreviousRelease(version: "v0.0.1+1-public.1")
         XCTAssertEqual(installs, 1)
         XCTAssertFalse(context.updater.isUpdateInProgress)
         XCTAssertNil(context.defaults.object(forKey: SettingsStore.UpdateKeys.betaReleasesEnabled))
-        for selected in ["v0.0.2", "v99.0.0"] {
-            context.fixture.setReply(version: "v99.0.0")
+        for selected in ["v0.0.2+1-public.1", "v99.0.0+1-public.1"] {
+            context.fixture.setReply(version: "v99.0.0+1-public.1")
             do {
                 try await context.updater.installPreviousRelease(version: selected)
                 XCTFail("A missing or newer release must never install")
@@ -93,29 +94,29 @@ final class UpdatePromptIntegrationTests: XCTestCase {
     func testFailedRollbackReleasesGateForRetry() async throws {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
-        context.fixture.setReply(version: "v0.0.1", downloadable: true)
+        context.fixture.setReply(version: "v0.0.1+1-public.1", downloadable: true)
         context.updater.simulationInstallHandler = { throw URLError(.cannotConnectToHost) }
         do {
-            try await context.updater.installPreviousRelease(version: "v0.0.1")
+            try await context.updater.installPreviousRelease(version: "v0.0.1+1-public.1")
             XCTFail("Expected installation failure")
         } catch {}
         XCTAssertFalse(context.updater.isUpdateInProgress)
         var installs = 0
         context.updater.simulationInstallHandler = { installs += 1 }
-        try await context.updater.installPreviousRelease(version: "v0.0.1")
+        try await context.updater.installPreviousRelease(version: "v0.0.1+1-public.1")
         XCTAssertEqual(installs, 1)
     }
 
     func testRollbackRejectsConcurrentInstallAndCancelledDiscovery() async throws {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
-        context.fixture.setReply(version: "v0.0.1", held: true, downloadable: true)
+        context.fixture.setReply(version: "v0.0.1+1-public.1", held: true, downloadable: true)
         var installs = 0
         context.updater.simulationInstallHandler = { installs += 1 }
-        let pending = Task { try await context.updater.installPreviousRelease(version: "v0.0.1") }
+        let pending = Task { try await context.updater.installPreviousRelease(version: "v0.0.1+1-public.1") }
         try await self.waitFor { context.fixture.requestCount == 1 }
         do {
-            try await context.updater.installPreviousRelease(version: "v0.0.1")
+            try await context.updater.installPreviousRelease(version: "v0.0.1+1-public.1")
             XCTFail("Concurrent operations must be rejected")
         } catch {}
         pending.cancel()
@@ -126,7 +127,10 @@ final class UpdatePromptIntegrationTests: XCTestCase {
     }
 
     func testPopupPreferenceBackupDecodesFalseAndMissingLegacyField() throws {
-        var payload = SettingsStore.shared.makeBackupPayload()
+        let suite = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var payload = SettingsStore(defaults: defaults, initializeDesktop: false).makeBackupPayload()
         payload.showUpdatePopups = false
         let encoded = try JSONEncoder().encode(payload)
         XCTAssertEqual(try JSONDecoder().decode(SettingsBackupPayload.self, from: encoded).showUpdatePopups, false)
@@ -359,11 +363,11 @@ final class UpdatePromptIntegrationTests: XCTestCase {
     func testDefaultAutomaticOfferAndDisabledPopupsStillDiscover() async throws {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
-        context.fixture.setReply(version: "v99.0.0")
+        context.fixture.setReply(version: "v99.0.0+1-public.1")
         XCTAssertNil(context.defaults.object(forKey: SettingsStore.UpdateKeys.showUpdatePopups))
         context.updater.checkForUpdatesAutomatically()
         try await self.finishCheck(context)
-        XCTAssertEqual(context.updater.availableUpdateVersion, "v99.0.0")
+        XCTAssertEqual(context.updater.availableUpdateVersion, "99.0.0 (1)")
         XCTAssertTrue(self.isVisible("Update Available"))
         XCTAssertNotNil(context.defaults.object(forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate))
         XCTAssertFalse(context.updater.isUpdateInProgress)
@@ -372,10 +376,10 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         context.updater.automaticUpdatePopupPreferenceDidChange(isEnabled: false)
         XCTAssertFalse(self.isVisible("Update Available"))
         context.defaults.removeObject(forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate)
-        context.fixture.setReply(version: "v100.0.0")
+        context.fixture.setReply(version: "v100.0.0+1-public.1")
         context.updater.checkForUpdatesAutomatically()
         try await self.finishCheck(context, requests: 2)
-        XCTAssertEqual(context.updater.availableUpdateVersion, "v100.0.0")
+        XCTAssertEqual(context.updater.availableUpdateVersion, "100.0.0 (1)")
         XCTAssertFalse(self.isVisible("Update Available"))
         XCTAssertNotNil(context.defaults.object(forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate))
         XCTAssertNil(context.defaults.object(forKey: SettingsStore.UpdateKeys.updatePromptSnoozedUntil))
@@ -386,7 +390,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
         context.defaults.set(false, forKey: SettingsStore.UpdateKeys.showUpdatePopups)
-        context.fixture.setReply(version: "v99.0.0")
+        context.fixture.setReply(version: "v99.0.0+1-public.1")
         var installs = 0
         context.updater.simulationInstallHandler = { installs += 1 }
         context.updater.checkForUpdatesManually()
@@ -401,7 +405,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         try self.button("Later", in: offer).performClick(nil)
         install.performClick(nil)
         XCTAssertEqual(installs, 0)
-        XCTAssertEqual(context.updater.availableUpdateVersion, "v99.0.0")
+        XCTAssertEqual(context.updater.availableUpdateVersion, "99.0.0 (1)")
         context.updater.showAvailableUpdate()
         let cachedOffer = try self.visibleWindow("Update Available")
         try self.button("Install Now", in: cachedOffer).performClick(nil)
@@ -414,7 +418,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
     func testPopupTogglesDuringHeldCheckUseFinalPreferenceWithoutExtraRequests() async throws {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
-        context.fixture.setReply(version: "v99.0.0", held: true)
+        context.fixture.setReply(version: "v99.0.0+1-public.1", held: true)
         context.updater.checkForUpdatesAutomatically()
         try await self.waitFor { context.fixture.requestCount == 1 }
         for enabled in [false, true, false] {
@@ -425,7 +429,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         }
         context.fixture.release()
         try await self.finishCheck(context)
-        XCTAssertEqual(context.updater.availableUpdateVersion, "v99.0.0")
+        XCTAssertEqual(context.updater.availableUpdateVersion, "99.0.0 (1)")
         XCTAssertFalse(self.isVisible("Update Available"))
         context.defaults.set(true, forKey: SettingsStore.UpdateKeys.showUpdatePopups)
         context.updater.automaticUpdatePopupPreferenceDidChange(isEnabled: true)
@@ -438,7 +442,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
         context.defaults.set(false, forKey: SettingsStore.UpdateKeys.showUpdatePopups)
-        context.fixture.setReply(version: "v99.0.0", held: true)
+        context.fixture.setReply(version: "v99.0.0+1-public.1", held: true)
         context.updater.checkForUpdatesAutomatically()
         try await self.waitFor { context.fixture.requestCount == 1 }
         for _ in 0..<8 {
@@ -458,7 +462,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
         context.defaults.set(false, forKey: SettingsStore.UpdateKeys.showUpdatePopups)
-        context.fixture.setReply(version: "v99.0.0")
+        context.fixture.setReply(version: "v99.0.0+1-public.1")
         context.updater.checkForUpdatesAutomatically()
         try await self.finishCheck(context)
         context.defaults.removeObject(forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate)
@@ -484,7 +488,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
     func testChannelChangeRejectsHeldOldResult() async throws {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
-        context.fixture.setReply(version: "v99.0.0", held: true)
+        context.fixture.setReply(version: "v99.0.0+1-public.1", held: true)
         context.updater.checkForUpdatesAutomatically()
         try await self.waitFor { context.fixture.requestCount == 1 }
         context.defaults.set(true, forKey: SettingsStore.UpdateKeys.betaReleasesEnabled)
@@ -493,33 +497,33 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         context.updater.updateChannelDidChange()
         XCTAssertNil(context.updater.availableUpdateVersion)
         XCTAssertFalse(self.isVisible("Update Available"))
-        context.fixture.setReply(version: "v100.0.0")
+        context.fixture.setReply(version: "v100.0.0+1-public.1")
         context.updater.checkForUpdatesManually()
         try await self.finishCheck(context, requests: 2)
         context.fixture.release()
         try await Task.sleep(nanoseconds: 30_000_000)
-        XCTAssertEqual(context.updater.availableUpdateVersion, "v100.0.0")
+        XCTAssertEqual(context.updater.availableUpdateVersion, "100.0.0 (1)")
         let offer = try self.visibleWindow("Update Available")
-        XCTAssertTrue(offer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("v100.0.0") } == true)
+        XCTAssertTrue(offer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("100.0.0 (1)") } == true)
         XCTAssertFalse(context.updater.isUpdateInProgress)
     }
 
     func testChangedReleaseRequiresFreshApprovalBeforeInstalling() async throws {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
-        context.fixture.setReply(version: "v99.0.0")
+        context.fixture.setReply(version: "v99.0.0+1-public.1")
         var installs = 0
         context.updater.simulationInstallHandler = { installs += 1 }
         context.updater.checkForUpdatesManually()
         try await self.finishCheck(context)
         let oldOffer = try self.visibleWindow("Update Available")
         let oldInstall = try self.button("Install Now", in: oldOffer)
-        context.fixture.setReply(version: "v100.0.0")
+        context.fixture.setReply(version: "v100.0.0+1-public.1")
         oldInstall.performClick(nil)
         try await self.waitFor { context.fixture.requestCount == 2 && !context.updater.isUpdateInProgress }
         XCTAssertEqual(installs, 0, "A release discovered after approval must not install silently")
         let freshOffer = try self.visibleWindow("Update Available")
-        XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("v100.0.0") } == true)
+        XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("100.0.0 (1)") } == true)
         oldInstall.performClick(nil)
         XCTAssertEqual(installs, 0)
         try self.button("Install Now", in: freshOffer).performClick(nil)
@@ -528,17 +532,17 @@ final class UpdatePromptIntegrationTests: XCTestCase {
     }
 
     func testChannelChangeDuringApprovedInstallRechecksAndRequiresFreshApproval() async throws {
-        for currentChannelVersion in ["v100.0.0", nil] as [String?] {
+        for currentChannelVersion in ["v100.0.0+1-public.1", nil] as [String?] {
             let context = try UpdateTestContext()
             defer { context.cleanup() }
-            context.fixture.setReply(version: "v99.0.0")
+            context.fixture.setReply(version: "v99.0.0+1-public.1")
             var installs = 0
             context.updater.simulationInstallHandler = { installs += 1 }
             context.updater.checkForUpdatesManually()
             try await self.finishCheck(context)
             let oldOffer = try self.visibleWindow("Update Available")
             let oldInstall = try self.button("Install Now", in: oldOffer)
-            context.fixture.setReply(version: "v99.0.0", held: true)
+            context.fixture.setReply(version: "v99.0.0+1-public.1", held: true)
             oldInstall.performClick(nil)
             try await self.waitFor { context.fixture.requestCount == 2 && context.updater.isUpdateInProgress }
             context.defaults.set(true, forKey: SettingsStore.UpdateKeys.betaReleasesEnabled)
@@ -554,7 +558,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
             XCTAssertEqual(installs, 0)
             if let currentChannelVersion {
                 let freshOffer = try self.visibleWindow("Update Available")
-                XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains(currentChannelVersion) } == true)
+                XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains(UpdateReleaseSelection.pichiVersion(currentChannelVersion).map { "\($0.version) (\($0.build))" } ?? currentChannelVersion) } == true)
                 try self.button("Install Now", in: freshOffer).performClick(nil)
                 try await self.waitFor { installs == 1 && !context.updater.isUpdateInProgress }
                 XCTAssertEqual(context.fixture.requestCount, 4)
@@ -567,19 +571,44 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         }
     }
 
+    func testURLCancellationAfterChannelChangeAlsoRequiresFreshApproval() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        context.fixture.setReply(version: "v99.0.0+1-public.1")
+        context.updater.simulationInstallHandler = {
+            context.defaults.set(true, forKey: SettingsStore.UpdateKeys.betaReleasesEnabled)
+            let revision = context.defaults.integer(forKey: SettingsStore.UpdateKeys.channelPreferenceRevision)
+            context.defaults.set(revision + 1, forKey: SettingsStore.UpdateKeys.channelPreferenceRevision)
+            context.fixture.setReply(version: "v100.0.0+1-public.1")
+            context.updater.updateChannelDidChange()
+            throw URLError(.cancelled)
+        }
+        context.updater.checkForUpdatesManually()
+        try await self.finishCheck(context)
+        let offer = try self.visibleWindow("Update Available")
+        try self.button("Install Now", in: offer).performClick(nil)
+        try await self.finishCheck(context, requests: 3)
+        XCTAssertFalse(context.updater.isUpdateInProgress)
+        let freshOffer = try self.visibleWindow("Update Available")
+        XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains {
+            $0.stringValue.contains("100.0.0 (1)")
+        } == true)
+        XCTAssertFalse(self.isVisible("Update Failed"))
+    }
+
     func testInstallRejectsResultFromPreviouslyPendingDiscovery() async throws {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
         context.defaults.set(false, forKey: SettingsStore.UpdateKeys.showUpdatePopups)
-        context.fixture.setReply(version: "v99.0.0")
+        context.fixture.setReply(version: "v99.0.0+1-public.1")
         context.updater.checkForUpdatesAutomatically()
         try await self.finishCheck(context)
-        context.fixture.setReply(version: "v100.0.0", held: true)
+        context.fixture.setReply(version: "v100.0.0+1-public.1", held: true)
         context.updater.checkForUpdatesManually()
         try await self.waitFor { context.fixture.requestCount == 2 }
         context.updater.showAvailableUpdate()
         let cachedOffer = try self.visibleWindow("Update Available")
-        context.fixture.setReply(version: "v99.0.0")
+        context.fixture.setReply(version: "v99.0.0+1-public.1")
         var installs = 0
         context.updater.simulationInstallHandler = {
             installs += 1
@@ -599,7 +628,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
     func testFailedInstallReleasesGateAndAllowsExplicitRetry() async throws {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
-        context.fixture.setReply(version: "v99.0.0")
+        context.fixture.setReply(version: "v99.0.0+1-public.1")
         var attempts = 0
         context.updater.simulationInstallHandler = {
             attempts += 1
@@ -634,12 +663,12 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         context.updater.checkForUpdatesManually()
         try await self.finishCheck(context)
         let noUpdates = try self.visibleWindow("No Updates")
-        context.fixture.setReply(version: "v99.0.0")
+        context.fixture.setReply(version: "v99.0.0+1-public.1")
         context.updater.checkForUpdatesManually()
         try await self.finishCheck(context, requests: 2)
         XCTAssertFalse(noUpdates.isVisible)
         let offer = try self.visibleWindow("Update Available")
-        XCTAssertTrue(offer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("v99.0.0") } == true)
+        XCTAssertTrue(offer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("99.0.0 (1)") } == true)
         offer.cancelOperation(nil)
 
         context.fixture.setReply(version: nil)
@@ -647,7 +676,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         try await self.finishCheck(context, requests: 3)
         let secondResult = try self.visibleWindow("No Updates")
         context.presenter.presentFloatingPrompt(title: "Update Failed", message: "Unrelated installation failure", actions: [FloatingPromptAction(title: "OK") {}])
-        context.fixture.setReply(version: "v100.0.0")
+        context.fixture.setReply(version: "v100.0.0+1-public.1")
         context.updater.checkForUpdatesManually()
         try await self.finishCheck(context, requests: 4)
         XCTAssertFalse(secondResult.isVisible)
@@ -657,7 +686,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         XCTAssertTrue(installFailure.isVisible, "Check-result cleanup and popup preference changes must preserve unrelated installation errors")
         installFailure.cancelOperation(nil)
         let freshOffer = try self.visibleWindow("Update Available")
-        XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("v100.0.0") } == true)
+        XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("100.0.0 (1)") } == true)
         XCTAssertFalse(context.updater.isUpdateInProgress)
     }
 
@@ -686,23 +715,26 @@ private final nonisolated class UpdateFixture: @unchecked Sendable {
     var requestCount: Int { self.lock.withLock { self.count } }
 
     func setReply(
-        version: String?, status: Int = 200, held: Bool = false, downloadable: Bool = false,
+        version: String?, status: Int = 200, held: Bool = false, downloadable: Bool = true,
         archiveRepository: String = AppBrand.repositoryName
     ) {
         self.lock.withLock {
             self.status = status
             self.held = held
             self.body = version.map {
-                let raw = $0.hasPrefix("v") ? String($0.dropFirst()) : $0
+                let identity = UpdateReleaseSelection.pichiVersion($0)!
+                let assetName = "Pichi-Voice.dmg"
                 let assets = downloadable
                     ? """
-                    [{"name":"\(archiveRepository)-\(raw).zip","content_type":"application/zip","browser_download_url":"https://example.com/build.zip"}]
+                    [{"name":"\(assetName)","content_type":"application/x-apple-diskimage","browser_download_url":"https://github.com/\(AppBrand.repositoryOwner)/\(archiveRepository)/releases/download/\($0)/\(assetName)"}]
                     """
                     : "[]"
                 return """
                 [{"tag_name":"\($0)","prerelease":false,"assets":\(assets)}]
                 """
-            } ?? "[{\"tag_name\":\"v0.0.1\",\"prerelease\":false,\"assets\":[]}]"
+            } ?? """
+            [{"tag_name":"v0.0.1+1-public.1","prerelease":false,"assets":[{"name":"Pichi-Voice.dmg","content_type":"application/x-apple-diskimage","browser_download_url":"https://github.com/\(AppBrand.repositoryOwner)/\(AppBrand.repositoryName)/releases/download/v0.0.1+1-public.1/Pichi-Voice.dmg"}]}]
+            """
         }
     }
 

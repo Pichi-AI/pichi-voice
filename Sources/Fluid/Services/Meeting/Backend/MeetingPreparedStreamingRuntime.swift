@@ -1,5 +1,62 @@
 import Foundation
 
+/// Attempt-local native admission shared by source adapters. Its bounded callers hold
+/// no permit while awaiting future PCM, protected publication or capture shutdown.
+/// Cancellation removes a queued call, while an admitted native operation must return
+/// before the permit can pass to another source or the enclosing scope can clean up.
+actor MeetingStreamingInferenceGate {
+    private var occupied = false
+    private var waiting: [(UUID, CheckedContinuation<Void, Error>)] = []
+
+    func withOperation<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> T {
+        try await acquire()
+        defer { release() }
+        try Task.checkCancellation()
+        let value = try await operation()
+        try Task.checkCancellation()
+        return value
+    }
+
+    private func acquire() async throws {
+        try Task.checkCancellation()
+        if !occupied { occupied = true; return }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                waiting.append((id, continuation))
+            }
+        } onCancel: {
+            Task { await self.cancel(id) }
+        }
+    }
+
+    private func cancel(_ id: UUID) {
+        guard let index = waiting.firstIndex(where: { $0.0 == id }) else { return }
+        waiting.remove(at: index).1.resume(throwing: CancellationError())
+    }
+
+    private func release() {
+        guard !waiting.isEmpty else { occupied = false; return }
+        waiting.removeFirst().1.resume()
+    }
+}
+
+/// Multiple source windows share the one provider scope without overlapping native ASR.
+/// Growing windows wait for capture outside this wrapper, so an idle source cannot block
+/// recognition or finalization of the other source.
+nonisolated struct MeetingSerializedParakeetASRSession: MeetingParakeetASRSession {
+    let session: any MeetingParakeetASRSession
+    let gate: MeetingStreamingInferenceGate
+
+    func allowsIntermediatePCMObservations() async -> Bool {
+        await session.allowsIntermediatePCMObservations()
+    }
+
+    func transcribeWithTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+        try await gate.withOperation { try await session.transcribeWithTimings(samples) }
+    }
+}
+
 /// The concrete inference adapter keeps both prepared sessions inside their existing model
 /// scopes. One controller worker invokes it serially; no complete recording or unprotected
 /// transcript history is retained. Canonical privacy admission remains the pipeline's owner.
@@ -16,6 +73,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
     private let ownerVerificationPolicy: MeetingOwnerVoiceVerifier.Policy
     private let preserveOwnerCadenceAtEOF: Bool
     private let preserveOwnerEvidenceOnInconclusiveRefresh: Bool
+    private let inferenceGate: MeetingStreamingInferenceGate?
     private let onProgress: @Sendable (MeetingStreamingPCMObservation) async throws -> Void
     private let lock = NSLock()
     private var busy = false
@@ -53,7 +111,9 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
          ownerVerificationPolicy: MeetingOwnerVoiceVerifier.Policy = .streamingV2,
          preserveOwnerCadenceAtEOF: Bool = false,
          preserveOwnerEvidenceOnInconclusiveRefresh: Bool = false,
+         inferenceGate: MeetingStreamingInferenceGate? = nil,
          onProgress: @escaping @Sendable (MeetingStreamingPCMObservation) async throws -> Void) {
+        self.inferenceGate = inferenceGate
         self.runtime = runtime
         self.asr = asr
         self.diarizer = diarizer
@@ -114,7 +174,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
                         let began = ProcessInfo.processInfo.systemUptime
                         MeetingTimelineTrace.shared?.record("diarizer_append_begin", fields: ["attemptID": self.attemptID.uuidString,
                             "sourceOffsetSample": String(start + local), "sampleCount": String(portion.count)])
-                        let next = try await self.diarizer.appendStreaming(portion, sourceStartSample: start + local)
+                        let next = try await self.withNativeOperation { try await self.diarizer.appendStreaming(portion, sourceStartSample: start + local) }
                         self.traceDiarizer(next, since: began)
                         try Task.checkCancellation()
                         try self.accept(next, expectedAccepted: start + end, final: false)
@@ -129,7 +189,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
                     let began = ProcessInfo.processInfo.systemUptime
                     MeetingTimelineTrace.shared?.record("diarizer_append_begin", fields: ["attemptID": self.attemptID.uuidString,
                         "sourceOffsetSample": String(start), "sampleCount": String(samples.count)])
-                    let next = try await self.diarizer.appendStreaming(samples, sourceStartSample: start)
+                    let next = try await self.withNativeOperation { try await self.diarizer.appendStreaming(samples, sourceStartSample: start) }
                     self.traceDiarizer(next, since: began)
                     try Task.checkCancellation()
                     try self.accept(next, expectedAccepted: start + samples.count, final: false)
@@ -200,7 +260,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         let began = ProcessInfo.processInfo.systemUptime
         MeetingTimelineTrace.shared?.record("diarizer_finish_begin", fields: ["attemptID": self.attemptID.uuidString,
             "totalSamples": String(self.update.acceptedThroughSample)])
-        let next = try await self.diarizer.finishStreaming(totalSamples: self.update.acceptedThroughSample)
+        let next = try await self.withNativeOperation { try await self.diarizer.finishStreaming(totalSamples: self.update.acceptedThroughSample) }
         self.traceDiarizer(next, since: began)
         try Task.checkCancellation()
         try self.accept(next, expectedAccepted: self.update.acceptedThroughSample, final: true)
@@ -219,7 +279,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         // waits for the interval admission horizon. Preserve its left turn-edge context.
         let ownerFloor = self.ownerSamples?.retainActivityFromSample ?? beforeSample
         let retainedFrom = max(self.update.retainedFromSample, min(beforeSample, ownerFloor))
-        try await self.diarizer.discardActivity(beforeSample: retainedFrom)
+        try await self.withNativeOperation { try await self.diarizer.discardActivity(beforeSample: retainedFrom) }
         try Task.checkCancellation()
         let floor = Double(retainedFrom) / 16_000
         self.update = .init(activity: self.update.activity.compactMap {
@@ -262,6 +322,11 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
                 retainedFromSample: self.update.retainedFromSample, isFinal: false))
     }
 
+    private func withNativeOperation<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> T {
+        if let inferenceGate { return try await inferenceGate.withOperation(operation) }
+        return try await operation()
+    }
+
     private var globalEpoch: MeetingAnalysisEpochID { .init(trackID: self.trackID, ordinal: 0) }
 
     private func activity() -> [MeetingBackendSpeakerActivity] {
@@ -299,7 +364,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         try Task.checkCancellation()
         let began = ProcessInfo.processInfo.systemUptime
         let profiles: [MeetingSpeakerVoiceProfile]
-        do { profiles = try await self.runtime.speakerVoiceProfiles(samples: samples) }
+        do { profiles = try await self.withNativeOperation { try await self.runtime.speakerVoiceProfiles(samples: samples) } }
         catch {
             try Task.checkCancellation()
             if self.preserveOwnerEvidenceOnInconclusiveRefresh {

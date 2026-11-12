@@ -26,6 +26,30 @@ private struct SyntheticFailingRedactor: TranscriptTextRedacting {
 
 @MainActor
 final class MeetingPrivacyPublicationTests: XCTestCase {
+    func testProtectedPreviewPreservesExactPCMEnvelopeAcrossPrivacyAdmission() async throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let start = 9.0 / 16_000, end = 16_009.0 / 16_000
+        let unit = MeetingFinalTextUnit(id: "fractional-private-word", trackID: epoch.trackID, analysisEpochID: epoch,
+            precision: .utterance, text: "Анна Тестова", analysisStart: start, analysisEnd: end,
+            speaker: .unassigned, analysisSpanIDs: [], confidence: nil)
+        var batch = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: UUID(), epoch: epoch,
+            offset: 0, duration: end, units: [unit])
+        batch.speechObservationIsFinal = true
+        let redactor = SyntheticPersonRedactor(approvesPreview: true)
+        let context = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let protected = try await context.previewSpeech(batch)
+        let preview = try XCTUnwrap(protected)
+        XCTAssertEqual(preview.text, "[PERSON]")
+        XCTAssertEqual(preview.start, start)
+        XCTAssertEqual(preview.end, end)
+        let timeline = try MeetingPCMSourceTimeline(originSeconds: 0)
+        try timeline.record(sourceStartSample: 0, frameCount: 16_009, presentationTime: 0)
+        XCTAssertNotNil(timeline.mapTime(preview.start))
+        XCTAssertNotNil(preview.end.flatMap { timeline.mapEndTime($0) })
+        XCTAssertNil(timeline.mapEndTime(try XCTUnwrap(batch.segments.first).end.seconds))
+        XCTAssertEqual(batch.segments.first?.text, "Анна Тестова", "Only the protected copy is published")
+    }
+
     func testLivePartialUsesPriorPhraseContextWithoutChangingIdentityOrTiming() async throws {
         let utterance = MeetingLiveUtterance(id: UUID(), speaker: .you, text: "Анна", start: 0, end: 1)
         var partial = MeetingLivePartial(id: UUID(), text: "Тестова просит копию.", start: 1, end: 3)
@@ -87,13 +111,16 @@ final class MeetingPrivacyPublicationTests: XCTestCase {
         let units = words.enumerated().map { index, text in
             MeetingFinalTextUnit(id: "word-\(index)", trackID: epoch.trackID, analysisEpochID: epoch,
                                  precision: .word, text: text, analysisStart: Double(index), analysisEnd: Double(index + 1),
-                                 speaker: .unassigned, analysisSpanIDs: ["span"])
+                                 speaker: .unassigned, analysisSpanIDs: ["span"],
+                                 wordTimingProvenance: .init(basis: .tokenEmission,
+                                     sourceWindowID: "private-source-window", sourceWordIndex: index))
         }
         let original = MeetingFinalTranscriptEvidence(backendID: .gigaam, attemptID: UUID(), units: units)
         let safe = try await MeetingTranscriptPrivacyPolicy.redactedEvidence(original, using: SyntheticPersonRedactor())
         XCTAssertEqual(safe.units.map(\.text), ["Здравствуйте", "[PERSON]", "[PERSON]", "hello"])
         XCTAssertEqual(safe.units.map(\.id), original.units.map(\.id))
         XCTAssertEqual(safe.units.map(\.analysisSpanIDs), original.units.map(\.analysisSpanIDs))
+        XCTAssertEqual(safe.units.map(\.wordTimingProvenance), original.units.map(\.wordTimingProvenance))
     }
 
     func testPrivacyFailureCannotReturnAnUnfilteredPublication() async throws {

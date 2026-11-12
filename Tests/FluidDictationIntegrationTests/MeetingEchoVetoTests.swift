@@ -407,3 +407,108 @@ final class MeetingEchoVetoTests: XCTestCase {
         ), "a checkpoint written under pipelineVersion 3 must not resume under pipelineVersion 4's classification rules")
     }
 }
+
+/// Actual source clock mapping and echo owner, with no model or physical microphone.
+final class MeetingStreamingEchoPauseTests: XCTestCase {
+    func testEmissionVisibilityUsesFrozenAdmissionWithoutLosingEchoSuppression() async throws {
+        let mic = track(.microphone), app = track(.applicationAudio)
+        func emissionWords(_ track: MeetingAudioTrack) -> [MeetingTranscriptSegment] {
+            ["one", "two", "three", "four"].enumerated().map { index, text in
+                let start = 0.08 + Double(index) * 0.2
+                var segment = self.word(track, start: start)
+                segment.text = text
+                segment.end = .init(value: Int64(((start + 0.04) * 1_000).rounded()), timescale: 1_000)
+                segment.nativeTiming = .init(start: start, end: start + 0.04)
+                segment.nativeSpeakerAssignment = .unassigned
+                segment.nativeWordTimingProvenance = .init(basis: .tokenEmission,
+                    sourceWindowID: "\(track.id):window", sourceWordIndex: index)
+                return segment
+            }
+        }
+        func input(_ track: MeetingAudioTrack) -> MeetingStreamingPCMObservation {
+            .init(batch: .init(segments: emissionWords(track)),
+                activity: [.init(token: .init(analysisEpochID: .init(trackID: track.id, ordinal: 0), label: "a"),
+                                 start: 1.2, end: 2.4)],
+                acceptedThroughSample: 48_000, processedThroughSample: 48_000, retainedFromSample: 0,
+                isFinal: false, asrStableThroughSample: 48_000)
+        }
+        for enabled in [false, true] {
+            let owner = try MeetingStreamingEchoAdmission(tracks: [mic, app], preservesTokenEmissions: enabled)
+            _ = try await owner.observe(track: app, observation: input(app))
+            let observed = try await owner.observe(track: mic, observation: input(mic))
+            XCTAssertEqual(observed.batch.segments.count, 4)
+            XCTAssertTrue(observed.batch.segments.allSatisfy { $0.isLikelyEcho == enabled })
+            await owner.cancel()
+        }
+    }
+
+    private func track(_ kind: MeetingAudioTrackKind) -> MeetingAudioTrack {
+        .init(id: UUID(), kind: kind, sourceIdentifier: "fixture", sourceDisplayName: "Fixture", format: nil,
+              timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1,
+                              firstPresentationTime: nil), health: .waiting, chunks: [])
+    }
+    private func word(_ track: MeetingAudioTrack, start: Double, echo: Bool? = nil) -> MeetingTranscriptSegment {
+        .init(id: UUID(), start: .init(value: Int64(start * 1_000), timescale: 1_000),
+              end: .init(value: Int64((start + 0.25) * 1_000), timescale: 1_000),
+              sourceTrackID: track.id, speakerID: nil, text: "fixture", revision: 0,
+              status: .final, overlap: .none, completeness: .complete, isLikelyEcho: echo,
+              nativePrecision: .word,
+              nativeSpeakerAssignment: .assigned(.init(analysisEpochID: .init(trackID: track.id, ordinal: 0), label: "a")),
+              nativeTiming: .init(start: start, end: start + 0.25))
+    }
+    private func observation(_ track: MeetingAudioTrack, through: Double,
+                             words: [MeetingTranscriptSegment] = []) -> MeetingStreamingPCMObservation {
+        .init(batch: .init(segments: words), activity: [
+            .init(token: .init(analysisEpochID: .init(trackID: track.id, ordinal: 0), label: "a"), start: 0, end: through)],
+              acceptedThroughSample: Int((through * 16_000).rounded()),
+              processedThroughSample: Int((through * 16_000).rounded()), retainedFromSample: 0,
+              isFinal: false, asrStableThroughSample: Int((through * 16_000).rounded()))
+    }
+
+    func testPendingWordsAcrossRealMuteGapDoNotStopEitherSourceOrReviveExpiredEchoHistory() async throws {
+        let mic = self.track(.microphone), app = self.track(.applicationAudio)
+        let micClock = try MeetingPCMSourceTimeline(originSeconds: 0)
+        let appClock = try MeetingPCMSourceTimeline(originSeconds: 0)
+        // Timing geometry observed in the failed build53 Meet recording, without its audio/text.
+        try micClock.record(sourceStartSample: 0, frameCount: 902_400, presentationTime: 1.289)
+        try micClock.record(sourceStartSample: 902_400, frameCount: 20_800, presentationTime: 103.589)
+        try appClock.record(sourceStartSample: 0, frameCount: 1_676_800, presentationTime: 1.555)
+        let owner = try MeetingStreamingEchoAdmission(tracks: [mic, app], presentationInterval: { id, start, end in
+            (id == mic.id ? micClock : appClock).mapInterval(start: start, end: end)
+        }, presentationThrough: { id, through in
+            (id == mic.id ? micClock : appClock).mapEndTime(through)
+        })
+        _ = try await owner.observe(track: mic, observation: observation(mic, through: 37))
+        _ = try await owner.observe(track: app, observation: observation(app, through: 104.8))
+        let expiredUnknown = word(mic, start: 40), expiredKnown = word(mic, start: 41, echo: true)
+        let fresh = word(mic, start: 56.65)
+        let result = try await owner.observe(track: mic,
+            observation: observation(mic, through: 57.7, words: [expiredUnknown, expiredKnown, fresh]))
+        XCTAssertEqual(Array(result.batch.segments.prefix(2)), [expiredUnknown, expiredKnown])
+        XCTAssertNil(result.batch.segments[0].isLikelyEcho, "Expired evidence must not fabricate a no-echo verdict")
+        let admitted = try await owner.admitting(result.batch)
+        XCTAssertEqual(Array(admitted.segments.prefix(2)), [expiredUnknown, expiredKnown])
+        _ = try await owner.observe(track: app, observation: observation(app, through: 104.8))
+        let diagnostics = await owner.diagnostics
+        XCTAssertFalse(diagnostics.closed)
+        XCTAssertEqual(diagnostics.expiredEvidenceUnits, 2)
+        XCTAssertEqual(diagnostics.retainedRawUnits, 1, "Only current physical-island evidence enters the bounded cache")
+        let revisions = await owner.pendingRevisionBatch()
+        XCTAssertNil(revisions, "Expired raw words cannot retroactively revise old transcript flags")
+    }
+
+    func testExpiredEvidenceStillRejectsMalformedSourceAndClosesAdmission() async throws {
+        let mic = track(.microphone), app = track(.applicationAudio)
+        let owner = try MeetingStreamingEchoAdmission(tracks: [mic, app])
+        _ = try await owner.observe(track: app, observation: observation(app, through: 100))
+        do {
+            _ = try await owner.observe(track: mic, observation: observation(mic, through: 5, words: [word(app, start: 1)]))
+            XCTFail("History expiry cannot bypass source validation")
+        } catch let error as MeetingStreamingEchoAdmission.Failure {
+            XCTAssertEqual(error, .invalidObservation)
+        }
+        let diagnostics = await owner.diagnostics
+        XCTAssertTrue(diagnostics.closed)
+        XCTAssertEqual(diagnostics.expiredEvidenceUnits, 0)
+    }
+}

@@ -120,6 +120,20 @@ nonisolated struct MeetingLiveTranscriptSnapshot: Sendable, Equatable {
         return copy
     }
 
+    /// A checkpoint commits one source. An unrelated source's preview cannot restore
+    /// the committing source's older hypothesis while the reading projection awaits.
+    func preservingConcurrentPartials(from current: Self,
+                                      since previous: [MeetingLiveSpeaker: MeetingLivePartial],
+                                      committing source: MeetingLiveSpeaker?) -> Self {
+        var result = self
+        for key in [MeetingLiveSpeaker.you, .them] {
+            if key != source || current.partials[key] != previous[key] {
+                result.partials[key] = current.partials[key]
+            }
+        }
+        return result
+    }
+
     private mutating func markFinalized(_ id: UUID) {
         guard !self.finalizedTurnIDs.contains(id) else { return }
         self.finalizedTurnIDs.append(id)
@@ -223,8 +237,8 @@ nonisolated enum MeetingLiveBubbleComposer {
 
         var labelIndex = rows.startIndex
         for index in rows.indices {
-            rows[index].showsLabel = rows[index].hasReadableParticipant
-                && (index == rows.startIndex || !rows[index].hasSameSpeaker(as: rows[index - 1]))
+            // A source header is useful before participant identification is available.
+            rows[index].showsLabel = index == rows.startIndex || !rows[index].hasSameSpeaker(as: rows[index - 1])
             if rows[index].showsLabel { labelIndex = index }
             // The visible header belongs to the complete continuous reading turn, even
             // when long text is divided into several layout paragraphs below that header.
@@ -250,12 +264,25 @@ nonisolated enum MeetingLiveTimeConversion {
 final nonisolated class MeetingLiveOriginBox: @unchecked Sendable {
     private let lock = NSLock()
     private var origin: CMTime?
+    private var frozen = false
+
+    /// A recording's master origin never follows a later packet or a restarted producer.
+    @discardableResult
+    func freeze(_ pts: CMTime) -> CMTime {
+        self.lock.withLock {
+            if self.frozen, let origin { return origin }
+            self.origin = pts
+            self.frozen = true
+            return pts
+        }
+    }
 
     @discardableResult
     func establish(_ pts: CMTime) -> CMTime {
         self.lock.lock()
         defer { self.lock.unlock() }
         if let existing = self.origin {
+            if self.frozen { return existing }
             let earliest = min(pts, existing)
             self.origin = earliest
             return earliest
@@ -268,6 +295,227 @@ final nonisolated class MeetingLiveOriginBox: @unchecked Sendable {
         self.lock.lock()
         defer { self.lock.unlock() }
         return self.origin
+    }
+}
+
+/// One immutable host-clock axis and ownership scope for a capture attempt. Frame positions
+/// remain media coordinates; only measured host intervals determine recording time.
+final nonisolated class MeetingRecordingClock: @unchecked Sendable {
+    enum Failure: LocalizedError {
+        case invalidTimebase, invalidPacket, retiredProducer, unprovenClock
+        var errorDescription: String? { PichiLocalization.text("Audio timing could not be verified.") }
+    }
+    let id: UUID
+    let origin: CMTime
+    private let lock = NSLock()
+    private var epochs: [MeetingAudioTrackID: UInt64] = [:]
+
+    init(timebase: MeetingTimebaseMetadata, id: UUID = UUID()) throws {
+        guard timebase.machTimebaseNumerator > 0, timebase.machTimebaseDenominator > 0 else {
+            throw Failure.invalidTimebase
+        }
+        let seconds = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
+            / Double(timebase.machTimebaseDenominator) / 1_000_000_000
+        guard seconds.isFinite, seconds >= 0 else { throw Failure.invalidTimebase }
+        self.id = id
+        self.origin = CMTime(seconds: seconds, preferredTimescale: 1_000_000_000)
+    }
+
+    func source(_ sourceID: MeetingAudioTrackID) -> MeetingRecordingClockContext {
+        MeetingRecordingClockContext(clock: self, sourceID: sourceID)
+    }
+
+    fileprivate func reserveEpoch(sourceID: MeetingAudioTrackID) -> UInt64 {
+        self.lock.withLock {
+            let next = (self.epochs[sourceID] ?? 0) + 1
+            self.epochs[sourceID] = next
+            return next
+        }
+    }
+}
+
+nonisolated struct MeetingRecordingClockContext: Sendable {
+    let clock: MeetingRecordingClock
+    let sourceID: MeetingAudioTrackID
+    var clockID: UUID { self.clock.id }
+    var origin: CMTime { self.clock.origin }
+
+    func reserveEpoch() -> UInt64 { self.clock.reserveEpoch(sourceID: self.sourceID) }
+
+    func accepts(_ packet: MeetingCaptureClockMetadata.Packet) -> Bool {
+        packet.clockID == self.clockID && packet.sourceID == self.sourceID
+    }
+
+    func mapping(frameCount: Int, start: CMTime, end: CMTime,
+                 discontinuityBefore: Bool) throws -> MeetingAudioClockMapping {
+        guard frameCount > 0, frameCount <= 65_536,
+              start.isNumeric, end.isNumeric, end > start,
+              start >= self.origin else { throw MeetingRecordingClock.Failure.invalidPacket }
+        return try MeetingAudioClockMapping(frameCount: Int64(frameCount), spans: [
+            MeetingAudioClockSpan(frameStart: 0, frameEnd: Double(frameCount),
+                hostStart: .init(value: start.convertScale(1_000_000_000, method: .default).value,
+                                 timescale: 1_000_000_000),
+                hostEnd: .init(value: end.convertScale(1_000_000_000, method: .default).value,
+                               timescale: 1_000_000_000),
+                discontinuityBefore: discontinuityBefore)
+        ]).validated(expectedFrameCount: Int64(frameCount))
+    }
+
+    /// Copies only the bounded audio block. It never retains an arbitrary native backing store.
+    static func ownedCopy(_ sample: CMSampleBuffer) throws -> CMSampleBuffer {
+        let frames = CMSampleBufferGetNumSamples(sample)
+        guard frames > 0, frames <= 65_536, CMSampleBufferDataIsReady(sample),
+              let format = CMSampleBufferGetFormatDescription(sample),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
+              asbd.mFormatID == kAudioFormatLinearPCM, asbd.mBitsPerChannel == 32,
+              asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0,
+              asbd.mSampleRate.isFinite, (8_000...192_000).contains(asbd.mSampleRate),
+              (1...8).contains(asbd.mChannelsPerFrame),
+              let block = CMSampleBufferGetDataBuffer(sample) else {
+            throw MeetingRecordingClock.Failure.invalidPacket
+        }
+        let bytes = CMBlockBufferGetDataLength(block)
+        guard bytes > 0, bytes <= 2 * 1024 * 1024 else { throw MeetingRecordingClock.Failure.invalidPacket }
+        var copied: CMBlockBuffer?
+        guard CMBlockBufferCreateContiguous(allocator: kCFAllocatorDefault, sourceBuffer: block,
+            blockAllocator: kCFAllocatorDefault, customBlockSource: nil, offsetToData: 0,
+            dataLength: bytes, flags: kCMBlockBufferAlwaysCopyDataFlag, blockBufferOut: &copied) == noErr,
+              let copied else { throw MeetingRecordingClock.Failure.invalidPacket }
+        var timing = CMSampleTimingInfo()
+        guard CMSampleBufferGetSampleTimingInfo(sample, at: 0, timingInfoOut: &timing) == noErr else {
+            throw MeetingRecordingClock.Failure.invalidPacket
+        }
+        var result: CMSampleBuffer?
+        guard CMSampleBufferCreateReady(allocator: kCFAllocatorDefault, dataBuffer: copied,
+            formatDescription: format, sampleCount: frames, sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing, sampleSizeEntryCount: 0, sampleSizeArray: nil,
+            sampleBufferOut: &result) == noErr, let result else { throw MeetingRecordingClock.Failure.invalidPacket }
+        return result
+    }
+
+    func timedCopy(_ sample: CMSampleBuffer, mapping: MeetingAudioClockMapping,
+                   producerEpoch: UInt64) throws -> CMSampleBuffer {
+        if let previous = MeetingCaptureClockMetadata.read(from: sample), !self.accepts(previous) {
+            throw MeetingRecordingClock.Failure.invalidPacket
+        }
+        let sample = try Self.ownedCopy(sample)
+        let frames = CMSampleBufferGetNumSamples(sample)
+        let mapping = try mapping.validated(expectedFrameCount: Int64(frames))
+        guard let first = mapping.spans.first, let last = mapping.spans.last else {
+            throw MeetingRecordingClock.Failure.invalidPacket
+        }
+        let start = CMTime(value: first.hostStart.value, timescale: first.hostStart.timescale)
+        let end = CMTime(value: last.hostEnd.value, timescale: last.hostEnd.timescale)
+        var timing = CMSampleTimingInfo(duration: CMTimeMultiplyByRatio(end - start, multiplier: 1,
+            divisor: Int32(frames)), presentationTimeStamp: start, decodeTimeStamp: .invalid)
+        var result: CMSampleBuffer?
+        guard CMSampleBufferCreateCopyWithNewTiming(allocator: kCFAllocatorDefault,
+            sampleBuffer: sample, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+            sampleBufferOut: &result) == noErr, let result else { throw MeetingRecordingClock.Failure.invalidPacket }
+        try MeetingCaptureClockMetadata.attach(mapping: mapping, clockID: self.clockID,
+            sourceID: self.sourceID, producerEpoch: producerEpoch, to: result)
+        return result
+    }
+}
+
+/// Finalizes one pending packet using the next measured acquisition anchor. Callback arrival
+/// time is never an anchor. A real source gap closes the previous interval without filling it.
+final nonisolated class MeetingCaptureSourceClock: @unchecked Sendable {
+    private struct Pending {
+        let sample: CMSampleBuffer
+        let nativeStart: CMTime
+        let nativeEnd: CMTime
+        let hostStart: CMTime
+        let projectedHostEnd: CMTime
+        let rate: Double
+        let frames: Int
+        let sourceFrameStart: Int64?
+        let epoch: UInt64
+        let discontinuity: Bool
+    }
+    let context: MeetingRecordingClockContext
+    private let lock = NSLock()
+    private var pending: Pending?
+    private var generation: UInt64?
+    private var epoch: UInt64 = 0
+    private var format: MeetingPCMFormatContract?
+
+    init(context: MeetingRecordingClockContext) { self.context = context }
+
+    func offer(_ input: CMSampleBuffer, producerGeneration: UInt64,
+               sourceClock: CMClockOrTimebase? = nil, acquisitionStart: CMTime? = nil,
+               sourceFrameStart: Int64? = nil) throws -> [CMSampleBuffer] {
+        try self.lock.withLock {
+            let sample = try MeetingRecordingClockContext.ownedCopy(input)
+            guard let description = CMSampleBufferGetFormatDescription(sample),
+                  let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee else {
+                throw MeetingRecordingClock.Failure.invalidPacket
+            }
+            if let generation, producerGeneration < generation { throw MeetingRecordingClock.Failure.retiredProducer }
+            let frames = CMSampleBufferGetNumSamples(sample), rate = asbd.mSampleRate
+            let nativeStart = CMSampleBufferGetPresentationTimeStamp(sample)
+            let nativeEnd = nativeStart + CMTime(seconds: Double(frames) / rate, preferredTimescale: 1_000_000_000)
+            let hostStart = acquisitionStart ?? sourceClock.map {
+                CMSyncConvertTime(nativeStart, from: $0, to: CMClockGetHostTimeClock())
+            } ?? nativeStart
+            var hostEnd = sourceClock.map {
+                CMSyncConvertTime(nativeEnd, from: $0, to: CMClockGetHostTimeClock())
+            } ?? (hostStart + CMTime(seconds: Double(frames) / rate, preferredTimescale: 1_000_000_000))
+            guard hostStart.isNumeric, hostEnd.isNumeric, hostStart >= self.context.origin, hostEnd > hostStart else {
+                throw MeetingRecordingClock.Failure.unprovenClock
+            }
+            let signalFormat = try MeetingPCMFormatContract(formatDescription: description)
+            let formatChanged = self.format.map { $0 != signalFormat } ?? false
+            let changed = self.generation.map { $0 != producerGeneration } ?? true
+            var continuous = self.pending != nil && !changed && !formatChanged
+            if let prior = self.pending {
+                if let a = prior.sourceFrameStart, let b = sourceFrameStart {
+                    continuous = continuous && b == a + Int64(prior.frames)
+                } else {
+                    continuous = continuous && abs((nativeStart - prior.nativeEnd).seconds) <= 1.0 / rate + 1e-9
+                }
+                guard hostStart > prior.hostStart else { throw MeetingRecordingClock.Failure.unprovenClock }
+                if continuous {
+                    let measured = (hostStart - prior.hostStart).seconds
+                    let nominal = Double(prior.frames) / prior.rate
+                    // The host anchors are represented at nanosecond scale. Apply their two
+                    // rounding units to the interval, rather than as a rate-dependent ratio.
+                    guard measured.isFinite, measured >= nominal * 0.98 - 2e-9,
+                          measured <= nominal * 1.02 + 2e-9 else {
+                        throw MeetingRecordingClock.Failure.unprovenClock
+                    }
+                    if sourceClock == nil {
+                        // Only the finite unpaired tail needs projection. Its rate comes from
+                        // adjacent acquisition anchors, never accumulated nominal sample time.
+                        hostEnd = hostStart + CMTime(seconds: measured / Double(prior.frames) * Double(frames),
+                                                    preferredTimescale: 1_000_000_000)
+                    }
+                }
+            }
+            var output: [CMSampleBuffer] = []
+            if let prior = self.pending {
+                let end = continuous ? hostStart : min(prior.projectedHostEnd, hostStart)
+                let mapping = try self.context.mapping(frameCount: prior.frames, start: prior.hostStart,
+                    end: end, discontinuityBefore: prior.discontinuity)
+                output.append(try self.context.timedCopy(prior.sample, mapping: mapping, producerEpoch: prior.epoch))
+            }
+            if changed || formatChanged { self.epoch = self.context.reserveEpoch() }
+            self.generation = producerGeneration; self.format = signalFormat
+            self.pending = Pending(sample: sample, nativeStart: nativeStart, nativeEnd: nativeEnd,
+                hostStart: hostStart, projectedHostEnd: hostEnd, rate: rate, frames: frames,
+                sourceFrameStart: sourceFrameStart, epoch: self.epoch, discontinuity: !continuous)
+            return output
+        }
+    }
+
+    func finish() throws -> [CMSampleBuffer] {
+        try self.lock.withLock {
+            guard let prior = self.pending else { return [] }
+            self.pending = nil
+            let mapping = try self.context.mapping(frameCount: prior.frames, start: prior.hostStart,
+                end: prior.projectedHostEnd, discontinuityBefore: prior.discontinuity)
+            return [try self.context.timedCopy(prior.sample, mapping: mapping, producerEpoch: prior.epoch)]
+        }
     }
 }
 
@@ -300,6 +548,7 @@ nonisolated enum MeetingLiveSampleCopy {
         let buffer: AVAudioPCMBuffer
         let pts: CMTime
         let duration: CMTime
+        var clockPacket: MeetingCaptureClockMetadata.Packet? = nil
     }
 
     static func copy(_ sampleBuffer: CMSampleBuffer) -> Sample? {
@@ -336,10 +585,14 @@ nonisolated enum MeetingLiveSampleCopy {
         guard pts.isValid, pts.isNumeric else { return nil }
 
         var duration = CMSampleBufferGetDuration(sampleBuffer)
-        if !duration.isValid || !duration.isNumeric || duration <= .zero {
+        let clockPacket = MeetingCaptureClockMetadata.read(from: sampleBuffer)
+        if let first = clockPacket?.mapping.spans.first, let last = clockPacket?.mapping.spans.last {
+            duration = CMTime(seconds: last.hostEnd.seconds - first.hostStart.seconds, preferredTimescale: 1_000_000_000)
+        } else if !duration.isValid || !duration.isNumeric || duration <= .zero {
             duration = CMTime(value: CMTimeValue(frameCount), timescale: CMTimeScale(copiedBuffer.format.sampleRate.rounded()))
         }
-        return Sample(buffer: copiedBuffer, pts: pts, duration: duration)
+        return Sample(buffer: copiedBuffer, pts: pts, duration: duration,
+                      clockPacket: clockPacket)
     }
 
     private static func downmixLayoutlessMultichannel(_ source: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
@@ -439,6 +692,7 @@ nonisolated struct MeetingPendingSpeechSnapshot: Sendable, Equatable {
 /// Wave cadence is a bounded presentation estimate, never recognized words.
 nonisolated struct MeetingPendingSpeechProjection {
     static let maximumTokens = 64
+    private let maximumIntervals: Int
     static let minimumActivityRMS: Float = 0.0042
     static let quietWaitingSeconds: TimeInterval = 5
     private static let cadenceResetSeconds: TimeInterval = 0.24
@@ -481,10 +735,32 @@ nonisolated struct MeetingPendingSpeechProjection {
         }
     }
 
+    /// Unresolved speech duration, rather than a solid envelope spanning source gaps.
+    /// The same interval subtraction is used for cadence debt and rendered token support.
+    private struct Cadence {
+        var intervals: [Range<Double>] = []
+        mutating func append(_ ranges: [Range<Double>]) {
+            intervals = MeetingPendingSpeechProjection.merged(intervals + ranges)
+        }
+        mutating func consume(_ seconds: Double) -> [Range<Double>]? {
+            guard intervals.reduce(0, { $0 + $1.upperBound - $1.lowerBound }) >= seconds - 0.000_001 else { return nil }
+            var remaining = seconds
+            var consumed: [Range<Double>] = []
+            while remaining > 0.000_001, let first = intervals.first {
+                let count = min(remaining, first.upperBound - first.lowerBound)
+                consumed.append(first.lowerBound..<(first.lowerBound + count))
+                remaining -= count
+                if count >= first.upperBound - first.lowerBound - 0.000_001 { intervals.removeFirst() }
+                else { intervals[0] = (first.lowerBound + count)..<first.upperBound }
+            }
+            return consumed
+        }
+    }
+
     private struct Track {
         var energies: [Float] = []
         var consecutiveActivity = 0
-        var pendingDuration: Double = 0
+        var pending = Cadence()
         var lastEnd: Double?
         var lastActivityEnd: Double?
         var lastProgressEnd: Double?
@@ -492,17 +768,30 @@ nonisolated struct MeetingPendingSpeechProjection {
         var cadenceSeconds: Double = 0.4
         var cadenceObservedThrough: Double?
         var protectedThrough: Double = 0
+        var processedIntervals: [Range<Double>] = []
     }
     private var tracks: [MeetingLiveSpeaker: Track] = [:]
+    /// Public tokens retain only their display envelope. Private support records which
+    /// measured speech still belongs to that token, including after the 64-view coalescing.
+    private var tokenSupport: [UInt64: [Range<Double>]] = [:]
     private var nextID: UInt64 = 0
     private var visibleRevision: UInt64 = 0
     private var reportedCapacity = false
     private let onDiagnostic: (@Sendable (DiagnosticEvent) -> Void)?
     private(set) var snapshot = MeetingPendingSpeechSnapshot(isCapturing: true)
 
-    init(diagnostics: (@Sendable (DiagnosticEvent) -> Void)? = nil) {
+    init(maximumIntervals: Int = 8_192, diagnostics: (@Sendable (DiagnosticEvent) -> Void)? = nil) {
+        precondition((1...8_192).contains(maximumIntervals))
+        self.maximumIntervals = maximumIntervals
         self.onDiagnostic = diagnostics
     }
+
+    #if DEBUG
+    var retainedIntervalCounts: [Int] {
+        self.tracks.values.flatMap { [$0.pending.intervals.count, $0.processedIntervals.count] }
+            + self.tokenSupport.values.map(\.count)
+    }
+    #endif
 
     /// Exactly one short scalar frame from admitted PCM, using its capture PTS timeline.
     mutating func observe(source: MeetingLiveSpeaker, start: Double, end: Double,
@@ -519,7 +808,7 @@ nonisolated struct MeetingPendingSpeechProjection {
             if start - lastEnd > 0.06 {
                 track.energies.removeAll(keepingCapacity: true)
                 track.consecutiveActivity = 0
-                track.pendingDuration = 0
+                track.pending.intervals.removeAll(keepingCapacity: true)
             }
         }
         track.lastEnd = end
@@ -554,11 +843,11 @@ nonisolated struct MeetingPendingSpeechProjection {
         var track = self.tracks[source] ?? Track()
         if let lastEnd = track.lastEnd {
             guard start >= lastEnd - 0.000_001 else { return }
-            if start - lastEnd > 0.06 { track.pendingDuration = 0 }
+            if start - lastEnd > 0.06 { track.pending.intervals.removeAll(keepingCapacity: true) }
         }
         track.lastEnd = end
         if activity == .speech { track.lastActivityEnd = end }
-        else { track.pendingDuration = 0 }
+        else { track.pending.intervals.removeAll(keepingCapacity: true) }
         self.advance(source: source, start: start, end: end, activity: activity,
             contributesSpeech: activity == .speech, level: level, track: &track)
         self.tracks[source] = track
@@ -572,19 +861,26 @@ nonisolated struct MeetingPendingSpeechProjection {
             self.snapshot.revision &+= 1
         }
         if contributesSpeech, end > track.protectedThrough + 0.000_001 {
-            track.pendingDuration += end - max(start, track.protectedThrough)
+            let measured = max(start, track.protectedThrough)..<end
+            track.pending.append(Self.subtract([measured], coveredBy: track.processedIntervals))
+            guard track.pending.intervals.count <= self.maximumIntervals else {
+                track.pending.intervals.removeAll(keepingCapacity: true)
+                self.emit(.capacityReached, source: source, start: start, end: end)
+                return
+            }
             // Start at 150 shapes/minute, then gently follow newly visible native speech
             // timing. Activity decides when to mint; cadence is still only a UI estimate.
-            if track.pendingDuration >= track.cadenceSeconds - 0.000_001 {
-                track.pendingDuration -= track.cadenceSeconds
+            if let speech = track.pending.consume(track.cadenceSeconds),
+               let first = speech.first, let last = speech.last {
                 track.lastProgressEnd = end
                 track.reportedQuietWaiting = false
                 if self.snapshot.tokens.count < Self.maximumTokens {
                     let widths: [Double] = [0.72, 1.02, 0.56, 0.88, 0.64, 1.10, 0.80]
                     self.nextID &+= 1
                     self.snapshot.tokens.append(MeetingPendingSpeechToken(
-                        id: self.nextID, source: source, start: max(track.protectedThrough, end - track.cadenceSeconds), end: end,
+                        id: self.nextID, source: source, start: first.lowerBound, end: last.upperBound,
                         widthHint: widths[Int((self.nextID - 1) % UInt64(widths.count))], level: level))
+                    self.tokenSupport[self.nextID] = speech
                     self.snapshot.revision &+= 1
                     self.reportedCapacity = false
                     self.emit(.created, source: source, tokens: [self.snapshot.tokens.last!])
@@ -592,7 +888,14 @@ nonisolated struct MeetingPendingSpeechProjection {
                     // Preserve the same bounded display token and its complete outstanding
                     // source envelope when recognition falls behind. Later speech must not
                     // disappear merely because the renderer reached its view budget.
-                    self.snapshot.tokens[index].end = max(self.snapshot.tokens[index].end, end)
+                    let id = self.snapshot.tokens[index].id
+                    let support = Self.merged((self.tokenSupport[id] ?? []) + speech)
+                    guard support.count <= self.maximumIntervals else {
+                        self.emit(.capacityReached, source: source, start: start, end: end)
+                        return
+                    }
+                    self.tokenSupport[id] = support
+                    self.snapshot.tokens[index].end = last.upperBound
                     self.snapshot.revision &+= 1
                     self.emit(.extended, source: source, tokens: [self.snapshot.tokens[index]])
                 } else if !self.reportedCapacity {
@@ -602,7 +905,10 @@ nonisolated struct MeetingPendingSpeechProjection {
             }
         }
         if let lastActivityEnd = track.lastActivityEnd,
-           end - lastActivityEnd >= Self.cadenceResetSeconds { track.pendingDuration = 0 }
+           end - lastActivityEnd >= Self.cadenceResetSeconds { track.pending.intervals.removeAll(keepingCapacity: true) }
+        // Older decisions cannot return after monotonic source observation. Pending
+        // cadence/token support has already had every acknowledged part subtracted.
+        track.processedIntervals.removeAll { $0.upperBound <= end + 0.000_001 }
         if let lastProgressEnd = track.lastProgressEnd, end - lastProgressEnd >= Self.quietWaitingSeconds,
            !track.reportedQuietWaiting {
             track.reportedQuietWaiting = true
@@ -665,19 +971,28 @@ nonisolated struct MeetingPendingSpeechProjection {
         var track = tracks[source] ?? Track()
         guard end > track.protectedThrough else { return }
         let start = track.protectedThrough
+        guard applyCoverage(source: source, start: start, end: end, captionID: nil, visibleUTF16: 0) else { return }
+        track = tracks[source] ?? track
         track.protectedThrough = end
-        track.pendingDuration = 0
         tracks[source] = track
-        applyCoverage(source: source, start: start, end: end, captionID: nil, visibleUTF16: 0)
         emit(.processedCoverage, source: source, transcriptRevision: transcriptRevision, start: start, end: end)
     }
 
-    /// A retained-file caption worker successfully decoded this interval without text.
-    /// Unlike a cleared partial or silence observation, this is completed processing.
+    mutating func acknowledgeProtectedIntervals(source: MeetingLiveSpeaker,
+        intervals: [Range<Double>], transcriptRevision: UInt64) {
+        guard snapshot.isCapturing, transcriptRevision == visibleRevision,
+              intervals.count <= self.maximumIntervals,
+              intervals.allSatisfy({ $0.lowerBound.isFinite && $0.upperBound.isFinite
+                  && $0.lowerBound >= 0 && $0.upperBound > $0.lowerBound }) else { return }
+        applyCoverage(source: source, intervals: Self.merged(intervals), captionID: nil, visibleUTF16: 0)
+    }
+
+    /// A caption worker completed this interval without a visible caption (empty final
+    /// or admitted echo suppression). A cleared partial or silence is not completion.
     /// It cannot advance a source prefix across earlier queued or privacy-held speech.
-    mutating func acknowledgeEmptyRecognition(source: MeetingLiveSpeaker, start: Double, end: Double) {
+    mutating func acknowledgeResolvedAudio(source: MeetingLiveSpeaker, start: Double, end: Double) {
         guard snapshot.isCapturing, start.isFinite, end.isFinite, start >= 0, end > start else { return }
-        applyCoverage(source: source, start: start, end: end, captionID: nil, visibleUTF16: 0)
+        guard applyCoverage(source: source, start: start, end: end, captionID: nil, visibleUTF16: 0) else { return }
         emit(.processedCoverage, source: source, start: start, end: end)
     }
 
@@ -701,27 +1016,58 @@ nonisolated struct MeetingPendingSpeechProjection {
         track.cadenceSeconds = track.cadenceSeconds * 0.8 + observed * 0.2
     }
 
+    @discardableResult
     private mutating func applyCoverage(source: MeetingLiveSpeaker, start: TimeInterval, end: TimeInterval,
-                                       captionID: UUID?, visibleUTF16: Int) {
+                                       captionID: UUID?, visibleUTF16: Int) -> Bool {
+        guard end > start else { return false }
+        return applyCoverage(source: source, intervals: [start..<end], captionID: captionID, visibleUTF16: visibleUTF16)
+    }
+
+    /// Preflight the complete acknowledgement before changing any retained proof.
+    /// Subtraction can fragment a bounded interval list just as append can grow it.
+    /// On overflow retain the old proof, without bridging already acknowledged holes.
+    @discardableResult
+    private mutating func applyCoverage(source: MeetingLiveSpeaker, intervals: [Range<Double>],
+                                       captionID: UUID?, visibleUTF16: Int) -> Bool {
+        guard let first = intervals.first, let last = intervals.last else { return true }
+        let start = first.lowerBound, end = last.upperBound
+        var track = self.tracks[source] ?? Track()
+        let remembered = Self.merged(track.processedIntervals + intervals)
+            .filter { $0.upperBound > (track.lastEnd ?? 0) + 0.000_001 }
+        let pending = Self.subtract(track.pending.intervals, coveredBy: intervals)
+        guard remembered.count <= self.maximumIntervals, pending.count <= self.maximumIntervals else {
+            self.emit(.capacityReached, source: source, start: start, end: end)
+            return false
+        }
+        var supports: [UInt64: [Range<Double>]] = [:]
+        var nextTokens: [MeetingPendingSpeechToken] = []
         var removed: [MeetingPendingSpeechToken] = []
         var trimmed: [MeetingPendingSpeechToken] = []
-        self.snapshot.tokens = self.snapshot.tokens.compactMap { token in
-            guard token.source == source, token.end > start, token.start < end else { return token }
-            if token.start + 0.000_001 >= start, token.end <= end + 0.000_001 {
-                removed.append(token)
-                return nil
+        for token in self.snapshot.tokens {
+            guard token.source == source, token.end > start, token.start < end else {
+                nextTokens.append(token); continue
             }
-            // A word-shaped estimate can straddle a recognized boundary. Keep its
-            // uncovered part and stable identity instead of deleting other audio.
+            let support = Self.subtract(self.tokenSupport[token.id] ?? [token.start..<token.end], coveredBy: intervals)
+            guard support.count <= self.maximumIntervals else {
+                self.emit(.capacityReached, source: source, start: start, end: end)
+                return false
+            }
+            supports[token.id] = support
+            guard let first = support.first, let last = support.last else {
+                removed.append(token); continue
+            }
             var retained = token
-            if start <= token.start { retained.start = min(end, token.end) }
-            else if end >= token.end { retained.end = max(start, token.start) }
-            // Coverage strictly inside an estimate cannot justify erasing either
-            // outside edge. Conservatively retain it until more text covers it.
+            retained.start = first.lowerBound
+            retained.end = last.upperBound
             if retained != token { trimmed.append(token) }
-            return retained
+            nextTokens.append(retained)
         }
-        guard !removed.isEmpty || !trimmed.isEmpty else { return }
+        track.processedIntervals = remembered
+        track.pending.intervals = pending
+        self.tracks[source] = track
+        for (id, support) in supports { self.tokenSupport[id] = support.isEmpty ? nil : support }
+        self.snapshot.tokens = nextTokens
+        guard !removed.isEmpty || !trimmed.isEmpty else { return true }
         self.snapshot.revision &+= 1
         self.reportedCapacity = false
         if !removed.isEmpty {
@@ -732,6 +1078,31 @@ nonisolated struct MeetingPendingSpeechProjection {
             self.emit(.trimmed, source: source, tokens: trimmed, transcriptRevision: self.visibleRevision,
                 captionID: captionID, visibleUTF16: visibleUTF16, start: start, end: end)
         }
+        return true
+    }
+
+    private static func merged(_ ranges: [Range<Double>]) -> [Range<Double>] {
+        var result: [Range<Double>] = []
+        for range in ranges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if let last = result.last, range.lowerBound <= last.upperBound + 0.000_001 {
+                result[result.count - 1] = last.lowerBound..<max(last.upperBound, range.upperBound)
+            } else { result.append(range) }
+        }
+        return result
+    }
+
+    private static func subtract(_ ranges: [Range<Double>], coveredBy coverage: [Range<Double>]) -> [Range<Double>] {
+        var result: [Range<Double>] = []
+        for range in ranges {
+            var cursor = range.lowerBound
+            for covered in coverage where covered.upperBound > cursor && covered.lowerBound < range.upperBound {
+                if covered.lowerBound > cursor + 0.000_001 { result.append(cursor..<min(covered.lowerBound, range.upperBound)) }
+                cursor = max(cursor, covered.upperBound)
+                if cursor >= range.upperBound - 0.000_001 { break }
+            }
+            if cursor < range.upperBound - 0.000_001 { result.append(cursor..<range.upperBound) }
+        }
+        return result
     }
 
     private func emit(_ kind: DiagnosticEvent.Kind, source: MeetingLiveSpeaker? = nil,
@@ -751,6 +1122,7 @@ nonisolated struct MeetingPendingSpeechProjection {
         guard self.snapshot.isCapturing else { return }
         let removed = self.snapshot.tokens
         self.tracks.removeAll()
+        self.tokenSupport.removeAll()
         self.snapshot.tokens.removeAll()
         self.snapshot.isCapturing = false
         self.snapshot.activityBySource.removeAll()
@@ -777,7 +1149,9 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
     private let originBox: MeetingLiveOriginBox
     private let onUpdate: @Sendable (MeetingPendingSpeechSnapshot) -> Void
     private var projection: MeetingPendingSpeechProjection
-    private var activityWorker: MeetingCaptureSpeechActivityWorker?
+    /// Recurrent state and silence evidence belong to a physical source, not a participant.
+    /// The source set is frozen at initialization and never grows with transcript history.
+    private var activityWorkers: [MeetingLiveSpeaker: MeetingCaptureSpeechActivityWorker] = [:]
     private let onDiagnostic: (@Sendable (MeetingPendingSpeechProjection.DiagnosticEvent) -> Void)?
     private var meters: [MeetingLiveSpeaker: Meter] = [:]
     private var publicationScheduled = false
@@ -785,6 +1159,7 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
 
     init(originBox: MeetingLiveOriginBox,
          activityModel: MeetingCaptureSpeechActivityWorker.Factory? = nil,
+         activitySources: Set<MeetingLiveSpeaker> = [.you],
          diagnostics: (@Sendable (MeetingPendingSpeechProjection.DiagnosticEvent) -> Void)? = nil,
          onUpdate: @escaping @Sendable (MeetingPendingSpeechSnapshot) -> Void) {
         self.originBox = originBox
@@ -792,34 +1167,40 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         self.onDiagnostic = diagnostics
         self.projection = MeetingPendingSpeechProjection(diagnostics: diagnostics)
         if let activityModel {
-            self.activityWorker = MeetingCaptureSpeechActivityWorker(factory: activityModel) { [weak self] start, end, activity in
-                guard let self, self.activityWorker?.isUnavailable != true else { return }
-                let publish = self.lock.withLock {
-                    self.projection.observeSpeechActivity(source: .you, start: start, end: end, activity: activity)
-                    return self.reservePublication()
+            for source in activitySources {
+                self.activityWorkers[source] = MeetingCaptureSpeechActivityWorker(factory: activityModel, source: source) { [weak self] start, end, activity in
+                    guard let self, self.activityWorkers[source]?.isUnavailable != true else { return }
+                    let publish = self.lock.withLock {
+                        self.projection.observeSpeechActivity(source: source, start: start, end: end, activity: activity)
+                        return self.reservePublication()
+                    }
+                    if publish { self.schedulePublication() }
                 }
-                if publish { self.schedulePublication() }
             }
         }
     }
 
-    func confidentlyNonSpeech(start: Double, end: Double) -> Bool {
-        self.activityWorker?.confidentlyNonSpeech(start: start, end: end) ?? false
+    func confidentlyNonSpeech(source: MeetingLiveSpeaker = .you, start: Double, end: Double) -> Bool {
+        self.activityWorkers[source]?.confidentlyNonSpeech(start: start, end: end) ?? false
     }
 
-    func awaitConfidentNonSpeech(start: Double, end: Double) async -> Bool {
-        await self.activityWorker?.awaitConfidentNonSpeech(start: start, end: end) ?? false
+    func awaitConfidentNonSpeech(source: MeetingLiveSpeaker = .you, start: Double, end: Double) async -> Bool {
+        await self.activityWorkers[source]?.awaitConfidentNonSpeech(start: start, end: end) ?? false
     }
 
     func stopAndWait() async {
         self.stop()
-        await self.activityWorker?.join()
+        await withTaskGroup(of: Void.self) { group in
+            for worker in self.activityWorkers.values { group.addTask { await worker.join() } }
+        }
         MeetingTimelineTrace.shared?.record("capture_joined")
         await MeetingTimelineTrace.shared?.flush()
     }
 
     func offer(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
-        if let activityWorker, kind == .microphone, !activityWorker.isUnavailable {
+        let source: MeetingLiveSpeaker = kind == .microphone ? .you : .them
+        let activityWorker = self.activityWorkers[source]
+        if let activityWorker, !activityWorker.isUnavailable {
             let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             guard pts.isNumeric else { return }
             let start = MeetingLiveTimeConversion.sessionSeconds(pts: pts, origin: self.originBox.establish(pts))
@@ -842,9 +1223,14 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         guard count > 0, count <= 65_536, pts.isNumeric else { return }
         let origin = self.originBox.establish(pts)
         let start = MeetingLiveTimeConversion.sessionSeconds(pts: pts, origin: origin)
+        let clockMapping = MeetingCaptureClockMetadata.read(from: sampleBuffer)?.mapping
+        func time(at frame: Int, side: MeetingAudioClockMapping.BoundarySide = .start) -> Double {
+            clockMapping?.hostTime(atFrame: Double(min(frame, count)), side: side).map { $0.seconds - origin.seconds }
+                ?? (start + Double(min(frame, count)) / asbd.mSampleRate)
+        }
         MeetingTimelineTrace.shared?.record("capture_pcm", fields: ["source": String(describing: kind),
             "sourceStartSeconds": String(start), "sampleCount": String(count),
-            "vadState": self.activityWorker == nil ? "not-configured" : "capture-fallback-see-vad-events"])
+            "vadState": activityWorker == nil ? "not-configured" : "capture-fallback-see-vad-events"])
         var needed = 0
         guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer,
             bufferListSizeNeededOut: &needed, bufferListOut: nil, bufferListSize: 0,
@@ -862,16 +1248,16 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         let interleaved = asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0
         guard buffers.count == (interleaved ? 1 : channels),
               buffers.allSatisfy({ $0.mData != nil && Int($0.mDataByteSize) >= count * MemoryLayout<Float>.stride * (interleaved ? channels : 1) }) else { return }
-        let source: MeetingLiveSpeaker = kind == .microphone ? .you : .them
         let schedule = self.lock.withLock { () -> Bool in
             guard self.projection.snapshot.isCapturing else { return false }
             var meter = self.meters[source] ?? Meter()
+            if clockMapping?.spans.first?.discontinuityBefore == true { meter = Meter() }
             if let lastEnd = meter.lastEnd {
                 guard start >= lastEnd - 0.000_01 else { return false }
                 if start - lastEnd > 0.01 { meter = Meter() }
             }
             let stride = max(1, Int(asbd.mSampleRate / 8_000))
-            let bufferEnd = start + Double(count) / asbd.mSampleRate
+            let bufferEnd = time(at: count, side: .end)
             for frame in Swift.stride(from: 0, to: count, by: stride) {
                 var value: Float = 0
                 for channel in 0..<channels {
@@ -879,12 +1265,12 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
                     value += data[interleaved ? frame * channels + channel : frame] / Float(channels)
                 }
                 guard value.isFinite else { self.meters[source] = Meter(); return false }
-                if meter.count == 0 { meter.start = start + Double(frame) / asbd.mSampleRate }
+                if meter.count == 0 { meter.start = time(at: frame) }
                 if meter.count > 0, (value < 0) != (meter.previous < 0) { meter.crossings += 1 }
                 meter.previous = value
                 meter.count += 1; meter.squares += Double(value) * Double(value)
                 meter.peak = max(meter.peak, abs(value))
-                let measuredEnd = min(bufferEnd, start + Double(frame + stride) / asbd.mSampleRate)
+                let measuredEnd = min(bufferEnd, time(at: frame + stride, side: .end))
                 if measuredEnd - meter.start >= 0.02 - 0.000_001 {
                     self.projection.observe(source: source, start: meter.start,
                         end: measuredEnd,
@@ -893,7 +1279,7 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
                     meter.count = 0; meter.squares = 0; meter.peak = 0; meter.crossings = 0
                 }
             }
-            meter.lastEnd = start + Double(count) / asbd.mSampleRate
+            meter.lastEnd = bufferEnd
             self.meters[source] = meter
             return self.reservePublication()
         }
@@ -918,15 +1304,24 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         }
     }
 
-    func acknowledgeEmptyRecognition(source: MeetingLiveSpeaker, start: Double, end: Double) -> MeetingPendingSpeechSnapshot {
+    func acknowledgeResolvedAudio(source: MeetingLiveSpeaker, start: Double, end: Double) -> MeetingPendingSpeechSnapshot {
         self.lock.withLock {
-            self.projection.acknowledgeEmptyRecognition(source: source, start: start, end: end)
+            self.projection.acknowledgeResolvedAudio(source: source, start: start, end: end)
+            return self.projection.snapshot
+        }
+    }
+
+    func acknowledgeProtectedIntervals(source: MeetingLiveSpeaker, intervals: [Range<Double>],
+                                      transcriptRevision: UInt64) -> MeetingPendingSpeechSnapshot {
+        self.lock.withLock {
+            self.projection.acknowledgeProtectedIntervals(source: source, intervals: intervals,
+                transcriptRevision: transcriptRevision)
             return self.projection.snapshot
         }
     }
 
     func stop() {
-        self.activityWorker?.stop()
+        for worker in self.activityWorkers.values { worker.stop() }
         self.lock.withLock { self.projection.stop(); self.meters.removeAll() }
     }
 
@@ -955,8 +1350,9 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
 }
 
 
-/// The mobile tee already supplies normalized 16kHz mono PCM. A single attempt-owned
-/// worker loads one optional model and owns its recurrent state. Admission only retains
+/// The mobile tee supplies normalized 16kHz mono PCM; desktop native PCM is converted
+/// through the existing capture converter on this worker. One source-owned worker
+/// loads one optional model and owns its recurrent state. Admission only retains
 /// bounded sample buffers; conversion, inference and model loading never run on capture.
 /// Unknown coverage always fails open for ASR. No audio file or model download is created.
 final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable {
@@ -971,7 +1367,18 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
         let buffer: CMSampleBuffer
         let start: Double
         let count: Int
+        let format: MeetingPCMFormatContract
+        var seconds: Double { Double(count) / format.sampleRate }
+        var bytes: Int { count * format.channelCount * MemoryLayout<Float>.stride }
         let epoch: UInt64
+        var clockPacket: MeetingCaptureClockMetadata.Packet? = nil
+        var mappedOrigin: Double? {
+            clockPacket?.mapping.spans.first.map { $0.hostStart.seconds - start }
+        }
+        var end: Double {
+            guard let origin = mappedOrigin, let last = clockPacket?.mapping.spans.last else { return start + seconds }
+            return last.hostEnd.seconds - origin
+        }
     }
     private struct Evidence {
         let start: Double
@@ -988,7 +1395,8 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     private let queue = DispatchQueue(label: "meeting.speech-activity", qos: .utility)
     private let lock = NSLock()
     private var inputs: [Input] = []
-    private var pendingSamples = 0
+    private var pendingSeconds: Double = 0
+    private var pendingBytes = 0
     private var scheduled = false
     private var closed = false
     private var unavailable = false
@@ -1000,13 +1408,23 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     private var sampleStart = 0.0
     private var previousEnd: Double?
     private var previousEpoch: UInt64?
+    private var previousFormat: MeetingPCMFormatContract?
+    private var converter: MeetingCapturePCMConverter?
+    private var sampleMapping: MeetingAudioClockMapping?
+    private var mappingOrigin: Double?
+    private var previousClockPacket: MeetingCaptureClockMetadata.Packet?
+    private var detectorEpoch: UInt64 = 0
+    private var detectorFrames: Int64 = 0
     private let session = UUID()
+    private let source: MeetingLiveSpeaker
     private let publish: @Sendable (Double, Double, MeetingSpeechActivity) -> Void
 
     init(factory: @escaping Factory,
+         source: MeetingLiveSpeaker = .you,
          clock: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime },
          publish: @escaping @Sendable (Double, Double, MeetingSpeechActivity) -> Void) {
         self.publish = publish
+        self.source = source
         queue.async { [self] in
             guard !lock.withLock({ closed }) else { return }
             // A missing or invalid model leaves the whole attempt unknown. Capture and
@@ -1033,28 +1451,31 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
 
     func offer(_ buffer: CMSampleBuffer, start: Double) {
         let count = CMSampleBufferGetNumSamples(buffer)
-        guard start.isFinite, start >= 0, count > 0, count <= 16_000,
+        guard start.isFinite, start >= 0, count > 0, count <= 65_536,
               CMSampleBufferIsValid(buffer), CMSampleBufferDataIsReady(buffer),
               let description = CMSampleBufferGetFormatDescription(buffer),
               let format = try? MeetingPCMFormatContract(formatDescription: description),
-              format.sampleRate == 16_000, format.channelCount == 1,
+              (8_000...192_000).contains(format.sampleRate), (1...8).contains(format.channelCount),
+              Double(count) / format.sampleRate <= 1,
               let block = CMSampleBufferGetDataBuffer(buffer),
-              CMBlockBufferGetDataLength(block) <= count * MemoryLayout<Float>.stride else {
+              CMBlockBufferGetDataLength(block) <= count * format.channelCount * MemoryLayout<Float>.stride else {
             MeetingTimelineTrace.shared?.record("vad_input_rejected", fields: ["captureID": session.uuidString,
-                "reason": "normalized-pcm-contract", "sampleCount": String(count)])
+                "reason": "native-pcm-contract", "sampleCount": String(count)])
             return
         }
         let shouldSchedule = lock.withLock { () -> Bool in
             guard !closed else { return false }
             // At most two seconds of admitted PCM and sixteen retained buffers. Overflow
             // invalidates evidence immediately; recognition never waits for this worker.
-            if inputs.count >= 16 || pendingSamples + count > 32_000 {
+            let packet = MeetingCaptureClockMetadata.read(from: buffer)
+            let input = Input(buffer: buffer, start: start, count: count, format: format, epoch: epoch, clockPacket: packet)
+            if inputs.count >= 16 || pendingSeconds + input.seconds > 2 || pendingBytes + input.bytes > 2 * 1024 * 1024 {
                 MeetingTimelineTrace.shared?.record("vad_queue_overflow", fields: ["captureID": session.uuidString,
-                    "discardedBuffers": String(inputs.count), "discardedSamples": String(pendingSamples), "epoch": String(epoch)])
-                inputs.removeAll(); pendingSamples = 0; epoch &+= 1; evidence.removeAll(); evidenceGeneration &+= 1
+                    "discardedBuffers": String(inputs.count), "discardedBytes": String(pendingBytes), "epoch": String(epoch)])
+                inputs.removeAll(); pendingSeconds = 0; pendingBytes = 0; epoch &+= 1; evidence.removeAll(); evidenceGeneration &+= 1
             }
-            inputs.append(Input(buffer: buffer, start: start, count: count, epoch: epoch))
-            pendingSamples += count
+            inputs.append(Input(buffer: buffer, start: start, count: count, format: format, epoch: epoch, clockPacket: packet))
+            pendingSeconds += input.seconds; pendingBytes += input.bytes
             guard !scheduled else { return false }
             scheduled = true
             return true
@@ -1108,12 +1529,14 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
             guard start.isFinite, end.isFinite, start >= 0, end > start else { return result(false, "invalid-range") }
             guard !closed, !unavailable else { return result(false, closed ? "closed" : "unavailable") }
             var cursor = start, overlaps = 0
-            for item in evidence where item.end > start && item.start < end {
+            // Adjacent 256ms windows can differ by a floating-point rounding unit.
+            // Use the same microsecond tolerance as the gap/coverage checks below.
+            for item in evidence where item.end > start + 0.000_001 && item.start < end - 0.000_001 {
                 guard item.start <= cursor + 0.000_001 else { return result(false, "unscored-gap") }
                 guard item.activity == .nonSpeech else { return result(false, "speech-or-unknown") }
                 cursor = max(cursor, item.end); overlaps += 1
             }
-            if cursor >= end - 0.000_001 { return result(true, "complete-nonspeech") }
+            if overlaps > 0, cursor >= end - 0.000_001 { return result(true, "complete-nonspeech") }
             let mayAwait = overlaps > 0 && end - cursor <= 2 * 0.256 + 0.000_001
             return result(false, "unscored-tail", mayAwait: mayAwait)
         }
@@ -1122,13 +1545,14 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     private func recordNonSpeechQuery(_ query: NonSpeechAssessment, start: Double, end: Double,
                                      result: Bool? = nil, reason: String? = nil, waitMilliseconds: Double = 0) {
         MeetingTimelineTrace.shared?.record("vad_policy_query", fields: ["captureID": session.uuidString,
+            "source": source == .you ? "microphone" : "applicationAudio",
             "sourceStartSeconds": String(start), "sourceEndSeconds": String(end), "result": String(result ?? query.result),
             "reason": reason ?? query.reason, "scoredThroughSeconds": String(query.scoredThrough),
             "waitMilliseconds": String(waitMilliseconds)])
     }
 
     func stop() {
-        lock.withLock { closed = true; inputs.removeAll(); pendingSamples = 0; evidence.removeAll(); evidenceGeneration &+= 1 }
+        lock.withLock { closed = true; inputs.removeAll(); pendingSeconds = 0; pendingBytes = 0; evidence.removeAll(); evidenceGeneration &+= 1 }
     }
 
     /// Queue barrier joins an in-flight non-preemptible CoreML prediction and releases its
@@ -1136,51 +1560,104 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     func join() async {
         await withCheckedContinuation { continuation in
             queue.async { [self] in
-                detector = nil; samples.removeAll(); previousEnd = nil
+                detector = nil; converter = nil; samples.removeAll(); previousEnd = nil; previousFormat = nil
+                sampleMapping = nil; mappingOrigin = nil; previousClockPacket = nil
                 continuation.resume()
             }
         }
     }
 
+    #if DEBUG
+    func drainForTesting() async {
+        await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
+    }
+    #endif
+
     private func drain() {
         while let input = lock.withLock({ () -> Input? in
             guard !closed, !inputs.isEmpty else { scheduled = false; return nil }
-            let next = inputs.removeFirst(); pendingSamples -= next.count; return next
+            let next = inputs.removeFirst()
+            pendingSeconds = max(0, pendingSeconds - next.seconds); pendingBytes = max(0, pendingBytes - next.bytes)
+            return next
         }) {
             autoreleasepool { process(input) }
         }
     }
 
     private func process(_ input: Input) {
-        let expectedEnd = input.start + Double(input.count) / 16_000
-        let changed = previousEpoch != input.epoch || previousEnd.map { abs($0 - input.start) > 1.0 / 32_000 } != false
+        let expectedEnd = input.end
+        let clockChanged = (previousClockPacket != nil) != (input.clockPacket != nil)
+            || input.clockPacket.map { packet in
+                previousClockPacket.map { previous in
+                    previous.clockID != packet.clockID || previous.sourceID != packet.sourceID
+                        || previous.producerEpoch != packet.producerEpoch
+                } ?? false
+            } == true || input.clockPacket?.mapping.spans.first?.discontinuityBefore == true
+        let changed = previousEpoch != input.epoch || previousFormat != input.format
+            || clockChanged || previousEnd.map { abs($0 - input.start) > (input.clockPacket == nil ? 1.0 / 32_000 : 1e-8) } != false
         if changed {
+            detectorEpoch &+= 1
+            detectorFrames = 0
             MeetingTimelineTrace.shared?.record("vad_reset", fields: ["captureID": session.uuidString,
                 "epoch": String(input.epoch), "sourceStartSeconds": String(input.start)])
-            samples.removeAll(keepingCapacity: true); sampleStart = input.start
+            samples.removeAll(keepingCapacity: true); converter = nil; sampleStart = input.start
+            sampleMapping = nil; mappingOrigin = input.mappedOrigin
             lock.withLock { evidence.removeAll(); evidenceGeneration &+= 1 }
         }
-        previousEpoch = input.epoch; previousEnd = expectedEnd
-        guard let copied = MeetingLiveSampleCopy.copy(input.buffer),
-              copied.buffer.format.sampleRate == 16_000, copied.buffer.format.channelCount == 1,
-              copied.buffer.format.commonFormat == .pcmFormatFloat32,
+        previousEpoch = input.epoch; previousEnd = expectedEnd; previousFormat = input.format
+        previousClockPacket = input.clockPacket
+        let copied: MeetingLiveSampleCopy.Sample?
+        let normalizedStart: Double
+        do {
+            guard let native = MeetingLiveSampleCopy.copy(input.buffer) else { throw MeetingCapturePCMError.invalidBuffer }
+            if input.format.sampleRate == 16_000, input.format.channelCount == 1 {
+                copied = native
+                normalizedStart = input.start
+            } else {
+                if converter == nil { converter = try MeetingCapturePCMConverter() }
+                let mono = try MeetingCapturePCMConverter.ownedMonoCopy(of: native.buffer)
+                guard let normalized = try converter?.convert(mono,
+                    presentationTime: input.clockPacket == nil ? CMTime(seconds: input.start, preferredTimescale: 1_000_000_000) : native.pts,
+                    clockPacket: input.clockPacket) else { return }
+                copied = MeetingLiveSampleCopy.copy(normalized)
+                normalizedStart = CMSampleBufferGetPresentationTimeStamp(normalized).seconds - (input.mappedOrigin ?? 0)
+            }
+        } catch { copied = nil; normalizedStart = input.start }
+        guard let copied,
               let pcm = copied.buffer.floatChannelData?[0] else {
-            samples.removeAll(keepingCapacity: true); previousEnd = nil
+            samples.removeAll(keepingCapacity: true); converter = nil; previousEnd = nil
+            sampleMapping = nil
             emit(start: input.start, end: expectedEnd, activity: .unknown, epoch: input.epoch)
             return
         }
-        if samples.isEmpty { sampleStart = input.start }
-        samples.append(contentsOf: UnsafeBufferPointer(start: pcm, count: input.count))
+        if samples.isEmpty { sampleStart = normalizedStart }
+        if let packet = copied.clockPacket {
+            do { sampleMapping = try sampleMapping.map { try $0.appending(packet.mapping) } ?? packet.mapping }
+            catch {
+                samples.removeAll(keepingCapacity: true); sampleMapping = nil; converter = nil; previousEnd = nil
+                emit(start: input.start, end: expectedEnd, activity: .unknown, epoch: input.epoch)
+                return
+            }
+        }
+        samples.append(contentsOf: UnsafeBufferPointer(start: pcm, count: Int(copied.buffer.frameLength)))
         while samples.count >= 4096 {
             let frame = Array(samples.prefix(4096))
             samples.removeFirst(4096)
-            let start = sampleStart; sampleStart += 0.256
+            let start = sampleMapping?.hostTime(atFrame: 0).map { $0.seconds - (mappingOrigin ?? 0) } ?? sampleStart
+            let end = sampleMapping?.hostTime(atFrame: 4096, side: .end).map { $0.seconds - (mappingOrigin ?? 0) } ?? (start + 0.256)
+            if let mapping = sampleMapping {
+                sampleMapping = samples.isEmpty ? nil : try? mapping.sliced(frames: 4096..<Double(mapping.frameCount))
+            }
+            sampleStart = end
             let began = ProcessInfo.processInfo.systemUptime
             let result = detector?.process(samples: frame, valid: [Bool](repeating: true, count: 4096),
-                start: start, session: session, epoch: input.epoch, route: "normalized-microphone-16k",
+                start: input.clockPacket == nil ? start : Double(detectorFrames) / 16_000,
+                session: session, epoch: detectorEpoch,
+                route: source == .you ? "normalized-microphone-16k" : "normalized-application-audio-16k",
                 cancelled: { self.lock.withLock { self.closed || self.epoch != input.epoch } })
+            detectorFrames += 4096
             MeetingTimelineTrace.shared?.record("vad_frame", fields: ["captureID": session.uuidString,
-                "epoch": String(input.epoch), "sourceStartSeconds": String(start), "sourceEndSeconds": String(start + 0.256),
+                "epoch": String(input.epoch), "sourceStartSeconds": String(start), "sourceEndSeconds": String(end),
                 "probability": result?.probability.map { String($0) } ?? "unavailable",
                 "unknownReason": result?.unknown?.rawValue ?? (result == nil ? "no-detector" : "none"),
                 "budgetExceeded": String(result?.budgetExceeded ?? false),
@@ -1191,7 +1668,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
                 // Only repeated actual model failures disable the attempt. Transient
                 // budget cooldown frames remain unknown and keep this worker available.
                 lock.withLock {
-                    unavailable = true; evidence.removeAll(); evidenceGeneration &+= 1; inputs.removeAll(); pendingSamples = 0
+                    unavailable = true; evidence.removeAll(); evidenceGeneration &+= 1; inputs.removeAll(); pendingSeconds = 0; pendingBytes = 0
                 }
                 detector = nil; samples.removeAll(keepingCapacity: false)
                 return
@@ -1203,7 +1680,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
             else { activity = .unknown }
             // This is activity anywhere in a 256ms window, never an estimate of voiced
             // milliseconds or recognized words. Partial tails remain unscored/fail-open.
-            emit(start: start, end: start + 0.256, activity: activity, epoch: input.epoch)
+            emit(start: start, end: end, activity: activity, epoch: input.epoch)
         }
     }
 

@@ -2,6 +2,11 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
+nonisolated enum PichiLocalization {
+    static func text(_ value: String) -> String { value }
+    static func format(_ value: String, _ args: CVarArg...) -> String { String(format: value, arguments: args) }
+}
+
 // Headless test context for the production live-model file. No app host, audio hardware,
 // model weights, transcript store or privacy service is constructed by this probe.
 typealias SessionSpeakerID = UUID
@@ -98,7 +103,7 @@ struct MeetingPendingSpeechProjectionTests {
         confirmedSpeech(&emptyFinal, from: 0, seconds: 4)
         feed(&emptyFinal, duration: 4, source: .them, rms: Self.speech)
         let beforeEmptyFinal = emptyFinal.snapshot.tokens
-        emptyFinal.acknowledgeEmptyRecognition(source: .you, start: 0.6, end: 2.2)
+        emptyFinal.acknowledgeResolvedAudio(source: .you, start: 0.6, end: 2.2)
         let remainingEmptyFinal = emptyFinal.snapshot.tokens
         try require(remainingEmptyFinal.filter { $0.source == .them } == beforeEmptyFinal.filter { $0.source == .them },
                     "A completed empty microphone decode cannot retire meeting audio")
@@ -109,11 +114,11 @@ struct MeetingPendingSpeechProjectionTests {
                     && remainingEmptyFinal.contains { $0.source == .you && abs($0.start - 2.2) < 0.000_001 },
                     "Boundary estimates retain their unprocessed edges")
         let emptyFinalRevision = emptyFinal.snapshot.revision
-        emptyFinal.acknowledgeEmptyRecognition(source: .you, start: .nan, end: 4)
-        emptyFinal.acknowledgeEmptyRecognition(source: .you, start: -1, end: 4)
-        emptyFinal.acknowledgeEmptyRecognition(source: .you, start: 4, end: 3)
+        emptyFinal.acknowledgeResolvedAudio(source: .you, start: .nan, end: 4)
+        emptyFinal.acknowledgeResolvedAudio(source: .you, start: -1, end: 4)
+        emptyFinal.acknowledgeResolvedAudio(source: .you, start: 4, end: 3)
         try require(emptyFinal.snapshot.revision == emptyFinalRevision, "Invalid empty completion cannot change waiting audio")
-        emptyFinal.acknowledgeEmptyRecognition(source: .you, start: 0, end: 4)
+        emptyFinal.acknowledgeResolvedAudio(source: .you, start: 0, end: 4)
         try require(emptyFinal.snapshot.tokens.allSatisfy { $0.source == .them },
                     "Successful empty completion clears its waves without requiring invented transcript words")
         print("PASS empty final interval retirement, boundary preservation, source isolation and invalid coverage")
@@ -305,14 +310,14 @@ struct MeetingPendingSpeechProjectionTests {
         }
         let initial = snapshot([nil, unknown, candidates])
         let initialRows = MeetingLiveBubbleComposer.rows(for: initial)
-        try require(initialRows.allSatisfy { !$0.showsLabel && !$0.hasReadableParticipant }
+        try require(initialRows.allSatisfy { $0.showsLabel && !$0.hasReadableParticipant }
                     && initialRows.map { $0.participant?.identity } == [nil, unknown.identity, candidates.identity],
                     "Initial unresolved text retains internal metadata without a fake participant header")
         for participants in [[first, unknown, first], [first, nil, first], [first, candidates, first]] {
             let value = snapshot(participants)
             let original = value
             let rows = MeetingLiveBubbleComposer.rows(for: value)
-            try require(rows.map(\.showsLabel) == [true, false, true]
+            try require(rows.map(\.showsLabel) == [true, true, true]
                         && rows.map { $0.participant?.identity } == participants.map { $0?.identity },
                         "The composer cannot infer a participant solely from the capture source")
             try require(!rows[1].hasReadableParticipant,
@@ -332,7 +337,7 @@ struct MeetingPendingSpeechProjectionTests {
         value.partials[.you] = .init(id: partialID, text: "продолжение", start: 3, end: 3.5)
         let original = value
         let rows = MeetingLiveBubbleComposer.rows(for: value)
-        try require(rows.map(\.showsLabel) == [true, false, true, false]
+        try require(rows.map(\.showsLabel) == [true, true, true, true]
                     && rows.map { $0.participant?.identity } == [first.identity, unknown.identity, second.identity, nil],
                     "Known participant switches remain distinct and source-only partials do not claim ownership")
         try require(rows.last?.id == partialID && rows.last?.isPartial == true && value == original,
@@ -355,7 +360,7 @@ struct MeetingPendingSpeechProjectionTests {
         ]
         let before = MeetingLiveBubbleComposer.rows(for: value)
         try require(before.map { $0.participant?.identity } == [first.identity, unknown.identity, nil, second.identity]
-                    && before.map(\.showsLabel) == [true, false, false, true],
+                    && before.map(\.showsLabel) == [true, true, true, true],
                     "Unresolved ownership never leaks across capture sources or collapses distinct equal-name identities")
         try require(before[2].readingTurnStart == 9 && before[3].readingTurnStart == 10,
                     "Unassigned source text retains its own time; a known participant uses its actual first word")
@@ -397,7 +402,7 @@ struct MeetingPendingSpeechProjectionTests {
         let after = MeetingLiveBubbleComposer.rows(for: value)
         try require(before.map(\.readingTurnStart) == [7.8, 7.8, 50]
                     && after.map(\.readingTurnStart) == [7.8, 7.8, 50]
-                    && after.map(\.showsLabel) == [true, false, false],
+                    && after.map(\.showsLabel) == [true, false, true],
                     "Layout and pending growth preserve actual participant turn time without attaching source-only partials")
         print("PASS finite elapsed timestamp boundaries and stable first-word turn anchors")
     }

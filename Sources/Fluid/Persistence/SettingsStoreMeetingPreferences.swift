@@ -8,6 +8,7 @@ import AppKit
 // The same defaults keys and Codable records are used by desktop and mobile targets.
 extension SettingsStore {
     enum UpdateKeys {
+        static let automaticUpdateDownloads = "AutomaticUpdateDownloads"
         static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
         static let showUpdatePopups = "ShowUpdatePopups"
         static let popupPreferenceRevision = "UpdatePopupPreferenceRevision"
@@ -390,23 +391,33 @@ extension SettingsStore {
         set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingSpeakerLabelsEnabled) }
     }
 
-    /// Settings displays the in-room preference. Capture admission passes its actual topology
-    /// below so an absent preference cannot enable a single-source runtime for an online call.
+    /// New recordings share one live processing policy. The setter retains the legacy
+    /// preference storage contract for imports and older clients; it cannot select an offline
+    /// path for a new capture. Encoded sessions retain their own immutable processing mode.
     var meetingSpeakerProcessingMode: MeetingSpeakerProcessingMode {
         get { self.meetingSpeakerProcessingMode(for: .inRoom) }
         set { objectWillChange.send(); self.defaults.set(newValue.rawValue, forKey: Keys.meetingSpeakerProcessingMode) }
     }
 
-    /// Only new requests without a stored choice prefer streaming when the selected backend
-    /// declares that capability. Explicit and unknown future values retain their prior meaning;
-    /// this never migrates encoded sessions, checkpoints or a running attempt's configuration.
+    /// Processing behavior belongs to the meeting, independently of its selected speech model.
+    /// Capability/language validation must reject unsupported requests before capture, rather
+    /// than silently record for a full post-Stop pass. Old manifests and retry pins are untouched.
     func meetingSpeakerProcessingMode(for mode: MeetingCaptureMode) -> MeetingSpeakerProcessingMode {
-        if let stored = self.defaults.object(forKey: Keys.meetingSpeakerProcessingMode) {
-            return (stored as? String).flatMap(MeetingSpeakerProcessingMode.init(rawValue:)) ?? .afterRecording
-        }
-        let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.selectedSpeechModel.rawValue)
-        return mode == .inRoom && descriptor?.supportedSpeakerProcessingModes.contains(.streaming) == true
-            ? .streaming : .afterRecording
+        .streaming
+    }
+
+    /// Freeze the current recording policy when a platform has resolved its sources.
+    /// Capture admission owns encryption requirements; applying preferences must preserve
+    /// that explicit requirement as well as the selected sources and backend override.
+    func applyingMeetingRecordingPreferences(to configuration: MeetingCaptureConfiguration) -> MeetingCaptureConfiguration {
+        var configured = configuration
+        let speakerLabelsEnabled = self.meetingSpeakerLabelsEnabled
+        configured.audioStorageMode = self.meetingSaveAudio ? .retainedFiles : .memoryOnly
+        configured.speakerLabelsEnabled = speakerLabelsEnabled
+        configured.speakerProcessingMode = speakerLabelsEnabled
+            && self.meetingSpeakerProcessingMode(for: configuration.mode) == .streaming ? .streaming : nil
+        configured.piiRedactionEnabled = self.meetingPIIRedactionEnabled
+        return configured
     }
 
     var meetingPIIRedactionEnabled: Bool {

@@ -1500,10 +1500,10 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     private func learningAlignment(for result: ASRResult) -> DictionaryLearningAlignment? {
-        guard self.sharedFeaturesEnabled, self.automaticLearningEnabled || self.collectNegativeExamples, !self.isWordBoostingActive,
+        guard self.sharedFeaturesEnabled, !self.isWordBoostingActive,
               let timings = result.tokenTimings, !timings.isEmpty
         else { return nil }
-        return DictionaryLearningAlignment(modelKey: self.pronunciationModelKey, words: Self.makeWordTimings(from: timings))
+        return DictionaryLearningAlignment(modelKey: self.pronunciationModelKey, words: Self.makeWordTimings(from: timings), originalText: result.text)
     }
 
     private func transcribeFinalResult(

@@ -21,19 +21,35 @@ actual = actual.replace("    private ", "    ")
 combined = template.replace("// ACTUAL_ASR_ADMISSION_SOURCE", actual)
 protocol = (repo / "Sources/Fluid/Services/TranscriptionProvider.swift").read_text()
 evidence = (repo / "Sources/Fluid/Services/DictionaryLearningEvidence.swift").read_text()
-marker = "nonisolated struct DictionaryLearningAudioEvidence:"
-assert evidence.count(marker) == 1, "Expected one production audio-evidence declaration"
-begin = evidence.index(marker)
-end = evidence.index("{", begin) + 1
-depth = 1
-while depth:
-    depth += (evidence[end] == "{") - (evidence[end] == "}")
-    end += 1
-combined = combined.replace("// ACTUAL_TRANSCRIPTION_PROVIDER_SOURCE", evidence[begin:end] + "\n" + protocol)
+def declaration(marker):
+    assert evidence.count(marker) == 1, f"Expected one production declaration of {marker}"
+    begin = evidence.index(marker)
+    end = evidence.index("{", begin) + 1
+    depth = 1
+    while depth:
+        depth += (evidence[end] == "{") - (evidence[end] == "}")
+        end += 1
+    return evidence[begin:end]
+
+# The evidence transport carries feature windows; their frame payload type is inert here.
+frames_stub = "nonisolated struct DictionaryAudioInspection { struct Frames: Equatable, Sendable {} }\n"
+audio_evidence = frames_stub + declaration("nonisolated struct DictionaryLearningFeatureFrames:") + "\n" + declaration("nonisolated struct DictionaryLearningAudioEvidence:")
+combined = combined.replace("// ACTUAL_TRANSCRIPTION_PROVIDER_SOURCE", audio_evidence + "\n" + protocol)
 
 # These checks bind the runtime declarations to the production start/stop/readiness paths.
 start = between("    func start(\n", "    func cancelPendingPronunciationTrainingStart()")
-assert start.index("try self.admitDictationTranscription(captureLease)") < start.index("await ")
+# start() suspends only inside acquireForegroundActivity. After that it revalidates and admits without
+# another suspension, so a start that went stale while waiting for the lease cannot reach admission.
+acquire = "captureLease = try await self.acquireForegroundActivity(.dictation)"
+admit = "try self.admitDictationTranscription(captureLease)"
+assert start.count(acquire) == 1 and start.count(admit) == 1
+assert start.index("await ") == start.index(acquire) + len("captureLease = try ")
+assert start.index(acquire) < start.index("startGeneration == self.audioCaptureStartGeneration, !self.isTerminating") < start.index(admit)
+for condition in ("!Task.isCancelled", "self.isPronunciationTrainingStartCurrent", "PrivateProfileStorage.acceptsNewWork",
+                  "PrivateProfileStorage.isReadable(profile)", "PrivateProfileStorage.current == profile",
+                  "self.releaseExclusiveActivity(captureLease)"):
+    assert condition in start[start.index(acquire):start.index(admit)], condition
+assert "await " not in start[start.index(acquire) + len(acquire):start.index(admit)]
 ensure = between("    func ensureAsrReady(\n        source:", "    private func modelArtifactsExist")
 assert ensure.index("let transcriptionAdmission = self.admittedTranscription") < ensure.index("await ")
 assert "transcriptionAdmission?.provider ?? self.transcriptionProvider" in ensure

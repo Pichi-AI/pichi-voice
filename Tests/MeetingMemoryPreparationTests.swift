@@ -2,16 +2,65 @@ import Foundation
 
 // These inert resource types let the probe compile the complete production attempt owner.
 // It runs no speech model, microphone, file store or personal transcript.
+nonisolated struct MeetingBackendID: Sendable { let rawValue = "synthetic" }
+nonisolated struct MeetingFinalProcessingConfiguration: Sendable {
+    let identityFingerprint = "synthetic"
+    var asrArtifactDirectory: URL? { nil }
+}
+nonisolated protocol MeetingIdlePreparedResource: Sendable {
+    var configurationIdentity: String { get }
+    func cleanup() async
+}
+nonisolated enum MeetingConfigFingerprintEncoding {
+    static func encode(_ values: [(String, String)]) -> String { "synthetic" }
+}
+typealias MeetingTrackConfidentNonSpeechQuery = @Sendable (MeetingAudioTrackKind, TimeInterval, TimeInterval) async -> Bool
+typealias MeetingAudioTrackID = UUID
+nonisolated struct MeetingAudioTrack: Sendable { let id = UUID() }
+nonisolated enum MeetingAudioTrackKind: Sendable { case microphone, applicationAudio }
+nonisolated struct MeetingStreamingPCMObservation: Sendable {}
+nonisolated enum MeetingStreamingPCMControllerError: Error { case invalidScope }
+actor MeetingProcessingSerializationGate {
+    func acquire() async throws {}
+    func release() {}
+}
 nonisolated struct MeetingBackendRequest: Sendable {}
 nonisolated struct MeetingBackendDescriptor: Sendable {}
 nonisolated protocol MeetingParakeetNemotronRunning: Sendable {}
-nonisolated struct MeetingPCMTranscriptBatch: Sendable {}
-nonisolated struct MeetingLivePartial: Sendable {}
+nonisolated struct MeetingProbeTime: Sendable {
+    let value: Int64
+    let timescale: Int32
+    var seconds: Double { Double(value) / Double(timescale) }
+}
+nonisolated struct MeetingProbeNativeTiming: Sendable { let start: Double; let end: Double }
+nonisolated struct MeetingProbeSegment: Sendable {
+    var nativeTiming: MeetingProbeNativeTiming?
+    var start: MeetingProbeTime
+    var end: MeetingProbeTime
+}
+nonisolated struct MeetingPCMTranscriptBatch: Sendable {
+    var sourceTrack: MeetingAudioTrack?
+    var segments: [MeetingProbeSegment] = []
+    var speakers: [String] = []
+    var speakerRevisions: [String] = []
+    var echoRevisions: [String] = []
+    var livePreview: MeetingLivePartial?
+    var protectedSourceThroughSample: Int?
+    var protectedSourceIntervals: [Range<TimeInterval>] = []
+}
+nonisolated struct MeetingLivePartial: Sendable { var start: Double; var end: Double? }
 nonisolated struct MeetingProcessingResult: Sendable {}
 nonisolated final class MeetingMemoryAudioArchive: Sendable {}
 nonisolated protocol MeetingMemoryAudioConsuming: Sendable {}
 nonisolated final class MeetingArchivedMemoryAudioConsumer: Sendable {}
-nonisolated final class MeetingStreamingPCMController: Sendable {}
+nonisolated final class MeetingStreamingPCMController: Sendable { func cancelAndWait() async {} }
+actor MeetingStreamingEchoAdmission {
+    func observe(track: MeetingAudioTrack, observation: MeetingStreamingPCMObservation) -> MeetingStreamingPCMObservation { observation }
+    func admitting(_ batch: MeetingPCMTranscriptBatch) -> MeetingPCMTranscriptBatch { batch }
+    func pendingRevisionBatch() -> MeetingPCMTranscriptBatch? { nil }
+    func markSealed(trackID: UUID) {}
+    func cancel() {}
+}
 nonisolated final class MeetingStreamingTranscriptState: Sendable {}
 nonisolated final class MeetingTranscriptPrivacyContext: Sendable {
     init(redactor: any TranscriptTextRedacting) {}

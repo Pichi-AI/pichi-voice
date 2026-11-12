@@ -7,6 +7,7 @@ import Foundation
         #if os(macOS)
         await LocalAPIServer.shared.stop().value
         await DictionaryAudioLearningService.shared.prepareForPrivateProfileTransition()
+        await DictionaryRejectionService.shared.prepareForPrivateProfileTransition()
         await StatsSnapshotStore.shared.prepareForPrivateProfileTransition()
         #endif
         await SettingsStore.prepareForPrivateProfileTransition()
@@ -23,6 +24,7 @@ import Foundation
         catch { if firstError == nil { firstError = error } }
         #if os(macOS)
         await AutomaticDictionaryCorrectionTracker.shared.prepareForPrivateProfileTransition()
+        await DictionaryRejectionService.shared.prepareForPrivateProfileTransition()
         let audio = DictationAudioHistoryStore.shared
         await audio.prepareForProfileTransition()
         do { try await TranscriptionHistoryStore.shared.prepareForProfileTransition() }

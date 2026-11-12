@@ -1,5 +1,10 @@
-FluidVoice Debug diagnostics build
-==================================
+Pichi Voice diagnostics tooling
+==============================
+
+This inherited developer-support tool retains its existing script and artifact
+filenames listed below. Those filenames are compatibility identifiers, not the
+name of the public Pichi Voice product. Use the Pichi Voice releases and user
+guide for ordinary installation; this internal package is not a public installer.
 
 1. Drag FluidVoice Debug.app to the Applications shortcut in this DMG.
 2. Grant macOS permissions if prompted. Permissions are expected once on a new Mac.

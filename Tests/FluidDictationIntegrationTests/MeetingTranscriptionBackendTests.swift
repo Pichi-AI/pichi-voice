@@ -305,6 +305,22 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         }
     }
 
+    func testHostRecordingCannotEnterLegacyProcessingOrAllocateASR() async throws {
+        var session = self.makeSession()
+        session.timebase.recordingTimePolicy = .hostMonotonicV1
+        let pipeline = self.makePipeline(registry: .makeDefault(), backendID: .legacyCompatibility)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("clock-legacy-refusal-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        do {
+            _ = try await pipeline.process(session: session, sessionDirectory: directory, progress: { _ in })
+            XCTFail("A host-mapped recording needs a backend that consumes its mapping before inference")
+        } catch {
+            XCTAssertEqual(error as? MeetingRecordingTimePolicyError,
+                .legacyProcessingUnsupported(.hostMonotonicV1))
+        }
+    }
+
     func testPipelineRejectsPlanForDifferentDirectory() async throws {
         let descriptor = self.makeFixtureDescriptor()
         let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: Self.fixtureBackendID)
@@ -511,7 +527,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
     func testDefaultRegistryUsesProductionDefaultAndKeepsLegacyRollback() throws {
         let registry = MeetingTranscriptionBackendRegistry.makeDefault()
         XCTAssertEqual(registry.defaultBackendID, .productionDefault)
-        XCTAssertEqual(registry.registeredBackendIDs, [.legacyCompatibility, .parakeetNemotron, .gigaam, .whisperTiny, .parakeetV3])
+        XCTAssertEqual(registry.registeredBackendIDs, [.legacyCompatibility, .parakeetNemotron, .gigaam, .whisperTiny, .parakeetV3, .parakeetV2, .fluidParakeetPro])
 
         let backend = try registry.makeBackend(
             id: registry.defaultBackendID,
@@ -1519,6 +1535,14 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertThrowsError(try registered.validateSpeakerProcessingMode(configuration: streaming, mode: .onlineCall)) {
             XCTAssertEqual($0 as? MeetingBackendError, .unsupportedTrackTopology(backend: Self.backendID))
         }
+        let multi = self.descriptor(tracks: [.microphone, .applicationAudio],
+            inputs: [.recordedChunks, .boundedMicrophonePCM, .boundedMultiTrackPCM],
+            speakerModes: [.afterRecording, .streaming])
+        XCTAssertNoThrow(try multi.validatePCMInput(configuration: streaming, mode: .onlineCall))
+        XCTAssertThrowsError(try multi.validatePCMInput(configuration: MeetingFinalProcessingConfiguration(languageCode: "en"), mode: .onlineCall))
+        let missingMicrophone = self.descriptor(tracks: [.applicationAudio], inputs: [.boundedMultiTrackPCM],
+            speakerModes: [.streaming])
+        XCTAssertThrowsError(try missingMicrophone.validatePCMInput(configuration: streaming, mode: .onlineCall))
         let disabled = MeetingFinalProcessingConfiguration(speakerLabelsEnabled: false, speakerProcessingMode: .streaming)
         XCTAssertNoThrow(try ordinary.validateSpeakerProcessingMode(configuration: disabled, mode: .inRoom))
     }
@@ -1535,7 +1559,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             speakerProcessingMode: .streaming)
         XCTAssertEqual(admission.diarizationFingerprint, selected.diarizationFingerprint)
         XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(admission, isAppleSilicon: true))
-        XCTAssertThrowsError(try PichiMeetingProviderFactory.validateRecordingConfiguration(selected,
+        XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(selected,
             isAppleSilicon: true, captureMode: .onlineCall))
 
         let wrongProfile = MeetingFinalProcessingConfiguration(asrModel: selected.asrModel, languageCode: "ru",
@@ -1545,6 +1569,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         for model in [PichiMeetingProviderFactory.whisperTinyModelID, PichiMeetingProviderFactory.parakeetV3ModelID] {
             let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model))
             XCTAssertTrue(descriptor.supportedSpeakerProcessingModes.contains(.streaming))
+            XCTAssertTrue(descriptor.supportedInputs.contains(.boundedMultiTrackPCM))
             XCTAssertNotNil(PichiMeetingProviderFactory.speakerModelStore(for: model, speakerProcessingMode: .streaming))
             let configuration = PichiMeetingProviderFactory.configuration(asrModel: model, languageCode: "auto",
                 artifactFingerprintOverride: "synthetic-export", speakerProcessingMode: .streaming)
@@ -1591,7 +1616,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         }
     }
 
-    func testSpeakerProcessingPreferenceUsesRegisteredTopologyAndDoesNotChangePrivacy() throws {
+    func testNewCaptureAlwaysUsesStreamingRegardlessOfModelOrLegacyTimingPreference() throws {
         let suite = "SpeakerModeSettings.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -1602,16 +1627,25 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
         settings.selectedSpeechModel = .gigaam
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
-        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .streaming)
         XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode))
         settings.meetingSpeakerProcessingMode = .afterRecording
-        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
         settings.meetingSpeakerProcessingMode = .streaming
         XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
         XCTAssertEqual(settings.meetingSaveAudio, originalSaveAudio)
         XCTAssertEqual(settings.meetingPIIRedactionEnabled, originalPrivacy)
         defaults.set("future-value", forKey: SettingsStore.Keys.meetingSpeakerProcessingMode)
-        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
+        for model in SettingsStore.SpeechModel.allCases {
+            settings.selectedSpeechModel = model
+            for mode in MeetingCaptureMode.allCases {
+                XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: mode), .streaming,
+                    "Unsupported models must fail admission, never select an offline meeting")
+            }
+        }
+        XCTAssertEqual(MeetingFinalProcessingConfiguration().effectiveSpeakerProcessingMode, .afterRecording,
+            "Legacy serialized configurations keep their original retry behavior")
     }
 
     private func session(backendID: MeetingBackendID = backendID, language: String = "en",
@@ -1701,7 +1735,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         let descriptor = self.descriptor()
         registry.register(Self.backendID) { context in PCMBackend(descriptor: descriptor, context: context, probe: probe) }
         await self.reject(self.pipeline(registry, probe: probe), session: self.session(mode: .onlineCall),
-            expected: .unsupportedTrackTopology(backend: Self.backendID), probe: probe)
+            expected: .unsupportedInput(backend: Self.backendID, input: .boundedMultiTrackPCM), probe: probe)
     }
 
     func testClaimedPCMCapabilityWithoutImplementedAdmissionIsRejected() async {
@@ -1867,7 +1901,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: sessionDirectory) }
 
-        for backendID in [MeetingBackendID.gigaam, .whisperTiny, .parakeetV3, .parakeetNemotron] {
+        for backendID in [MeetingBackendID.gigaam, .whisperTiny, .parakeetV3, .parakeetV2, .fluidParakeetPro, .parakeetNemotron] {
             let language = backendID == .gigaam ? "ru" : "en"
             let probe = Probe()
             let registry = MeetingTranscriptionBackendRegistry.makeDefault()

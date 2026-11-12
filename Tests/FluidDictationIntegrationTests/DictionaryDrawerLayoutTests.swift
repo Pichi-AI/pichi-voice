@@ -90,9 +90,9 @@ final class DictionaryDrawerLayoutTests: XCTestCase {
                                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(referenceID)) } action: {
                                         referenceFrames[.replacement] = $0
                                     }
-                                Text(verbatim: entry.triggers.joined(separator: ", "))
+                                Text(verbatim: PichiLocalization.format("Auto-replace: %@", entry.triggers.joined(separator: ", ")))
                                     .font(theme.typography.caption)
-                                    .lineLimit(3)
+                                    .lineLimit(2)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(referenceID)) } action: {
