@@ -112,6 +112,10 @@ class Boundaries(m.Commands):
                 return self.result(args, self.raw_response)
             method = args[args.index("--method") + 1]
             endpoint = args[args.index("--method") + 2]
+            if endpoint == "repos/" + m.REPO + "/":
+                return self.result(args, b'HTTP/2.0 404 Not Found\n\n{}', code=1)
+            if endpoint == "repos/" + m.REPO:
+                endpoint = ""
             endpoint = endpoint.removeprefix("repos/" + m.REPO + "/")
             body = json.loads(kwargs["input"]) if kwargs.get("input") else None
             value, code = self.api(endpoint, method, body)

@@ -387,7 +387,9 @@ class GitHub:
         self.base = f"repos/{REPO}/"
 
     def api(self, endpoint, *, method="GET", body=None, missing=False):
-        command = ["gh", "api", "--hostname", "github.com", "--include", "--method", method, self.base + endpoint]
+        # GitHub's repository endpoint rejects a trailing slash with HTTP 404.
+        target = self.base + endpoint if endpoint else self.base.rstrip("/")
+        command = ["gh", "api", "--hostname", "github.com", "--include", "--method", method, target]
         if body is not None:
             command += ["--input", "-"]
         result = self.commands.run(command, input=json_bytes(body) if body is not None else None, check=False)
