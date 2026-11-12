@@ -11,13 +11,20 @@ source = Path('Sources/Fluid/Services/Meeting/MeetingProcessingPipeline.swift').
 versions = [line.strip() for line in source.splitlines() if line.strip().startswith('nonisolated static let pipelineVersion =')]
 assert len(versions) == 1, 'The pipeline owns one authoritative version'
 (Path(sys.argv[1]) / 'PipelineVersion.swift').write_text('nonisolated enum MeetingProcessingPipeline {\n    ' + versions[0] + '\n}\n')
+# MeetingFinalProcessingConfiguration stores the frozen capture-clock policy (120); take the actual
+# declaration without linking MeetingModels.swift.
+models = Path('Sources/Fluid/Services/Meeting/MeetingModels.swift').read_text()
+marker = 'nonisolated enum MeetingRecordingTimePolicy: String, Codable, Sendable {'
+assert models.count(marker) == 1, 'Expected one production recording time policy declaration'
+start = models.index(marker)
+(Path(sys.argv[1]) / 'RecordingTimePolicy.swift').write_text('import Foundation\n' + models[start:models.index('\n}\n', start) + 3])
 PYCODE
 # Compile the actual owner, scope, immutable configuration and additive service contract.
 # The portable harness supplies inert neighboring contracts. No weights, network, capture,
 # native app build, activity lease acquisition or model inference runs in this test.
 if ! xcrun swiftc -parse-as-library -swift-version 5 -strict-concurrency=targeted -default-isolation MainActor -D DEBUG \
     -module-cache-path "$task_test_dir/ModuleCache" \
-    "$task_test_dir/PipelineVersion.swift" \
+    "$task_test_dir/PipelineVersion.swift" "$task_test_dir/RecordingTimePolicy.swift" \
     Sources/Fluid/Services/ASRActivityLease.swift \
     Tests/Support/StandaloneMeetingProcessingDependencies.swift \
     Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift \

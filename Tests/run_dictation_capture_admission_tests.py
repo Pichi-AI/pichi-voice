@@ -21,19 +21,23 @@ actual = actual.replace("    private ", "    ")
 combined = template.replace("// ACTUAL_ASR_ADMISSION_SOURCE", actual)
 protocol = (repo / "Sources/Fluid/Services/TranscriptionProvider.swift").read_text()
 evidence = (repo / "Sources/Fluid/Services/DictionaryLearningEvidence.swift").read_text()
-def declaration(marker):
-    assert evidence.count(marker) == 1, f"Expected one production declaration of {marker}"
-    begin = evidence.index(marker)
-    end = evidence.index("{", begin) + 1
+def declaration(marker, text=evidence):
+    assert text.count(marker) == 1, f"Expected one production declaration of {marker}"
+    begin = text.index(marker)
+    end = text.index("{", begin) + 1
     depth = 1
     while depth:
-        depth += (evidence[end] == "{") - (evidence[end] == "}")
+        depth += (text[end] == "{") - (text[end] == "}")
         end += 1
-    return evidence[begin:end]
+    return text[begin:end]
+
+# 117 gave ASRWordTiming a timing provenance that TranscriptionProvider.swift now names.
+persisted = (repo / "Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift").read_text()
+timing_provenance = declaration("nonisolated struct ASRWordTimingProvenance:", persisted) + "\n"
 
 # The evidence transport carries feature windows; their frame payload type is inert here.
 frames_stub = "nonisolated struct DictionaryAudioInspection { struct Frames: Equatable, Sendable {} }\n"
-audio_evidence = frames_stub + declaration("nonisolated struct DictionaryLearningFeatureFrames:") + "\n" + declaration("nonisolated struct DictionaryLearningAudioEvidence:")
+audio_evidence = timing_provenance + frames_stub + declaration("nonisolated struct DictionaryLearningFeatureFrames:") + "\n" + declaration("nonisolated struct DictionaryLearningAudioEvidence:")
 combined = combined.replace("// ACTUAL_TRANSCRIPTION_PROVIDER_SOURCE", audio_evidence + "\n" + protocol)
 
 # These checks bind the runtime declarations to the production start/stop/readiness paths.

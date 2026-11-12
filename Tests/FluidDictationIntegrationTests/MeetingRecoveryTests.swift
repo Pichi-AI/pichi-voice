@@ -1973,6 +1973,41 @@ final class MeetingRecoveryTests: XCTestCase {
         }
     }
 
+    func testSilenceWatchdogStaysOffWhileTheMicrophoneIsMuted() async throws {
+        for muteState in [MeetingMicrophoneMuteState.muted, .manuallyMuted] {
+            let dir = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let capture = StubCaptureController()
+            var microphone = self.makeMicrophoneTrack(chunks: [])
+            microphone.health.status = .healthy
+            microphone.health.silentForSeconds = 0
+            var applicationAudio = self.makeMicrophoneTrack(chunks: [])
+            applicationAudio.kind = .applicationAudio
+            applicationAudio.health.status = .healthy
+            applicationAudio.health.silentForSeconds = 0
+            capture.startResult = MeetingCaptureStartResult(tracks: [microphone, applicationAudio], firstPresentationTime: nil)
+            let coordinator = MeetingSessionCoordinator(
+                store: MeetingSessionStore(rootDirectory: dir),
+                capture: capture,
+                processing: StubProcessingController(),
+                audioArbiter: StubArbiter()
+            )
+            var configuration = self.makeConfiguration()
+            configuration.mode = .onlineCall
+            configuration.application = MeetingApplicationIdentity(bundleIdentifier: "us.zoom.xos", displayName: "Zoom")
+            let started = try await coordinator.startRecording(configuration: configuration)
+            capture.emit(.microphoneMuteStateChanged(muteState))
+            await self.drainCaptureEvents()
+            var silentHealth = applicationAudio.health
+            silentHealth.silentForSeconds = 100
+            capture.emit(.trackHealth(trackID: applicationAudio.id, health: silentHealth))
+            await self.drainCaptureEvents()
+            XCTAssertEqual(coordinator.state, .recording(started.id), "\(muteState)")
+            XCTAssertEqual(coordinator.trackHealth[.applicationAudio]?.status, .healthy, "\(muteState)")
+            await coordinator.shutdownForTermination()
+        }
+    }
+
     private func drainCaptureEvents() async {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async { continuation.resume() }
@@ -2953,6 +2988,23 @@ final class MeetingRecoveryTests: XCTestCase {
         )
     }
 
+    /// A finalized chunk of a real recording has its file on disk, and the store checks chunk
+    /// files when it restores a session. Fixtures that describe finalized audio write the files too.
+    private func writeFinalizedChunkFiles(of session: MeetingSession, in store: MeetingSessionStore) async throws {
+        try self.writeFinalizedChunkFiles(of: session, inSessionDirectory: try await store.sessionDirectory(for: session.id))
+    }
+
+    private func writeFinalizedChunkFiles(of session: MeetingSession, inSessionDirectory sessionDirectory: URL) throws {
+        for track in session.audioTracks {
+            for chunk in track.chunks where chunk.finalizationState == .finalized {
+                let fileURL = chunk.fileURL(relativeTo: sessionDirectory)
+                guard !FileManager.default.fileExists(atPath: fileURL.path) else { continue }
+                try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data(repeating: 7, count: Int(max(chunk.byteCount, 1))).write(to: fileURL)
+            }
+        }
+    }
+
     private func makeMicrophoneTrack(chunks: [MeetingAudioChunk]) -> MeetingAudioTrack {
         MeetingAudioTrack(
             id: UUID(),
@@ -3185,7 +3237,10 @@ final class MeetingRecoveryTests: XCTestCase {
         )
 
         for session in [recording, stopping, processing, interrupted, completed, recoverableFailed, unrecoverableFailed, dismissedInterrupted] {
-            do { try await store.create(session) } catch {
+            do {
+                try await store.create(session)
+                try await self.writeFinalizedChunkFiles(of: session, in: store)
+            } catch {
                 XCTFail("create failed for state \(session.state): \(error)")
                 throw error
             }
@@ -3261,6 +3316,7 @@ final class MeetingRecoveryTests: XCTestCase {
 
         for session in [older, newer, emptyPreparing] {
             try await store.create(session)
+            try await self.writeFinalizedChunkFiles(of: session, in: store)
         }
 
         let coordinator = MeetingSessionCoordinator(
@@ -3315,6 +3371,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let track = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
         let session = self.makeSession(state: .interrupted, endedAt: Date(), audioTracks: [track])
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let coordinator = MeetingSessionCoordinator(
             store: store,
@@ -3373,6 +3430,7 @@ final class MeetingRecoveryTests: XCTestCase {
             processingAttempts: [staleAttempt]
         )
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let processing = GatedProcessingController()
         let coordinator = MeetingSessionCoordinator(
@@ -3599,6 +3657,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await store.create(session)
+        try self.writeFinalizedChunkFiles(of: session, inSessionDirectory: dir.appendingPathComponent(session.id.uuidString))
 
         let coordinator = MeetingSessionCoordinator(
             store: store,
@@ -3665,6 +3724,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let coordinator = MeetingSessionCoordinator(
             store: store,
@@ -3710,7 +3770,9 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await store.create(older)
+        try await self.writeFinalizedChunkFiles(of: older, in: store)
         try await store.create(newer)
+        try await self.writeFinalizedChunkFiles(of: newer, in: store)
 
         let coordinator = MeetingSessionCoordinator(
             store: store,
@@ -3763,6 +3825,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await retryStore.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: retryStore)
         let gatedProcessing = GatedProcessingController()
         let retryCoordinator = MeetingSessionCoordinator(
             store: retryStore,
@@ -3807,6 +3870,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let coordinator = MeetingSessionCoordinator(
             store: store,
@@ -3837,6 +3901,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let gatedProcessing = GatedProcessingController()
         let coordinator = MeetingSessionCoordinator(
@@ -3905,6 +3970,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let capture = StubCaptureController()
         capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
@@ -3946,6 +4012,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let capture = StubCaptureController()
         capture.startError = MeetingCaptureError.applicationNotSelected
@@ -3984,6 +4051,7 @@ final class MeetingRecoveryTests: XCTestCase {
             failures: [MeetingSessionFailure(id: UUID(), occurredAt: Date(), domain: .capture, code: "teams.noSpeech", message: "No speech", recoverable: true)]
         )
         try await store.create(old)
+        try await self.writeFinalizedChunkFiles(of: old, in: store)
 
         let capture = StubCaptureController()
         capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
@@ -4012,6 +4080,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await store.create(old)
+        try await self.writeFinalizedChunkFiles(of: old, in: store)
         let capture = StubCaptureController()
         capture.startError = MeetingCaptureError.applicationNotSelected
         let arbiter = StubArbiter()
@@ -4360,6 +4429,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let sessionDirectory = try await store.sessionDirectory(for: session.id)
         let checkpointURL = sessionDirectory.appendingPathComponent("checkpoint.json", isDirectory: false)
@@ -4445,6 +4515,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let session = self.makeSession(state: .interrupted, endedAt: Date(),
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
         let processing = GatedProcessingController()
         let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
             processing: processing, audioArbiter: StubArbiter())
@@ -4502,6 +4573,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let store = MeetingSessionStore(rootDirectory: dir)
         let session = try self.completedEnglishRetranscriptionFixture()
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
         let processing = GatedProcessingController()
         var dutch = try XCTUnwrap(session.transcriptSegments.first)
         dutch.text = "Nieuwe transcript"
@@ -4636,6 +4708,7 @@ final class MeetingRecoveryTests: XCTestCase {
         var session = try self.completedEnglishRetranscriptionFixture()
         session.transcriptIsComplete = false
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
         let directory = try await store.sessionDirectory(for: session.id)
         try LanguageCheckpointProcessingController.writeCheckpoint(session: session, directory: directory,
             payload: Data("English inference progress".utf8))
@@ -4662,6 +4735,7 @@ final class MeetingRecoveryTests: XCTestCase {
         failed.errorCode = "legacy-language-mismatch"
         session.processingAttempts.append(failed)
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
         let directory = try await store.sessionDirectory(for: session.id)
         try LanguageCheckpointProcessingController.writeCheckpoint(session: session, directory: directory,
             payload: Data("English inference predates the failed Dutch attempt".utf8))
@@ -4682,6 +4756,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let store = MeetingSessionStore(rootDirectory: dir)
         let session = try self.completedEnglishRetranscriptionFixture()
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
         let arbiter = StubArbiter()
         let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(), processing: DiagnosticFailingProcessingController(error: CancellationError()), audioArbiter: arbiter)
         await coordinator.ensureRestored()
@@ -4775,6 +4850,7 @@ final class MeetingRecoveryTests: XCTestCase {
         abandoned.stage = .completed
         session.processingAttempts.append(abandoned)
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
         let arbiter = StubArbiter()
         let coordinator = MeetingSessionCoordinator(
             store: store,
@@ -4835,6 +4911,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let store = MeetingSessionStore(rootDirectory: dir)
         let session = try self.completedEnglishRetranscriptionFixture()
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
         let registry = MeetingTranscriptionBackendRegistry.makeDefault()
         XCTAssertEqual(MeetingRetranscriptionLanguage.canonicalCode("zh"), "zh")
         let whisper = try XCTUnwrap(registry.descriptor(for: .whisperTiny))
@@ -4985,6 +5062,7 @@ final class MeetingRecoveryTests: XCTestCase {
         session.transcriptSegments = [self.makeTranscriptSegment(sourceTrackID: trackID, speakerID: nil)]
         session.transcriptSegments[0].text = "English transcript"
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let coordinator = MeetingSessionCoordinator(
             store: store,
@@ -5037,6 +5115,7 @@ final class MeetingRecoveryTests: XCTestCase {
         )
         session.languageCode = "en"
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let coordinator = MeetingSessionCoordinator(
             store: store,
@@ -5128,6 +5207,7 @@ final class MeetingRecoveryTests: XCTestCase {
         session.transcriptSegments = [self.makeTranscriptSegment(sourceTrackID: trackID, speakerID: nil)]
         session.transcriptSegments[0].text = "Legacy transcript"
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let coordinator = MeetingSessionCoordinator(
             store: store,
@@ -5160,6 +5240,7 @@ final class MeetingRecoveryTests: XCTestCase {
         session.title = "Private meeting title"
         session.transcriptSegments[0].text = "Private transcript content"
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
         let message = "Missing model\n" + String(repeating: "x", count: 1000)
         let error = NSError(domain: "MeetingProbe\r", code: 42, userInfo: [NSLocalizedDescriptionKey: message])
         var lines: [String] = []
@@ -5212,6 +5293,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let store = MeetingSessionStore(rootDirectory: dir)
         let session = self.makeCorrectionSession(state: .interrupted).session
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
         var lines: [String] = []
         let arbiter = StubArbiter()
         let coordinator = MeetingSessionCoordinator(
@@ -5249,6 +5331,7 @@ final class MeetingRecoveryTests: XCTestCase {
             session.defaultTitleBase = "Meeting"
             session.endedAt = session.startedAt.addingTimeInterval(1_800)
             try await inner.create(session)
+            try await self.writeFinalizedChunkFiles(of: session, in: inner)
             let store = RejectCompletedTitleStore(inner: inner, cancellation: cancellation)
             let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
                 processing: TitleFixtureProcessingController(), audioArbiter: StubArbiter())
@@ -5322,6 +5405,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [chunk, survivingChunk])]
         )
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let coordinator = MeetingSessionCoordinator(
             store: store,
@@ -5369,7 +5453,9 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await store.create(older)
+        try await self.writeFinalizedChunkFiles(of: older, in: store)
         try await store.create(newer)
+        try await self.writeFinalizedChunkFiles(of: newer, in: store)
 
         let arbiter = ThrowOnceArbiter()
         let coordinator = MeetingSessionCoordinator(
@@ -5427,6 +5513,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await realStore.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: realStore)
 
         let recorder = EventRecorder()
         let gatedStore = GatedDeleteStore(inner: realStore, recorder: recorder)
@@ -5660,6 +5747,7 @@ final class MeetingRecoveryTests: XCTestCase {
             source: "synthetic", rejected: false, confirmedAt: nil)]
         session.piiRedactionEnabled = true
         try await realStore.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: realStore)
         let store = GatedThrowingSaveStore(inner: realStore, recorder: EventRecorder())
         let redactor = ColdCorrectionRedactor()
         redactor.behavior = .preparationFailure
@@ -5807,6 +5895,7 @@ final class MeetingRecoveryTests: XCTestCase {
         session.speakers[1].displayName = "Selected alias Ёё"
         session.speakers[1].generatedParticipantNumber = 1
         try await realStore.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: realStore)
         let store = GatedThrowingSaveStore(inner: realStore, recorder: EventRecorder())
         let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
             processing: StubProcessingController(), audioArbiter: StubArbiter())
@@ -6057,6 +6146,7 @@ final class MeetingRecoveryTests: XCTestCase {
             return word
         }
         try await realStore.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: realStore)
         let store = GatedThrowingSaveStore(inner: realStore, recorder: EventRecorder())
         let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
             processing: StubProcessingController(), audioArbiter: StubArbiter())
@@ -6413,6 +6503,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let store = MeetingSessionStore(rootDirectory: dir)
         let (session, speakerA, _, _) = self.makeCorrectionSession(state: .interrupted)
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let processing = GatedProcessingController()
         let coordinator = MeetingSessionCoordinator(
@@ -6594,6 +6685,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let store = MeetingSessionStore(rootDirectory: dir)
         let (session, speakerA, _, _) = self.makeCorrectionSession(state: .interrupted)
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let coordinator = MeetingSessionCoordinator(
             store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
@@ -6618,6 +6710,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let store = MeetingSessionStore(rootDirectory: dir)
         let (session, speakerA, _, _) = self.makeCorrectionSession(state: .interrupted)
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let coordinator = MeetingSessionCoordinator(
             store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
@@ -6637,6 +6730,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let store = MeetingSessionStore(rootDirectory: dir)
         let (session, speakerA, _, _) = self.makeCorrectionSession(state: .interrupted)
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let arbiter = ThrowOnceArbiter()
         let coordinator = MeetingSessionCoordinator(
@@ -7699,6 +7793,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
         let sessionDirectory = try await store.sessionDirectory(for: session.id)
         let tracksURL = sessionDirectory.appendingPathComponent("tracks", isDirectory: true)
         XCTAssertTrue(FileManager.default.fileExists(atPath: tracksURL.path))
@@ -7733,6 +7828,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await store.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: store)
 
         let gatedProcessing = GatedProcessingController()
         let coordinator = MeetingSessionCoordinator(
@@ -8703,6 +8799,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let track = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
         let session = self.makeSession(state: .interrupted, endedAt: Date(timeIntervalSinceNow: -10), audioTracks: [track])
         try await realStore.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: realStore)
 
         try await self.withRetentionPolicy(.afterTranscription) {
             let recorder = EventRecorder()
@@ -8838,6 +8935,7 @@ final class MeetingRecoveryTests: XCTestCase {
         session.startedAt = Date().addingTimeInterval(-30 * 24 * 60 * 60)
         session.endedAt = session.startedAt
         try await realStore.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: realStore)
 
         let recorder = EventRecorder()
         let gatedStore = GatedThrowingSaveStore(inner: realStore, recorder: recorder)
@@ -8884,6 +8982,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
         )
         try await realStore.create(session)
+        try await self.writeFinalizedChunkFiles(of: session, in: realStore)
 
         let recorder = EventRecorder()
         let gatedStore = GatedDeleteStore(inner: realStore, recorder: recorder)

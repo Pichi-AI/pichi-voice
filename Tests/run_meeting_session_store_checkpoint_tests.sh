@@ -90,6 +90,9 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     "$task_test_dir/AttributionTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \
     Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
+    Sources/Fluid/Services/Meeting/MeetingAudioChunkLedger.swift Sources/Fluid/Services/Meeting/MeetingPCMSourceTimeline.swift \
+    Sources/Fluid/Services/Meeting/Backend/MeetingAudioChunkSink.swift Sources/Fluid/Services/Meeting/Backend/MeetingAudioFilePCMChunkSink.swift \
+    Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift \
     Sources/Fluid/Services/Meeting/MeetingAutomaticNaming.swift \
     Sources/Fluid/Services/Meeting/MeetingTitleLanguage.swift \
     Sources/Fluid/Services/Meeting/MeetingUniversalTitleEngine.swift \

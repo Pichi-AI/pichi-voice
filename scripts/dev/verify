@@ -1,0 +1,498 @@
+#!/usr/bin/env python3
+"""Run the test layer a change needs and leave a receipt.
+
+L0 is the portable repository check. L1 adds XCTest and the standalone probes, which run side by side
+once the build has finished. L2 always includes iOS and the vendored packages too. With --changed the
+diff picks the layer. A path without a rule takes L1, so a new kind of file cannot skip the app.
+
+XCTest stays serial: its classes change shared settings, and parallel workers share one preferences
+domain, so a parallel run fails at random. A red step stays red. Nothing here retries a test or
+rewrites a result.
+"""
+
+import argparse
+from collections import namedtuple
+import contextlib
+from datetime import datetime, timezone
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parents[2]
+CHECK_ONLY = re.compile(r"(?:[^/]+\.md|LICENSE|docs/.*|\.github/.*|\.codex/.*|scripts/dev/(?!test-).*"
+                        r"|Tests/test_(?!published_upstream_release)[^/]+\.py|Tests/quarantine\.json|Tests/skip-registry\.json)")
+MOBILE = re.compile(r"(?:Sources/Mobile[^/]*/|Tests/Mobile|Vendor/|Fluid\.xcodeproj/|Package\.|Sources/.*(?<!\.swift)$"
+                    r"|scripts/dev/stage-sensitive-topic-model\.py|tools/sensitive_topic_classifier\.py|Tests/Fixtures/SensitiveTopics/)")
+# A step can be the probe runner, which needs time to stop its own probes. The wait ends once the group is gone.
+STEP_STOP_GRACE_SECONDS = 30
+MINIMUM_FREE_GB = 10
+STEP_LIMIT_SECONDS = 1800
+HEAVY_STEPS = ("xctest", "skip-policy", "probes", "ios", "vendor")
+MOBILE_BUNDLE = "PichiVoiceMobileIntegrationTests"
+REGRESSION_PRODUCTS = str(ROOT / ".build/XcodeRegression") + "/"
+BUILD_FINISHED = b"** TEST BUILD SUCCEEDED **"
+POLL_SECONDS = 0.2
+Quarantine = namedtuple("Quarantine", "tests probes")
+
+
+class Unavailable(Exception):
+    """This machine cannot run a step. That is a gap in the evidence, not a verdict on the change."""
+
+
+def load_probe_runner():
+    """The probe runner owns process group cleanup and signal handling, so this script reuses them."""
+    spec = importlib.util.spec_from_file_location("standalone_regression", ROOT / "scripts/dev/standalone-regression.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+RUNNER = load_probe_runner()
+RUNNER.CANCEL_GRACE_SECONDS = STEP_STOP_GRACE_SECONDS
+
+
+def stop_test_hosts(prefix):
+    """Test hosts start outside a step's process group, so they are found by their build path."""
+    listing = subprocess.run(["ps", "-axo", "pid=,comm="], capture_output=True, text=True).stdout
+    for line in listing.splitlines():
+        pid, _, path = line.strip().partition(" ")
+        if path.strip().startswith(prefix):
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(int(pid), signal.SIGKILL)
+
+
+def git(*arguments):
+    return subprocess.check_output(["git", "-c", "core.quotePath=false", *arguments], cwd=ROOT, text=True)
+
+
+def changed_paths(base):
+    merge_base = git("merge-base", base, "HEAD").strip()
+    tracked = git("diff", "--name-only", "--no-renames", merge_base).splitlines()
+    untracked = git("ls-files", "--others", "--exclude-standard").splitlines()
+    return merge_base, sorted(set(tracked + untracked))
+
+
+def choose_layer(paths, project=""):
+    """Return the layer and why, for the receipt. A script the Xcode project calls is a build input."""
+    app = [path for path in paths if not CHECK_ONLY.fullmatch(path) or (path.startswith("scripts/") and path in project)]
+    if app:
+        more = f" and {len(app) - 1} more" if len(app) > 1 else ""
+        return "L1", f"{app[0]}{more} can change the app"
+    if paths:
+        return "L0", f"{len(paths)} changed file(s), none can change the app"
+    return "L0", "no changes against the base"
+
+
+def shared_sources():
+    lines = (ROOT / "Sources/Mobile/shared-sources.txt").read_text().splitlines()
+    return {line.strip() for line in lines if line.strip() and not line.startswith("#")}
+
+
+def touches_mobile(paths, shared):
+    return any(MOBILE.match(path) or path in shared for path in paths)
+
+
+def timestamp():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class Receipt:
+    """Runs steps, keeps their logs, and always records what happened."""
+
+    def __init__(self, directory, **facts):
+        self.directory = directory
+        self.started = time.monotonic()
+        self.protect_creation = None
+        self.running = []
+        self.value = {"version": 1, **facts, "startedAt": timestamp(), "result": "running", "seconds": None,
+                      "steps": [], "skipped": [], "unavailable": [], "quarantined": []}
+        self.save()
+
+    def save(self):
+        partial = self.directory / "receipt.json.next"
+        partial.write_text(json.dumps(self.value, indent=2) + "\n")
+        os.replace(partial, self.directory / "receipt.json")
+
+    def begin(self, name, command, environment=None, hosts=None):
+        """Start a step without waiting for it."""
+        stream = (self.directory / f"{name}.log").open("wb")
+        with (self.protect_creation or contextlib.nullcontext)():
+            # Its own session lets a hung step go down with the tools it started.
+            process = subprocess.Popen(command, cwd=ROOT, env={**os.environ, **(environment or {})}, stdin=subprocess.DEVNULL,
+                                       stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+            entry = {"name": name, "process": process, "stream": stream, "started": time.monotonic(), "timedOut": False,
+                     "hosts": hosts}
+            self.running.append(entry)
+        return entry
+
+    def wait_for_text(self, entry, text, limit=STEP_LIMIT_SECONDS):
+        """Return once the step's log holds this text, or the step has ended."""
+        log = self.directory / f"{entry['name']}.log"
+        try:
+            while entry["process"].poll() is None and time.monotonic() - entry["started"] < limit:
+                if text in log.read_bytes():
+                    return
+                time.sleep(POLL_SECONDS)
+        except BaseException:
+            self.stop_running()
+            raise
+
+    def join(self, *entries, limit=STEP_LIMIT_SECONDS):
+        """Wait for steps that run side by side. A step that outlives the limit is stopped."""
+        try:
+            while True:
+                for entry in entries:
+                    if entry["process"].poll() is None and time.monotonic() - entry["started"] > limit:
+                        self.stop(entry)
+                        entry["timedOut"] = True
+                    if entry["process"].poll() is not None:
+                        # A step that ends first is not charged for the wait on its neighbour.
+                        entry.setdefault("ended", time.monotonic())
+                if all("ended" in entry for entry in entries):
+                    break
+                time.sleep(POLL_SECONDS)
+        except BaseException:
+            self.stop_running()
+            raise
+        return [self.record(entry) for entry in entries]
+
+    def step(self, name, command, environment=None, limit=STEP_LIMIT_SECONDS):
+        return self.join(self.begin(name, command, environment), limit=limit)[0]
+
+    def record(self, entry):
+        entry["stream"].close()
+        self.running.remove(entry)
+        code = None if entry["timedOut"] else entry["process"].returncode
+        status = "timed out" if entry["timedOut"] else "passed" if code == 0 else "failed"
+        row = {"name": entry["name"], "status": status, "exitCode": code, "seconds": round(entry["ended"] - entry["started"], 1),
+               "log": str(self.directory / f"{entry['name']}.log")}
+        self.value["steps"].append(row)
+        self.save()
+        print(f"{status:>9}  {row['name']}  {row['seconds']:.0f} s", flush=True)
+        return row
+
+    @staticmethod
+    def stop(entry):
+        try:
+            RUNNER.stop_process_group(entry["process"])
+        finally:
+            # Only this step's hosts: the step beside it may still be running its own binaries.
+            if entry["hosts"]:
+                stop_test_hosts(entry["hosts"])
+
+    def stop_running(self):
+        """Stop every running step. A failure or a second signal on one step must not leave another alive."""
+        errors = []
+        for entry in list(self.running):
+            try:
+                self.stop(entry)
+            except BaseException as error:
+                errors.append(error)
+            with contextlib.suppress(OSError):
+                entry["stream"].close()
+        self.running.clear()
+        return errors
+
+    def fail(self, name, reason):
+        self.value["steps"].append({"name": name, "status": "failed", "exitCode": None, "seconds": 0, "log": None, "note": reason})
+        self.save()
+        print(f"   failed  {name}  {reason}", flush=True)
+
+    def skip(self, name, reason):
+        self.value["skipped"].append({"name": name, "reason": reason})
+        self.save()
+
+    def unavailable(self, name, reason):
+        """Record a step this machine cannot run. The receipt can then be incomplete at best."""
+        self.value["unavailable"].append(name)
+        self.skip(name, reason)
+
+    def failed(self):
+        return any(row["status"] != "passed" for row in self.value["steps"])
+
+    def finish(self, result=None):
+        # A red step outranks a gap, and a gap outranks green.
+        if result != "interrupted" and self.failed():
+            result = "failed"
+        elif result is None and self.value["unavailable"]:
+            result = "incomplete"
+        self.value["result"] = result or "passed"
+        self.value["seconds"] = round(time.monotonic() - self.started, 1)
+        self.save()
+
+
+def collect(node, bundle, suite, rows):
+    kind = node.get("nodeType")
+    if kind in ("Unit test bundle", "UI test bundle"):
+        bundle = node.get("name")
+    elif kind == "Test Suite":
+        suite = node.get("name")
+    elif kind == "Test Case":
+        rows[f"{bundle}/{suite}/{node.get('name')}"] = node.get("result")
+    for child in node.get("children", []):
+        collect(child, bundle, suite, rows)
+
+
+def bundle_results(bundle):
+    """Map each test in an xcresult to its result. None means no readable report, which never counts as success."""
+    try:
+        report = subprocess.check_output(["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", str(bundle), "--compact"],
+                                         stderr=subprocess.DEVNULL)
+        rows = {}
+        for node in json.loads(report).get("testNodes", []):
+            collect(node, None, None, rows)
+    except (OSError, ValueError, AttributeError, TypeError, KeyError, subprocess.SubprocessError):
+        return None
+    return rows or None
+
+
+def artifact_directory(row, label):
+    match = re.search(rf"^{label}: (.+)$", Path(row["log"]).read_text(errors="replace"), re.MULTILINE)
+    return Path(match.group(1)) if match else None
+
+
+def report_results(row, bundle):
+    """Results of a finished step. A step that passed without a readable report turns red."""
+    results = bundle_results(bundle) if bundle else None
+    if results is None:
+        if row["status"] == "passed":
+            row["status"] = "failed"
+        row["note"] = "no readable test report"
+        return {}
+    return results
+
+
+def xctest_results(row):
+    directory = artifact_directory(row, "Regression artifacts")
+    results = report_results(row, directory / "tests.xcresult" if directory else None)
+    summary = directory / "summary.txt" if directory else None
+    if not results and summary and summary.is_file() and "Build failed" in summary.read_text(errors="replace"):
+        row["note"] = "the build failed, so no test ran"
+    return results
+
+
+def plain(test):
+    return test[:-2] if test.endswith("()") else test
+
+
+def probe_command(quarantine, jobs):
+    selection = []
+    if quarantine.probes:
+        selection = [argument for probe in RUNNER.PROBES if probe.name not in quarantine.probes and not probe.requires_ui
+                     for argument in ("--only", probe.name)]
+    return ["bash", "scripts/dev/standalone-regression.sh", "--jobs", str(jobs), *selection]
+
+
+def name_failed_probes(receipt, row):
+    directory = artifact_directory(row, "Standalone artifacts")
+    if row["status"] != "passed" and directory:
+        try:
+            results = json.loads((directory / "summary.json").read_text())["results"]
+            receipt.value["probesFailed"] = sorted(item["name"] for item in results if item["status"] == "FAIL")
+            receipt.save()
+        except (OSError, ValueError, KeyError):
+            pass
+
+
+def run_xctest_and_probes(receipt, quarantine, jobs):
+    """Return the result of every XCTest. Probes compile too, so they wait until the build has finished."""
+    skipped = [f"-skip-testing:{test}" for test in sorted(quarantine.tests) if not test.startswith(MOBILE_BUNDLE + "/")]
+    xctest = receipt.begin("xctest", ["bash", "scripts/dev/macos.sh", "regression", *skipped], hosts=REGRESSION_PRODUCTS)
+    receipt.wait_for_text(xctest, BUILD_FINISHED)
+    probes = receipt.begin("probes", probe_command(quarantine, jobs))
+    xctest_row, probes_row = receipt.join(xctest, probes)
+    name_failed_probes(receipt, probes_row)
+    return xctest_results(xctest_row)
+
+
+def disposable_simulator(name):
+    """Create a simulator nobody else uses, on the newest iOS runtime."""
+    listing = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "-j", "runtimes"]))
+    runtimes = [item for item in listing["runtimes"] if item.get("isAvailable") and item.get("platform") == "iOS"]
+    if not runtimes:
+        raise Unavailable("no iOS simulator runtime is installed here")
+    runtime = max(runtimes, key=lambda item: [int(part) for part in item["version"].split(".")])
+    device = next(item for item in runtime["supportedDeviceTypes"] if item["productFamily"] == "iPhone")
+    return subprocess.check_output(["xcrun", "simctl", "create", name, device["identifier"], runtime["identifier"]], text=True).strip()
+
+
+def run_ios(receipt, quarantine):
+    """Return the result of every test in the integration suite."""
+    bundle = receipt.directory / "ios.xcresult"
+    try:
+        udid = disposable_simulator(f"pichi-verify-{receipt.directory.name}")
+    except Unavailable as error:
+        receipt.unavailable("ios", str(error))
+        return {}
+    except (OSError, ValueError, KeyError, StopIteration, subprocess.SubprocessError) as error:
+        receipt.fail("ios", f"Could not create a simulator: {error}")
+        return {}
+    receipt.value["simulator"] = {"udid": udid, "deleted": False}
+    receipt.save()
+    try:
+        skipped = [f"-skip-testing:{test}" for test in sorted(quarantine.tests) if test.startswith(MOBILE_BUNDLE + "/")]
+        row = receipt.step("ios", ["bash", "scripts/dev/mobile.sh", "test", f"-only-testing:{MOBILE_BUNDLE}", *skipped,
+                                   "-resultBundlePath", str(bundle)], {"PICHI_MOBILE_DESTINATION": f"platform=iOS Simulator,id={udid}"})
+    finally:
+        subprocess.run(["xcrun", "simctl", "shutdown", udid], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deleted = subprocess.run(["xcrun", "simctl", "delete", udid], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        receipt.value["simulator"]["deleted"] = deleted.returncode == 0
+        receipt.save()
+    return report_results(row, bundle)
+
+
+def vendor_packages():
+    """Every vendored package that has its own tests."""
+    return sorted(path.parent.name for path in (ROOT / "Vendor").glob("*/Tests"))
+
+
+def run_vendor(receipt, layer, paths):
+    changed = {path.split("/")[1] for path in paths if path.startswith("Vendor/")}
+    for package in vendor_packages():
+        if layer == "L2" or package in changed:
+            receipt.step(f"vendor-{package}", ["swift", "test", "--package-path", f"Vendor/{package}",
+                                               "--scratch-path", f".build/vendor/{package}"])
+        else:
+            receipt.skip(f"vendor-{package}", "this package did not change")
+
+
+def read_quarantine():
+    entries = json.loads((ROOT / "Tests/quarantine.json").read_text())["entries"]
+    tests = [entry["test"] for entry in entries]
+    return Quarantine(tests={plain(test) for test in tests if not test.startswith("probe:")},
+                      probes={test.removeprefix("probe:") for test in tests if test.startswith("probe:")})
+
+
+def execute(receipt, layer, paths, base, jobs):
+    receipt.step("check", ["bash", "scripts/dev/check.sh"])
+    if shutil.which("swiftlint"):
+        receipt.step("lint", ["python3", "-S", "scripts/dev/lint-changed.py", "--base", base])
+    elif any(path.endswith(".swift") for path in paths):
+        receipt.unavailable("lint", "swiftlint is not installed here, and Swift files changed")
+    else:
+        receipt.skip("lint", "swiftlint is not installed here, and no Swift file changed")
+    if layer == "L0":
+        for name in HEAVY_STEPS:
+            receipt.skip(name, "L0 stops at the repository check")
+        return None
+    if receipt.failed():
+        for name in HEAVY_STEPS:
+            receipt.skip(name, "the repository check failed")
+        return None
+    if shutil.which("xcodebuild") is None:
+        for name in HEAVY_STEPS:
+            receipt.skip(name, "xcodebuild is not available here")
+        return "incomplete"
+    free = shutil.disk_usage(ROOT).free / 2**30
+    if free < MINIMUM_FREE_GB:
+        for name in HEAVY_STEPS:
+            receipt.skip(name, f"only {free:.0f} GB free, and heavy runs need {MINIMUM_FREE_GB} GB")
+        return "incomplete"
+    quarantine = read_quarantine()
+    receipt.value["quarantined"] = sorted(quarantine.tests) + sorted(f"probe:{name}" for name in quarantine.probes)
+    results = run_xctest_and_probes(receipt, quarantine, jobs)
+    if layer == "L2" or touches_mobile(paths, shared_sources()):
+        results = {**results, **run_ios(receipt, quarantine)}
+    else:
+        receipt.skip("ios", "no mobile or shared source changed")
+    receipt.value["testsFailed"] = sorted(test for test, result in results.items() if result == "Failed")
+    run_vendor(receipt, layer, paths)
+    record = receipt.directory / "results.json"
+    record.write_text(json.dumps(results, indent=0, sort_keys=True))
+    receipt.step("skip-policy", ["python3", "-S", "scripts/dev/check-test-policy.py", "--results", str(record), "--complete"])
+    return None
+
+
+def summary_lines(value, directory):
+    lines = [f"Verify {value['layer']}: {value['result']} in {value['seconds']:.0f} s",
+             f"Revision {value['revision'][:8]} ({value['workingTree']}), base {value['base'][:8]}",
+             f"Why {value['layer']}: {value['reason']}"]
+    lines += [f"  {row['status']} {row['name']}: {row['seconds']:.0f} s" + (f" ({row['note']})" if row.get("note") else "")
+              for row in value["steps"]]
+    lines += [f"  skipped {item['name']}: {item['reason']}" for item in value["skipped"]]
+    if value["quarantined"]:
+        lines.append(f"  quarantined, not run: {', '.join(value['quarantined'])}")
+    for key in ("testsFailed", "probesFailed"):
+        if value.get(key):
+            lines.append(f"  {key}: {', '.join(value[key])}")
+    if value.get("simulator", {}).get("deleted") is False:
+        lines.append(f"  simulator {value['simulator']['udid']} was not deleted")
+    if value.get("error"):
+        lines.append(f"  error: {value['error']}")
+    lines.append(f"Receipt: {directory / 'receipt.json'}")
+    return lines
+
+
+def tree_fingerprint(root=ROOT):
+    """Identify the exact content under test: the commit, every tracked change and every untracked file."""
+    def run(*arguments, **options):
+        return subprocess.run(["git", *arguments], cwd=root, check=True, capture_output=True, **options).stdout
+
+    digest = hashlib.sha256(run("rev-parse", "HEAD"))
+    digest.update(run("diff", "HEAD", "--binary"))
+    untracked = run("ls-files", "--others", "--exclude-standard", "-z")
+    digest.update(untracked)
+    if untracked:
+        digest.update(run("hash-object", "--stdin-paths", input=untracked.replace(b"\0", b"\n")))
+    return digest.hexdigest()
+
+
+def finish(receipt, outcome, tree):
+    """A receipt names one tree, so a tree that moved during the run proves nothing."""
+    if outcome is None and not receipt.failed() and tree_fingerprint() != tree:
+        receipt.skip("freeze", "the tree changed during the run")
+        outcome = "incomplete"
+    receipt.finish(outcome)
+
+
+def run_guarded(receipt, work):
+    """Run the work. Whatever happens, no step stays running and the receipt is finished."""
+    with RUNNER.suite_signal_handlers() as protect_creation:
+        receipt.protect_creation = protect_creation
+        try:
+            work()
+        except (KeyboardInterrupt, RUNNER.RunTermination):
+            receipt.stop_running()
+            receipt.finish("interrupted")
+        except Exception as error:
+            cleanup = receipt.stop_running()
+            receipt.value["error"] = "; ".join(str(item) or type(item).__name__ for item in [error, *cleanup])
+            receipt.finish("failed")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    choice = parser.add_mutually_exclusive_group()
+    choice.add_argument("--changed", action="store_true", help="Pick the layer from the diff against the base")
+    choice.add_argument("--layer", choices=("L0", "L1", "L2"), help="Run this layer. Without either option: L1")
+    parser.add_argument("--base", default="origin/main", help="The diff starts at the merge base with this ref")
+    parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 3) * 2 // 3), help="Standalone probes at once")
+    arguments = parser.parse_args()
+    merge_base, paths = changed_paths(arguments.base)
+    project = (ROOT / "Fluid.xcodeproj/project.pbxproj").read_text()
+    layer, reason = choose_layer(paths, project) if arguments.changed else (arguments.layer or "L1", "requested")
+    revision = git("rev-parse", "HEAD").strip()
+    status = git("status", "--porcelain")
+    tree = tree_fingerprint()
+    moment = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    directory = ROOT / ".build/verify" / f"{moment}-{revision[:8]}-{os.getpid()}"
+    directory.mkdir(parents=True)
+    receipt = Receipt(directory, layer=layer, reason=reason, revision=revision, workingTree="dirty" if status.strip() else "clean",
+                      tree=tree, base=merge_base, changedFiles=len(paths))
+    print(f"Verify {layer}: {reason}", flush=True)
+    run_guarded(receipt, lambda: finish(receipt, execute(receipt, layer, paths, arguments.base, arguments.jobs), tree))
+    print("\n".join(summary_lines(receipt.value, directory)))
+    return {"passed": 0, "failed": 1, "incomplete": 2, "interrupted": 130}[receipt.value["result"]]
+
+
+if __name__ == "__main__":
+    sys.exit(main())

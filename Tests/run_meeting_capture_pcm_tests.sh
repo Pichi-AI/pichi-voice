@@ -30,10 +30,18 @@ root.joinpath('Contracts.swift').write_text('import Foundation\nimport CoreMedia
     + 'final class DebugLogger: Sendable { static let shared = DebugLogger(); func info(_ message: String, source: String) {} }\n'
     + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true; var speakerRevisions: [String] = []; var protectedSourceThroughSample: Int? = nil; var protectedSourceIntervals: [Range<TimeInterval>] = [] }\n'
     + 'enum MeetingAudioTrackKind: Sendable { case microphone, applicationAudio }\n'
-    + 'enum MeetingCaptureEvent: Sendable { enum Kind: Sendable { case writerBackpressure, captureStoppedUnexpectedly }; case interrupted(kind: Kind, trackID: UUID?, detail: String) }\n'
+    + 'enum MeetingCaptureEvent: Sendable { enum Kind: Sendable { case writerBackpressure, captureStoppedUnexpectedly, liveTranscriptionDeferred }; case interrupted(kind: Kind, trackID: UUID?, detail: String) }\n'
     + 'struct MeetingBackendSpeakerActivity: Sendable {}\n'
     + 'final class MeetingMemoryAudioArchive: @unchecked Sendable { private let lock = NSLock(); private var count = 0; var totalSampleCount: Int { lock.withLock { count } }; func append(_ samples: UnsafeBufferPointer<Float>) throws { lock.withLock { count += samples.count } }; func seal() throws {} }\n')
 source = pathlib.Path('Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift').read_text()
+# The in-room callback and the PCM transport name the shared capture-clock contracts (120). Compile the actual
+# value contracts and clock owners; the in-room fixture never starts a native session, so no clock is measured.
+import subprocess
+subprocess.run(['python3', 'Tests/Support/write_capture_clock_standalone_types.py', str(root / 'CaptureClockValues.swift'),
+                '--without-track-id'], check=True)
+root.joinpath('CaptureClock.swift').write_text('import CoreMedia\nimport Foundation\n' + '\n'.join(declaration(source, marker) for marker in (
+    'final nonisolated class MeetingRecordingClock:', 'nonisolated struct MeetingRecordingClockContext:',
+    'final nonisolated class MeetingCaptureSourceClock:')) + '\n')
 # Compile the complete production copier, without unrelated declarations appended later.
 sample_copy = declaration(source, 'nonisolated enum MeetingLiveSampleCopy {')
 root.joinpath('SampleCopy.swift').write_text('import AVFoundation\nimport CoreMedia\nimport Foundation\n' + sample_copy + '\n')
@@ -41,13 +49,23 @@ root.joinpath('SampleCopy.swift').write_text('import AVFoundation\nimport CoreMe
 # controlled sinks. Their implementation is not re-created in the regression fixture.
 engine = pathlib.Path('Sources/Fluid/Services/Meeting/MeetingCaptureEngine.swift').read_text()
 inroom = declaration(engine, 'private final nonisolated class InRoomMicrophoneCaptureRuntime:')
+# The microphone callback no longer owns PCM conversion: 91865f5b routed in-room streaming through the shared
+# clock-aware MeetingMultiTrackCaptureTee. It now hands each measured buffer to the writer and the live handler,
+# and defers live transcription (never the recording) when either sink rejects.
 callbacks = '\n'.join(declaration(inroom, marker) for marker in [
-    'func captureOutput(', 'private func failTranscription(', 'private func enqueueForTranscription('])
+    'func captureOutput(', 'private func deliverMeasuredSample(', 'private func failTranscription('])
 probe = pathlib.Path('Tests/Support/MeetingMacCaptureTeeProbe.swift').read_text()
-root.joinpath('MacCaptureTee.swift').write_text(probe.replace('// PRODUCTION_CALLBACKS', callbacks) + '\n' + declaration(engine, 'final nonisolated class MeetingMultiTrackCaptureTee:'))
+tee = declaration(engine, 'final nonisolated class MeetingMultiTrackCaptureTee:')
+# prepare(session:...) composes the session, consumer factory and privacy gate (120). This transport probe
+# builds the tee directly; XCTest MeetingAudioChunkSinkTests exercises the composition entry point.
+prepare = declaration(tee, '    static func prepare(')
+assert tee.count('    @MainActor\n' + prepare) == 1, 'prepare keeps its own main-actor attribute'
+tee = tee.replace('    @MainActor\n' + prepare, '')
+root.joinpath('MacCaptureTee.swift').write_text(probe.replace('// PRODUCTION_CALLBACKS', callbacks) + '\n' + tee)
 ios = pathlib.Path('Sources/Fluid/Services/Meeting/Platform/IOSMeetingCaptureEngine.swift').read_text()
 stop_probe = pathlib.Path('Tests/Support/MeetingCaptureStopProbe.swift').read_text()
 stop_probe = stop_probe.replace('// PRODUCTION_CAPTURE_ERROR', declaration(contract, 'nonisolated enum MeetingCaptureError:'))
+stop_probe = stop_probe.replace('// PRODUCTION_CAPTURE_CONTINUITY', declaration(contract, 'final nonisolated class MeetingCaptureContinuityState:'))
 stop_probe = stop_probe.replace('// PRODUCTION_IOS_STOP', declaration(ios, 'func stop(sessionID:'))
 stop_probe = stop_probe.replace('// PRODUCTION_DESKTOP_STOP', declaration(engine, 'func stop(sessionID:'))
 coordinator = pathlib.Path('Sources/Fluid/Services/Meeting/MeetingSessionCoordinator.swift').read_text()
@@ -69,7 +87,8 @@ assert 'if self.captureStopHandoff?.sessionID != session.id || self.captureStopH
 start_body = declaration(coordinator, 'private func performStartRecording(')
 retry_body = declaration(coordinator, 'private func beginProcessingRetry(')
 assert 'self.captureStopHandoff = nil' in start_body and 'self.captureStopHandoff = nil' in retry_body
-assert 'self.stopRequestedAt = (session.id, Date())' in coordinator
+# fec7007b added the host time that the frozen recording timer uses once Stop is requested.
+assert 'self.stopRequestedAt = (session.id, Date(), mach_absolute_time())' in coordinator
 mobile_ui = pathlib.Path('Sources/Mobile/MobileMeetingRoot.swift').read_text()
 assert 'Text(MeetingTranscriptExporter.timestampText(coordinator.elapsedTime))' in mobile_ui
 root.joinpath('CaptureStop.swift').write_text(stop_probe)
@@ -83,6 +102,6 @@ xcrun swiftc -parse-as-library -swift-version 6 \
     Sources/Fluid/Services/Meeting/MeetingProcessingPipeline+MemoryAudio.swift \
     Sources/Fluid/Services/Meeting/MeetingPCMSourceTimeline.swift \
     Sources/Fluid/Services/Meeting/MeetingStreamingPCMController.swift \
-    "$task_test_dir/Contracts.swift" "$task_test_dir/SampleCopy.swift" "$task_test_dir/MacCaptureTee.swift" "$task_test_dir/CaptureStop.swift" \
+    "$task_test_dir/Contracts.swift" "$task_test_dir/CaptureClockValues.swift" "$task_test_dir/CaptureClock.swift" "$task_test_dir/SampleCopy.swift" "$task_test_dir/MacCaptureTee.swift" "$task_test_dir/CaptureStop.swift" \
     Tests/MeetingMultiTrackCaptureTeeTests.swift Tests/MeetingCapturePCMTransportTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests"

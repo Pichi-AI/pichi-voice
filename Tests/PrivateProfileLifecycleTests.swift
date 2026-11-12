@@ -33,6 +33,14 @@ extension MeetingSessionStoreCheckpointTests {
         check(PrivateProfileStorage.current.isGuest && service.isPrivateDataVisible,
             "Offline guest cleanup retry completes after original capture drains")
 
+        let storeCache = PrivateProfileStoreCache<SyntheticCachedStore>()
+        var cachedStore: SyntheticCachedStore? = storeCache.value { _ in SyntheticCachedStore() }
+        weak var previousStore = cachedStore
+        cachedStore = nil
+        check(previousStore != nil, "The cache keeps the store of the selected profile")
+        try await service.transition(from: nil, to: nil, generation: UUID())
+        check(previousStore == nil, "A transition releases cached stores, so no old writer keeps the profile's files open")
+
         let gate = SyntheticProfileGate()
         let workID = UUID()
         let write = Task { await gate.wait(); service.finishPrivateWrite(id: workID) }
@@ -429,3 +437,5 @@ private actor SyntheticProfileGate {
     }
     func release() { releaseWaiter?.resume(); releaseWaiter = nil }
 }
+
+private final class SyntheticCachedStore: Sendable {}

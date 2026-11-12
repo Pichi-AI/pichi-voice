@@ -9,6 +9,11 @@ provider = repo / "Sources/Fluid/Services/PichiGigaAMProvider.swift"
 catalog = repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMModelCatalog.swift"
 ctc = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMCTC.swift").read_text()
 error = ctc[ctc.index("public enum GigaAMError:"):]
+# 117: the provider converts GigaAMWordTiming (with its source context) into ASRWordTiming provenance.
+word_timing = ctc[ctc.index("/// Exact inference input and word position"):ctc.index("public struct GigaAMTranscript:")]
+persisted = (repo / "Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift").read_text()
+provenance_start = persisted.index("nonisolated struct ASRWordTimingProvenance:")
+word_provenance = persisted[provenance_start:persisted.index("\n}\n", provenance_start) + 3]
 protocol = (repo / "Sources/Fluid/Services/TranscriptionProvider.swift").read_text()
 progress = protocol[protocol.index("nonisolated enum ModelPreparationPhase:"):protocol.index("// MARK: - Transcription Result")]
 execution_status = protocol[protocol.index("nonisolated struct TranscriptionExecutionStatus:"):protocol.index("// MARK: - Transcription Provider Protocol")]
@@ -38,7 +43,7 @@ neighbors = neighbors.replace("// ACTUAL_ENCODER_MODEL_KEY", method(encoder, "  
 with tempfile.TemporaryDirectory(prefix="pichi-gigaam-artifact-ownership-") as temporary:
     temporary = Path(temporary)
     runtime = temporary / "Runtime.swift"
-    runtime.write_text((repo / "Tests/Support/GigaAMArtifactOwnershipRuntime.swift").read_text() + "\n" + error + "\n" + runtime_status)
+    runtime.write_text((repo / "Tests/Support/GigaAMArtifactOwnershipRuntime.swift").read_text() + "\n" + error + "\n" + runtime_status + "\n" + word_timing)
     library = temporary / "libPichiGigaAM.dylib"
     subprocess.run([
         "xcrun", "swiftc", "-swift-version", "5", "-parse-as-library", "-emit-module", "-emit-library",
@@ -51,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix="pichi-gigaam-artifact-ownership-") as t
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMAcousticMatcher.swift"), str(runtime), "-o", str(library),
     ], check=True, cwd=repo)
     progress_source = temporary / "PreparationProgress.swift"
-    progress_source.write_text("import Foundation\n" + progress + "\n" + execution_status + "\n" + result_values + "\n" + enrollment)
+    progress_source.write_text("import Foundation\n" + progress + "\n" + execution_status + "\n" + result_values + "\n" + enrollment + "\n" + word_provenance)
     neighbor_source = temporary / "DictionaryNeighbors.swift"
     neighbor_source.write_text(neighbors)
     for isolation in ([], ["-default-isolation", "MainActor"]):
@@ -63,6 +68,8 @@ with tempfile.TemporaryDirectory(prefix="pichi-gigaam-artifact-ownership-") as t
             str(provider), str(progress_source),
             str(repo / "Sources/Fluid/Services/DictionaryAudioInspection.swift"),
             str(repo / "Sources/Fluid/Services/DictionaryLearningEvidence.swift"),
+            # DictionaryLearningEvidence validates correction ranges through the 101 replacement plan.
+            str(repo / "Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift"),
             str(neighbor_source),
             str(repo / "Tests/GigaAMArtifactOwnershipTests.swift"),
             "-o", str(executable),

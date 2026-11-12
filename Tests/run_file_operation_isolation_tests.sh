@@ -45,7 +45,14 @@ error_marker = 'enum DictionaryMatchPlaygroundError: LocalizedError {'
 assert playground.count(error_marker) == 1, 'Expected one production playground error declaration'
 error_start = playground.index(error_marker)
 error_end = playground.index('\n}\n', error_start) + 3
-Path(sys.argv[1]).write_text('import Foundation\n' + playground[error_start:error_end] + '\n' + source[frames_start:frames_end] + '\n' + source[start:end] + '\n')
+# TranscriptionProvider's word timing names ASRWordTimingProvenance (117); take only that declaration from
+# the persisted-metadata file, whose other types need unrelated meeting models.
+metadata = Path('Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift').read_text()
+provenance_marker = 'nonisolated struct ASRWordTimingProvenance:'
+assert metadata.count(provenance_marker) == 1, 'Expected one production word-timing provenance declaration'
+provenance_start = metadata.index(provenance_marker)
+provenance_end = metadata.index('\n}\n', provenance_start) + 3
+Path(sys.argv[1]).write_text('import Foundation\n' + metadata[provenance_start:provenance_end] + '\n' + playground[error_start:error_end] + '\n' + source[frames_start:frames_end] + '\n' + source[start:end] + '\n')
 PY
 xcrun swiftc -target x86_64-apple-macosx15.0 -parse-as-library -swift-version 5 \
     -module-cache-path "$task_test_dir/ModuleCache" \

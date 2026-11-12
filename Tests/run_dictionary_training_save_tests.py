@@ -26,7 +26,9 @@ already_correct = source[source.index('    private var trainingAlreadyCorrectWit
 can_save = source[source.index('    private var canAddTrainedReplacement:'):source.index('    private var shouldPulseTrainedReplacementButton:')]
 merge = source[source.index('enum CustomDictionaryTrainingMerge {'):source.index('private struct ReplacementConfirmation:')]
 spelling_policy_source = (repo / 'Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift').read_text()
-spelling_policy = spelling_policy_source[spelling_policy_source.index('nonisolated enum DictionaryTrainingSpellingPolicy {'):]
+# The policy file now also holds the replacement plan and text map (101), which call DictionaryCorrectionEditPolicy
+# at the top of the file, so compile the whole file rather than its tail.
+spelling_policy = spelling_policy_source
 store_source = (repo / 'Sources/Fluid/Services/PronunciationDictionaryStore.swift').read_text()
 retained = store_source[store_source.index('    static func retainedEnrollments('):store_source.index('    static func matchingEnrollments(')]
 settings = (repo / 'Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift').read_text()

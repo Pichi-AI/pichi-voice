@@ -263,6 +263,11 @@ enum MeetingCoordinatorError: Error { case featureDisabled }
     var showPasteCheckAlerts = true
     var meetingRecordingDefaults = MeetingRecordingDefaults()
     var preferredInputDeviceUID: String?
+    // The production method (112) freezes storage and speaker policy into the configuration; this feedback
+    // probe only needs the menu-start path to hand the resolved configuration through unchanged.
+    func applyingMeetingRecordingPreferences(to configuration: MeetingCaptureConfiguration) -> MeetingCaptureConfiguration {
+        configuration
+    }
 }
 @MainActor enum MeetingCaptureSourceCatalog {
     static var microphoneGate: MenuStartGate?

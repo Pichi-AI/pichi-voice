@@ -78,16 +78,19 @@ A green portable check does not replace macOS validation. The initial setup does
 
 ## Reproducible macOS regression
 
-Run `bash scripts/dev/standalone-regression.sh` for the registered standalone probes. The registry covers every `Tests/run_*` runner; `--list` prints them. The `scripts/dev/test-*.sh` probes are manual and unregistered. It invokes shell and Python scripts with their declared interpreters, verifies registry coverage before execution, and continues through failures to retain a complete result. A changed script interpreter or unregistered runner requires a registry update.
+Run `bash scripts/dev/standalone-regression.sh` for the registered standalone probes. The registry covers every `Tests/run_*` runner and lists the checks that live elsewhere by hand; `--list` prints them. The `scripts/dev/test-*.sh` probes that load real models stay manual and unregistered. It invokes shell and Python scripts with their declared interpreters, verifies registry coverage before execution, and continues through failures to retain a complete result. A changed script interpreter or unregistered runner requires a registry update.
 
 Full runs require an isolated worktree, macOS and full Xcode. The runner prevents simultaneous standalone runs in one worktree. `--list` lists the names without starting native probes and is portable. Narrow a repeat run with repeated `--only NAME` options:
 
 ```bash
 bash scripts/dev/standalone-regression.sh --list
 bash scripts/dev/standalone-regression.sh --only file_export --only file_transcript_relative_date --only ui_contrast
+bash scripts/dev/standalone-regression.sh --jobs 8
 ```
 
-Each probe owns a separate process session. INT and TERM trigger bounded TERM/KILL cleanup, wait for runnable descendants to stop and reap the direct process before releasing the worktree lock. Reports retain the runner's 130/143 status separately from the direct child's actual exit code. If cleanup cannot finish, its ownership marker blocks another suite from using those build directories. Signal delivery during process creation is deferred until its owner and marker are stored, without changing the child's inherited signal mask.
+`--jobs N` runs N probes at once, with the same process ownership, cleanup and report as one at a time. Use it for a full run: 105 probes take about 5 minutes with 8 jobs instead of about 22 minutes. Timing-sensitive runs and performance measurements stay sequential.
+
+Each probe owns a separate process session. INT, TERM and HUP trigger bounded TERM/KILL cleanup, wait for runnable descendants to stop and reap the direct process before releasing the worktree lock. Reports retain the runner's 130/143 status separately from the direct child's actual exit code. If cleanup cannot finish, its ownership marker blocks another suite from using those build directories. Signal delivery during process creation is deferred until its owner and marker are stored, without changing the child's inherited signal mask.
 
 The `participant_input_contrast` probe compiles the complete participant sheet with inert meeting metadata and the actual shared theme/actions. Its never-visible, non-key windows test the sheet's own appearance boundary, retained native editor/drafts, caret contrast of at least 3, and inactive selection contrast of at least 3; ordinary typed text requires 4.5. Field-only rasters additionally cover empty hints and disabled controls. These checks do not establish active selection or exact application sheet appearance. Frozen application screenshots and physical focus/selection in both themes remain required native acceptance gates.
 
@@ -151,6 +154,8 @@ Optional `-only-testing:target/class/test` and `-skip-testing:target/class/test`
 bash scripts/dev/macos.sh regression -only-testing:FluidDictationIntegrationTests/PichiGigaAMIntegrationTests
 ```
 
+`macos.sh regression` builds with the separate identity `ai.pichi.voice.regression` and its own derived data directory `.build/XcodeRegression`. That costs about 2 GB more per worktree but leaves the product of `macos.sh build` untouched. The first run under this identity downloads about 1 GB of models into `~/Library/Application Support/ai.pichi.voice.regression.debug`, and later runs reuse them. Tests still leave UUID-named preference files in `~/Library/Preferences`, which this script does not remove because it cannot tell its own files from another process's files. `macos.sh test`, which CI uses, has no separate identity.
+
 Each run prints its artifact directory under `.build/regression/`. It keeps the revision and working-tree state, build/test logs, both `.xcresult` bundles, and the test report's JSON and concise summary. Counts come from `xcresulttool`, including skipped and expected-failure tests. Build failures, test failures, empty/all-skipped runs, and absent or malformed reports return failure. The configured `.xctestrun` stays beside its build products because Xcode resolves `__TESTROOT__` relative to that file. Python 3 and Xcode with `xcresulttool get test-results summary` are required. Do not run concurrent builds in one worktree.
 
 ## Initial verification on October 9, 2026
@@ -160,6 +165,10 @@ Historical results are retained in [Initial verification history](initial-verifi
 ## Pichi feature verification on October 9-10, 2026
 
 Feature results and then-open validation gaps are retained in [Initial verification history](initial-verification-2026-10.md#pichi-feature-verification-on-october-9-10-2026). Recheck current sources and artifacts before making a present-tense claim.
+
+## Test exceptions
+
+`Tests/quarantine.json` lists known failures, each with an owner, a reason and an expiry date at most 90 days away. `Tests/skip-registry.json` gives every skipped test a reason and the layer that should run it. `check.sh` runs `scripts/dev/check-test-policy.py` on the files only (shape, owners, expiry), so an expired entry fails the repository check. The gate script `scripts/dev/verify` leaves quarantined XCTest cases and probes out of its runs and passes its results to the checker with `--results <map.json> --complete`. With `--results` a skip without a registry entry fails. Only with `--complete`, which says every bundle in the map ran completely, does a registry entry for a test missing from the map fail as well.
 
 ## CI and cleanup
 

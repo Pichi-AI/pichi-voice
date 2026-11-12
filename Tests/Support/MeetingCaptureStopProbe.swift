@@ -6,8 +6,14 @@ import Foundation
 typealias MeetingSessionID = UUID
 struct MeetingTrackHealth: Sendable { enum Status { case recording, stopped }; var status: Status = .recording }
 struct MeetingAudioTrack: Sendable { var health = MeetingTrackHealth() }
-struct MeetingCaptureStopResult: Sendable { let tracks: [MeetingAudioTrack]; let stoppedAt: Date }
+// The host-clock boundary and live-transcription deferral receipt join the physical Stop facts (120, 91865f5b).
+struct MeetingCaptureStopResult: Sendable {
+    let tracks: [MeetingAudioTrack]; let stoppedAt: Date
+    var stoppedHostTime: UInt64? = nil
+    var transcriptionDeferred: Bool = false
+}
 // PRODUCTION_CAPTURE_ERROR
+// PRODUCTION_CAPTURE_CONTINUITY
 
 actor MeetingCaptureStopLatch {
     private var entered = false
@@ -94,9 +100,9 @@ actor MeetingDesktopCaptureStopProbe {
         let sessionID: MeetingSessionID
         let runtime: MeetingCaptureStopRuntimeProbe
         let writers: [MeetingCaptureStopWriterProbe]
-        let memoryConsumer: MeetingCaptureStopConsumerProbe?
+        let continuity = MeetingCaptureContinuityState()
         let comparisonProbe: ComparisonProbe? = nil
-        let streamingTee: MeetingMultiTrackCaptureTee? = nil
+        let streamingTee: MeetingMultiTrackCaptureTee?
         let privacyGate: PrivacyStopProbe? = nil
         let muteMonitor: PrivacyStopProbe? = nil
         let microphoneControl: MicrophoneControlProbe? = nil
@@ -104,8 +110,11 @@ actor MeetingDesktopCaptureStopProbe {
     private var activeCapture: ActiveCapture?
     private var stopTask: Task<MeetingCaptureStopResult, Error>?
     private var releasedAssertions = 0
-    init(id: UUID, runtime: MeetingCaptureStopRuntimeProbe, consumer: MeetingCaptureStopConsumerProbe) {
-        activeCapture = ActiveCapture(sessionID: id, runtime: runtime, writers: [.init()], memoryConsumer: consumer)
+    // The desktop owner joins its streaming consumer only through the shared tee (91865f5b); the real tee is built here.
+    init(id: UUID, runtime: MeetingCaptureStopRuntimeProbe, consumer: MeetingCaptureStopConsumerProbe) throws {
+        let tee = try MeetingMultiTrackCaptureTee(consumers: [.microphone: consumer], originHostTime: 0,
+            eventHandler: { _ in }, liveAudioHandler: nil)
+        activeCapture = ActiveCapture(sessionID: id, runtime: runtime, writers: [.init()], streamingTee: tee)
     }
     private static func stopWriters(_ writers: [MeetingCaptureStopWriterProbe]) async -> [MeetingAudioTrack] {
         var tracks: [MeetingAudioTrack] = []
@@ -119,10 +128,14 @@ actor MeetingDesktopCaptureStopProbe {
 
 final class MeetingCaptureStopTimerProbe {
     enum State: Equatable { case stopping(UUID), recording(UUID), completed(UUID) }
-    struct Session { var id: UUID; var startedAt: Date; var endedAt: Date? }
+    struct Session {
+        var id: UUID; var startedAt: Date; var endedAt: Date?
+        var timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+            machTimebaseDenominator: 1, firstPresentationTime: nil)
+    }
     var activeSession: Session?
     var state: State
-    var stopRequestedAt: (sessionID: UUID, date: Date)?
+    var stopRequestedAt: (sessionID: UUID, date: Date, hostTime: UInt64)?
     init(_ session: Session) { activeSession = session; state = .recording(session.id) }
     // PRODUCTION_STOP_TIMER
 }
@@ -197,7 +210,7 @@ extension MeetingCapturePCMTransportTests {
             "A physical Stop handoff is consumed exactly once")
         let id = UUID(), request = Date(), start = Date().addingTimeInterval(-3)
         let timer = MeetingCaptureStopTimerProbe(.init(id: id, startedAt: start, endedAt: nil))
-        timer.stopRequestedAt = (id, request); timer.state = .stopping(id)
+        timer.stopRequestedAt = (id, request, 0); timer.state = .stopping(id)
         let shownAtStop = timer.elapsedTime
         try await Task.sleep(nanoseconds: 30_000_000)
         try require(timer.elapsedTime == shownAtStop, "A Stop request freezes visible duration while model work is joined")
@@ -205,10 +218,22 @@ extension MeetingCapturePCMTransportTests {
         try require(timer.elapsedTime == request.addingTimeInterval(0.5).timeIntervalSince(start),
             "The joined capture result supersedes the provisional visible Stop request")
         timer.activeSession?.endedAt = nil
-        timer.stopRequestedAt = (UUID(), request.addingTimeInterval(-10))
+        timer.stopRequestedAt = (UUID(), request.addingTimeInterval(-10), 0)
         try require(timer.elapsedTime > shownAtStop, "An unrelated prior session cannot freeze the next recording timer")
-        timer.stopRequestedAt = (id, start.addingTimeInterval(-1))
+        timer.stopRequestedAt = (id, start.addingTimeInterval(-1), 0)
         try require(timer.elapsedTime == 0, "A backward wall-clock observation never displays negative elapsed time")
+        // Host-monotonic recordings (120) freeze the visible timer on the Stop request's host time instead.
+        let hostStart: UInt64 = 5_000_000_000
+        let hostTimer = MeetingCaptureStopTimerProbe(.init(id: id, startedAt: start, endedAt: nil, timebase: .init(
+            startedHostTime: hostStart, machTimebaseNumerator: 1, machTimebaseDenominator: 1,
+            firstPresentationTime: nil, recordingTimePolicy: .hostMonotonicV1)))
+        hostTimer.stopRequestedAt = (id, request, hostStart + 2_000_000_000); hostTimer.state = .stopping(id)
+        try require(hostTimer.elapsedTime == 2, "A host-monotonic Stop request freezes the visible duration at its host time")
+        hostTimer.activeSession?.timebase.endedHostTime = hostStart + 2_500_000_000
+        try require(hostTimer.elapsedTime == 2.5, "The joined capture host boundary supersedes the provisional Stop request")
+        hostTimer.stopRequestedAt = (id, request, hostStart - 1)
+        hostTimer.activeSession?.timebase.endedHostTime = nil
+        try require(hostTimer.elapsedTime == 0, "A host request before the recording origin never displays negative elapsed time")
         func entered(_ gate: MeetingCaptureStopLatch) async throws {
             for _ in 0..<1_000 {
                 if await gate.hasEntered() { return }
@@ -222,7 +247,7 @@ extension MeetingCapturePCMTransportTests {
                 let runtime = MeetingCaptureStopRuntimeProbe(gate: runtimeGate, failure: failure == "runtime")
                 let consumer = MeetingCaptureStopConsumerProbe(gate: consumerGate, failure: failure == "consumer")
                 let ios = MeetingIOSCaptureStopProbe(id: id, runtime: runtime, consumer: consumer, retained: platform == "ios-retained")
-                let desktop = MeetingDesktopCaptureStopProbe(id: id, runtime: runtime, consumer: consumer)
+                let desktop = try MeetingDesktopCaptureStopProbe(id: id, runtime: runtime, consumer: consumer)
                 let first = Task { try await platform == "desktop" ? desktop.stop(sessionID: id) : ios.stop(sessionID: id) }
                 try await entered(runtimeGate)
                 // Stop must still join an admitted audio runtime before timestamping its result.
@@ -239,10 +264,18 @@ extension MeetingCapturePCMTransportTests {
                 for task in [first, second] {
                     do {
                         let result = try await task.value
-                        try require(failure == "none", "A runtime or finalizer failure must remain terminal")
+                        // 9751bfd2: a desktop streaming-consumer failure is a recoverable processing event; the recording
+                        // already closed, so only a runtime failure (or an iOS finalizer failure) remains a Stop failure.
+                        // This probe proves only that such a Stop no longer fails. Its continuity is not connected to the
+                        // tee, so it cannot observe that the deferral is recorded; `transcriptionDeferred` stays unchecked.
+                        try require(failure == "none" || (platform == "desktop" && failure == "consumer"),
+                            "A runtime or finalizer failure must remain terminal")
+                        if platform == "desktop" { try require(result.stoppedHostTime != nil, "Desktop Stop records the joined host-clock boundary") }
                         boundaries.append(result.stoppedAt)
                     } catch let MeetingCaptureError.captureStopFailed(_, partialResult: result) {
-                        try require(failure != "none", "A canceled waiter cannot fail otherwise valid owned Stop")
+                        try require(failure != "none" && !(platform == "desktop" && failure == "consumer"),
+                            "A canceled waiter cannot fail otherwise valid owned Stop, nor can a desktop processing failure")
+                        if platform == "desktop" { try require(result.stoppedHostTime != nil, "Desktop partial Stop keeps its host-clock boundary") }
                         boundaries.append(result.stoppedAt)
                     }
                 }
