@@ -231,6 +231,7 @@ final class SimpleUpdater: ObservableObject {
     var downloadTemporaryDirectoryForTesting: URL?
     var currentVersionForTesting: String?
     var currentBuildForTesting: String?
+    var currentBundleInformationForTesting: [String: Any]?
     #endif
     private let updateSession: URLSession
     private let updateDefaults: UserDefaults
@@ -285,14 +286,21 @@ final class SimpleUpdater: ObservableObject {
         #if DEBUG
         if let currentVersionForTesting { return currentVersionForTesting }
         #endif
-        return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        return self.currentBundleInformation["CFBundleShortVersionString"] as? String ?? "unknown"
     }
 
     private var currentAppBuild: String {
         #if DEBUG
         if let currentBuildForTesting { return currentBuildForTesting }
         #endif
-        return Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        return self.currentBundleInformation["CFBundleVersion"] as? String ?? ""
+    }
+
+    private var currentBundleInformation: [String: Any] {
+        #if DEBUG
+        if let currentBundleInformationForTesting { return currentBundleInformationForTesting }
+        #endif
+        return Bundle.main.infoDictionary ?? [:]
     }
 
     private var currentComparableVersion: String { "v\(self.currentAppVersion)+\(self.currentAppBuild)-public.1" }

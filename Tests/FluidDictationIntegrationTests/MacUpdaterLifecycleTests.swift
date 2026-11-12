@@ -4,6 +4,27 @@ import XCTest
 
 @MainActor
 final class MacUpdaterLifecycleTests: XCTestCase {
+    func testAbsentAndNonStringInstalledBuildMetadataCannotBecomeBuildZero() async throws {
+        let context = try Context()
+        defer { context.close() }
+        context.updater.currentBuildForTesting = nil
+        for information: [String: Any] in [
+            ["CFBundleShortVersionString": "0.1.0"],
+            ["CFBundleShortVersionString": "0.1.0", "CFBundleVersion": 71],
+            ["CFBundleShortVersionString": "0.1.0", "CFBundleVersion": true],
+            ["CFBundleShortVersionString": "0.1.0", "CFBundleVersion": NSNull()],
+        ] {
+            context.updater.currentBundleInformationForTesting = information
+            do {
+                _ = try await context.updater.checkForUpdate(owner: "Pichi-AI", repo: "pichi-voice")
+                XCTFail("Unverified installed metadata must not become build zero")
+            } catch {}
+        }
+        XCTAssertEqual(context.fixture.downloadCount, 0)
+        XCTAssertNil(context.updater.availableUpdateVersion)
+        await context.cleanup()
+    }
+
     func testUnknownInstalledBuildFailsClosedInsteadOfComparingAsZero() async throws {
         let context = try Context()
         defer { context.close() }
