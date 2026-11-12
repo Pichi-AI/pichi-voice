@@ -747,11 +747,12 @@ sys.exit(status)
         for group in RUNNER.EXCLUSIVE_PROBES:
             self.assertLessEqual(group, names)
 
-    def test_permission_error_from_a_zombie_member_keeps_escalating_and_joins(self):
-        # Darwin returns EPERM from killpg while the group still holds a zombie, although the live
-        # members received the signal. Cleanup must still wait for the group instead of leaving it.
-        process = subprocess.Popen(["/bin/sh", "-c", "sleep 30"], start_new_session=True)
+    def test_permission_error_from_signals_keeps_escalating_and_joins(self):
+        # Darwin has returned EPERM from killpg for an owned group whose members were changing state. The
+        # signal may still be delivered: cleanup must escalate and wait instead of leaving the group running.
+        process = subprocess.Popen(["/bin/sh", "-c", "trap '' TERM; while :; do sleep 1; done"], start_new_session=True)
         self.addCleanup(lambda: process.poll() is None and process.kill())
+        time.sleep(0.2)  # Let the shell install its TERM trap.
         real_killpg = os.killpg
         sent = []
 
@@ -761,10 +762,10 @@ sys.exit(status)
                 sent.append(number)
                 raise PermissionError(errno.EPERM, "Operation not permitted")
 
-        with patch.object(RUNNER.os, "killpg", killpg):
+        with patch.object(RUNNER.os, "killpg", killpg), patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.2):
             RUNNER.stop_process_group(process)
-        self.assertEqual(sent[0], signal.SIGTERM)
-        self.assertIn(process.returncode, [-signal.SIGTERM, -signal.SIGKILL])
+        self.assertEqual(sent, [signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(process.returncode, -signal.SIGKILL)
         self.assertFalse(RUNNER.process_group_exists(process.pid))
 
     def test_parallel_failure_does_not_stop_other_probes(self):

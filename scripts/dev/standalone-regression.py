@@ -166,8 +166,9 @@ def signal_process_group(group, number):
     except ProcessLookupError:
         pass
     except PermissionError:
-        # Darwin returns EPERM while the group still holds a zombie, although its live members
-        # received the signal. The wait and the inspection after escalation decide what survived.
+        # Observed on Darwin for an owned group that was still starting or exiting members; the cause is
+        # not confirmed and delivery is not assumed. The wait and the inspection after escalation decide
+        # what survived, and a group that stays live keeps its ownership marker.
         pass
 
 
