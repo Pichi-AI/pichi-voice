@@ -4,7 +4,7 @@ import XCTest
 
 final class MacUpdateDistributionTests: XCTestCase {
     func testPackagedMacPolicySelectsPublicRepositoryAndSigningTeam() throws {
-        let bundle = try XCTUnwrap(Bundle(identifier: "ai.pichi.voice.debug"))
+        let bundle = Bundle.main
         let policy = BrandDistribution.load(bundle: bundle)
         try policy.validate()
         XCTAssertTrue(policy.updatesEnabled)
