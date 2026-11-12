@@ -377,6 +377,10 @@
    "layer": "L3-real-model",
    "reason": "Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support."
   },
+  "PichiVoiceMobileIntegrationTests/MeetingTranscriptAssemblerTests/testOptInSavedMeetingReadingCoverage()": {
+   "layer": "manual-private-data",
+   "reason": "Set PICHI_SPEAKER_AUDIT_ROOT to an authorized read-only metadata snapshot"
+  },
   "PichiVoiceMobileIntegrationTests/MobileAudioStorageTests/testFileProtectionClassOnPhysicalDevice()": {
    "layer": "L4-hardware-or-manual",
    "reason": "The iOS Simulator does not implement device Data Protection. Verify on a physical iPad or iPhone."
@@ -388,6 +392,10 @@
   "PichiVoiceMobileIntegrationTests/MobileFirstUseModelTests/testAuthorizedPhysicalRestoreTestPreferences()": {
    "layer": "L4-hardware-or-manual",
    "reason": "Requires the explicitly authorized physical device"
+  },
+  "PichiVoiceMobileIntegrationTests/MobileFirstUseModelTests/testNativeGigaAMProviderKeepsCPUThroughRepeatedAdmittedPCM()": {
+   "layer": "L3-real-model",
+   "reason": "Set a verified local Q8 GGUF path for native mobile provider execution."
   },
   "PichiVoiceMobileIntegrationTests/MobileLocalizationRenderingTests/testNativeMeetingLocationFromControlledSimulator()": {
    "layer": "L4-hardware-or-manual",
@@ -548,6 +556,10 @@
   "PichiVoiceMobileIntegrationTests/PhysicalDevicePrerequisiteTests/testPhysicalMicrophoneDeliversPCMWithoutAudioFiles()": {
    "layer": "L4-hardware-or-manual",
    "reason": "Requires a physical iPad or iPhone"
+  },
+  "PichiVoiceMobileIntegrationTests/WhisperDiagnosticsTests/testRealTinyProviderPreservesAnUncertainNativeSpeechResult()": {
+   "layer": "L3-real-model",
+   "reason": "Enable a verified local Tiny model and synthetic noisy speech fixture explicitly"
   }
  }
 }
