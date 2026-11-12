@@ -82,11 +82,7 @@ public struct GigaAMTranscript: Sendable {
     public let text: String
     public let confidence: Float
     public let endOfUtteranceProbability: Float?
-    public let words: [GigaAMTestWord]
+    // GigaAMWordTiming is the real declaration; the runner appends it from GigaAMCTC.swift.
+    public let words: [GigaAMWordTiming]
     public let encoderWindows: [GigaAMEncoderWindow] = []
-}
-public struct GigaAMTestWord: Sendable {
-    public let text: String
-    public let start: TimeInterval
-    public let end: TimeInterval
 }

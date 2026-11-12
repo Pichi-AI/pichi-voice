@@ -8,7 +8,14 @@ BUILD = ROOT / '.build' / 'meeting-speaker-attribution'
 BUILD.mkdir(parents=True, exist_ok=True)
 subprocess.run(['bash', 'scripts/dev/assert-worktree.sh'], cwd=ROOT, check=True)
 # Only the app identifier alias is supplied; all canonical values compile from their real file.
-contracts = 'import Foundation\ntypealias MeetingAudioTrackID = UUID\n'
+# MeetingFinalTextUnit carries the provider's word-timing provenance (117); its actual value type is copied
+# from the persisted-metadata file, whose other declarations need unrelated meeting models.
+metadata = (ROOT / 'Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift').read_text()
+marker = 'nonisolated struct ASRWordTimingProvenance:'
+assert metadata.count(marker) == 1, 'Expected one production word-timing provenance declaration'
+start = metadata.index(marker)
+provenance = metadata[start:metadata.index('\n}\n', start) + 3]
+contracts = 'import Foundation\ntypealias MeetingAudioTrackID = UUID\n' + provenance
 (BUILD / 'CanonicalContracts.swift').write_text(contracts)
 subprocess.run([
     'xcrun', 'swiftc', '-O', '-swift-version', '6', '-strict-concurrency=complete',

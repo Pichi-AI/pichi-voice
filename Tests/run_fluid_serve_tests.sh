@@ -25,6 +25,7 @@ set -- "$task_test_dir/ProfileDefaultsSupport.swift" Sources/Fluid/Services/Mode
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
     Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
+    Sources/Fluid/Services/Meeting/Backend/MeetingReadingSpeakerResolver.swift \
     "$task_test_dir/AttributionTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift \
     Sources/Fluid/Services/Meeting/MeetingSummaryInput.swift \

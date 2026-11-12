@@ -89,6 +89,11 @@ def main() -> None:
     # Keep descriptor capabilities below, without importing inference model locators.
     factory = "\n".join(line for line in factory.splitlines()
                         if not line.strip().startswith(("let speakerProcessingProfiles:", "speakerProcessingProfiles:")))
+    # The shared Parakeet registration builds those profiles in a local before the descriptor (138).
+    profiles_marker = "        let profiles: [MeetingSpeakerProcessingMode: MeetingNemotronModelProfile] = ["
+    while profiles_marker in factory:
+        begin = factory.index(profiles_marker)
+        factory = factory[:begin] + factory[factory.index("\n        ]\n", begin) + len("\n        ]\n"):]
     # Strict PCM/device admission is not consulted by these backup UI handlers.
     # Omit its stored restriction payload as well as its callbacks, rather than
     # introducing fake artifact identities, display names or admission validators.
@@ -165,7 +170,11 @@ nonisolated final class UserDefaults: @unchecked Sendable {
 
 final class SettingsStore {
     static let shared = SettingsStore()
-    struct SpeechModel { let rawValue: String }
+    struct SpeechModel { let rawValue: String
+        // Raw values of the production enum cases the factory descriptors name (138).
+        static let parakeetTDTv2 = SpeechModel(rawValue: "parakeet-tdt-v2")
+        static let fluidParakeetPro = SpeechModel(rawValue: "fluid-parakeet-pro")
+    }
     var selectedSpeechModel = SpeechModel(rawValue: PichiMeetingProviderFactory.gigaamModelID)
     var meetingRecordingDefaults = MeetingRecordingDefaults.unconfigured
     var meetingAutoDetectEnabled = true
@@ -425,11 +434,17 @@ struct StartReadiness {
         profile_types = directory / "ProfileTypes.swift"
         subprocess.run(["python3", "Tests/Support/write_private_profile_standalone_types.py",
                         str(profile_types), "--synthetic-brand"], cwd=ROOT, env=env, check=True, timeout=15)
+        # The factory descriptors name ParakeetSpeechModelCatalog.v3/v2/pro (138). Compile the real catalog; its only
+        # outside dependency is the artifact-completeness query, which this probe never reaches.
+        downloader = directory / "ModelDownloader.swift"
+        downloader.write_text("import Foundation\nnonisolated enum HuggingFaceModelDownloader {\n"
+                              "    static func artifactIsComplete(at url: URL, isDirectory: Bool) -> Bool { false }\n}\n")
         executable = directory / "tests"
         subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-default-isolation", "MainActor",
                         "-module-cache-path", str(directory / "ModuleCache"),
                         str(profile_types), str(ROOT / "Sources/Fluid/Account/PrivateProfileStorage.swift"),
                         str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
+                        str(ROOT / "Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift"), str(downloader),
                         str(swift_file), "-o", str(executable)],
                        env=env, check=True, timeout=60)
         subprocess.run([str(executable)], env=env, check=True, timeout=15)
