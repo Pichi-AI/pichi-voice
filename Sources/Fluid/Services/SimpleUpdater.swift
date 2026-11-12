@@ -719,7 +719,10 @@ final class SimpleUpdater: ObservableObject {
                 if self.channelRevision != approvedRevision { self.checkForUpdatesManually() }
                 return
             } catch {
-                if Task.isCancelled || self.cancellationRequested || (error as? URLError)?.code == .cancelled { return }
+                if Task.isCancelled || self.cancellationRequested || (error as? URLError)?.code == .cancelled {
+                    if self.channelRevision != approvedRevision { self.checkForUpdatesManually() }
+                    return
+                }
                 let cancelled = (error as? PMKError)?.isCancelled == true
                 self.showUpdateCheckResult(
                     title: cancelled ? "No Updates" : "Update Failed",

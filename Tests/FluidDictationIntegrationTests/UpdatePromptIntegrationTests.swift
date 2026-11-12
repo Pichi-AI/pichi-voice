@@ -571,6 +571,31 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         }
     }
 
+    func testURLCancellationAfterChannelChangeAlsoRequiresFreshApproval() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        context.fixture.setReply(version: "v99.0.0+1-public.1")
+        context.updater.simulationInstallHandler = {
+            context.defaults.set(true, forKey: SettingsStore.UpdateKeys.betaReleasesEnabled)
+            let revision = context.defaults.integer(forKey: SettingsStore.UpdateKeys.channelPreferenceRevision)
+            context.defaults.set(revision + 1, forKey: SettingsStore.UpdateKeys.channelPreferenceRevision)
+            context.fixture.setReply(version: "v100.0.0+1-public.1")
+            context.updater.updateChannelDidChange()
+            throw URLError(.cancelled)
+        }
+        context.updater.checkForUpdatesManually()
+        try await self.finishCheck(context)
+        let offer = try self.visibleWindow("Update Available")
+        try self.button("Install Now", in: offer).performClick(nil)
+        try await self.finishCheck(context, requests: 3)
+        XCTAssertFalse(context.updater.isUpdateInProgress)
+        let freshOffer = try self.visibleWindow("Update Available")
+        XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains {
+            $0.stringValue.contains("100.0.0 (1)")
+        } == true)
+        XCTAssertFalse(self.isVisible("Update Failed"))
+    }
+
     func testInstallRejectsResultFromPreviouslyPendingDiscovery() async throws {
         let context = try UpdateTestContext()
         defer { context.cleanup() }

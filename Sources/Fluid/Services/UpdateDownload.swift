@@ -23,7 +23,8 @@ nonisolated enum UpdateDownload {
             }
             group.addTask { try await Task.sleep(for: .seconds(45)); throw URLError(.timedOut) }
             defer { group.cancelAll() }
-            return try await group.next()!
+            guard let result = try await group.next() else { throw SimpleUpdateError.invalidResponse }
+            return result
         }
     }
 
