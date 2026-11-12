@@ -216,6 +216,8 @@ Container metadata is limited to known Finder/filesystem entries. The pinned
 uses a root `.background.tiff` for the Retina artwork (or `.background.png`
 without a Retina variant), rather than a `.background` directory. Unknown root
 files, metadata links and extra files beneath metadata directories are rejected.
+It resolves the scratch path before mounting so macOS's `/var` and `/private/var`
+aliases share one mount identity for validation and cleanup.
 It detaches its own mount on success, error and ordinary cancellation. If native
 detach fails, it preserves scratch rather than deleting a mounted tree; resolve
 the reported owned mount before cleanup. SIGKILL, power loss and native command

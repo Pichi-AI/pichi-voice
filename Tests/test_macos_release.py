@@ -88,7 +88,7 @@ class Boundaries(m.Commands):
                     raise m.ReleaseError("Uncertain attach")
                 if self.attach_failure == "malformed":
                     return self.result(args, b"bad plist")
-                return self.result(args, plistlib.dumps({"system-entities": [{"mount-point": str(mount)}]}))
+                return self.result(args, plistlib.dumps({"system-entities": [{"mount-point": str(mount.resolve())}]}))
             if args[:2] == ["hdiutil", "detach"]:
                 if self.detach_failure:
                     return self.result(args, code=1)
@@ -112,6 +112,10 @@ class Boundaries(m.Commands):
                 return self.result(args, self.raw_response)
             method = args[args.index("--method") + 1]
             endpoint = args[args.index("--method") + 2]
+            if endpoint == "repos/" + m.REPO + "/":
+                return self.result(args, b'HTTP/2.0 404 Not Found\n\n{}', code=1)
+            if endpoint == "repos/" + m.REPO:
+                endpoint = ""
             endpoint = endpoint.removeprefix("repos/" + m.REPO + "/")
             body = json.loads(kwargs["input"]) if kwargs.get("input") else None
             value, code = self.api(endpoint, method, body)
@@ -380,6 +384,25 @@ class ReleaseTests(unittest.TestCase):
             for mount in self.boundaries.mounts:
                 shutil.rmtree(mount.parent)
             self.boundaries.mounts.clear()
+
+    def test_symlinked_temp_parent_uses_canonical_owned_mount_identity(self):
+        actual = self.root / "actual-temp"
+        actual.mkdir()
+        alias = self.root / "temp-alias"
+        alias.symlink_to(actual, target_is_directory=True)
+        scratch = actual / "owned-scratch"
+        scratch.mkdir()
+        make_temp = tempfile.mkdtemp
+        def make_scratch(*args, **kwargs):
+            if kwargs.get("prefix") == "pichi-release-mount-":
+                return str(alias / scratch.name)
+            return make_temp(*args, **kwargs)
+        with patch.object(m.tempfile, "mkdtemp", side_effect=make_scratch):
+            self.release.verify_dmg(self.image, m.inventory(self.app))
+        attach = next(c for c in self.boundaries.calls if c[:2] == ["hdiutil", "attach"])
+        self.assertEqual(attach[attach.index("-mountpoint") + 1], str(scratch.resolve() / "image"))
+        self.assertFalse(self.boundaries.mounts)
+        self.assertFalse(scratch.exists())
 
     def test_terminal_cancellation_during_detach_is_deferred_until_cleanup(self):
         previous = signal.getsignal(signal.SIGINT)

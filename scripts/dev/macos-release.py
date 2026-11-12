@@ -279,7 +279,9 @@ class Release:
 
     @contextmanager
     def mounted(self, image):
-        root = Path(tempfile.mkdtemp(prefix="pichi-release-mount-"))
+        # macOS reports canonical /private/var paths even when TMPDIR uses /var.
+        # Use that same identity for attach, verification and cleanup.
+        root = Path(tempfile.mkdtemp(prefix="pichi-release-mount-")).resolve()
         mount = root / "image"
         mount.mkdir()
         attempted = False
@@ -385,7 +387,9 @@ class GitHub:
         self.base = f"repos/{REPO}/"
 
     def api(self, endpoint, *, method="GET", body=None, missing=False):
-        command = ["gh", "api", "--hostname", "github.com", "--include", "--method", method, self.base + endpoint]
+        # GitHub's repository endpoint rejects a trailing slash with HTTP 404.
+        target = self.base + endpoint if endpoint else self.base.rstrip("/")
+        command = ["gh", "api", "--hostname", "github.com", "--include", "--method", method, target]
         if body is not None:
             command += ["--input", "-"]
         result = self.commands.run(command, input=json_bytes(body) if body is not None else None, check=False)
