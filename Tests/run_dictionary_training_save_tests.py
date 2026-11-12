@@ -63,7 +63,7 @@ nonisolated enum PrivateProfileStorage {
     nonisolated(unsafe) static var acceptsNewWork = true
     static func isReadable(_ profile: PrivateProfileSnapshot) -> Bool { profile == current }
 }
-nonisolated struct PronunciationEnrollmentCapture: Equatable, Sendable { var modelKey = "test"; var originalAudioID: UUID? }
+nonisolated struct PronunciationEnrollmentCapture: Equatable, Sendable { var modelKey = "test"; var originalAudioID: UUID?; var observedText: String? }
 nonisolated struct PronunciationDictionaryProfile: Sendable {
     let dictionaryEntryID: UUID
     let modelKey: String

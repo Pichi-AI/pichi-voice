@@ -5,6 +5,8 @@ struct HistoryTextComparisonView: View {
     @Environment(\.theme) private var theme
     let entry: TranscriptionHistoryEntry
     let copy: (String) -> Void
+    var historyStore: TranscriptionHistoryStore? = nil
+    var rejectionService: DictionaryRejectionService? = nil
     @State private var showChanges = true
     @State private var comparison: HistoryTextDiff?
     @State private var sourceCorrections: HistoryTextDiff?
@@ -18,6 +20,8 @@ struct HistoryTextComparisonView: View {
     @State private var isPreparingPronunciation = false
     @State private var pronunciationTask: Task<Void, Never>?
     @State private var savedAudioStatus: String?
+    @State private var rejectionStatus: String?
+    @State private var rejectionTask: Task<Void, Never>?
 
     private struct ComparisonInput: Equatable {
         let entryID: UUID
@@ -41,6 +45,7 @@ struct HistoryTextComparisonView: View {
         let sourceText: String
         let profile: PrivateProfileSnapshot
         let candidate: AutomaticDictionaryCorrectionCandidate
+        let plan: DictionaryCorrectionReplacementPlan
     }
 
     private var comparisonInput: ComparisonInput {
@@ -97,7 +102,7 @@ struct HistoryTextComparisonView: View {
         .sheet(item: self.$correctionSelection) { selection in
             HistoryDictionaryCorrectionSheet(selection: selection) { corrected in
                 guard PrivateProfileStorage.isReadable(selection.profile), PrivateProfileStorage.acceptsNewWork,
-                      let current = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == selection.entryID }),
+                      let current = (self.historyStore ?? TranscriptionHistoryStore.shared).entries.first(where: { $0.id == selection.entryID }),
                       selection.matches(current) else { return false }
                 self.correctionSelection = nil
                 self.preparePronunciation(
@@ -123,6 +128,7 @@ struct HistoryTextComparisonView: View {
             self.transcript(content: content, isOriginal: isOriginal)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if isOriginal {
+                self.dictionaryReplacementActions
                 self.inlineStatus
                 self.savedAudioActions
             }
@@ -130,6 +136,50 @@ struct HistoryTextComparisonView: View {
         .padding(20)
         .background { RoundedRectangle(cornerRadius: 16).fill(self.theme.palette.cardBackground) }
         .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(self.theme.palette.cardBorder.opacity(0.5)) }
+    }
+
+    @ViewBuilder private var dictionaryReplacementActions: some View {
+        let hits = self.entry.currentDictionaryReplacements
+        if !hits.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(PichiLocalization.text("From dictionary"), systemImage: "text.book.closed")
+                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
+                ForEach(hits) { hit in
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(verbatim: hit.label).font(self.theme.typography.bodyStrong)
+                            Text(PichiLocalization.format("Model heard: %@", hit.heard))
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                        }
+                        Spacer(minLength: 8)
+                        Button("Use model version") { self.restoreDictionaryReplacement(hit) }
+                            .buttonStyle(.borderless)
+                            .accessibilityIdentifier("history.dictionary.restore.\(hit.id.uuidString)")
+                    }
+                }
+            }.font(self.theme.typography.caption)
+        }
+        if let status = self.rejectionStatus {
+            Text(PichiLocalization.text(status)).font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .accessibilityIdentifier("history.dictionary.rejectionStatus")
+        }
+    }
+
+    private func restoreDictionaryReplacement(_ hit: DictionaryHistoryReplacement) {
+        self.rejectionTask?.cancel()
+        let entryID = self.entry.id, source = self.entry.sourceTranscriptText
+        let profile = PrivateProfileStorage.current
+        let history = self.historyStore ?? TranscriptionHistoryStore.shared
+        self.rejectionTask = Task { @MainActor in
+            let result = await (self.rejectionService ?? .shared).restore(entryID: entryID, replacementID: hit.id,
+                expectedSource: source, history: history, profile: profile)
+            guard !Task.isCancelled, self.entry.id == entryID, PrivateProfileStorage.isReadable(profile) else { return }
+            self.rejectionStatus = result.restored
+                ? (result.negativeSaved ? "Model version restored. Negative example saved." : "Model version restored. Negative example unavailable.")
+                : "This text changed. Select the replacement again."
+            self.rejectionTask = nil
+        }
     }
 
     private func sectionHeader(title: String, content: String, isOriginal: Bool) -> some View {
@@ -281,11 +331,16 @@ struct HistoryTextComparisonView: View {
                     ], range: fragment.range)
                 }
             }
+            self.markDictionaryReplacements(in: result, content: content)
             return result
         }
         guard self.showChanges, let comparison,
               (isOriginal ? comparison.original : comparison.final).map(\.text).joined() == content
-        else { return NSAttributedString(string: content, attributes: attributes) }
+        else {
+            let result = NSMutableAttributedString(string: content, attributes: attributes)
+            self.markDictionaryReplacements(in: result, content: content)
+            return result
+        }
         let result = NSMutableAttributedString(string: "")
         for run in isOriginal ? comparison.original : comparison.final {
             var runAttributes = attributes
@@ -295,10 +350,29 @@ struct HistoryTextComparisonView: View {
             }
             result.append(NSAttributedString(string: run.text, attributes: runAttributes))
         }
+        self.markDictionaryReplacements(in: result, content: content)
         return result
     }
 
+    private func markDictionaryReplacements(in result: NSMutableAttributedString, content: String) {
+        for hit in self.entry.currentDictionaryReplacements {
+            guard let range = DictionaryLearningAlignmentResolver.textRange(in: content,
+                delivered: self.entry.sourceTranscriptText, selected: hit.range),
+                  DictionaryCorrectionReplacementPlan.isValid(range, in: content),
+                  (content as NSString).substring(with: range).caseInsensitiveCompare(hit.label) == .orderedSame else { continue }
+            result.addAttributes([
+                .foregroundColor: NSColor(self.theme.palette.readableText(self.theme.palette.warning)),
+                .backgroundColor: NSColor(self.theme.palette.warning.opacity(0.12)),
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+                .toolTip: PichiLocalization.format("Dictionary: %@. Model heard: %@", hit.label, hit.heard),
+            ], range: range)
+        }
+    }
+
     private func clearInlineInteraction() {
+        self.rejectionTask?.cancel()
+        self.rejectionTask = nil
+        self.rejectionStatus = nil
         self.pronunciationTask?.cancel()
         self.pronunciationTask = nil
         self.isPreparingPronunciation = false
@@ -312,7 +386,7 @@ struct HistoryTextComparisonView: View {
     private func beginInlineCorrection(range: NSRange, source: String) -> Bool {
         let profile = PrivateProfileStorage.current
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
-              let current = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == self.entry.id }),
+              let current = (self.historyStore ?? TranscriptionHistoryStore.shared).entries.first(where: { $0.id == self.entry.id }),
               current.sourceTranscriptText == source,
               let edit = DictionaryInlineTextEdit(sourceText: source, range: range) else { return false }
         self.activeInlineCorrection = InlineCorrection(
@@ -324,38 +398,60 @@ struct HistoryTextComparisonView: View {
     }
 
     private func commitInlineCorrection(range: NSRange, replacement: String) -> Bool {
+        let history = self.historyStore ?? TranscriptionHistoryStore.shared
+        let protected = history.entries.first(where: { $0.id == self.entry.id })?.currentDictionaryReplacements.map(\.range) ?? []
         guard let context = self.activeInlineCorrection,
               context.entryID == self.entry.id, context.edit.range == range,
-              let updatedText = context.edit.replacing(with: replacement),
-              TranscriptionHistoryStore.shared.applyWordCorrection(
-                  entryID: context.entryID, expectedText: context.edit.sourceText,
-                  range: range, replacement: replacement, profile: context.profile, isOriginal: true
-              ) else {
-            self.inlineError = "This transcription changed. Select the word again."
-            return false
-        }
-        self.activeInlineCorrection = nil
-        self.inlineError = nil
-        // Explicitly edited text can be a new term. Existing compounds retain all
-        // unchanged components through the same detector used by fresh dictation.
+              let singleEditText = context.edit.replacing(with: replacement),
+              let plan = DictionaryCorrectionReplacementPlan(sourceText: context.edit.sourceText, range: range, replacement: replacement, protectedRanges: protected)
+        else { return false }
+        // Detect only the explicit edit. Propagated repetitions are not separate
+        // user edits and must not turn one correction into an ambiguous diff.
         let detected = AutomaticDictionaryCorrectionDetector.candidate(
-            before: context.edit.sourceText, after: updatedText,
+            before: context.edit.sourceText, after: singleEditText,
             insertedRange: NSRange(location: 0, length: (context.edit.sourceText as NSString).length),
             knownCanonicalTerms: context.canonicalTerms
         )
         let explicit = self.explicitInlineCandidate(context: context, replacement: replacement)
         let selectedPhrase = DictionaryInlineTextEdit.wordRanges(in: context.edit.heardText).count > 1 ||
             DictionaryInlineTextEdit.wordRanges(in: replacement).count > 1
-        // A user-selected compound is one dictionary value, including unchanged
-        // components. Single-word edits may still expand a known compound.
-        let candidate = selectedPhrase ? explicit : (detected ?? explicit)
-        if let candidate, let range = candidate.sourceUTF16Range,
-           let selection = DictionaryHistoryWordSelection(entryID: context.entryID, sourceText: context.edit.sourceText, range: range, isOriginal: true) {
-            HistoryDictionaryAudioLearningService.shared.enqueueInline(candidate: candidate, selection: selection, expectedText: updatedText)
+        let proposed = selectedPhrase ? explicit : (detected ?? explicit)
+        let candidate = AutomaticDictionaryCorrectionDetector.confirmedCandidate(proposed, in: plan) ??
+            AutomaticDictionaryCorrectionDetector.confirmedCandidate(explicit, in: plan)
+        let rejected = history.entries.first(where: { $0.id == context.entryID })?.rejectedDictionaryReplacement(at: range, replacement: replacement)
+        guard history.applyWordCorrection(
+            entryID: context.entryID, expectedText: context.edit.sourceText,
+            range: range, replacement: replacement, profile: context.profile, isOriginal: true,
+            confirmationRange: candidate?.sourceUTF16Range, replacesAllOccurrences: rejected == nil
+        ) else {
+            self.inlineError = "This transcription changed. Select the word again."
+            return false
+        }
+        self.activeInlineCorrection = nil
+        self.inlineError = nil
+        if let rejected {
+            self.savedInlineCorrection = nil
+            self.rejectionTask?.cancel()
+            let pending = (self.rejectionService ?? .shared).enqueue(rejected, corrected: replacement, profile: context.profile, isValid: {
+                history.entries.first(where: { $0.id == context.entryID })?.rejectionRemainsValid(rejected.id) == true
+            })
+            self.rejectionTask = Task { @MainActor in
+                let saved = await pending?.value ?? false
+                guard !Task.isCancelled, self.entry.id == context.entryID else { return }
+                self.rejectionStatus = saved ? "Correction saved. Negative example saved." : "Correction saved. Negative example unavailable."
+                self.rejectionTask = nil
+            }
+            return true
+        }
+        if let candidate, let candidateRange = candidate.sourceUTF16Range,
+           let selection = DictionaryHistoryWordSelection(entryID: context.entryID, sourceText: context.edit.sourceText,
+               range: candidateRange, isOriginal: true) {
+            HistoryDictionaryAudioLearningService.shared.enqueueInline(candidate: candidate, selection: selection,
+                expectedText: plan.text, correctionPlan: plan)
         }
         self.savedInlineCorrection = candidate.map {
-            SavedInlineCorrection(entryID: context.entryID, expectedText: updatedText, sourceText: context.edit.sourceText,
-                                  profile: context.profile, candidate: $0)
+            SavedInlineCorrection(entryID: context.entryID, expectedText: plan.text, sourceText: context.edit.sourceText,
+                                  profile: context.profile, candidate: $0, plan: plan)
         }
         return true
     }
@@ -375,7 +471,7 @@ struct HistoryTextComparisonView: View {
     private func confirmInlinePronunciation(range: NSRange) {
         guard let context = self.activeInlineCorrection, context.entryID == self.entry.id,
               context.edit.range == range, PrivateProfileStorage.isReadable(context.profile),
-              let current = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == context.entryID }),
+              let current = (self.historyStore ?? TranscriptionHistoryStore.shared).entries.first(where: { $0.id == context.entryID }),
               current.sourceTranscriptText == context.edit.sourceText,
               current.sourceFragments.contains(where: { $0.range == range }),
               let selection = DictionaryHistoryWordSelection(entryID: context.entryID, sourceText: context.edit.sourceText, range: range, isOriginal: true),
@@ -386,7 +482,7 @@ struct HistoryTextComparisonView: View {
     private func openSavedInlinePronunciation() {
         guard let correction = self.savedInlineCorrection,
               correction.entryID == self.entry.id,
-              let current = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == correction.entryID }),
+              let current = (self.historyStore ?? TranscriptionHistoryStore.shared).entries.first(where: { $0.id == correction.entryID }),
               current.sourceTranscriptText == correction.expectedText,
               PrivateProfileStorage.isReadable(correction.profile),
               let range = correction.candidate.sourceUTF16Range,
@@ -395,10 +491,11 @@ struct HistoryTextComparisonView: View {
             self.savedInlineCorrection = nil
             return
         }
-        self.preparePronunciation(candidate: correction.candidate, selection: selection, expectedText: correction.expectedText)
+        self.preparePronunciation(candidate: correction.candidate, selection: selection, expectedText: correction.expectedText, correctionPlan: correction.plan)
     }
 
-    private func preparePronunciation(candidate: AutomaticDictionaryCorrectionCandidate, selection: DictionaryHistoryWordSelection, expectedText: String) {
+    private func preparePronunciation(candidate: AutomaticDictionaryCorrectionCandidate, selection: DictionaryHistoryWordSelection, expectedText: String,
+                                      correctionPlan: DictionaryCorrectionReplacementPlan? = nil) {
         self.pronunciationTask?.cancel()
         let epoch = self.interactionEpoch
         self.isPreparingPronunciation = true
@@ -409,9 +506,9 @@ struct HistoryTextComparisonView: View {
                     self.pronunciationTask = nil
                 }
             }
-            let enriched = await HistoryDictionaryAudioLearningService.shared.enrich(candidate: candidate, selection: selection)
+            let enriched = await HistoryDictionaryAudioLearningService.shared.enrich(candidate: candidate, selection: selection, correctionPlan: correctionPlan)
             guard !Task.isCancelled, self.interactionEpoch == epoch, self.entry.id == selection.entryID,
-                  let current = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == selection.entryID }),
+                  let current = (self.historyStore ?? TranscriptionHistoryStore.shared).entries.first(where: { $0.id == selection.entryID }),
                   (selection.isOriginal ? current.sourceTranscriptText : (current.clipboardText ?? "")) == expectedText,
                   let request = DictionaryWordTrainingRequest(candidate: enriched, profile: selection.profile) else { return }
             self.savedInlineCorrection = nil

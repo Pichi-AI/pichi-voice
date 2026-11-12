@@ -45,6 +45,7 @@ struct TranscriptionHistoryEntry {
     let searchRevision: UInt64?
     let timestamp: Date
     let processedText: String
+    let correctedRawText: String? = nil
     let appName: String
     let windowTitle: String
 }

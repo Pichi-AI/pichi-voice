@@ -1815,6 +1815,8 @@ final class ASRService: ObservableObject {
         let expiry = dictionaryLearningExpiryTask
         expiry?.cancel(); await expiry?.value
         dictionaryLearningExpiryTask = nil; lastDictionaryLearningRecording = nil
+        let replacementExpiry = dictionaryReplacementExpiryTask
+        retainDictionaryReplacementTrace(nil); await replacementExpiry?.value
         lastCompletedAudioSnapshot = nil; lastDictionaryTrainingResult = nil
         lastStopOutcome = .empty; finalText = ""; partialTranscription = ""; previousFullTranscription = ""
         audioBuffer.clear(); audioCapturePipeline.clearPreroll()
@@ -2353,6 +2355,9 @@ final class ASRService: ObservableObject {
 
     private var lastCompletedAudioSnapshot: DictationAudioSnapshot?
     private var lastDictionaryLearningRecording: DictionaryLearningRecording?
+    private var lastDictionaryReplacementTrace: DictionaryReplacementTrace?
+    private var dictionaryReplacementExpiryTask: Task<Void, Never>?
+    private var dictionaryReplacementGeneration = UUID()
     private var dictionaryLearningExpiryTask: Task<Void, Never>?
 
     // Streaming transcription state (no VAD)
@@ -2500,6 +2505,26 @@ final class ASRService: ObservableObject {
     func consumeDictionaryLearningRecording() -> DictionaryLearningRecording? {
         defer { self.retainDictionaryLearningRecording(nil) }
         return self.lastDictionaryLearningRecording
+    }
+
+    func consumeDictionaryReplacementTrace() -> DictionaryReplacementTrace? {
+        defer { self.retainDictionaryReplacementTrace(nil) }
+        return self.lastDictionaryReplacementTrace
+    }
+
+    private func retainDictionaryReplacementTrace(_ trace: DictionaryReplacementTrace?) {
+        self.dictionaryReplacementExpiryTask?.cancel()
+        self.dictionaryReplacementExpiryTask = nil
+        self.dictionaryReplacementGeneration = UUID()
+        self.lastDictionaryReplacementTrace = trace
+        guard trace != nil else { return }
+        let generation = self.dictionaryReplacementGeneration
+        self.dictionaryReplacementExpiryTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .seconds(DictionaryLearningRecording.lifetime)) } catch { return }
+            guard let self, self.dictionaryReplacementGeneration == generation else { return }
+            self.lastDictionaryReplacementTrace = nil
+            self.dictionaryReplacementExpiryTask = nil
+        }
     }
 
     func consumeLastCompletedAudioSnapshot() -> DictationAudioSnapshot? {
@@ -3222,6 +3247,7 @@ final class ASRService: ObservableObject {
             return .failed
         }
         self.retainDictionaryLearningRecording(nil)
+        self.retainDictionaryReplacementTrace(nil)
         defer {
             if !self.isRunning { self.releaseDictationActivityIfNeeded(captureLease) }
         }
@@ -3882,6 +3908,7 @@ final class ASRService: ObservableObject {
         }
         self.lastCompletedAudioSnapshot = nil
         self.retainDictionaryLearningRecording(nil)
+        self.retainDictionaryReplacementTrace(nil)
         let stopStartedAt = Date().timeIntervalSince1970
         let traceStartedAt = ProcessInfo.processInfo.systemUptime
         var tracePreviousAt = traceStartedAt
@@ -4239,6 +4266,7 @@ final class ASRService: ObservableObject {
                 ))
             }
 
+            var replacementTrace = DictionaryReplacementTrace.acoustic(output: result.text, alignment: result.dictionaryLearningAlignment)
             let outputText: String
             if let admission = self.admittedTranscription, !PrivateProfileStorage.isReadable(admission.profile) {
                 // Concealed logout preserves the original provider result locally. It does not
@@ -4246,12 +4274,20 @@ final class ASRService: ObservableObject {
                 outputText = result.text
             } else {
                 let textWithoutFillers = ASRService.removeFillerWords(result.text)
+                replacementTrace.remap(to: textWithoutFillers)
                 let dictionaryText = useDictionaryTrainingPath
                     ? textWithoutFillers
-                    : ASRService.applyCustomDictionary(textWithoutFillers)
+                    : ASRService.applyCustomDictionary(textWithoutFillers, onReplacement: { entryID, range, _, replacement in
+                        replacementTrace.replace(range: range, entryID: entryID, label: replacement, kind: .textRule)
+                    })
+                replacementTrace.remap(to: dictionaryText)
                 outputText = useDictionaryTrainingPath
                     ? dictionaryText
                     : ASRService.applySpokenPunctuationFormatting(dictionaryText)
+            }
+            if !isolatedDictionaryCapture, let admission = self.admittedTranscription, PrivateProfileStorage.isReadable(admission.profile) {
+                replacementTrace.remap(to: outputText)
+                if PrivateProfileStorage.isReadable(admission.profile) { self.retainDictionaryReplacementTrace(replacementTrace) }
             }
             if !isolatedDictionaryCapture {
                 self.recordWordBoostHitIfAny(transcribedText: outputText)
@@ -8179,7 +8215,8 @@ final class ASRService: ObservableObject {
     /// Match against one immutable string so built-in edits cannot move protected ranges.
     private static func applyBuiltInDictionary(
         to text: String,
-        onReplacement: (CachedDictionaryPattern, NSRange, String, String) -> Void
+        onReplacement: (CachedDictionaryPattern, NSRange, String, String) -> Void,
+        rejections: DictionaryTextRejectionStore
     ) -> String {
         let fullRange = NSRange(text.startIndex..., in: text)
         var candidates: [(pattern: CachedDictionaryPattern, match: NSTextCheckingResult)] = []
@@ -8211,6 +8248,8 @@ final class ASRService: ObservableObject {
         for (pattern, match) in accepted.reversed() {
             let replacement = pattern.regex.replacementString(for: match, in: text, offset: 0, template: pattern.template)
             let heard = (text as NSString).substring(with: match.range)
+            if DictionaryMatcherExperiment.compareTextNegatives,
+               rejections.rejects(entryID: pattern.entryID, label: replacement, heard: heard) { continue }
             if heard != replacement { onReplacement(pattern, match.range, heard, replacement) }
             output.replaceCharacters(in: match.range, with: replacement)
         }
@@ -8251,7 +8290,9 @@ final class ASRService: ObservableObject {
     /// Replaces trigger words/phrases with their designated replacements.
     /// Uses case-insensitive matching with word boundaries.
     /// Optimized: caches compiled regexes to avoid per-call compilation overhead.
-    static func applyCustomDictionary(_ text: String) -> String {
+    static func applyCustomDictionary(_ text: String, onReplacement: ((UUID, NSRange, String, String) -> Void)? = nil,
+                                     rejections: DictionaryTextRejectionStore? = nil) -> String {
+        let rejections = rejections ?? DictionaryTextRejectionStore.shared
         // Built-in spellings always exist, so the compiled patterns decide whether there is work.
 
         // Rebuild cache if needed (lazy initialization)
@@ -8268,6 +8309,7 @@ final class ASRService: ObservableObject {
         // Apply cached regexes - O(n) where n = number of patterns
         var replacementCount = 0
         func recordReplacement(_ pattern: CachedDictionaryPattern, _ range: NSRange, _ heard: String, _ replacement: String) {
+            onReplacement?(pattern.entryID, range, heard, replacement)
             replacementCount += 1
             guard replacementCount <= DictionaryReplacementDiagnostics.maximumEvents else { return }
             DebugLogger.shared.debug(
@@ -8281,7 +8323,7 @@ final class ASRService: ObservableObject {
         }
         // Defaults cannot consume an explicit user phrase. Apply user rules last so a
         // default's corrected spelling can also follow the user's chosen replacement.
-        result = self.applyBuiltInDictionary(to: result, onReplacement: recordReplacement)
+        result = self.applyBuiltInDictionary(to: result, onReplacement: recordReplacement, rejections: rejections)
         for pattern in self.cachedDictionaryPatterns {
             result = DictionaryReplacementProtection.replacingMatches(
                 in: result,
@@ -8290,6 +8332,10 @@ final class ASRService: ObservableObject {
                 canonical: pattern.canonical,
                 onReplacement: { range, heard, replacement in
                     recordReplacement(pattern, range, heard, replacement)
+                },
+                shouldReplace: { _, heard, replacement in
+                    !DictionaryMatcherExperiment.compareTextNegatives || !rejections.rejects(
+                        entryID: pattern.entryID, label: replacement, heard: heard)
                 }
             )
         }

@@ -143,6 +143,15 @@ nonisolated struct ASRWordTiming: Codable, Sendable {
     let text: String
     let start: TimeInterval
     let end: TimeInterval
+    let timingProvenance: ASRWordTimingProvenance?
+
+    init(text: String, start: TimeInterval, end: TimeInterval,
+         timingProvenance: ASRWordTimingProvenance? = nil) {
+        self.text = text
+        self.start = start
+        self.end = end
+        self.timingProvenance = timingProvenance
+    }
 }
 
 /// A provider's actual segment boundary, in seconds from its input PCM start.

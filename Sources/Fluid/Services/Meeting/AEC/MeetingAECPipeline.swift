@@ -100,12 +100,13 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
         for emission in self.joiner.flush(reason: reason) {
             let samples: [Float]
             let time: CMTime
+            let packet: MeetingCaptureClockMetadata.Packet?
             switch emission {
-            case let .paired(frame): samples = frame.capture.samples; time = frame.capture.presentationTime
-            case let .bypass(slice, _): samples = slice.samples; time = slice.presentationTime
+            case let .paired(frame): samples = frame.capture.samples; time = frame.capture.presentationTime; packet = frame.capture.clockPacket
+            case let .bypass(slice, _): samples = slice.samples; time = slice.presentationTime; packet = slice.clockPacket
             case .reset: continue
             }
-            guard let raw = MeetingAECPCMAdapter.synthesize(samples: samples, presentationTime: time) else {
+            guard let raw = MeetingAECPCMAdapter.synthesize(samples: samples, presentationTime: time, clockPacket: packet) else {
                 self.committer.failTerminal(.outputSynthesis)
                 continue
             }
@@ -139,7 +140,7 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
             case let .bypass(slice, failure):
                 guard let raw = MeetingAECPCMAdapter.synthesize(
                     samples: slice.samples,
-                    presentationTime: slice.presentationTime
+                    presentationTime: slice.presentationTime, clockPacket: slice.clockPacket
                 ) else {
                     self.committer.invalidateForExternalBoundary(nil)
                     continue
@@ -171,14 +172,15 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
                 && joined.pairedFrameCount > MeetingAECConstants.attestationFrames
             guard let output = MeetingAECPCMAdapter.synthesize(
                 samples: mayPromote ? result.samples : joined.capture.samples,
-                presentationTime: joined.capture.presentationTime
+                presentationTime: joined.capture.presentationTime, clockPacket: joined.capture.clockPacket
             ) else {
                 self.beginFallback(joined.capture, failure: .outputSynthesis, allowFallback: allowFallback)
                 return false
             }
             if mayPromote {
                 let original = MeetingAECPCMAdapter.synthesize(
-                    samples: joined.capture.samples, presentationTime: joined.capture.presentationTime
+                    samples: joined.capture.samples, presentationTime: joined.capture.presentationTime,
+                    clockPacket: joined.capture.clockPacket
                 )
                 self.committer.commitProcessed(output, mayPromote: true, originalCapture: original)
             } else if allowFallback {
@@ -213,7 +215,7 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
     private func commitRaw(_ capture: MeetingAECFrame, failure: MeetingAECFailure, allowFallback: Bool = true) {
         if let raw = MeetingAECPCMAdapter.synthesize(
             samples: capture.samples,
-            presentationTime: capture.presentationTime
+            presentationTime: capture.presentationTime, clockPacket: capture.clockPacket
         ) {
             if allowFallback {
                 self.committer.commitUnfiltered(raw)

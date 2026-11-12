@@ -3,6 +3,15 @@ import Combine
 import SwiftUI
 import UIKit
 
+/// Both the history swipe and the detail confirmation use the same admitted deletion.
+enum MobileMeetingDeletionActions {
+    @MainActor static func delete(_ session: MeetingSession, coordinator: MeetingSessionCoordinator,
+                                 canDelete: @MainActor () -> Bool) async throws {
+        guard !Task.isCancelled, !session.isLocalContentConcealed, canDelete() else { throw CancellationError() }
+        try await coordinator.deleteSession(id: session.id, expectedOwnership: session.profileOwnership ?? .guest)
+    }
+}
+
 /// Platform navigation and transient view state only. The shared coordinator owns every meeting.
 struct MobileMeetingRoot: View {
     @ObservedObject var coordinator: MeetingSessionCoordinator
@@ -22,6 +31,7 @@ struct MobileMeetingRoot: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The private profile root keeps this tree disabled until the account and its storage are
@@ -67,10 +77,6 @@ struct MobileMeetingRoot: View {
     private var showMicrophoneSettings: Bool {
         get { privatePresentation.showMicrophoneSettings }
         nonmutating set { privatePresentation.showMicrophoneSettings = newValue }
-    }
-    private var showRecordingSettings: Bool {
-        get { privatePresentation.showRecordingSettings }
-        nonmutating set { privatePresentation.showRecordingSettings = newValue }
     }
     @State private var startFeedback = 0
     @State private var isStarting = false
@@ -141,7 +147,7 @@ struct MobileMeetingRoot: View {
         }
     }
 
-    /// Destructive actions share one confirmation, as on the desktop.
+    /// Detail actions use a confirmation; the history swipe commits directly.
     private typealias Deletion = MobilePrivatePresentationState.Deletion
 
     /// The meeting whose audio is being captured. It owns the whole window until capture ends:
@@ -181,6 +187,11 @@ struct MobileMeetingRoot: View {
                 }
             }
         }
+        .overlay(alignment: .bottomTrailing) {
+            if #available(iOS 26.0, *), showsTabRowStart {
+                startBar.padding(.horizontal, 24)
+            }
+        }
         .foregroundStyle(theme.palette.primaryText)
         .background(theme.palette.windowBackground)
         .alert(PichiLocalization.text("Error"), isPresented: $privatePresentation.showError) {
@@ -192,9 +203,6 @@ struct MobileMeetingRoot: View {
             }
             Button(PichiLocalization.text("OK"), role: .cancel) { error = nil }
         } message: { Text(error ?? "") }
-        .sheet(isPresented: $privatePresentation.showRecordingSettings) {
-            NavigationStack { MobileRecordingSettings(microphones: microphoneSnapshot.identities, isPresentedAsSheet: true) }
-        }
         .sheet(item: $privatePresentation.edit) { draft in
             MeetingEditSheet(draft: draft, cancel: { edit = nil }) { kind, updated in
                 edit = nil
@@ -243,11 +251,7 @@ struct MobileMeetingRoot: View {
                     playback.stop()
                     switch item {
                     case .meeting(let session):
-                        guard canPresent(session) else { return }
-                        try await coordinator.deleteSession(id: session.id, expectedOwnership: session.profileOwnership ?? .guest)
-                        guard canPresent(session) else { return }
-                        if historyPath.contains(session.id) { historyPath.removeAll() }
-                        await refreshHistory()
+                        try await deleteMeeting(session)
                     case .audio(let session):
                         guard canPresent(session) else { return }
                         acceptCommittedSession(try await coordinator.deleteAudio(sessionID: session.id, expectedOwnership: session.profileOwnership ?? .guest))
@@ -655,10 +659,16 @@ struct MobileMeetingRoot: View {
                     .alignmentGuide(.listRowSeparatorLeading) { dimensions in dimensions[.leading] }
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityIdentifier("history.session.\(session.id)")
-                .swipeActions {
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     // Deletion needs a presentable meeting, so an encrypted one offers no Delete here.
                     if !session.isLocalContentConcealed {
-                        Button(PichiLocalization.text("Delete"), role: .destructive) { deletion = .meeting(session) }
+                        Button(PichiLocalization.text("Delete"), role: .destructive) {
+                            run(session: session) { try await deleteMeeting(session) }
+                        }
+                        .buttonStyle(.automatic)
+                        .tint(.red)
+                        .disabled(isBusy || !coordinator.isQuiescent || !canPresent(session))
+                        .accessibilityIdentifier("history.delete.\(session.id)")
                     }
                 }
         }
@@ -692,55 +702,27 @@ struct MobileMeetingRoot: View {
         .modifier(MeetingSearch(isAvailable: !sessions.isEmpty || !search.isEmpty, text: $privatePresentation.search))
         .refreshable { await refreshHistory() }.accessibilityIdentifier("history.list")
         .mobileReadableColumn()
-        .safeAreaInset(edge: .bottom, spacing: 0) { startBar }
+        .modifier(MobileMeetingStartPlacement(control: startBar))
         .navigationDestination(for: MeetingSessionID.self) { id in meetingPage(id) }
     }
 
-    /// Start stays in the same place on every screen size. Below it, what the next recording uses;
-    /// the line opens the same settings as Settings > Recording.
-    private var startBar: some View {
-        let preparing = isStarting && coordinator.isQuiescent
-        return VStack(spacing: 0) {
-            Button { beginMeeting() } label: {
-                Label(PichiLocalization.text(preparing ? "Preparing recording…" : "Start Recording"), systemImage: "record.circle")
-                    .foregroundStyle(theme.palette.accentForeground)
-                    .frame(maxWidth: .infinity, minHeight: 48)
-                    .animation(nil, value: preparing)
-            }.buttonStyle(.borderedProminent)
-                .disabled(isBusy || !coordinator.isQuiescent)
-                .accessibilityIdentifier("meeting.start")
-            if coordinator.isProcessing {
-                Label(PichiLocalization.text("Preparing your transcript"), systemImage: "text.alignleft")
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                    .frame(minHeight: 44)
-            } else {
-                Button { showRecordingSettings = true } label: {
-                    HStack(spacing: theme.metrics.spacing.xs) {
-                        Image(systemName: "mic")
-                        Text(verbatim: nextRecordingSummary.joined(separator: " · "))
-                        Image(systemName: "chevron.right").imageScale(.small)
-                    }
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                    .frame(minHeight: 44)
-                    .contentShape(Rectangle())
-                }.buttonStyle(.plain).disabled(isBusy)
-                    .accessibilityLabel(PichiLocalization.text("Recording settings"))
-                    .accessibilityValue(nextRecordingSummary.joined(separator: ", "))
-                    .accessibilityIdentifier("meeting.settings")
-            }
-        }
-        .padding(.horizontal, 24).padding(.top, 12)
-        .frame(maxWidth: 560).frame(maxWidth: .infinity)
-        .background(theme.palette.toolbarBackground)
+    private var usesFloatingStart: Bool {
+        MobileMeetingStartBar.usesFloatingLayout(idiom: UIDevice.current.userInterfaceIdiom,
+            verticalSizeClass: verticalSizeClass, dynamicTypeSize: dynamicTypeSize)
     }
 
-    /// The microphone and transcript language the next recording uses.
-    private var nextRecordingSummary: [String] {
-        let defaults = settings.meetingRecordingDefaults
-        let uid = defaults.microphoneCoreAudioUID ?? microphoneSnapshot.defaultCoreAudioUID
-        let microphone = microphoneSnapshot.identities.first { $0.coreAudioUID == uid }?.displayName
-            ?? PichiLocalization.text("System Default")
-        return [microphone, MobileRecordingSettings.languageTitle(settings: settings)]
+    private var showsTabRowStart: Bool {
+        usesFloatingStart && MobileMeetingStartBar.showsTabRowAction(
+            showingRecordings: destination == .meetings, historyIsAtRoot: historyPath.isEmpty,
+            isCapturing: capturingSession != nil, privateDataVisible: privateProfile.isPrivateDataVisible)
+    }
+
+    /// Landscape phones share the native navigation row; configuration lives only in Settings.
+    private var startBar: MobileMeetingStartBar {
+        MobileMeetingStartBar(
+            floating: usesFloatingStart,
+            preparing: isStarting && coordinator.isQuiescent,
+            startDisabled: isBusy || !coordinator.isQuiescent, start: beginMeeting)
     }
 
     /// A meeting's own page: its progress while processing, then its transcript or recovery.
@@ -1100,6 +1082,14 @@ struct MobileMeetingRoot: View {
         }
     }
 
+    private func deleteMeeting(_ session: MeetingSession) async throws {
+        playback.stop()
+        try await MobileMeetingDeletionActions.delete(session, coordinator: coordinator, canDelete: { canPresent(session) })
+        guard canPresent(session) else { return }
+        if historyPath.contains(session.id) { historyPath.removeAll() }
+        await refreshHistory()
+    }
+
     private func runPrivate(_ operation: @escaping @MainActor (MobilePrivatePublicationTasks.Admission) async throws -> Void) {
         guard !isBusy else { return }
         privatePresentation.publications.start(report: report, operation: operation)
@@ -1236,7 +1226,6 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
     @Published var error: String?
     @Published var showError: Bool = false
     @Published var showMicrophoneSettings: Bool = false
-    @Published var showRecordingSettings: Bool = false
     @Published var edit: MeetingEditDraft?
     @Published var participantEdit: MeetingParticipantEditDraft?
     @Published var speakerAssignment: MeetingSpeakerAssignmentDraft?
@@ -1321,7 +1310,7 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
         copiedSessionID = nil; edit = nil; participantEdit = nil; speakerAssignment = nil; deletion = nil
         share?.cleanup(); share = nil
         transcriptReadingSource = nil; transcriptReading = []
-        error = nil; showError = false; showMicrophoneSettings = false; showRecordingSettings = false
+        error = nil; showError = false; showMicrophoneSettings = false
     }
 }
 

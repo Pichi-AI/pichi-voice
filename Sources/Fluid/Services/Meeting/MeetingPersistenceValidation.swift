@@ -90,6 +90,10 @@ nonisolated extension MeetingSession {
             try Self.validateMediaTime(firstPresentationTime)
         }
 
+        if let origin = self.transcriptPresentationOrigin {
+            try Self.validateMediaTime(origin)
+            guard self.transcriptTimeDomain == .meetingRelative, origin.seconds >= 0 else { throw MeetingModelValidationError.invalidTimebase }
+        }
         try self.validateTranscriptStructure()
         // Historical attempts keep their original request language. Backend capabilities are
         // checked when processing starts; persistence must also read older installed providers.

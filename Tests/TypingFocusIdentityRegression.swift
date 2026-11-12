@@ -43,6 +43,7 @@ nonisolated let kAXSelectedTextAttribute = "AXSelectedText"
 nonisolated let kAXSelectedTextRangeAttribute = "AXSelectedTextRange"
 nonisolated let kAXChildrenAttribute = "AXChildren"
 nonisolated let kAXTitleAttribute = "AXTitle"
+nonisolated let kAXDescriptionAttribute = "AXDescription"
 nonisolated let kAXInsertionPointLineNumberAttribute = "AXInsertionPointLineNumber"
 nonisolated func AXIsProcessTrusted() -> Bool { syntheticAX.trusted }
 nonisolated func AXUIElementCreateSystemWide() -> AXUIElement { syntheticAX.system }

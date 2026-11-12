@@ -78,6 +78,7 @@ extension SettingsStore {
         static let spokenSendPhrase = "SpokenSendPhrase"
         static let spokenSendKey = "SpokenSendKey"
         static let reliablePasteMigrationV1 = "TextInsertionModeMigratedToReliablePasteV1"
+        static let automaticUpdateDownloads = UpdateKeys.automaticUpdateDownloads
         static let autoUpdateCheckEnabled = UpdateKeys.autoUpdateCheckEnabled
         static let showUpdatePopups = UpdateKeys.showUpdatePopups
         static let betaReleasesEnabled = UpdateKeys.betaReleasesEnabled

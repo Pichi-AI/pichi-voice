@@ -17,6 +17,22 @@ run_case OnboardingPolishPracticeTests Sources/Fluid/Services/OnboardingPolishPr
 run_case OnboardingDictationOutputPolicyTests Sources/Fluid/Services/OnboardingDictationOutputPolicy.swift
 run_case PrivateAIHardwareRecommendationTests Sources/Fluid/Services/PrivateAIHardwareRecommendation.swift
 run_case DesktopOnboardingNavigationTests Sources/Fluid/UI/DesktopOnboardingNavigation.swift
+python3 -S - "$task_test_dir/OnboardingOwnerVoiceRestorationTests.swift" <<'PY'
+from pathlib import Path
+import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path('Tests').resolve()))
+from run_meeting_backup_refresh_tests import declaration
+source = Path('Sources/Fluid/UI/WelcomeView.swift').read_text()
+actual = declaration(source, 'private func restoreSpeechAfterOwnerVoiceIfNeeded()')
+conceal = declaration(source, 'private func cancelOwnerVoiceWorkForConceal()')
+probe = Path('Tests/OnboardingOwnerVoiceRestorationTests.swift').read_text()
+Path(sys.argv[1]).write_text(probe.replace('// ACTUAL_OWNER_VOICE_RESTORATION', actual)
+                           .replace('// ACTUAL_OWNER_VOICE_CONCEALMENT', conceal))
+PY
+xcrun swiftc -parse-as-library -swift-version 6 -module-cache-path "$task_test_dir/VoiceRestoreModuleCache" \
+    "$task_test_dir/OnboardingOwnerVoiceRestorationTests.swift" -o "$task_test_dir/OnboardingOwnerVoiceRestorationTests"
+"$task_test_dir/OnboardingOwnerVoiceRestorationTests"
 xcrun swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
     -module-cache-path "$task_test_dir/AccountModuleCache" \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \

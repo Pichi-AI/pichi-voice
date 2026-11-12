@@ -90,6 +90,26 @@ nonisolated enum AppBrand {
     static let applicationSupportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-unused-context-profile")
 }
 nonisolated enum BrandDistribution { struct AccountConfiguration: Sendable {} }
+// The context/profile probe never opens permission UI. Its guide substitute is
+// an external boundary only; ScreenPermissionGuideTests owns the real flow.
+@MainActor protocol PermissionDragGuidePresenting: AnyObject {
+    func present(instruction: String, settingsPaneURL: URL,
+                 isGranted: @escaping @Sendable () -> Bool,
+                 onGranted: @escaping @MainActor () -> Void) -> UUID
+    func dismiss(requestID: UUID)
+}
+@MainActor final class PermissionDragGuideController: PermissionDragGuidePresenting {
+    static let shared = PermissionDragGuideController()
+    func present(instruction: String, settingsPaneURL: URL,
+                 isGranted: @escaping @Sendable () -> Bool,
+                 onGranted: @escaping @MainActor () -> Void) -> UUID { UUID() }
+    func dismiss(requestID: UUID) {}
+}
+nonisolated enum PichiLocalization {
+    static func format(_ key: String, _ value: String) -> String { String(format: key, value) }
+}
+extension Bundle { nonisolated var fluidAppDisplayName: String { "Synthetic Voice" } }
+
 @MainActor protocol PrivateProfileTransitionParticipant: AnyObject { func prepareForPrivateProfileTransition() async throws }
 @MainActor final class PrivateProfileService {
     static let shared = PrivateProfileService()

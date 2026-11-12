@@ -11,6 +11,69 @@ struct CaptureFailure: Error, CustomStringConvertible {
     let description: String
     init(_ description: String) { self.description = description }
 }
+// Paired screen devices appear asynchronously after CMIO discovery is enabled.
+// Wait only for the caller's already filtered exact match; ambiguity is fatal.
+func waitForSingleMatch<Match>(timeout: Double, now: () -> Double, stopped: () -> Bool,
+                               matches: () -> [Match], wait: () -> Void) throws -> Match {
+    let start = now()
+    guard timeout.isFinite, timeout > 0, timeout <= 5 else { throw CaptureFailure("Invalid discovery deadline") }
+    while true {
+        guard !stopped() else { throw CaptureFailure("Screen discovery stopped") }
+        guard now() - start < timeout else { throw CaptureFailure("Exact paired muxed screen device unavailable") }
+        let current = matches()
+        guard !stopped(), now() - start < timeout else { throw CaptureFailure("Screen discovery stopped or expired") }
+        guard current.count <= 1 else { throw CaptureFailure("Ambiguous paired screen device") }
+        if let match = current.first { return match }
+        wait()
+    }
+}
+
+func discoverySelfTest() throws {
+    func require(_ condition: Bool) throws {
+        guard condition else { throw CaptureFailure("Discovery self-test failed") }
+    }
+    func rejects(_ operation: () throws -> Void) -> Bool {
+        do { try operation(); return false } catch { return true }
+    }
+    let immediate: String = try waitForSingleMatch(timeout: 5, now: { 0 }, stopped: { false },
+        matches: { ["synthetic"] }, wait: { })
+    try require(immediate == "synthetic")
+    var clock = 0.0, polls = 0
+    let delayed: String = try waitForSingleMatch(timeout: 5, now: { clock }, stopped: { false },
+        matches: { polls += 1; return polls == 3 ? ["synthetic"] : [] }, wait: { clock += 1 })
+    try require(delayed == "synthetic" && polls == 3 && clock == 2)
+    try require(rejects {
+        let _: String = try waitForSingleMatch(timeout: 5, now: { 0 }, stopped: { false },
+            matches: { ["first", "second"] }, wait: { })
+    })
+    clock = 0
+    try require(rejects {
+        let _: String = try waitForSingleMatch(timeout: 5, now: { clock }, stopped: { false },
+            matches: { [] }, wait: { clock += 1 })
+    } && clock == 5)
+    polls = 0
+    try require(rejects {
+        let _: String = try waitForSingleMatch(timeout: 5, now: { 0 }, stopped: { true },
+            matches: { polls += 1; return ["synthetic"] }, wait: { })
+    } && polls == 0)
+    var cancelled = false
+    polls = 0
+    try require(rejects {
+        let _: String = try waitForSingleMatch(timeout: 5, now: { 0 }, stopped: { cancelled },
+            matches: { polls += 1; return [] }, wait: { cancelled = true })
+    } && polls == 1)
+    clock = 0
+    try require(rejects {
+        let _: String = try waitForSingleMatch(timeout: 5, now: { clock }, stopped: { false },
+            matches: { clock = 6; return ["late"] }, wait: { })
+    })
+    cancelled = false
+    try require(rejects {
+        let _: String = try waitForSingleMatch(timeout: 5, now: { 0 }, stopped: { cancelled },
+            matches: { cancelled = true; return ["cancelled"] }, wait: { })
+    })
+    print("{\"discoveryTestsPassed\":8,\"deviceOpened\":false}")
+}
 func utc() -> String {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -85,6 +148,7 @@ final class FrameWriter: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
 }
 
 func main() throws {
+    if Array(CommandLine.arguments.dropFirst()) == ["--self-test"] { try discoverySelfTest(); return }
     var options: [String: String] = [:]
     var cursor = 1
     let argv = CommandLine.arguments
@@ -122,9 +186,16 @@ func main() throws {
     let discoveryStatus = CMIOObjectSetPropertyData(CMIOObjectID(kCMIOObjectSystemObject), &address, 0, nil, UInt32(MemoryLayout<UInt32>.size), &allow)
     guard discoveryStatus == noErr else { throw CaptureFailure("Cannot expose paired screen devices: \(discoveryStatus)") }
     // The exact explicit ID and muxed requirement prevent fallback to a Mac camera.
-    let matches = AVCaptureDevice.devices().filter { $0.uniqueID == deviceID && $0.hasMediaType(.muxed) }
-    guard matches.count == 1, let device = matches.first else { throw CaptureFailure("Exact paired muxed screen device unavailable") }
+    let discoveryDeadline = ProcessInfo.processInfo.systemUptime + 5
+    let device = try waitForSingleMatch(timeout: 5, now: { ProcessInfo.processInfo.systemUptime },
+        stopped: { FileManager.default.fileExists(atPath: root.appendingPathComponent("STOP").path) },
+        matches: { AVCaptureDevice.devices().filter { $0.uniqueID == deviceID && $0.hasMediaType(.muxed) } },
+        wait: { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1)) })
     let session = AVCaptureSession()
+    guard ProcessInfo.processInfo.systemUptime < discoveryDeadline,
+          !FileManager.default.fileExists(atPath: root.appendingPathComponent("STOP").path) else {
+        throw CaptureFailure("Screen discovery stopped or expired")
+    }
     let input = try AVCaptureDeviceInput(device: device)
     let output = AVCaptureVideoDataOutput()
     output.alwaysDiscardsLateVideoFrames = true

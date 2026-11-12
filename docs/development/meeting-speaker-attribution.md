@@ -5,6 +5,12 @@ mixed audio, recognize a person's name, or create word timestamps that an ASR pr
 return. These distinctions are necessary for short interruptions, uncertain turn boundaries and
 recovery after a restart.
 
+The current reading contract assigns every admitted, readable speech fragment a participant
+when speaker labels are enabled. Acoustic uncertainty remains evidence, not an empty participant
+caption. A brief unsupported slot must not create another person just to fill a caption.
+Punctuation-only artifacts do not open participants; their original timed evidence is retained.
+This contract applies to live publication, Stop and saved-session reading.
+
 ## Contracts and extension point
 
 The shared attribution stage consumes `MeetingFinalTextUnit`, `MeetingBackendSpeakerActivity`
@@ -79,8 +85,9 @@ acoustic selection is admitted; missing flags in older attempts retain their for
 These are presentation heuristics, not separated ASR of the interrupting voice. Their duration,
 gap and residual tolerances are named, versioned policy parameters. They are not universal facts
 about human speech. Missing support, ambiguous roles, three or more simultaneous sources,
-conflicting evidence and utterances without word timing require explicit uncertainty rather
-than fabricated ownership. Native text, IDs and times remain unchanged.
+conflicting evidence and utterances without word timing retain explicit acoustic uncertainty.
+They still receive a reading participant through the completion operation below. Native text,
+IDs and times remain unchanged.
 
 The policy is immutable for an attempt and participates in its configuration fingerprint.
 Resumed and uninterrupted processing of the same finalized evidence must use the same policy.
@@ -89,6 +96,57 @@ Policy version 2 adds this per-word interruption eligibility. Its fingerprint di
 version 1, and decoding a version 1 attempt policy fails before checkpoint adoption rather than
 replaying old decisions with different ownership semantics. The pipeline and backend formats
 are unchanged; the frozen configuration already includes and validates the attribution policy.
+
+## Complete reading ownership
+
+`MeetingReadingSpeakerResolver` owns the shared completion operation. The additive
+`enableCompleteReadingAssignment` flag is frozen in the attempt fingerprint; missing or false
+keeps the former policy when replaying older attempts. The ordinary default enables it.
+
+1. Preserve independently assigned participants and explicit participant corrections, custom
+   names and confirmed owner choices. Existing native continuation/interruption rules run first.
+2. When an unresolved mixed native unit has a strictly leading duration of actual speaker
+   activity, select that foreground participant for reading, including indivisible utterances.
+   Preserve native ambiguity. This `foregroundDominance` rule cannot become an acoustic anchor
+   or train identity; unsafe epochs and coverage barriers retain their diagnostic abstention.
+3. A native unassigned word in a pause between different independently supported voices follows
+   the incoming turn. Earlier long speech must not outvote that turn-boundary decision. This
+   remains a reading inference, with no claim of acoustic speech inside the pause. The additive
+   `enableIncomingGapReading` flag freezes this rule; older complete-reading policies stay replayable.
+   Existing archive neighbor/continuation decisions keep priority over completion.
+   For other unresolved text, compare independently assigned intervals in a 15-second
+   surrounding window. Union intervals before counting, so duplicate/fragmented timestamps
+   cannot inflate support. Prefer the continuing left participant on equal support. Word/ASR
+   envelope support is a contextual heuristic, distinct from actual diarizer activity.
+4. If local evidence cannot select anyone, reuse an already admitted participant from the same
+   source, then an existing reading identity. A reset alone is not evidence of another person.
+   This fallback carries `readingParticipantContext` with no selected acoustic token and never
+   creates a native identity link across epochs or privacy barriers. Only when no usable person
+   exists is one stable reading participant created for that source, reused across pauses and
+   chunks. Explicit names/owner choices are preserved when later evidence arrives.
+
+Excluded speech never enters this operation. Echo, manual/text edits, invalid timing, incomplete
+rows and explicit gaps isolate contextual evidence. Tracks and observed epoch/generation
+boundaries stay separate; tokenless words at a reset use the incoming scope. A source-roster
+fallback is presentation only and cannot sponsor subsequent acoustic/contextual anchors.
+The interval index queries all nearby participants, including a dominant speaker behind brief
+intervening turns. Prefix sums over unioned intervals bound per-candidate support queries.
+
+The protected tail retains and delays commitment for the complete 15-second reading horizon.
+Stop reconciles the full admitted transcript, including both tracks of an online meeting, while
+retaining each source scope and coverage barrier. Resource limits, atomic cancellation and
+manual revision protection remain enforced by their existing owners.
+
+Saved-session reading uses this same completion operation without rewriting original members,
+native evidence, frozen policies or audio. Existing specific paragraph continuation rules remain
+before completion. Captions, correction/playback member selection, summaries and portable export
+consume the resolved reading owner. Fallback-only archives retain their durable participant ID
+on reopen, and portable export includes any projected identity referenced by its turns.
+
+The prior contract permitted blanks outside a 3.5-second run and 0.8-second neighbor gap. Stable
+speaker opening then prevented those blanks from becoming extra provisional people. Those two
+local rules did not satisfy total reading ownership, and tests explicitly expected unnamed
+fragments. Keep their frozen replay tests distinct from current-default coverage tests.
 
 ## Verification and quality claims
 
@@ -184,10 +242,9 @@ word and a neighboring estimated word from the same foreground speaker belong to
 same paragraph. Per-word rule names, overlap and suppressed candidate lists remain available
 in JSON and correction rows, but do not create extra speaker headers for that same foreground
 participant. Visible labels use the participant's name without an estimated prefix. An unresolved
-candidate set is displayed as an unknown participant rather than a separate multiple-speakers
-label. Changes in foreground identity, source, status or completeness remain boundaries.
-Consecutive unidentified fragments can still flow under one unknown-speaker header;
-their separate uncertainty states remain on the original correction/JSON members.
+candidate set receives a reading participant through the shared completion operation; uncertainty
+remains on the original correction/JSON members. Changes in foreground identity, source, status
+or completeness remain paragraph boundaries.
 
 Completed pre-canonical attempts with pipeline versions below 14 can contain short
 unknown fragments without native precision, timing or speaker activity. They cannot

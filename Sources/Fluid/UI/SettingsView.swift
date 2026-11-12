@@ -131,7 +131,9 @@ struct SettingsView: View {
     }
 
     private var currentAppVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        return "\(version) (\(build))"
     }
 
     private var appDisplayName: String {
@@ -247,6 +249,7 @@ struct SettingsView: View {
                         .padding(16)
                     }
                     .settingsSearchTarget(.fluidMeet)
+
                 }
 
                 if self.selectedSection == .general, self.appServices.accountSession.configuration != nil {
@@ -3015,6 +3018,7 @@ private extension SettingsView {
                 }
 
                 self.updateCheckStatus
+                self.updateDownloadStatus
 
                 Divider().opacity(0.2)
                 VStack(spacing: 16) {
@@ -3024,6 +3028,15 @@ private extension SettingsView {
                         isOn: Binding(
                             get: { self.settings.autoUpdateCheckEnabled },
                             set: { self.settings.autoUpdateCheckEnabled = $0 }
+                        )
+                    )
+                    Divider().opacity(0.2)
+                    self.settingsToggleRow(
+                        title: "Download updates automatically",
+                        description: "Download verified updates in the background. Installation and restart require your approval.",
+                        isOn: Binding(
+                            get: { self.settings.automaticUpdateDownloads },
+                            set: { self.settings.automaticUpdateDownloads = $0 }
                         )
                     )
                     Divider().opacity(0.2)
@@ -3131,6 +3144,28 @@ private extension SettingsView {
         }
     }
 
+    @ViewBuilder private var updateDownloadStatus: some View {
+        switch self.updater.downloadState {
+        case .idle:
+            EmptyView()
+        case .downloading:
+            HStack {
+                ProgressView().controlSize(.small)
+                Text("Downloading update…")
+                Button("Cancel") { Task { await self.updater.cancelPendingUpdate() } }
+                    .accessibilityIdentifier("updater.cancel")
+            }
+        case .ready:
+            Label("Update downloaded and verified. Install when you are ready.", systemImage: "checkmark.shield")
+                .font(self.theme.typography.bodySmall)
+        case let .failed(message):
+            VStack(alignment: .leading) {
+                Text("Update download failed. Try again from View Update.")
+                Text(message).font(self.theme.typography.caption).textSelection(.enabled)
+            }
+        }
+    }
+
     private var rollbackControls: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             FluidManagementRow(title: PichiLocalization.text("Roll back"), detail: AppBrand.text("Choose an earlier version. FluidVoice will restart.")) {
@@ -3145,7 +3180,7 @@ private extension SettingsView {
                             Text(PichiLocalization.format("%@ · Saved on this Mac", self.rollbackVersion)).tag("local")
                         }
                         ForEach(self.rollbackOptions, id: \.version) { option in
-                            Text(option.version).tag(option.version)
+                            Text(option.displayVersion).tag(option.version)
                         }
                     }
                     .fluidDropdownStyle()
@@ -3180,7 +3215,7 @@ private extension SettingsView {
 
     private var selectedRollbackTitle: String {
         if self.selectedRollbackVersion == "local" { return PichiLocalization.format("%@ · Saved on this Mac", self.rollbackVersion) }
-        return self.selectedRollbackVersion.isEmpty ? PichiLocalization.text("Choose a version") : self.selectedRollbackVersion
+        return self.selectedRollbackVersion.isEmpty ? PichiLocalization.text("Choose a version") : (self.rollbackOptions.first { $0.version == self.selectedRollbackVersion }?.displayVersion ?? self.selectedRollbackVersion)
     }
 
     private func loadRollbackVersions() async {
@@ -3214,7 +3249,7 @@ private extension SettingsView {
         let useLocalBackup = self.selectedRollbackVersion == "local"
         let targetVersion = useLocalBackup ? self.rollbackVersion : self.selectedRollbackVersion
         guard !targetVersion.isEmpty else { return }
-        let infoText = targetVersion
+        let infoText = useLocalBackup ? targetVersion : self.selectedRollbackTitle
         let confirm = NSAlert()
         confirm.messageText = PichiLocalization.format("Roll back to %@?", infoText)
         confirm.informativeText = AppBrand.text("This will restore a previous app version and relaunch FluidVoice.")
@@ -3241,7 +3276,7 @@ private extension SettingsView {
                 await MainActor.run {
                     let success = NSAlert()
                     success.messageText = PichiLocalization.text("Rollback Successful")
-                    success.informativeText = AppBrand.format("Rolled back to %@. FluidVoice will relaunch shortly.", targetVersion)
+                    success.informativeText = AppBrand.format("Rolled back to %@. FluidVoice will relaunch shortly.", infoText)
                     success.alertStyle = .informational
                     success.addButton(withTitle: PichiLocalization.text("Report Bug"))
                     success.addButton(withTitle: PichiLocalization.text("OK"))

@@ -21,11 +21,32 @@ nonisolated struct AudioBudgetMeasurementGate: Equatable, Sendable {
 // MARK: - Transcription History Entry Model
 
 nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
-    /// One explicitly grouped source term, including any internal whitespace.
+    /// One explicitly confirmed source term, including any internal whitespace.
     nonisolated struct SourceFragment: Codable, Equatable, Sendable {
         let location: Int
         let length: Int
         let text: String
+        /// Stable approval identity survives unrelated edits and UTF-16 shifts.
+        let correctionID: UUID?
+        /// Provenance in immutable rawText, never a guessed audio interval.
+        let originalLocation: Int?
+        let originalLength: Int?
+
+        init(location: Int, length: Int, text: String, correctionID: UUID? = nil, originalRange: NSRange? = nil) {
+            self.location = location
+            self.length = length
+            self.text = text
+            self.correctionID = correctionID
+            self.originalLocation = originalRange?.location
+            self.originalLength = originalRange?.length
+        }
+
+        var originalRange: NSRange? {
+            guard let originalLocation, let originalLength, originalLocation >= 0, originalLength > 0,
+                  originalLength <= Int.max - originalLocation else { return nil }
+            return NSRange(location: originalLocation, length: originalLength)
+        }
+
         var range: NSRange { NSRange(location: location, length: length) }
 
         func isValid(in source: String) -> Bool {
@@ -49,6 +70,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
     /// User-corrected source text; rawText remains the exact ASR output.
     let correctedRawText: String?
     let sourceFragments: [SourceFragment]
+    let dictionaryReplacements: [DictionaryHistoryReplacement]
     var sourceTranscriptText: String { self.correctedRawText ?? self.rawText }
     let appName: String
     let windowTitle: String
@@ -88,7 +110,8 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         searchRevision: UInt64? = nil,
         originalProcessedText: String? = nil,
         correctedRawText: String? = nil,
-        sourceFragments: [SourceFragment] = []
+        sourceFragments: [SourceFragment] = [],
+        dictionaryReplacements: [DictionaryHistoryReplacement] = []
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -97,6 +120,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         self.originalProcessedText = originalProcessedText
         self.correctedRawText = correctedRawText
         self.sourceFragments = Array(sourceFragments.filter { $0.isValid(in: correctedRawText ?? rawText) }.prefix(128))
+        self.dictionaryReplacements = DictionaryHistoryReplacement.sanitized(dictionaryReplacements, in: rawText)
         self.appName = appName
         self.windowTitle = windowTitle
         self.characterCount = processedText.count
@@ -132,7 +156,8 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         searchRevision: UInt64?,
         originalProcessedText: String?,
         correctedRawText: String?,
-        sourceFragments: [SourceFragment]
+        sourceFragments: [SourceFragment],
+        dictionaryReplacements: [DictionaryHistoryReplacement] = []
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -141,6 +166,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         self.originalProcessedText = originalProcessedText
         self.correctedRawText = correctedRawText
         self.sourceFragments = Array(sourceFragments.filter { $0.isValid(in: correctedRawText ?? rawText) }.prefix(128))
+        self.dictionaryReplacements = DictionaryHistoryReplacement.sanitized(dictionaryReplacements, in: rawText)
         self.appName = appName
         self.windowTitle = windowTitle
         self.characterCount = characterCount
@@ -167,6 +193,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
         let fragmentSource = self.correctedRawText ?? self.rawText
         self.sourceFragments = Array((try container.decodeIfPresent([SourceFragment].self, forKey: .sourceFragments) ?? [])
             .filter { $0.isValid(in: fragmentSource) }.prefix(128))
+        self.dictionaryReplacements = DictionaryHistoryReplacement.sanitized(try container.decodeIfPresent([DictionaryHistoryReplacement].self, forKey: .dictionaryReplacements) ?? [], in: self.rawText)
         self.appName = try container.decode(String.self, forKey: .appName)
         self.windowTitle = try container.decode(String.self, forKey: .windowTitle)
         self.characterCount = try container.decode(Int.self, forKey: .characterCount)
@@ -192,7 +219,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, timestamp, rawText, processedText, originalProcessedText, correctedRawText, sourceFragments, appName, windowTitle
+        case id, timestamp, rawText, processedText, originalProcessedText, correctedRawText, sourceFragments, dictionaryReplacements, appName, windowTitle
         case characterCount, wasAIProcessed, processingModel
         case transcriptionDurationMilliseconds, parakeetProcessingDurationMilliseconds, aiProcessingDurationMilliseconds
         case aiTokensPerSecond
@@ -267,7 +294,7 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             audio: audio,
             isStarred: self.isStarred,
             searchRevision: self.searchRevision,
-            originalProcessedText: self.originalProcessedText, correctedRawText: self.correctedRawText, sourceFragments: self.sourceFragments
+            originalProcessedText: self.originalProcessedText, correctedRawText: self.correctedRawText, sourceFragments: self.sourceFragments, dictionaryReplacements: self.dictionaryReplacements
         )
     }
 
@@ -283,18 +310,21 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             aiProcessingDurationMilliseconds: self.aiProcessingDurationMilliseconds,
             aiTokensPerSecond: self.aiTokensPerSecond, aiProcessingError: self.aiProcessingError,
             audio: self.audio, isStarred: self.isStarred, searchRevision: self.searchRevision,
-            originalProcessedText: self.originalProcessedText ?? self.processedText, correctedRawText: self.correctedRawText, sourceFragments: self.sourceFragments
+            originalProcessedText: self.originalProcessedText ?? self.processedText, correctedRawText: self.correctedRawText, sourceFragments: self.sourceFragments, dictionaryReplacements: self.dictionaryReplacements
         )
     }
 
     /// Every accumulated explicit source correction overrides the corresponding
     /// formatted span, while the exact ASR and first model output stay immutable.
-    func replacingSourceText(_ text: String, fragments: [SourceFragment]? = nil) -> TranscriptionHistoryEntry {
+    func replacingSourceText(_ text: String, fragments: [SourceFragment]? = nil, projectFinal: Bool = true) -> TranscriptionHistoryEntry {
         let groups = (fragments ?? self.sourceFragments).filter { $0.isValid(in: text) }
-        let latest = SourceTranscriptCorrection.apply(original: self.sourceTranscriptText, corrected: text, to: self.processedText)
-        var final = SourceTranscriptCorrection.apply(original: self.rawText, corrected: text, to: latest)
-        for group in groups.reversed() {
-            final = SourceTranscriptCorrection.applyGroup(source: text, final: final, range: group.range, text: group.text)
+        var final = self.processedText
+        if projectFinal {
+            let latest = SourceTranscriptCorrection.apply(original: self.sourceTranscriptText, corrected: text, to: self.processedText)
+            final = SourceTranscriptCorrection.apply(original: self.rawText, corrected: text, to: latest)
+            for group in groups.reversed() {
+                final = SourceTranscriptCorrection.applyGroup(source: text, final: final, range: group.range, text: group.text)
+            }
         }
         if final.utf16.count > 100_000 { final = text }
         return TranscriptionHistoryEntry(
@@ -308,39 +338,86 @@ nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, 
             aiTokensPerSecond: self.aiTokensPerSecond, aiProcessingError: self.aiProcessingError,
             audio: self.audio, isStarred: self.isStarred, searchRevision: self.searchRevision,
             originalProcessedText: self.originalProcessedText ?? self.processedText,
-            correctedRawText: text, sourceFragments: groups
+            correctedRawText: text, sourceFragments: groups, dictionaryReplacements: self.dictionaryReplacements
         )
     }
 
-    /// Keep grouped terms attached to the same source occurrence across later edits.
-    func fragmentsAfterReplacing(_ range: NSRange, with replacement: String, in updatedText: String) -> [SourceFragment] {
+    /// Inverse projection is exact only when every intervening edit has retained
+    /// provenance and all unchanged gaps still match the immutable ASR text.
+    func originalSourceRange(for range: NSRange) -> NSRange? {
+        let source = self.sourceTranscriptText as NSString
+        let original = self.rawText as NSString
+        guard range.location >= 0, range.length > 0, range.location <= source.length,
+              range.length <= source.length - range.location else { return nil }
+        if self.sourceTranscriptText == self.rawText { return range }
+        var sourceOffset = 0, originalOffset = 0
+        var mapped: [(NSRange, NSRange)] = []
+        for fragment in self.sourceFragments.sorted(by: { $0.location < $1.location }) {
+            guard fragment.isValid(in: self.sourceTranscriptText), let raw = fragment.originalRange,
+                  fragment.location >= sourceOffset, raw.location >= originalOffset,
+                  raw.location <= original.length, raw.length <= original.length - raw.location else { return nil }
+            let gap = NSRange(location: sourceOffset, length: fragment.location - sourceOffset)
+            let rawGap = NSRange(location: originalOffset, length: raw.location - originalOffset)
+            guard source.substring(with: gap) == original.substring(with: rawGap) else { return nil }
+            mapped.append((gap, rawGap))
+            mapped.append((fragment.range, raw))
+            sourceOffset = NSMaxRange(fragment.range)
+            originalOffset = NSMaxRange(raw)
+        }
+        let tail = NSRange(location: sourceOffset, length: source.length - sourceOffset)
+        let rawTail = NSRange(location: originalOffset, length: original.length - originalOffset)
+        guard source.substring(with: tail) == original.substring(with: rawTail) else { return nil }
+        mapped.append((tail, rawTail))
+        var start: Int?, end: Int?
+        for (current, raw) in mapped where NSIntersectionRange(current, range).length > 0 {
+            let overlap = NSIntersectionRange(current, range)
+            if current.length != raw.length {
+                guard overlap == current else { return nil }
+            }
+            // Interior offsets in rewritten spellings are not original provenance.
+            let isUnchanged = source.substring(with: current) == original.substring(with: raw)
+            guard isUnchanged || overlap == current else { return nil }
+            let lower = isUnchanged ? raw.location + overlap.location - current.location : raw.location
+            let upper = isUnchanged ? lower + overlap.length : NSMaxRange(raw)
+            start = start ?? lower
+            end = upper
+        }
+        guard let start, let end, end > start else { return nil }
+        return NSRange(location: start, length: end - start)
+    }
+
+    /// Disjoint edits preserve approval IDs. Replacing any part of a confirmed
+    /// group creates a fresh approval and retires queued evidence for that group.
+    func fragmentsAfterReplacing(_ range: NSRange, with replacement: String, in updatedText: String,
+                                 confirmationRange: NSRange? = nil) -> [SourceFragment] {
         let delta = replacement.utf16.count - range.length
-        var ranges: [NSRange] = []
-        var grouped = (self.sourceTranscriptText as NSString).substring(with: range).split(whereSeparator: \.isWhitespace).count > 1 ||
-            replacement.split(whereSeparator: \.isWhitespace).count > 1
-        for group in self.sourceFragments where group.isValid(in: self.sourceTranscriptText) {
-            if NSMaxRange(group.range) <= range.location { ranges.append(group.range) }
-            else if group.location >= NSMaxRange(range) { ranges.append(NSRange(location: group.location + delta, length: group.length)) }
-            else {
-                grouped = true
-                let start = min(group.location, range.location)
-                let end = max(NSMaxRange(group.range), NSMaxRange(range)) + delta
-                if end > start { ranges.append(NSRange(location: start, length: end - start)) }
+        var confirmed = confirmationRange ?? range
+        var preserved: [SourceFragment] = []
+        let source = self.sourceTranscriptText as NSString
+        if source.substring(with: range) == replacement,
+           self.sourceFragments.contains(where: { $0.range == confirmed && $0.isValid(in: self.sourceTranscriptText) }) {
+            return self.sourceFragments
+        }
+        for fragment in self.sourceFragments where fragment.isValid(in: self.sourceTranscriptText) {
+            if NSIntersectionRange(fragment.range, confirmed).length > 0 {
+                confirmed = NSUnionRange(confirmed, fragment.range)
             }
         }
-        if grouped, !replacement.isEmpty { ranges.append(NSRange(location: range.location, length: replacement.utf16.count)) }
-        var merged: [NSRange] = []
-        for item in ranges.sorted(by: { $0.location < $1.location }) {
-            if let last = merged.last, item.location <= NSMaxRange(last) {
-                merged[merged.count - 1] = NSUnionRange(last, item)
-            } else { merged.append(item) }
+        for fragment in self.sourceFragments where fragment.isValid(in: self.sourceTranscriptText) {
+            if NSMaxRange(fragment.range) <= confirmed.location { preserved.append(fragment) }
+            else if fragment.location >= NSMaxRange(confirmed) {
+                preserved.append(SourceFragment(location: fragment.location + delta, length: fragment.length, text: fragment.text,
+                    correctionID: fragment.correctionID, originalRange: fragment.originalRange))
+            }
         }
-        let text = updatedText as NSString
-        return merged.compactMap { span in
-            guard span.location >= 0, span.length > 0, span.location <= text.length, span.length <= text.length - span.location else { return nil }
-            let group = SourceFragment(location: span.location, length: span.length, text: text.substring(with: span))
-            return group.isValid(in: updatedText) ? group : nil
-        }.prefix(128).map { $0 }
+        let updated = updatedText as NSString
+        let finalRange = NSRange(location: confirmed.location, length: confirmed.length + delta)
+        if finalRange.length > 0, finalRange.location <= updated.length, finalRange.length <= updated.length - finalRange.location {
+            let fragment = SourceFragment(location: finalRange.location, length: finalRange.length,
+                text: updated.substring(with: finalRange), correctionID: UUID(), originalRange: self.originalSourceRange(for: confirmed))
+            if fragment.isValid(in: updatedText) { preserved.append(fragment) }
+        }
+        return Array(preserved.sorted { $0.location < $1.location }.prefix(128))
     }
 
     func reconcilingSourceCorrections() -> TranscriptionHistoryEntry {
@@ -566,6 +643,7 @@ nonisolated struct HistorySearchSelectionRequest: Equatable {
     }
     func finish() async throws { try await self.history.finishRecordingWrite(self) }
     func retryPersistence() async throws { try await self.history.retryRecordingWrite(self) }
+    var acceptsDictionaryEvidence: Bool { self.history.allowsDictionaryEvidence(self) }
 }
 
 // MARK: - Transcription History Store
@@ -581,6 +659,10 @@ final class TranscriptionHistoryStore: ObservableObject {
     private let writer: TranscriptionHistoryWriter
     private let profile: PrivateProfileSnapshot?
     private let audioStore: DictationAudioHistoryStore
+    private let removeDictionaryEvidence: @MainActor (Set<UUID>) async throws -> Void
+    private var pendingDictionaryEvidenceRemoval = Set<UUID>()
+    private var dictionaryEvidenceCleanupTask: Task<Void, Never>?
+    private var dictionaryEvidenceCleanupError: Error?
     private var transitioning = false
     private var retired = false
     private var canAccess: Bool {
@@ -588,6 +670,9 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
     private var recordingWrites: [UUID: DictationHistoryWriteAdmission] = [:]
     var admittedRecordingWriteCount: Int { self.recordingWrites.count }
+    fileprivate func allowsDictionaryEvidence(_ admission: DictationHistoryWriteAdmission) -> Bool {
+        self.validates(admission) && admission.write.saveGeneration == self.audioSaveGeneration
+    }
     private var retainedEntries: [TranscriptionHistoryEntry] = []
     private var loadTask: Task<Void, Never>?
     @Published private var hasLoaded = false
@@ -661,13 +746,19 @@ final class TranscriptionHistoryStore: ObservableObject {
         audioStore: DictationAudioHistoryStore? = nil,
         summaryNow: @escaping () -> Date = Date.init,
         summaryCalendar: @escaping () -> Calendar = { Calendar.current },
-        deleteAllAudioFiles: (() -> Void)? = nil
+        deleteAllAudioFiles: (() -> Void)? = nil,
+        removeDictionaryEvidence: (@MainActor (Set<UUID>) async throws -> Void)? = nil
     ) {
         let selected = profile ?? (writer == nil ? PrivateProfileStorage.current : nil)
         let audioStore = audioStore ?? selected.map(DictationAudioHistoryStore.scoped)
             ?? DictationAudioHistoryStore.shared
         self.profile = selected
         self.audioStore = audioStore
+        if let removeDictionaryEvidence { self.removeDictionaryEvidence = removeDictionaryEvidence }
+        else if let selected {
+            let negatives = DictionaryNegativeExampleStore.scoped(to: selected)
+            self.removeDictionaryEvidence = { try await negatives.removeRetainedEvidence(ids: $0) }
+        } else { self.removeDictionaryEvidence = { _ in } }
         self.writer = writer ?? TranscriptionHistoryWriter(profile: selected)
         self.summaryNow = summaryNow
         self.summaryCalendar = summaryCalendar
@@ -863,7 +954,8 @@ final class TranscriptionHistoryStore: ObservableObject {
         aiTokensPerSecond: Double? = nil,
         aiProcessingError: String? = nil,
         audio: DictationAudioMetadata? = nil,
-        admission: DictationHistoryWriteAdmission? = nil
+        admission: DictationHistoryWriteAdmission? = nil,
+        dictionaryReplacements: [DictionaryHistoryReplacement] = []
     ) {
         let id = id ?? admission?.entryID ?? UUID()
         if let admission {
@@ -886,7 +978,8 @@ final class TranscriptionHistoryStore: ObservableObject {
             aiProcessingDurationMilliseconds: aiProcessingDurationMilliseconds,
             aiTokensPerSecond: aiTokensPerSecond,
             aiProcessingError: aiProcessingError,
-            audio: audio
+            audio: audio,
+            dictionaryReplacements: dictionaryReplacements
         )
 
         if let admission {
@@ -915,7 +1008,9 @@ final class TranscriptionHistoryStore: ObservableObject {
         range: NSRange,
         replacement: String,
         profile: PrivateProfileSnapshot,
-        isOriginal: Bool = false
+        isOriginal: Bool = false,
+        confirmationRange: NSRange? = nil,
+        replacesAllOccurrences: Bool = true
     ) -> Bool {
         guard self.canAccess, PrivateProfileStorage.acceptsNewWork,
               PrivateProfileStorage.isReadable(profile),
@@ -931,12 +1026,35 @@ final class TranscriptionHistoryStore: ObservableObject {
               replacement.utf16.count <= 100_000,
               !replacement.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
         else { return false }
-        let final = expectedText.replacingCharacters(in: swiftRange, with: replacement)
+        let protected = isOriginal ? self.entries[index].currentDictionaryReplacements.map(\.range) : []
+        let plan = replacesAllOccurrences ? DictionaryCorrectionReplacementPlan(sourceText: expectedText, range: range,
+            replacement: replacement, protectedRanges: protected) : nil
+        let final = plan?.text ?? expectedText.replacingCharacters(in: swiftRange, with: replacement)
         guard !final.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               final.utf16.count <= 100_000 else { return false }
-        let fragments = isOriginal ? self.entries[index].fragmentsAfterReplacing(range, with: replacement, in: final) : []
-        guard final != expectedText || (isOriginal && fragments != self.entries[index].sourceFragments) else { return false }
-        var entry = isOriginal ? self.entries[index].replacingSourceText(final, fragments: fragments) : self.entries[index].replacingFinalText(final)
+        var entry = self.entries[index]
+        if isOriginal {
+            for occurrence in (plan?.ranges ?? [range]).reversed() {
+                let updated = (entry.sourceTranscriptText as NSString).replacingCharacters(in: occurrence, with: replacement)
+                let confirmation = occurrence == range ? confirmationRange : nil
+                if let confirmation {
+                    guard confirmation.location >= 0, confirmation.length > 0,
+                          confirmation.location <= occurrence.location,
+                          confirmation.location <= entry.sourceTranscriptText.utf16.count,
+                          confirmation.length <= entry.sourceTranscriptText.utf16.count - confirmation.location,
+                          NSMaxRange(confirmation) >= NSMaxRange(occurrence) else { return false }
+                }
+                let fragments = entry.fragmentsAfterReplacing(occurrence, with: replacement, in: updated, confirmationRange: confirmation)
+                // Keep intermediate provenance local. Project formatted output
+                // once for the complete plan, rather than once per repetition.
+                entry = entry.replacingSourceText(updated, fragments: fragments, projectFinal: false)
+            }
+            entry = self.entries[index].replacingSourceText(final, fragments: entry.sourceFragments)
+        } else {
+            entry = entry.replacingFinalText(final)
+        }
+        guard entry.sourceTranscriptText != self.entries[index].sourceTranscriptText ||
+              entry.processedText != self.entries[index].processedText || entry.sourceFragments != self.entries[index].sourceFragments else { return false }
         entry.markRestored(over: self.entries[index].searchRevision)
         self.entries[index] = entry
         // A reserved audio write may complete after this edit. Its retry capsule
@@ -965,9 +1083,37 @@ final class TranscriptionHistoryStore: ObservableObject {
         admission.audio?.complete()
     }
 
+    private func removeRetainedDictionaryEvidence(from entries: [TranscriptionHistoryEntry]) {
+        self.pendingDictionaryEvidenceRemoval.formUnion(entries.flatMap { $0.dictionaryReplacements.compactMap(\.evidenceID) })
+        self.scheduleDictionaryEvidenceCleanup()
+    }
+
+    private func scheduleDictionaryEvidenceCleanup() {
+        guard !self.pendingDictionaryEvidenceRemoval.isEmpty, self.dictionaryEvidenceCleanupTask == nil else { return }
+        self.dictionaryEvidenceCleanupTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.dictionaryEvidenceCleanupTask = nil }
+            while !self.pendingDictionaryEvidenceRemoval.isEmpty {
+                let ids = self.pendingDictionaryEvidenceRemoval
+                do {
+                    try await self.removeDictionaryEvidence(ids)
+                    self.pendingDictionaryEvidenceRemoval.subtract(ids)
+                    if self.dictionaryEvidenceCleanupError != nil,
+                       self.persistenceError == AppBrand.text("Dictionary feedback could not be removed. Keep the app open and retry.") { self.persistenceError = nil }
+                    self.dictionaryEvidenceCleanupError = nil
+                } catch {
+                    self.dictionaryEvidenceCleanupError = error
+                    if self.canAccess { self.persistenceError = AppBrand.text("Dictionary feedback could not be removed. Keep the app open and retry.") }
+                    return
+                }
+            }
+        }
+    }
+
     /// Delete a specific entry
     func deleteEntry(id: UUID) {
         guard self.canAccess else { return }
+        self.removeRetainedDictionaryEvidence(from: self.entries.filter { $0.id == id })
         self.revokeRecordingWrite(for: id)
         self.invalidateAutomaticAudioBudgetMeasurement()
         if let audio = self.entries.first(where: { $0.id == id })?.audio {
@@ -990,6 +1136,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     /// Delete multiple entries
     func deleteEntries(ids: Set<UUID>) {
         guard self.canAccess else { return }
+        self.removeRetainedDictionaryEvidence(from: self.entries.filter { ids.contains($0.id) })
         for id in ids { self.revokeRecordingWrite(for: id) }
         self.invalidateAutomaticAudioBudgetMeasurement()
         for entry in self.entries where ids.contains(entry.id) {
@@ -1013,6 +1160,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     /// Clear all history
     func clearAllHistory() {
         guard self.canAccess else { return }
+        self.removeRetainedDictionaryEvidence(from: self.entries)
         for id in self.recordingWrites.keys { self.revokeRecordingWrite(for: id) }
         self.audioSaveGeneration &+= 1
         self.invalidateAutomaticAudioBudgetMeasurement()
@@ -1116,6 +1264,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         }
         self.invalidateAutomaticAudioBudgetMeasurement()
         let removedCount = self.entries.filter { $0.audio != nil }.count
+        self.removeRetainedDictionaryEvidence(from: self.entries.filter { $0.audio != nil })
         self.deleteAllAudioFiles()
         let changed = self.entries.filter { $0.audio != nil }.map { $0.replacingAudio(nil) }
         self.entries = self.entries.map { $0.replacingAudio(nil) }
@@ -1167,6 +1316,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         }
 
         if prunedCount > 0 {
+            self.removeRetainedDictionaryEvidence(from: changed)
             self.entries = updatedEntries
             self.persist(upserts: changed)
             DebugLogger.shared.info("Pruned saved dictation audio (\(prunedCount) entries)", source: "TranscriptionHistoryStore")
@@ -1324,6 +1474,8 @@ final class TranscriptionHistoryStore: ObservableObject {
     func finishPendingWrites() async {
         await self.loadTask?.value
         await self.automaticAudioBudgetTask?.value
+        self.scheduleDictionaryEvidenceCleanup()
+        await self.dictionaryEvidenceCleanupTask?.value
         if let error = await self.writer.drain(), self.canAccess {
             self.persistenceError = AppBrand.format("History could not be saved. Keep FluidVoice open and retry. %@", error.localizedDescription)
         }
@@ -1340,6 +1492,9 @@ final class TranscriptionHistoryStore: ObservableObject {
         await self.loadTask?.value
         await self.todaySummaryTask?.value
         await self.automaticAudioBudgetTask?.value
+        self.scheduleDictionaryEvidenceCleanup()
+        await self.dictionaryEvidenceCleanupTask?.value
+        if let error = self.dictionaryEvidenceCleanupError { self.transitioning = false; throw error }
         if let error = await self.writer.drain() {
             self.transitioning = false
             throw error

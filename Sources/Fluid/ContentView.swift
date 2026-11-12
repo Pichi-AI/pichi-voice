@@ -255,6 +255,11 @@ struct ContentView: View {
         var savesHistory: Bool { self != .onboardingSandbox }
         var deliversText: Bool { self == .normal }
         var publishesEditorResult: Bool { self != .historyOnly }
+
+        /// Final transcription needs visible feedback even when AI enhancement is off.
+        func hidesOverlayOnStop(isCancelled: Bool) -> Bool {
+            self == .historyOnly || isCancelled
+        }
     }
 
     @EnvironmentObject private var appServices: AppServices
@@ -455,6 +460,14 @@ struct ContentView: View {
 
     func beginRewriteModeSwitchForTesting() async {
         await self.beginRewriteRecording()
+    }
+
+    func prepareStoppedOverlayForTesting(route: DictationOutputRoute = .normal, isCancelled: Bool = false)
+        -> (didRequestHide: Bool, onFinalTranscriptionStarted: (@MainActor () -> Void)?) {
+        self.prepareOverlayForASRStop(
+            shouldHideOverlayOnStop: route.hidesOverlayOnStop(isCancelled: isCancelled),
+            lifecycleID: self.overlayLifecycleID
+        )
     }
 
     func blockDictationModeSwitchForTesting(savingCancellation: Bool = false, processing: Bool = false) {
@@ -3289,11 +3302,9 @@ struct ContentView: View {
         let promptTestSessionID = promptTest.isActive ? promptTest.sessionID : nil
         var stopSnapshot = route.savesHistory && !wasRewriteMode && !wasCommandMode && !promptTest.isActive
             ? self.captureDictationStopSnapshot(slot: activeDictationSlot ?? .primary) : nil
-        let shouldUseAIOnStop = stopSnapshot?.usesAI ?? activeDictationSlot.map {
-            DictationAIPostProcessingGate.isConfigured(for: $0, appBundleID: self.recordingAppInfo?.bundleId)
-        } ?? DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: self.recordingAppInfo?.bundleId)
-        let shouldHideOverlayOnStop = route == .historyOnly || self.cancelledOutputLifecycleID == expectedOverlayLifecycleID || (route == .normal && !wasRewriteMode && !wasCommandMode
-            && !promptTest.isActive && !shouldUseAIOnStop && !self.settings.spokenSendEnabled)
+        let shouldHideOverlayOnStop = route.hidesOverlayOnStop(
+            isCancelled: self.cancelledOutputLifecycleID == expectedOverlayLifecycleID
+        )
         DebugLogger.shared.info(
             "Routing decision snapshot | activeMode=\(modeAtStop.rawValue) | rewrite=\(wasRewriteMode) | command=\(wasCommandMode) | overlay=\(NotchContentState.shared.mode.rawValue)",
             source: "ContentView"
@@ -3327,6 +3338,7 @@ struct ContentView: View {
         }
         let audioSnapshot = self.asr.consumeLastCompletedAudioSnapshot()
         let dictionaryLearningRecording = self.asr.consumeDictionaryLearningRecording()
+        var dictionaryReplacementTrace = self.asr.consumeDictionaryReplacementTrace()
         let transcriptionDurationMilliseconds = self.asr.consumeLastFinalTranscriptionDurationMs()
         let parakeetProcessingDurationMilliseconds = self.asr.consumeLastFinalParakeetProcessingMs()
         DebugLogger.shared.info(
@@ -3599,6 +3611,7 @@ struct ContentView: View {
         // Save to transcription history (transcription mode only, if enabled)
         if shouldPersistOutputs, !sendsExistingDraft, let privateOutput, let admission = privateOutput.admission {
             let historyTimestamp = Date()
+            dictionaryReplacementTrace?.remap(to: outputRoute.deliversText && spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText)
             privateOutput.history.addEntry(
                 timestamp: historyTimestamp,
                 rawText: outputRoute.deliversText && spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText,
@@ -3612,13 +3625,15 @@ struct ContentView: View {
                 aiProcessingDurationMilliseconds: aiProcessingDurationMilliseconds,
                 aiTokensPerSecond: aiTokensPerSecond,
                 aiProcessingError: aiFallbackReason,
-                admission: admission
+                admission: admission,
+                dictionaryReplacements: dictionaryReplacementTrace?.replacements ?? []
             )
             privateOutput.saveAudio(
                 audioSnapshot,
                 timestamp: historyTimestamp,
                 model: transcriptionModelInfo.model
             )
+            privateOutput.saveDictionaryEvidence(dictionaryReplacementTrace?.replacements ?? [])
         }
         // When FluidVoice itself is frontmost, the bound editor already receives `finalText`.
         let shouldCopyToClipboard = shouldDeliverOutputs &&
@@ -3775,10 +3790,18 @@ struct ContentView: View {
             }
             // Delivery UI must complete before correction tracking queries Accessibility.
             if didTypeExternally, !spokenSendAllowed {
+                dictionaryReplacementTrace?.remap(to: finalOutputPlan.plainText)
                 AutomaticDictionaryCorrectionTracker.shared.beginObservingInsertion(
                     finalOutputPlan.plainText,
                     targetPID: typingTarget.pid,
-                    learningRecording: dictionaryLearningRecording
+                    learningRecording: dictionaryLearningRecording,
+                    historyCorrection: privateOutput.flatMap { output in
+                        output.admission.flatMap { admission in
+                            DictationHistoryCorrectionSession(history: output.history, entryID: admission.entryID,
+                                deliveredText: finalOutputPlan.plainText, profile: output.profile)
+                        }
+                    },
+                    dictionaryReplacements: dictionaryReplacementTrace?.replacements ?? []
                 )
                 self.appBench("dictionary_tracking_scheduled afterDeliveryUI=true")
             }

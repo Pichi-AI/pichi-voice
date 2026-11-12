@@ -2405,7 +2405,7 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
             configuration: MeetingModelFixture.makeOnlineConfiguration()
         )
         XCTAssertEqual(session.languageCode, "en")
-        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.productionDefault.rawValue)
+        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.parakeetV2.rawValue)
         let snapshot = await harness.capture.snapshot()
         XCTAssertEqual(snapshot.startCallCount, 1)
         XCTAssertEqual(harness.arbiter.acquireCallCount, 1)
@@ -2631,35 +2631,72 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(storeSnapshot.rejectedSaveStates, [.stopping])
     }
 
-    func testPostStartPersistenceFailureStopsCaptureAndReleasesLease() async {
+    func testPostStartPersistenceFailureKeepsCaptureUntilUserStop() async throws {
         let harness = self.makeHarness(failingSaveState: .recording)
-
-        do {
-            _ = try await harness.coordinator.startRecording(
-                configuration: MeetingModelFixture.makeOnlineConfiguration()
-            )
-            XCTFail("Start must report the persistence failure.")
-        } catch let error as MeetingCoordinatorTestError {
-            XCTAssertEqual(error, .rejectedSave(.recording))
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
-
-        let captureSnapshot = await harness.capture.snapshot()
-        let storeSnapshot = await harness.store.snapshot()
-        XCTAssertEqual(captureSnapshot.startCallCount, 1)
-        XCTAssertEqual(captureSnapshot.stopCallCount, 1)
-        XCTAssertEqual(harness.processing.processCallCount, 0)
+        let started = try await harness.coordinator.startRecording(configuration: MeetingModelFixture.makeOnlineConfiguration())
+        let capture = await harness.capture.snapshot()
+        XCTAssertEqual(capture.startCallCount, 1)
+        XCTAssertEqual(capture.stopCallCount, 0)
+        XCTAssertEqual(harness.arbiter.releaseCallCount, 0)
+        XCTAssertNil(started.endedAt)
+        XCTAssertEqual(harness.coordinator.state, .recordingDegraded(started.id))
+        let completed = try await harness.coordinator.stopAndTranscribe()
+        XCTAssertNotNil(completed.endedAt)
         XCTAssertEqual(harness.arbiter.releaseCallCount, 1)
-        let recoveredSession = harness.coordinator.activeSession
-        XCTAssertNotNil(recoveredSession)
-        XCTAssertNotNil(recoveredSession?.endedAt)
-        XCTAssertEqual(recoveredSession?.failures.last?.recoverable, true)
-        XCTAssertEqual(recoveredSession.flatMap { storeSnapshot.sessions[$0.id] }?.state, .failed)
-        XCTAssertEqual(storeSnapshot.rejectedSaveStates, [.recording])
-        guard case .failed = harness.coordinator.state else {
-            return XCTFail("Coordinator must expose the failed Start after cleanup.")
-        }
+    }
+
+    func testLiveTranscriptionFailureLeavesAudioActiveAndRetainedRetryWorks() async throws {
+        let harness = self.makeHarness()
+        let started = try await harness.coordinator.startRecording(configuration: MeetingModelFixture.makeOnlineConfiguration())
+        await harness.capture.emit(.interrupted(kind: .liveTranscriptionDeferred, trackID: nil, detail: "synthetic recognition failure"))
+        let delivered = expectation(description: "failure delivered on capture event queue")
+        DispatchQueue.main.async { delivered.fulfill() }
+        await fulfillment(of: [delivered], timeout: 2)
+        let active = await harness.capture.snapshot()
+        XCTAssertEqual(active.stopCallCount, 0)
+        XCTAssertEqual(harness.arbiter.releaseCallCount, 0)
+        XCTAssertEqual(harness.coordinator.activeSession?.transcriptIsComplete, false)
+        XCTAssertEqual(harness.coordinator.state, .recordingDegraded(started.id))
+        do { _ = try await harness.coordinator.stopAndTranscribe(); XCTFail("Deferred speech must remain explicit") }
+        catch {}
+        let stopped = await harness.capture.snapshot()
+        XCTAssertEqual(stopped.stopCallCount, 1)
+        XCTAssertNotNil(harness.coordinator.activeSession?.endedAt)
+        XCTAssertEqual(harness.coordinator.activeSession?.hasRetryableAudio, true)
+        XCTAssertEqual(harness.processing.processCallCount, 0, "Stop must not start a surprise full replay")
+        let recovered = try await harness.coordinator.retryProcessing()
+        XCTAssertEqual(recovered.state, .completed)
+        XCTAssertEqual(harness.processing.processCallCount, 1)
+        XCTAssertEqual(harness.arbiter.acquireCallCount, harness.arbiter.releaseCallCount)
+    }
+
+    func testStopReceiptPreservesDeferredTranscriptionWhenNotificationHasNotArrived() async throws {
+        let harness = self.makeHarness()
+        let started = try await harness.coordinator.startRecording(configuration: MeetingModelFixture.makeOnlineConfiguration())
+        await harness.capture.deferTranscriptionOnStop()
+        do { _ = try await harness.coordinator.stopAndTranscribe(); XCTFail("The stop receipt must retain the processing omission") }
+        catch {}
+        XCTAssertEqual(harness.processing.processCallCount, 0)
+        XCTAssertEqual(harness.coordinator.activeSession?.id, started.id)
+        XCTAssertEqual(harness.coordinator.activeSession?.transcriptIsComplete, false)
+        XCTAssertEqual(harness.coordinator.activeSession?.hasRetryableAudio, true)
+        XCTAssertTrue(harness.coordinator.activeSession?.events.contains { $0.kind == .liveTranscriptionDeferred } == true)
+        let restored = try await harness.coordinator.retryProcessing()
+        XCTAssertEqual(restored.state, .completed)
+    }
+
+    func testRetainedCaptureCanStartAfterMemoryRecognitionPreparationFails() async throws {
+        let harness = self.makeHarness()
+        harness.processing.failMemoryPreparation = true
+        var configuration = MeetingModelFixture.makeOnlineConfiguration()
+        configuration.speakerProcessingMode = .streaming
+        let started = try await harness.coordinator.startRecording(configuration: configuration)
+        let active = await harness.capture.snapshot()
+        XCTAssertEqual(active.startCallCount, 1)
+        XCTAssertEqual(active.stopCallCount, 0)
+        XCTAssertNil(started.endedAt)
+        XCTAssertEqual(harness.coordinator.state, .recordingDegraded(started.id))
+        await harness.coordinator.shutdownForTermination()
     }
 
     func testRecoverableFailedSessionRestoresWithoutLosingFailureState() async throws {
@@ -2990,6 +3027,9 @@ private actor FakeMeetingCaptureController: MeetingCaptureControlling {
         )
     }
 
+    private var transcriptionDeferredOnStop = false
+    func deferTranscriptionOnStop() { self.transcriptionDeferredOnStop = true }
+
     func stop(sessionID _: MeetingSessionID) async throws -> MeetingCaptureStopResult {
         self.stopCallCount += 1
         self.stopObservers.forEach { $0.resume() }
@@ -2999,7 +3039,7 @@ private actor FakeMeetingCaptureController: MeetingCaptureControlling {
         }
         let result = MeetingCaptureStopResult(
             tracks: MeetingModelFixture.makeSession().audioTracks,
-            stoppedAt: Date()
+            stoppedAt: Date(), transcriptionDeferred: self.transcriptionDeferredOnStop
         )
         if self.shouldFailStop {
             throw MeetingCaptureError.captureStopFailed("fixture stop failed", partialResult: result)
@@ -3049,6 +3089,12 @@ private actor FakeMeetingCaptureController: MeetingCaptureControlling {
 @MainActor
 private final class FakeMeetingProcessingController: MeetingProcessingControlling {
     private(set) var processCallCount = 0
+
+    var failMemoryPreparation = false
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+        checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws {
+        if self.failMemoryPreparation { throw MeetingCapturePCMError.transcriptionStopped }
+    }
 
     func process(
         session _: MeetingSession,

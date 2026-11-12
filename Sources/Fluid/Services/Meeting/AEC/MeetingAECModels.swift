@@ -55,6 +55,7 @@ nonisolated struct MeetingAECPCMBlock: Equatable, Sendable {
     let duration: CMTime
     let samples: [Float]
     let sourceFormat: MeetingAECPCMFormat
+    var clockPacket: MeetingCaptureClockMetadata.Packet? = nil
 
     init(
         kind: MeetingAECInputKind,
@@ -62,7 +63,8 @@ nonisolated struct MeetingAECPCMBlock: Equatable, Sendable {
         presentationTime: CMTime,
         duration: CMTime,
         samples: [Float],
-        sourceFormat: MeetingAECPCMFormat = .monoPlanar
+        sourceFormat: MeetingAECPCMFormat = .monoPlanar,
+        clockPacket: MeetingCaptureClockMetadata.Packet? = nil
     ) {
         self.kind = kind
         self.stream = stream
@@ -70,10 +72,14 @@ nonisolated struct MeetingAECPCMBlock: Equatable, Sendable {
         self.duration = duration
         self.samples = samples
         self.sourceFormat = sourceFormat
+        self.clockPacket = clockPacket
     }
 
     var endTime: CMTime {
-        CMTimeAdd(self.presentationTime, CMTime(value: CMTimeValue(self.samples.count), timescale: 48_000))
+        if let time = self.clockPacket?.mapping.spans.last?.hostEnd {
+            return CMTime(value: time.value, timescale: time.timescale)
+        }
+        return CMTimeAdd(self.presentationTime, CMTime(value: CMTimeValue(self.samples.count), timescale: 48_000))
     }
 }
 
@@ -83,11 +89,13 @@ nonisolated struct MeetingAECFrame: Equatable, Sendable {
 
     let presentationTime: CMTime
     let samples: [Float]
+    var clockPacket: MeetingCaptureClockMetadata.Packet? = nil
 
-    init(presentationTime: CMTime, samples: [Float]) {
+    init(presentationTime: CMTime, samples: [Float], clockPacket: MeetingCaptureClockMetadata.Packet? = nil) {
         precondition(samples.count == Self.sampleCount)
         self.presentationTime = presentationTime
         self.samples = samples
+        self.clockPacket = clockPacket
     }
 
     var duration: CMTime {
@@ -107,6 +115,7 @@ nonisolated struct MeetingAECJoinedFrame: Equatable, Sendable {
 nonisolated struct MeetingAECBypassSlice: Equatable, Sendable {
     let presentationTime: CMTime
     let samples: [Float]
+    var clockPacket: MeetingCaptureClockMetadata.Packet? = nil
 }
 
 nonisolated enum MeetingAECJoinerEmission: Equatable, Sendable {

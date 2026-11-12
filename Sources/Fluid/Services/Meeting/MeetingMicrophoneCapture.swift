@@ -80,6 +80,21 @@ nonisolated struct MeetingMicrophonePTSClock {
         return self.stampValid(hostTime: hostTime, frameCount: frameCount)
     }
 
+    /// Privacy capture may reject a proposed stamp before any PCM is published. In that case
+    /// retire its entire clock update before re-anchoring, so the monotonic clamp retains only
+    /// the preceding accepted end rather than repeatedly inheriting an unpublished future end.
+    /// Ordinary capture keeps using `stamp` and its sample-count timeline unchanged.
+    mutating func stampVerifiedAcquisition(hostTime: UInt64?, frameCount: Int) -> Outcome? {
+        let preceding = self
+        let outcome = self.stamp(hostTime: hostTime, frameCount: frameCount)
+        guard MeetingMicrophonePrivacyTiming.acceptsEmission(outcome, acquisitionHostTime: hostTime) else {
+            self = preceding
+            self.requestTimelineReset()
+            return nil
+        }
+        return outcome
+    }
+
     private mutating func stampInvalid(frameCount: Int) -> Outcome {
         guard self.anchorHostSeconds != nil else { // no anchor: epoch-0 PTS would poison origins
             return .droppedPostCap
@@ -161,7 +176,7 @@ nonisolated struct MeetingMicrophonePTSClock {
 /// Privacy admission needs acquisition evidence, independently of the writer's intentionally
 /// sample-count-based timeline. A host-clock gap must never turn fresh private PCM into old PCM.
 nonisolated enum MeetingMicrophonePrivacyTiming {
-    static let maximumDivergenceSeconds: Double = 0.020
+    static let maximumDivergenceSeconds = MeetingMicrophonePrivacyGate.maximumAcquisitionDivergenceSeconds
 
     static func acceptsTap(hostTime: UInt64?, windowHostTime: UInt64?, accumulatedFrameCount: Int) -> Bool {
         guard let hostTime, accumulatedFrameCount >= 0 else { return false }
@@ -590,7 +605,7 @@ private final class MeetingMicrophoneGenerationBox: @unchecked Sendable {
 
 // MARK: - Tap state (audio thread only, never hops to the actor)
 
-private final class MeetingMicrophoneTapState: @unchecked Sendable {
+final nonisolated class MeetingMicrophoneTapState: @unchecked Sendable {
     /// Tap delivers ~10.7 ms buffers; emitting each would 10x the writer's tuned 24-slot budget.
     private static let accumulationFrameThreshold = 4800 // 100 ms @ 48 kHz
 
@@ -599,6 +614,17 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
     private let onSample: @Sendable (CMSampleBuffer) -> Void
     private let onSampleMetadata: @Sendable (CMSampleBuffer, Bool, Bool) -> Void
     private let privacyGate: MeetingMicrophonePrivacyGate?
+    private let clockContext: MeetingRecordingClockContext?
+    private let sourceClock: MeetingCaptureSourceClock?
+    private let onClockFailure: @Sendable () -> Void
+    private var masterClockFailed = false // privacyStateLock owned
+    // Shared-clock work is confined to privacyQueue, away from the real-time tap.
+    private var masterConverter: MeetingCapturePCMConverter?
+    private var masterFormat: AVAudioFormat?
+    private var masterEpoch: UInt64?
+    private var masterSamples: [Float] = []
+    private var masterMapping = MeetingAudioClockMapping(frameCount: 0, spans: [])
+    private var masterGeneration: UInt64 = 0
     // The existing tap emits owned 100 ms PCM blocks. This handoff only retains them on the
     // render callback; the privacy gate's deep copy runs on this bounded non-real-time queue.
     private let privacyQueue = DispatchQueue(label: "com.fluidvoice.meeting.microphone.privacy", qos: .userInteractive)
@@ -611,8 +637,10 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
         let buffer: CMSampleBuffer
         let synthesized: Bool
         let resynced: Bool
-        init(_ buffer: CMSampleBuffer, synthesized: Bool, resynced: Bool) {
+        let acquisitionHostTime: UInt64
+        init(_ buffer: CMSampleBuffer, synthesized: Bool, resynced: Bool, acquisitionHostTime: UInt64) {
             self.buffer = buffer; self.synthesized = synthesized; self.resynced = resynced
+            self.acquisitionHostTime = acquisitionHostTime
         }
     }
 
@@ -628,12 +656,17 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
         statsBox: MeetingMicrophoneCaptureStats,
         canonicalFormat: AVAudioFormat,
         privacyGate: MeetingMicrophonePrivacyGate? = nil,
+        clockContext: MeetingRecordingClockContext? = nil,
+        onClockFailure: @escaping @Sendable () -> Void = {},
         onSample: @escaping @Sendable (CMSampleBuffer) -> Void,
         onSampleMetadata: @escaping @Sendable (CMSampleBuffer, Bool, Bool) -> Void = { _, _, _ in }
     ) {
         self.statsBox = statsBox
         self.canonicalFormat = canonicalFormat
         self.privacyGate = privacyGate
+        self.clockContext = clockContext
+        self.sourceClock = clockContext.map(MeetingCaptureSourceClock.init)
+        self.onClockFailure = onClockFailure
         self.onSample = onSample
         self.onSampleMetadata = onSampleMetadata
     }
@@ -642,6 +675,10 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
         let start = DispatchTime.now()
         defer { self.statsBox.recordCallbackDuration(Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000_000) }
 
+        if self.clockContext != nil {
+            self.enqueueMasterClockSample(buffer, time: time)
+            return
+        }
         self.consumePendingResetIfNeeded()
         self.checkSequenceContinuity(time: time, frameCount: Int(buffer.frameLength))
 
@@ -680,18 +717,15 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
     private func flush() {
         let frameCount = self.accumulated.count
         let acquisitionHostTime = self.windowHostTimeValid ? self.windowHostTime : nil
-        let outcome = self.clock.stamp(hostTime: acquisitionHostTime, frameCount: frameCount)
+        let outcome: MeetingMicrophonePTSClock.Outcome? = self.privacyGate == nil
+            ? self.clock.stamp(hostTime: acquisitionHostTime, frameCount: frameCount)
+            : self.clock.stampVerifiedAcquisition(hostTime: acquisitionHostTime, frameCount: frameCount)
         let samples = self.accumulated
         self.accumulated.removeAll(keepingCapacity: true)
         self.windowHostTime = nil
         self.windowHostTimeValid = false
 
-        if self.privacyGate != nil,
-           !MeetingMicrophonePrivacyTiming.acceptsEmission(outcome, acquisitionHostTime: acquisitionHostTime) {
-            self.clock.requestTimelineReset()
-            return
-        }
-
+        guard let outcome else { return }
         guard case let .emitted(pts, synthesized, anchorCorrected, resynced) = outcome else {
             self.statsBox.mutate { $0.droppedPostCapCount += 1 }
             return
@@ -728,7 +762,9 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
             stats.lastValidHostSeconds = clock.lastValidHostSeconds
         }
         if let privacyGate = self.privacyGate {
-            self.enqueuePrivacySample(sampleBuffer, synthesized: synthesized, resynced: resynced, gate: privacyGate)
+            guard let acquisitionHostTime else { return }
+            self.enqueuePrivacySample(sampleBuffer, synthesized: synthesized, resynced: resynced,
+                                      acquisitionHostTime: acquisitionHostTime, gate: privacyGate)
         } else {
             self.onSampleMetadata(sampleBuffer, synthesized, resynced)
             self.onSample(sampleBuffer)
@@ -736,7 +772,7 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
     }
 
     private func enqueuePrivacySample(_ sampleBuffer: CMSampleBuffer, synthesized: Bool, resynced: Bool,
-        gate: MeetingMicrophonePrivacyGate) {
+        acquisitionHostTime: UInt64, gate: MeetingMicrophonePrivacyGate) {
         // A malformed or unexpectedly large block must not defeat the eight-slot handoff bound.
         guard let block = CMSampleBufferGetDataBuffer(sampleBuffer),
               CMBlockBufferGetDataLength(block) <= 131_072 else { return }
@@ -745,13 +781,14 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
             self.privacyStateLock.unlock(); return
         }
         self.privacyHandoffGroup.enter()
-        let sample = PrivacySample(sampleBuffer, synthesized: synthesized, resynced: resynced)
+        let sample = PrivacySample(sampleBuffer, synthesized: synthesized, resynced: resynced,
+                                   acquisitionHostTime: acquisitionHostTime)
         self.privacyQueue.async { [self, sample] in
             defer { self.privacySlots.signal(); self.privacyHandoffGroup.leave() }
             guard self.privacyStateLock.withLock({ !self.privacyDeliveryStopped }) else { return }
             let synthesized = sample.synthesized
             let resynced = sample.resynced
-            gate.submit(sample.buffer, deliveryQueue: self.privacyQueue) { [weak self] approved in
+            gate.submit(sample.buffer, acquisitionHostTime: sample.acquisitionHostTime, deliveryQueue: self.privacyQueue) { [weak self] approved in
                 guard let self, self.privacyStateLock.withLock({ !self.privacyDeliveryStopped }) else { return }
                 self.onSampleMetadata(approved, synthesized, resynced)
                 self.onSample(approved)
@@ -767,7 +804,29 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
     func stopPrivacyDelivery() async {
         self.closePrivacyDelivery()
         await withCheckedContinuation { continuation in
+            self.privacyHandoffGroup.notify(queue: self.privacyQueue) { [self] in
+                if self.clockContext != nil { self.finishMasterClockInput(deliver: false) }
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Deterministic join of the same bounded raw handoff used by capture, without starting HAL.
+    func drainClockHandoff() async {
+        await withCheckedContinuation { continuation in
             self.privacyHandoffGroup.notify(queue: self.privacyQueue) { continuation.resume() }
+        }
+    }
+
+    /// Ends a synthetic/native input producer before its owner closes the existing privacy gate.
+    /// Capture Stop uses stopPrivacyDelivery instead, which never publishes after closure.
+    func finishClockInput() async {
+        await self.drainClockHandoff()
+        await withCheckedContinuation { continuation in
+            self.privacyQueue.async { [self] in
+                self.finishMasterClockInput(deliver: true)
+                continuation.resume()
+            }
         }
     }
 
@@ -792,6 +851,174 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
             self.converter = nil
             self.converterSourceFormat = nil
         }
+    }
+
+    private func enqueueMasterClockSample(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
+        guard time.isHostTimeValid, time.isSampleTimeValid,
+              buffer.format.commonFormat == .pcmFormatFloat32,
+              buffer.format.sampleRate.isFinite, (8_000...192_000).contains(buffer.format.sampleRate),
+              (1...32).contains(buffer.format.channelCount), buffer.frameLength > 0, buffer.frameLength <= 65_536 else {
+            self.failMasterClock(); return
+        }
+        self.privacyStateLock.lock()
+        guard !self.privacyDeliveryStopped, !self.masterClockFailed else { self.privacyStateLock.unlock(); return }
+        guard self.privacySlots.wait(timeout: .now()) == .success else {
+            self.privacyStateLock.unlock(); self.failMasterClock(); return
+        }
+        self.privacyHandoffGroup.enter()
+        self.privacyStateLock.unlock()
+        // Copy and explicitly downmix the VPIO aggregate (observed as nine channels) once.
+        // The rest of calibration, resampling and accumulation runs on the bounded serial queue.
+        let samples = Self.downmixToMono(buffer)
+        guard !samples.isEmpty, samples.allSatisfy(\.isFinite),
+              let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: buffer.format.sampleRate,
+                  channels: 1, interleaved: false),
+              let mono = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameLength) else {
+            self.privacySlots.signal(); self.privacyHandoffGroup.leave()
+            self.failMasterClock(); return
+        }
+        mono.frameLength = buffer.frameLength
+        let copied = samples.withUnsafeBufferPointer { source -> Bool in
+            guard let input = source.baseAddress, let output = mono.floatChannelData?[0] else { return false }
+            output.update(from: input, count: samples.count)
+            return true
+        }
+        guard copied else {
+            self.privacySlots.signal(); self.privacyHandoffGroup.leave()
+            self.failMasterClock(); return
+        }
+        let nativePTS = CMTime(value: time.sampleTime, timescale: CMTimeScale(buffer.format.sampleRate.rounded()))
+        guard let sample = meetingMicrophoneSynthesizeSampleBuffer(from: mono, presentationTime: nativePTS) else {
+            self.privacySlots.signal(); self.privacyHandoffGroup.leave()
+            self.failMasterClock(); return
+        }
+        let acquiredAt = CMClockMakeHostTimeFromSystemUnits(time.hostTime)
+        let sourceFrame = time.sampleTime
+        // Freeze a route/reset boundary at acquisition admission. A delayed queue must not
+        // retroactively apply a newer notification to an earlier already-owned raw packet.
+        let resetTimeline = self.pendingTimelineReset.withLock { value -> Bool in defer { value = false }; return value }
+        let boxed = MasterRawSample(sample: sample, acquiredAt: acquiredAt, sourceFrame: sourceFrame, resetTimeline: resetTimeline)
+        self.privacyQueue.async { [self, boxed] in
+            defer { self.privacySlots.signal(); self.privacyHandoffGroup.leave() }
+            guard self.privacyStateLock.withLock({ !self.privacyDeliveryStopped && !self.masterClockFailed }), let sourceClock else { return }
+            do {
+                if boxed.resetTimeline {
+                    for pending in try sourceClock.finish() { try self.consumeMasterClockPacket(pending) }
+                    try self.flushMasterConverter()
+                    self.masterGeneration &+= 1
+                }
+                for packet in try sourceClock.offer(boxed.sample, producerGeneration: self.masterGeneration,
+                    acquisitionStart: boxed.acquiredAt, sourceFrameStart: boxed.sourceFrame) {
+                    try self.consumeMasterClockPacket(packet)
+                }
+            } catch { self.failMasterClock() }
+        }
+    }
+
+    private func failMasterClock() {
+        let report = self.privacyStateLock.withLock { () -> Bool in
+            guard !self.privacyDeliveryStopped, !self.masterClockFailed else { return false }
+            self.masterClockFailed = true
+            return true
+        }
+        guard report else { return }
+        self.statsBox.mutate { $0.conversionFailures += 1 }
+        self.onClockFailure()
+    }
+
+    private final class MasterRawSample: @unchecked Sendable {
+        let sample: CMSampleBuffer
+        let acquiredAt: CMTime
+        let sourceFrame: Int64
+        let resetTimeline: Bool
+        init(sample: CMSampleBuffer, acquiredAt: CMTime, sourceFrame: Int64, resetTimeline: Bool) {
+            self.sample = sample; self.acquiredAt = acquiredAt; self.sourceFrame = sourceFrame
+            self.resetTimeline = resetTimeline
+        }
+    }
+
+    private func consumeMasterClockPacket(_ sample: CMSampleBuffer) throws {
+        guard let packet = MeetingCaptureClockMetadata.read(from: sample),
+              let description = CMSampleBufferGetFormatDescription(sample),
+              let format = try? MeetingPCMFormatResolver.resolve(description),
+              let copied = MeetingLiveSampleCopy.copy(sample) else { throw MeetingCapturePCMError.invalidBuffer }
+        if self.masterConverter != nil, self.masterEpoch != packet.producerEpoch || self.masterFormat != format
+            || packet.mapping.spans.first?.discontinuityBefore == true {
+            try self.flushMasterConverter()
+        }
+        if self.masterConverter == nil { self.masterConverter = try MeetingCapturePCMConverter(targetSampleRate: 48_000) }
+        self.masterFormat = format; self.masterEpoch = packet.producerEpoch
+        if let converted = try self.masterConverter?.convert(copied.buffer, presentationTime: copied.pts, clockPacket: packet) {
+            try self.accumulateMasterClockOutput(converted)
+        }
+    }
+
+    private func accumulateMasterClockOutput(_ sample: CMSampleBuffer) throws {
+        guard let packet = MeetingCaptureClockMetadata.read(from: sample),
+              let copied = MeetingLiveSampleCopy.copy(sample), let values = copied.buffer.floatChannelData?[0] else {
+            throw MeetingCapturePCMError.invalidBuffer
+        }
+        self.masterMapping = try self.masterMapping.appending(packet.mapping)
+        self.masterSamples.append(contentsOf: UnsafeBufferPointer(start: values, count: Int(copied.buffer.frameLength)))
+        while self.masterSamples.count >= Self.accumulationFrameThreshold {
+            try self.emitMasterClockOutput(frameCount: Self.accumulationFrameThreshold)
+        }
+    }
+
+    private func emitMasterClockOutput(frameCount: Int? = nil) throws {
+        guard !self.masterSamples.isEmpty, let context = self.clockContext, let epoch = self.masterEpoch else { return }
+        let frames = min(frameCount ?? self.masterSamples.count, self.masterSamples.count)
+        let mapping = try self.masterMapping.sliced(frames: 0..<Double(frames))
+        guard frames <= 65_536,
+              let pcm = AVAudioPCMBuffer(pcmFormat: self.canonicalFormat, frameCapacity: AVAudioFrameCount(frames)),
+              let start = mapping.hostTime(atFrame: 0) else { throw MeetingCapturePCMError.invalidBuffer }
+        pcm.frameLength = AVAudioFrameCount(frames)
+        try self.masterSamples.withUnsafeBufferPointer { values in
+            guard let input = values.baseAddress, let output = pcm.floatChannelData?[0] else {
+                throw MeetingCapturePCMError.invalidBuffer
+            }
+            output.update(from: input, count: frames)
+        }
+        guard let raw = meetingMicrophoneSynthesizeSampleBuffer(from: pcm,
+            presentationTime: CMTime(value: start.value, timescale: start.timescale)) else { throw MeetingCapturePCMError.invalidBuffer }
+        let sample = try context.timedCopy(raw, mapping: mapping, producerEpoch: epoch)
+        if frames == self.masterSamples.count {
+            self.masterSamples.removeAll(keepingCapacity: true)
+            self.masterMapping = MeetingAudioClockMapping(frameCount: 0, spans: [])
+        } else {
+            self.masterMapping = try self.masterMapping.sliced(frames: Double(frames)..<Double(self.masterSamples.count))
+            self.masterSamples.removeFirst(frames)
+        }
+        self.statsBox.mutate { $0.buffersEmitted += 1; $0.validHostTimeCount += 1 }
+        if let gate = self.privacyGate {
+            gate.submit(sample, deliveryQueue: self.privacyQueue) { [weak self] approved in
+                guard let self, self.privacyStateLock.withLock({ !self.privacyDeliveryStopped && !self.masterClockFailed }) else { return }
+                self.onSampleMetadata(approved, false, false)
+                self.onSample(approved)
+            }
+        } else {
+            self.onSampleMetadata(sample, false, false); self.onSample(sample)
+        }
+    }
+
+    private func flushMasterConverter() throws {
+        if let tail = try self.masterConverter?.finish() { try self.accumulateMasterClockOutput(tail) }
+        try self.emitMasterClockOutput()
+        self.masterConverter = nil; self.masterFormat = nil; self.masterEpoch = nil
+    }
+
+    private func finishMasterClockInput(deliver: Bool) {
+        let deliver = deliver && self.privacyStateLock.withLock({ !self.privacyDeliveryStopped && !self.masterClockFailed })
+        do {
+            if let sourceClock {
+                for packet in try sourceClock.finish() {
+                    if deliver { try self.consumeMasterClockPacket(packet) }
+                }
+            }
+            if deliver { try self.flushMasterConverter() }
+        } catch { self.failMasterClock() }
+        self.masterConverter = nil; self.masterFormat = nil; self.masterEpoch = nil
+        self.masterSamples.removeAll(); self.masterMapping = MeetingAudioClockMapping(frameCount: 0, spans: [])
     }
 
     // Resample first, then downmix explicitly — converter channel mapping may drop, not mix.
@@ -846,6 +1073,14 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
             return Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
         }
         var mono = [Float](repeating: 0, count: frameCount)
+        if buffer.format.isInterleaved {
+            for frame in 0..<frameCount {
+                var sum: Double = 0
+                for channel in 0..<channels { sum += Double(channelData[0][frame * channels + channel]) }
+                mono[frame] = Float(sum / Double(channels))
+            }
+            return mono
+        }
         for channel in 0..<channels {
             vDSP_vadd(channelData[channel], 1, mono, 1, &mono, 1, vDSP_Length(frameCount))
         }
@@ -900,6 +1135,7 @@ actor MeetingMicrophoneCapture {
         microphone: MeetingMicrophoneIdentity,
         authorizationPreflighted: Bool = false,
         privacyGate: MeetingMicrophonePrivacyGate? = nil,
+        clockContext: MeetingRecordingClockContext? = nil,
         onSample: @escaping @Sendable (CMSampleBuffer) -> Void,
         onSampleMetadata: @escaping @Sendable (CMSampleBuffer, Bool, Bool) -> Void = { _, _, _ in },
         onEvent: @escaping @Sendable (MeetingMicrophoneCaptureEvent) -> Void = { _ in }
@@ -1004,6 +1240,8 @@ actor MeetingMicrophoneCapture {
             statsBox: self.statsBox,
             canonicalFormat: Self.canonicalFormat,
             privacyGate: privacyGate,
+            clockContext: clockContext,
+            onClockFailure: { onEvent(.engineStopped) },
             onSample: onSample,
             onSampleMetadata: onSampleMetadata
         )

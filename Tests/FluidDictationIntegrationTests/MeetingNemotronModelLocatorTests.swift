@@ -7,6 +7,42 @@ import XCTest
 /// location, and fail-closed structure validation. No network and no bundled 190 MB weights.
 @MainActor
 final class MeetingNemotronModelLocatorTests: XCTestCase {
+    func testSilenceEmbeddingDecodesLittleEndianBitsFromMisalignedStorage() throws {
+        // Synthetic IEEE 754 values include signed zero, finite values, infinities and
+        // a NaN payload. Comparing bits avoids treating NaN or -0 as ordinary equality.
+        let patterns: [UInt32] = [0, 0x8000_0000, 0x3F80_0000, 0xC020_0000, 0x0000_0001,
+                                  0x7F80_0000, 0xFF80_0000, 0x7FC0_1234]
+        let expected = (0..<512).map { patterns[$0 % patterns.count] }
+        let allocation = UnsafeMutableRawPointer.allocate(byteCount: 2_049, alignment: MemoryLayout<UInt32>.alignment)
+        defer { allocation.deallocate() }
+        let start = allocation.advanced(by: 1)
+        XCTAssertNotEqual(Int(bitPattern: start) % MemoryLayout<UInt32>.alignment, 0)
+        let bytes = UnsafeMutableRawBufferPointer(start: start, count: 2_048)
+        for (index, bits) in expected.enumerated() {
+            for byte in 0..<4 {
+                bytes[index * 4 + byte] = UInt8(truncatingIfNeeded: bits >> (byte * 8))
+            }
+        }
+
+        let decoded = try MeetingModelInstaller.decodeSilenceEmbedding(UnsafeRawBufferPointer(bytes))
+
+        XCTAssertEqual(decoded.map(\.bitPattern), expected)
+    }
+
+    func testSilenceEmbeddingDecoderRejectsTruncatedAndOversizedStorage() throws {
+        let bytes = [UInt8](repeating: 0, count: 2_049)
+        try bytes.withUnsafeBytes { storage in
+            for count in [0, 3, 2_047, 2_049] {
+                let payload = UnsafeRawBufferPointer(rebasing: storage[..<count])
+                XCTAssertThrowsError(try MeetingModelInstaller.decodeSilenceEmbedding(payload)) { error in
+                    guard case MeetingModelInstaller.InstallError.wrongPackage = error else {
+                        return XCTFail("Unexpected rejection: \(error)")
+                    }
+                }
+            }
+        }
+    }
+
     func testSilenceEmbeddingInstallCreatesFreshParentAndPreservesExistingFiles() throws {
         let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -35,8 +71,10 @@ final class MeetingNemotronModelLocatorTests: XCTestCase {
     func testInvalidSilenceEmbeddingDoesNotCreateDestinationDirectory() throws {
         let root = try self.makeTempDirectory()
         let source = root.appendingPathComponent("invalid.f32")
-        try Data("invalid".utf8).write(to: source)
+        // A correctly sized synthetic file must still fail the published SHA256 gate.
+        try Data(repeating: 0, count: 512 * MemoryLayout<UInt32>.size).write(to: source)
         let destination = root.appendingPathComponent("fresh/v1/model.mlpackage")
+        XCTAssertThrowsError(try MeetingModelInstaller.validatedSilenceEmbedding(at: source))
         XCTAssertThrowsError(try MeetingModelInstaller.installSilenceEmbedding(from: source, besides: destination))
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.deletingLastPathComponent().path))
     }

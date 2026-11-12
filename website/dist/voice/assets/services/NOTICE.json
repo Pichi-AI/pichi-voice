@@ -1,0 +1,89 @@
+{
+  "purpose": "Genuine service marks identify applications shown in illustrative product demos and conferencing examples. No partnership or endorsement is implied. Marks remain the property of their respective owners; website code license does not relicense these marks.",
+  "retrievedUTC": "2026-11-10T09:18:02.183499+00:00",
+  "sources": [
+    {
+      "name": "zoom",
+      "file": "zoom.ico",
+      "officialPage": "https://www.zoom.com/",
+      "imageSource": "https://st1.zoom.us/homepage/20261105-2009/primary/favicon.ico",
+      "sha256": "58b6fee1a883d9b798dea9dbf8f262fb8875e035bfa571792b8967c4c0434d26",
+      "bytes": 4286,
+      "contentType": "image/vnd.microsoft.icon"
+    },
+    {
+      "name": "google-meet",
+      "file": "google-meet.svg",
+      "officialPage": "https://workspace.google.com/products/meet/",
+      "imageSource": "https://www.gstatic.com/images/branding/productlogos/meet_2026/v2/web/192px.svg",
+      "sha256": "ae2e86aa009fd7e1952082bff7d4fa9eca8f45ff46d0298800d53c5d6bdcb3b4",
+      "bytes": 1762,
+      "contentType": "image/svg+xml"
+    },
+    {
+      "name": "telemost",
+      "file": "telemost.png",
+      "officialPage": "https://telemost.yandex.ru/",
+      "imageSource": "https://yastatic.net/s3/chat-static/favicons/tm/apple-touch-icon-192.png",
+      "sha256": "0c2b5b09b033cb8d063c3a8227ecf7da29f349215b5b578b4b54f8a22cdf09b1",
+      "bytes": 8259,
+      "contentType": "image/png"
+    },
+    {
+      "name": "mts-link",
+      "file": "mts-link.png",
+      "officialPage": "https://mts-link.ru/",
+      "imageSource": "https://mts-link.ru/favicons/favicon-48x48.png",
+      "sha256": "6f293a2095f87043d4d8c195a6382257cfab0dee263f4e8551e34a5c0be0a3c2",
+      "bytes": 498,
+      "contentType": "image/png"
+    },
+    {
+      "name": "kontur-talk",
+      "file": "kontur-talk.png",
+      "officialPage": "https://app.ktalk.ru/",
+      "imageSource": "https://app.ktalk.ru/static/assets/images/mobile_v3/192.png",
+      "sha256": "78c8a3af8becb308540af25a2533361ef89d6d6e68bc2814611c13f60a8fc88a",
+      "bytes": 2927,
+      "contentType": "image/png"
+    },
+    {
+      "name": "vk-teams",
+      "file": "vk-teams.png",
+      "officialPage": "https://workspace.vk.ru/superapp/",
+      "imageSource": "https://workspace.vk.ru/apple-icon.png?6c7d56fc9ca0afbe",
+      "sha256": "851f6451b4f6a9d50900f55d3e8771b279e86c8ae7f1713da89537b3fe30a4ce",
+      "bytes": 8752,
+      "contentType": "image/png"
+    },
+    {
+      "name": "trueconf",
+      "file": "trueconf.png",
+      "officialPage": "https://github.com/TrueConf",
+      "imageSource": "https://avatars.githubusercontent.com/u/20208639?v=4",
+      "sha256": "1f23a82984461f710b367c1024bdf341dad16d2f959a94c26ee918a79626ada5",
+      "bytes": 20790,
+      "contentType": "image/png"
+    },
+    {
+      "name": "gmail",
+      "file": "gmail.svg",
+      "officialPage": "https://workspace.google.com/products/gmail/",
+      "imageSource": "https://www.gstatic.com/images/branding/productlogos/gmail_2026/v2/web/192px.svg",
+      "sha256": "0a242131424b796a26247a8edd41d66fa294da6d177897526a19b7e81aedfdb8",
+      "bytes": 1298,
+      "contentType": "image/svg+xml",
+      "retrievedUTC": "2026-11-10T23:46:13.246307+00:00"
+    },
+    {
+      "name": "telegram",
+      "file": "telegram.svg",
+      "officialPage": "https://telegram.org/tour/screenshots",
+      "imageSource": "https://telegram.org/file/464001088/1/bI7AJLo7oX4.287931.zip/374fe3b0a59dc60005#Logo.svg",
+      "sha256": "54842d414c100f0110f90caf09ff58cd0d229629820e4576bd70befca88befd5",
+      "bytes": 2051,
+      "contentType": "image/svg+xml",
+      "retrievedUTC": "2026-11-10T23:46:13.246319+00:00"
+    }
+  ]
+}

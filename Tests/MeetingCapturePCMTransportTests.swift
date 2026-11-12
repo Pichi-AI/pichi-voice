@@ -253,6 +253,9 @@ struct MeetingCapturePCMTransportTests {
     }
 
     static func main() async throws {
+        try await testSourceTimeline()
+        try await testMultiTrackCaptureTee()
+        if ProcessInfo.processInfo.environment["PICHI_SOURCE_TIMELINE_TESTS_ONLY"] == "1" { return }
         try await testCaptureStopBoundary()
         try await testDesktopWriterRejection()
         try await testCaptureBeforePreparation()

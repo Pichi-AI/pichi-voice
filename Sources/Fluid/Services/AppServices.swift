@@ -40,7 +40,7 @@ final class AppServices: ObservableObject {
             }, prepare: { [weak self] in
                 guard let self else { throw AccountError.isolationRequired }
                 await self._localAIModelResidency?.shutdown(); self._localAIModelResidency = nil
-                self._meetingAutoDetector?.stop(); self._meetingAutoDetector = nil
+                MeetingCallObservationService.shared.detachDetection(self._meetingAutoDetector); self._meetingAutoDetector = nil
                 MeetingRecordingPillController.shared.deactivate()
                 try await PrivateProfileSources.prepare(coordinator: self._meetingSessionCoordinator, asr: self._asr)
                 self._fileTranscriptionService = nil
@@ -56,7 +56,7 @@ final class AppServices: ObservableObject {
                 let warmup = self.privateAIStartupWarmup
                 warmup?.cancel(); await warmup?.value
                 self.privateAIStartupWarmup = nil
-                self._meetingAutoDetector?.stop(); self._meetingAutoDetector = nil
+                MeetingCallObservationService.shared.detachDetection(self._meetingAutoDetector); self._meetingAutoDetector = nil
                 MeetingRecordingPillController.shared.deactivate()
                 await PrivateProfileSources.conceal()
             })
@@ -344,6 +344,8 @@ final class AppServices: ObservableObject {
             preferredMicrophoneUID: { [weak self] in
                 self?.microphonePreferenceCoordinator.inputDeviceForCapture()?.uid
             },
+            speechActivityModel: MeetingSileroActivityArtifacts.open,
+            prepareSpeechActivity: { try await MeetingSpeechActivityResources.shared.prepare() },
             locationResolver: self.meetingLocation,
             // The coordinator prepares the frozen speaker dependency profile only when the
             // capture mode needs it; the ASR lifecycle remains owned by the existing service.
@@ -407,7 +409,7 @@ final class AppServices: ObservableObject {
             micActivity: CoreAudioMicActivitySignal(),
             audioProcessActivity: CoreAudioProcessActivityProvider(),
             windowSnapshotProvider: CGWindowSnapshotProvider(),
-            browserTabReader: AXBrowserTabReader(),
+            browserTabReader: MeetingModuleBrowserTabReader(),
             activityGate: LiveDetectionActivityGate(),
             clock: SystemClock(),
             isNativeDetectionEnabled: { SettingsStore.shared.fluidMeetEnabled && SettingsStore.shared.meetingAutoDetectEnabled },
@@ -418,7 +420,7 @@ final class AppServices: ObservableObject {
         )
         self._meetingAutoDetector = detector
         self.wireMeetingAutoDetector(detector)
-        if SettingsStore.shared.fluidMeetEnabled { detector.start() }
+        if SettingsStore.shared.fluidMeetEnabled { MeetingCallObservationService.shared.attachDetection(detector) }
         DebugLogger.shared.info("detector-started", source: "MeetingAutoDetector")
         return detector
     }
@@ -578,7 +580,7 @@ final class AppServices: ObservableObject {
         guard SettingsStore.shared.fluidMeetEnabled,
               PrivateProfileStorage.acceptsNewWork,
               PrivateProfileStorage.isReadable(PrivateProfileStorage.current) else {
-            self._meetingAutoDetector?.stop()
+            MeetingCallObservationService.shared.detachDetection(self._meetingAutoDetector)
             self._meetingAutoDetector = nil
             self.meetingAutomaticTarget = nil
             self.meetingAutoDetectHealth = nil
@@ -655,7 +657,7 @@ final class AppServices: ObservableObject {
         self.privateAIStartupWarmup = nil
         await self._localAIModelResidency?.shutdown()
         self._localAIModelResidency = nil
-        self._meetingAutoDetector?.stop()
+        MeetingCallObservationService.shared.detachDetection(self._meetingAutoDetector)
         self._meetingAutoDetector = nil
         if let meetingSessionCoordinator = self._meetingSessionCoordinator {
             await meetingSessionCoordinator.shutdownForTermination()

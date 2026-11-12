@@ -60,7 +60,7 @@ struct BrandProfileTests {
         object["formatVersion"] = 99
         self.reject { _ = try BrandPackage.decode(JSONSerialization.data(withJSONObject: object)) }
         object["formatVersion"] = 1
-        for forbidden in ["bundleIdentifier", "updatesEnabled", "analytics", "remoteLogoURL", "feedbackEndpoint"] {
+        for forbidden in ["bundleIdentifier", "updatesEnabled", "analytics", "remoteLogoURL", "feedbackEndpoint", "privacyPolicyURL"] {
             var injected = object
             injected[forbidden] = "https://attacker.invalid"
             self.reject { _ = try BrandPackage.decode(JSONSerialization.data(withJSONObject: injected)) }
@@ -181,6 +181,17 @@ struct BrandProfileTests {
         let signedPolicy = BrandDistribution(formatVersion: 1, repository: "https://github.com/a/b", updatesEnabled: true, expectedSigningTeam: "ABCDEFGHIJ")
         try signedPolicy.validate()
         precondition(!signedPolicy.updatesAllowedForCurrentSignature, "Unsigned local tools must not enable the updater")
+        let legacyDistributionData = Data("{\"formatVersion\":1,\"localizePackagedTagline\":false,\"updatesEnabled\":false}".utf8)
+        let legacyDistribution = try JSONDecoder().decode(BrandDistribution.self, from: legacyDistributionData)
+        try legacyDistribution.validate()
+        precondition(legacyDistribution.privacyPolicyURL == nil, "Existing signed distributions do not require a privacy URL")
+        let privacyPolicy = BrandDistribution(formatVersion: 1, privacyPolicyURL: "https://example.com/voice/privacy")
+        try privacyPolicy.validate()
+        try self.require(try JSONDecoder().decode(BrandDistribution.self, from: JSONEncoder().encode(privacyPolicy)) == privacyPolicy)
+        for invalid in ["", "/privacy", "not a URL", "http://example.com/privacy", "file:///privacy", "https://user:password@example.com/privacy", "https://user@example.com/privacy", "https://example.com/\nprivacy"] {
+            self.reject { try BrandDistribution(formatVersion: 1, privacyPolicyURL: invalid).validate() }
+        }
+        precondition(AppBrand.privacyPolicyURL == nil, "An unconfigured bundle must not derive legal links from imported appearance")
         print("Portable brand package: validation, atomic activation, cache, legacy migration and identity isolation passed")
     }
 

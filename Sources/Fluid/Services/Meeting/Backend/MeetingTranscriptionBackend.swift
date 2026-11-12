@@ -59,6 +59,8 @@ nonisolated enum MeetingBackendInputKind: String, Hashable, Sendable {
     case recordedChunks
     /// One microphone stream of bounded mono 16kHz windows, with canonical transcript assembly.
     case boundedMicrophonePCM
+    /// Independently clocked mono16k tracks on one shared prepared inference owner.
+    case boundedMultiTrackPCM
 }
 
 /// Capture privacy and deployment reach are separate from the ASR configuration identity.
@@ -181,29 +183,35 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         self.allowsTranscriptOnlyOnUnsupportedHardware = allowsTranscriptOnlyOnUnsupportedHardware
     }
 
-    /// Scheduling is a declared capability. Streaming currently consumes the existing single
-    /// in-room PCM input contract; it never drops a second online-call track silently.
+    /// Scheduling and topology are declared capabilities. Online streaming must explicitly
+    /// support both capture tracks and a shared prepared inference owner.
     func validateSpeakerProcessingMode(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {
+        if let policy = configuration.recordingTimePolicy, self.resultContract != .canonicalEvidence {
+            throw MeetingRecordingTimePolicyError.legacyProcessingUnsupported(policy)
+        }
         guard configuration.speakerLabelsEnabled else { return }
         let processingMode = configuration.effectiveSpeakerProcessingMode
         guard self.supportedSpeakerProcessingModes.contains(processingMode) else {
             throw MeetingBackendError.unsupportedSpeakerProcessingMode(backend: self.id, mode: processingMode)
         }
         if processingMode == .streaming {
-            guard mode == .inRoom, self.supportedInputs.contains(.boundedMicrophonePCM),
-                  self.supportedTrackKinds.contains(.microphone), self.resultContract == .canonicalEvidence else {
+            let input: MeetingBackendInputKind = mode == .onlineCall ? .boundedMultiTrackPCM : .boundedMicrophonePCM
+            let requiredTracks: Set<MeetingAudioTrackKind> = mode == .onlineCall ? [.microphone, .applicationAudio] : [.microphone]
+            guard self.supportedInputs.contains(input), requiredTracks.isSubset(of: self.supportedTrackKinds),
+                  self.resultContract == .canonicalEvidence else {
                 throw MeetingBackendError.unsupportedTrackTopology(backend: self.id)
             }
         }
     }
 
     /// Pure admission: no runtime, artifact preparation, file reads or microphone access. The
-    /// strict capture path has one source, so admitting an online two-source topology would lose
-    /// a track rather than provide the file backend's semantics.
+    /// multi-track input is a separate capability and requires streaming, preserving the
+    /// existing offline microphone contract for other registrations.
     func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {
         try self.validateSpeakerProcessingMode(configuration: configuration, mode: mode)
-        guard self.supportedInputs.contains(.boundedMicrophonePCM) else {
-            throw MeetingBackendError.unsupportedInput(backend: self.id, input: .boundedMicrophonePCM)
+        let input: MeetingBackendInputKind = mode == .onlineCall ? .boundedMultiTrackPCM : .boundedMicrophonePCM
+        guard self.supportedInputs.contains(input), mode != .onlineCall || configuration.effectiveSpeakerProcessingMode == .streaming else {
+            throw MeetingBackendError.unsupportedInput(backend: self.id, input: input)
         }
         guard self.resultContract == .canonicalEvidence else {
             throw MeetingBackendError.outcomeContractMismatch(backend: self.id, declared: self.resultContract)
@@ -221,7 +229,8 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         guard self.supportedLanguageCodes.contains(configuration.languageCode) else {
             throw MeetingBackendError.unsupportedLanguage(backend: self.id, languageCode: configuration.languageCode)
         }
-        guard mode == .inRoom, self.supportedTrackKinds.contains(.microphone) else {
+        let requiredTracks: Set<MeetingAudioTrackKind> = mode == .onlineCall ? [.microphone, .applicationAudio] : [.microphone]
+        guard requiredTracks.isSubset(of: self.supportedTrackKinds) else {
             throw MeetingBackendError.unsupportedTrackTopology(backend: self.id)
         }
     }
@@ -243,9 +252,14 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         guard request.configuration.languageCode == request.session.languageCode else {
             throw MeetingBackendError.unsupportedLanguage(backend: self.id, languageCode: request.session.languageCode)
         }
+        let multiTrack = request.session.mode == .onlineCall
+        let requiredKinds: Set<MeetingAudioTrackKind> = multiTrack ? [.microphone, .applicationAudio] : [.microphone]
+        let kinds = request.session.audioTracks.map(\.kind)
         guard request.session.audioStorageMode == .memoryOnly || request.session.effectiveSpeakerProcessingMode == .streaming,
-              request.session.audioTracks.count <= 1,
-              request.session.audioTracks.allSatisfy({ $0.kind == .microphone && $0.chunks.isEmpty }) else {
+              !multiTrack || (request.session.effectiveSpeakerProcessingMode == .streaming && request.session.audioStorageMode != .memoryOnly),
+              request.session.audioTracks.count <= requiredKinds.count,
+              Set(kinds).count == kinds.count,
+              request.session.audioTracks.allSatisfy({ requiredKinds.contains($0.kind) && $0.chunks.isEmpty }) else {
             throw MeetingBackendError.unsupportedTrackTopology(backend: self.id)
         }
         try self.validatePCMInput(configuration: request.configuration, mode: request.session.mode,

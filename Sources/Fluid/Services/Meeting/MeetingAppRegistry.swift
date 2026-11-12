@@ -1,4 +1,7 @@
 import Foundation
+#if os(macOS)
+import PichiCallObservation
+#endif
 
 /// Detection tier for a registry app. Tier 1 (native) is default-on; Tier 2 (browser) is an
 /// opt-in sub-toggle because it reads the frontmost tab's URL.
@@ -13,13 +16,20 @@ nonisolated enum MeetingDetectionTier: Sendable, Equatable {
 nonisolated enum MeetingAppRegistry {
     /// Bundle identifiers for native meeting apps (Tier 1). Includes legacy Teams alongside the
     /// current "new Teams" bundle since both ship in the wild.
-    static let nativeBundleIdentifiers: Set<String> = [
+    static var nativeBundleIdentifiers: Set<String> {
+        #if os(macOS)
+        return Set(MeetingCommunicationModuleHost.snapshot.registry.modules.filter { $0.descriptor.validation != .researchOnly }
+            .flatMap { $0.descriptor.nativeBundleIdentifiers })
+        #else
+        return [
         "us.zoom.xos",
         "com.microsoft.teams2",
         "com.microsoft.teams",
         "com.cisco.webexmeetingsapp",
         "Cisco-Systems.Spark",
     ]
+        #endif
+    }
 
     /// Bundle identifiers for browsers eligible for Tier 2 URL reading. Google Meet's "app" is a
     /// Chrome/Edge PWA, not a separate bundle — it is matched via `pwaBundlePrefixes` instead.
@@ -56,6 +66,9 @@ nonisolated enum MeetingAppRegistry {
         if self.pwaBundlePrefixes.contains(where: { bundleIdentifier.hasPrefix($0) }) {
             return .browserTier2
         }
+        #if os(macOS)
+        if let native = MeetingCommunicationModuleHost.nativeTier(for: bundleIdentifier) { return native ? .nativeTier1 : .browserTier2 }
+        #endif
         return nil
     }
 
@@ -177,7 +190,11 @@ nonisolated enum MeetingInCallURLMatcher {
         case host == "meet.jit.si":
             return self.matchesRoomPath(path, excluding: Self.jitsiReservedPaths)
         default:
+            #if os(macOS)
+            return MeetingCommunicationModuleHost.recognizesCallURL(host: host, path: path)
+            #else
             return false
+            #endif
         }
     }
 

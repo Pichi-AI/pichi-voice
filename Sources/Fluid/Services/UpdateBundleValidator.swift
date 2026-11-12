@@ -8,7 +8,7 @@ nonisolated enum UpdateBundleValidator {
         let bundleIdentifier: String
         /// Exact approved release version. Nil is only for inspecting an installed/rollback bundle.
         let version: String?
-        /// GitHub tags do not publish build numbers; nil still requires a valid numeric build.
+        /// Pichi release tags pin the numeric build; upstream tags may omit it.
         let build: String?
 
         init(bundleIdentifier: String, version: String?, build: String? = nil) {
@@ -54,6 +54,8 @@ nonisolated enum UpdateBundleValidator {
 
     enum ValidationError: LocalizedError, Equatable {
         case invalidBundle
+        case missingRuntimeOrTimestamp
+        case notarizationRejected
         case invalidExpectation
         case invalidSignature(OSStatus)
         case missingSigningMetadata
@@ -64,6 +66,8 @@ nonisolated enum UpdateBundleValidator {
 
         var errorDescription: String? {
             switch self {
+            case .missingRuntimeOrTimestamp: return "The update requires hardened runtime and a secure signing timestamp."
+            case .notarizationRejected: return "The update could not pass stapled notarization and Gatekeeper checks."
             case .invalidBundle: return "The update is not a valid application bundle."
             case .invalidExpectation: return "The update's expected identity or signing policy is invalid."
             case .invalidSignature: return "The update's signature or sealed contents could not be verified."
@@ -151,7 +155,37 @@ nonisolated enum UpdateBundleValidator {
         if let expectedBuild = expectation.build, build != expectedBuild {
             throw ValidationError.buildMismatch
         }
+        if case .developerID = policy {
+            try self.validateReleaseTrust(
+                flags: signatureFlags.uint32Value,
+                timestamp: information[kSecCodeInfoTimestamp as String] as? Date
+            ) {
+                try self.assessRelease(at: bundleURL)
+            }
+        }
         return ValidatedBundle(bundleIdentifier: bundleIdentifier, version: version, build: build, teamIdentifier: team)
+    }
+
+    /// syspolicy_check is part of macOS 14+, so end users need no Xcode tools.
+    /// Its distribution check rejects a missing stapled ticket, then spctl assesses execution.
+    /// Apple DTS: https://developer.apple.com/forums/thread/767612
+    static func assessRelease(
+        at bundleURL: URL,
+        run: (String, [String], URL, Bool) throws -> Void = UpdateDMGStager.run
+    ) throws {
+        do {
+            try run("/usr/bin/syspolicy_check", ["distribution", bundleURL.path], bundleURL.deletingLastPathComponent(), true)
+            try run("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=2", bundleURL.path], bundleURL.deletingLastPathComponent(), true)
+        } catch is CancellationError { throw CancellationError() }
+        catch { throw ValidationError.notarizationRejected }
+    }
+
+    /// The external assessment is substituted only by deterministic unit tests.
+    /// Production always calls Apple's distribution and Gatekeeper checks above.
+    static func validateReleaseTrust(flags: UInt32, timestamp: Date?, assess: () throws -> Void) throws {
+        guard flags & 0x10000 != 0, timestamp != nil else { throw ValidationError.missingRuntimeOrTimestamp }
+        try Task.checkCancellation()
+        try assess()
     }
 
     private static func readInfoPlist(at url: URL) throws -> [String: Any] {

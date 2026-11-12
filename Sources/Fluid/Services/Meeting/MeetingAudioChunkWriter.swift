@@ -1,10 +1,10 @@
 import AudioToolbox
 @preconcurrency import AVFoundation
 import CoreMedia
-import CryptoKit
 import Foundation
 
 final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
+    let clockContext: MeetingRecordingClockContext?
     typealias EventHandler = @Sendable (MeetingCaptureEvent) -> Void
 
     private final class SampleBox: @unchecked Sendable {
@@ -43,28 +43,27 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         var producerEpoch: UInt64
         var framesWritten: Int64
         var lastCheckpointFrames: Int64
-    }
-
-    private enum FinalizationResult: @unchecked Sendable {
-        case finalized(MeetingAudioChunk, MeetingAudioFormat)
-        case failed(MeetingAudioChunk, String)
+        var clockMapping: MeetingAudioClockMapping? = nil
     }
 
     private let queue: DispatchQueue
-    private let finalizationQueue: DispatchQueue
-    private let finalizationGroup = DispatchGroup()
-    private let finalizationSlots = DispatchSemaphore(value: 2)
+    private var journal: MeetingAudioRecordingJournal?
+    private var activeIntent: MeetingAudioChunkLedgerIntent?
+    private var latestCheckpoint: MeetingAudioChunkLedgerCheckpoint?
+    private var metadataRevision: UInt64 = 0
+    private var scheduledMetadata: MeetingAudioTrack?
+    private var metadataFailureReported = false
     private let pendingSlots: DispatchSemaphore
+    private let audioBudget = MeetingPCMIntakeGate(maximumBytes: 16 * 1024 * 1024, maximumSeconds: 10, closeOnRejection: false)
+    var retainedPCMBytes: Int { self.audioBudget.retainedBytes }
     private let stateLock = NSLock()
     private let sessionDirectory: URL
     private let trackDirectory: URL
-    private let manifestURL: URL
     private let chunkDuration: TimeInterval
+    private let maximumClockSpans: Int
     private let eventHandler: EventHandler
     private let diagnosticSampleObserver: (@Sendable (CMSampleBuffer, UInt64) -> Void)?
     private let sampleAdmission: (@Sendable (CMSampleBuffer) -> Bool)?
-    private let encoder: JSONEncoder
-    private let ledger: MeetingAudioChunkLedgerStore
 
     let trackID: MeetingAudioTrackID
 
@@ -89,8 +88,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     private var nextChunkSequence = 0
     private var pendingDroppedSampleCount = 0
     private var dropReportScheduled = false
-    /// At most one bounded overflow command may bypass `pendingSlots`, solely to publish a
-    /// conservative in-memory safety era before a terminal stop.
+    /// At most one bounded overflow command may bypass `pendingSlots` to publish a
+    /// conservative era while physical capture continues.
     private var emergencySafetyCommandPending = false
     private var lastHealthEmission = Date.distantPast
     private var lastLevelMeasurement = Date.distantPast
@@ -107,46 +106,47 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         sessionDirectory: URL,
         chunkDuration: TimeInterval,
         eventHandler: @escaping EventHandler,
-        // PCM persistence is intentionally synchronous on the serialized writer queue. Keep the
-        // queue bounded, but allow roughly 1.3 seconds of capture jitter at a 48 kHz/10 ms tap
-        // cadence while the filesystem drains a burst.
-        pendingSlotLimit: Int = 128,
+        // PCM persistence owns a serialized queue. Command count, bytes and duration are all
+        // bounded; temporary pressure never permanently closes admission for later buffers.
+        pendingSlotLimit: Int = 1_024,
         diagnosticSampleObserver: (@Sendable (CMSampleBuffer, UInt64) -> Void)? = nil,
-        sampleAdmission: (@Sendable (CMSampleBuffer) -> Bool)? = nil
+        sampleAdmission: (@Sendable (CMSampleBuffer) -> Bool)? = nil,
+        clockContext: MeetingRecordingClockContext? = nil,
+        persistenceHook: MeetingAudioRecordingJournal.Hook? = nil,
+        maximumClockSpans: Int = MeetingAudioClockMapping.maximumSpans
     ) throws {
+        self.clockContext = clockContext
         self.trackID = track.id
         self.track = track
         self.sessionDirectory = sessionDirectory
         self.trackDirectory = sessionDirectory
             .appendingPathComponent("tracks", isDirectory: true)
             .appendingPathComponent(track.kind.rawValue, isDirectory: true)
-        self.manifestURL = self.trackDirectory.appendingPathComponent("track.json")
         self.chunkDuration = max(60, chunkDuration)
+        self.maximumClockSpans = max(1, min(maximumClockSpans, MeetingAudioClockMapping.maximumSpans))
         self.eventHandler = eventHandler
         self.diagnosticSampleObserver = diagnosticSampleObserver
         self.sampleAdmission = sampleAdmission
-        self.ledger = MeetingAudioChunkLedgerStore(sessionDirectory: sessionDirectory)
         self.queue = DispatchQueue(
             label: "com.fluidvoice.meeting.writer.\(track.kind.rawValue)",
             qos: .userInitiated
         )
-        self.finalizationQueue = DispatchQueue(
-            label: "com.fluidvoice.meeting.writer.\(track.kind.rawValue).pcm-finalization",
-            qos: .utility
-        )
         self.pendingSlots = DispatchSemaphore(value: max(0, pendingSlotLimit))
-
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        self.encoder = encoder
 
         try FileManager.default.createDirectory(
             at: self.trackDirectory,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: NSNumber(value: Int16(0o700))]
         )
-        try self.persistTrackManifest()
+        self.nextChunkSequence = (track.chunks.map(\.sequence).max() ?? -1) + 1
+        self.journal = MeetingAudioRecordingJournal(directory: sessionDirectory, hook: persistenceHook) { [weak self] chunks, error, completions in
+            guard let self else { return }
+            self.queue.async {
+                self.receiveJournal(chunks, error: error)
+                for completion in completions { completion(error.map { .failure($0) } ?? .success(())) }
+            }
+        }
+        self.publishJournal()
     }
 
     @discardableResult
@@ -174,14 +174,30 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             return false
         }
 
+        guard let reservation = self.reservePCM(sampleBuffer) else {
+            self.pendingSlots.signal()
+            self.pendingDroppedSampleCount += 1
+            let report = !self.dropReportScheduled
+            self.dropReportScheduled = true
+            self.stateLock.unlock()
+            if report { self.queue.async { self.drainDroppedSampleReport() } }
+            return false
+        }
         let sampleBox = SampleBox(sampleBuffer, producerEpoch: producerEpoch)
         self.queue.async { [weak self, sampleBox] in
-            defer { self?.pendingSlots.signal() }
+            defer { self?.pendingSlots.signal(); self?.audioBudget.release(reservation) }
             self?.consume(sampleBox.sampleBuffer, producerEpoch: sampleBox.producerEpoch)
             onConsumed?()
         }
         self.stateLock.unlock()
         return true
+    }
+
+    private func reservePCM(_ sample: CMSampleBuffer) -> MeetingPCMIntakeGate.Reservation? {
+        guard let format = CMSampleBufferGetFormatDescription(sample),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee else { return nil }
+        return self.audioBudget.reserve(frames: CMSampleBufferGetNumSamples(sample),
+            channels: Int(asbd.mChannelsPerFrame), sampleRate: asbd.mSampleRate)
     }
 
     /// Runs a safety-era mutation, durable manifest write, and sample consume as one writer-queue
@@ -206,19 +222,34 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             return
         }
 
+        guard let reservation = self.reservePCM(sampleBuffer) else {
+            self.pendingSlots.signal()
+            self.pendingDroppedSampleCount += 1
+            let report = !self.dropReportScheduled
+            self.dropReportScheduled = true
+            self.stateLock.unlock()
+            if report { self.queue.async { self.drainDroppedSampleReport() } }
+            completion(.failure(SequencedCommandError.queueFull))
+            return
+        }
         let sampleBox = SampleBox(sampleBuffer, producerEpoch: producerEpoch)
         self.queue.async { [self, sampleBox] in
-            defer { self.pendingSlots.signal() }
-            var candidate = self.track
+            defer { self.pendingSlots.signal(); self.audioBudget.release(reservation) }
+            self.metadataRevision &+= 1
+            let revision = self.metadataRevision
+            var candidate = self.scheduledMetadata ?? self.track
             mutate(&candidate)
-            do {
-                try self.persistTrackManifest(candidate)
-                self.track = candidate
-                self.consume(sampleBox.sampleBuffer, producerEpoch: sampleBox.producerEpoch)
-                completion(.success(()))
-            } catch {
-                if failClosed { self.track = candidate }
-                completion(.failure(error))
+            if failClosed { self.applyMetadata(candidate) }
+            self.consume(sampleBox.sampleBuffer, producerEpoch: sampleBox.producerEpoch)
+            candidate.chunks = self.track.chunks
+            let metadata = candidate
+            self.scheduledMetadata = metadata
+            self.publishJournal(track: metadata) { result in
+                if self.metadataRevision == revision {
+                    if case .success = result { self.applyMetadata(metadata) }
+                    self.scheduledMetadata = nil
+                }
+                completion(result)
             }
         }
         self.stateLock.unlock()
@@ -239,21 +270,25 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             return
         }
         guard self.pendingSlots.wait(timeout: .now()) == .success else {
-            self.failOverflowedSequencedCommand(failClosed: failClosed, mutate: mutate, completion: completion)
+            self.failOverflowedSequencedCommand(failClosed: failClosed, recordsAudioLoss: false, mutate: mutate, completion: completion)
             return
         }
 
         self.queue.async { [self] in
             defer { self.pendingSlots.signal() }
-            var candidate = self.track
+            self.metadataRevision &+= 1
+            let revision = self.metadataRevision
+            var candidate = self.scheduledMetadata ?? self.track
             mutate(&candidate)
-            do {
-                try self.persistTrackManifest(candidate)
-                self.track = candidate
-                completion(.success(()))
-            } catch {
-                if failClosed { self.track = candidate }
-                completion(.failure(error))
+            if failClosed { self.applyMetadata(candidate) }
+            let metadata = candidate
+            self.scheduledMetadata = metadata
+            self.publishJournal(track: metadata) { result in
+                if self.metadataRevision == revision {
+                    if case .success = result { self.applyMetadata(metadata) }
+                    self.scheduledMetadata = nil
+                }
+                completion(result)
             }
         }
         self.stateLock.unlock()
@@ -264,12 +299,12 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     /// conservative era still reaches the in-memory track (and best-effort the manifest).
     private func failOverflowedSequencedCommand(
         failClosed: Bool,
+        recordsAudioLoss: Bool = true,
         mutate: @escaping @Sendable (inout MeetingAudioTrack) -> Void,
         completion: @escaping @Sendable (Result<Void, Error>) -> Void
     ) {
-        self.pendingDroppedSampleCount += 1
-        let shouldScheduleReport = !self.dropReportScheduled
-        self.dropReportScheduled = true
+        let shouldScheduleReport = recordsAudioLoss && !self.dropReportScheduled
+        if recordsAudioLoss { self.pendingDroppedSampleCount += 1; self.dropReportScheduled = true }
         let enqueueEmergency = failClosed && !self.emergencySafetyCommandPending
         if enqueueEmergency { self.emergencySafetyCommandPending = true }
         self.stateLock.unlock()
@@ -278,10 +313,12 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         }
         if enqueueEmergency {
             self.queue.async { [self] in
-                var candidate = self.track
+                self.metadataRevision &+= 1
+                var candidate = self.scheduledMetadata ?? self.track
                 mutate(&candidate)
-                self.track = candidate
-                try? self.persistTrackManifest(candidate)
+                self.applyMetadata(candidate)
+                self.scheduledMetadata = candidate
+                self.publishJournal(track: candidate)
                 self.stateLock.withLock { self.emergencySafetyCommandPending = false }
                 completion(.failure(SequencedCommandError.queueFull))
             }
@@ -299,9 +336,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 self.stopWaiters.append(continuation)
                 self.queue.async { [self] in
                     self.scheduleActiveChunkFinalization()
-                    self.finalizationGroup.notify(queue: self.queue) { [self] in
-                        self.completeStop()
-                    }
+                    self.track.health.status = self.track.chunks.isEmpty ? .unavailable : .stopped
+                    self.publishJournal(final: true) { _ in self.completeStop() }
                 }
                 self.stateLock.unlock()
             case .stopping:
@@ -315,42 +351,59 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         }
     }
 
-    /// Unlike the `try?` writes elsewhere here, a persist failure propagates to the caller.
-    /// Transactional: mutates a copy, persists it, publishes to `self.track` only on success.
+    /// Hardware facts are committed to the recording's in-memory owner immediately. Optional
+    /// persistence follows separately; creating or switching a physical source never waits for it.
+    func updateCaptureMetadata(_ mutate: @escaping (inout MeetingAudioTrack) -> Void) async {
+        await withCheckedContinuation { continuation in
+            self.queue.async {
+                self.metadataRevision &+= 1
+                let revision = self.metadataRevision
+                var metadata = self.scheduledMetadata ?? self.track
+                mutate(&metadata)
+                self.applyMetadata(metadata)
+                self.scheduledMetadata = metadata
+                self.publishJournal(track: metadata) { _ in
+                    if self.metadataRevision == revision { self.scheduledMetadata = nil }
+                }
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Metadata receipt governs transcription admission only. Capture never waits for it.
     func updateTrackMetadata(_ mutate: @escaping (inout MeetingAudioTrack) -> Void) async throws {
+        try await self.updateMetadata(false, mutate)
+    }
+
+    func updateTrackMetadataFailClosed(_ mutate: @escaping (inout MeetingAudioTrack) -> Void) async throws {
+        try await self.updateMetadata(true, mutate)
+    }
+
+    private func updateMetadata(_ failClosed: Bool, _ mutate: @escaping (inout MeetingAudioTrack) -> Void) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            self.queue.async { [self] in
-                var candidate = self.track
+            self.queue.async {
+                self.metadataRevision &+= 1
+                let revision = self.metadataRevision
+                var candidate = self.scheduledMetadata ?? self.track
                 mutate(&candidate)
-                do {
-                    try self.persistTrackManifest(candidate)
-                    self.track = candidate
-                    continuation.resume()
-                } catch {
-                    continuation.resume(throwing: error)
+                if failClosed { self.applyMetadata(candidate) }
+                let metadata = candidate
+                self.scheduledMetadata = metadata
+                self.publishJournal(track: metadata) { result in
+                    if self.metadataRevision == revision {
+                    if case .success = result { self.applyMetadata(metadata) }
+                    self.scheduledMetadata = nil
+                }
+                    continuation.resume(with: result)
                 }
             }
         }
     }
 
-    /// Safety metadata must fail closed even when its manifest write fails. Publishing the
-    /// conservative candidate in memory ensures the track returned by `stop()` cannot resurrect
-    /// the prior optimistic era; the caller must still terminate capture after the thrown error.
-    func updateTrackMetadataFailClosed(_ mutate: @escaping (inout MeetingAudioTrack) -> Void) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            self.queue.async { [self] in
-                var candidate = self.track
-                mutate(&candidate)
-                do {
-                    try self.persistTrackManifest(candidate)
-                    self.track = candidate
-                    continuation.resume()
-                } catch {
-                    self.track = candidate
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
+    private func applyMetadata(_ candidate: MeetingAudioTrack) {
+        let chunks = self.track.chunks, health = self.track.health, format = self.track.format
+        self.track = candidate
+        self.track.chunks = chunks; self.track.health = health; self.track.format = format
     }
 
     /// Splice point for a capture-side swap: finalizes the active chunk, returns its `presentationEnd`. No-op unless `.accepting`.
@@ -370,9 +423,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 }
                 let boundary = Self.mediaTime(activeChunk.end)
                 self.scheduleActiveChunkFinalization()
-                self.finalizationGroup.notify(queue: self.queue) {
-                    continuation.resume(returning: boundary)
-                }
+                continuation.resume(returning: boundary)
             }
         }
     }
@@ -389,11 +440,19 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         // Intentional privacy exclusion is neither a hardware failure nor writer backpressure.
         // Recheck here because a producer or normalization queue can outlive an observation.
         guard self.sampleAdmission?(sourceSampleBuffer) != false else { return }
-        self.diagnosticSampleObserver?(sourceSampleBuffer, producerEpoch)
         guard CMSampleBufferIsValid(sourceSampleBuffer), CMSampleBufferDataIsReady(sourceSampleBuffer) else {
             self.recordDroppedSample(detail: "Capture delivered an invalid audio sample.")
             return
         }
+        let clockPacket = MeetingCaptureClockMetadata.read(from: sourceSampleBuffer)
+        if let clockContext {
+            guard let clockPacket, clockContext.accepts(clockPacket) else {
+                self.reportWriterFailure(detail: PichiLocalization.text("Audio timing could not be verified."), sampleBuffer: sourceSampleBuffer)
+                return
+            }
+        }
+        let producerEpoch = self.clockContext != nil ? clockPacket?.producerEpoch ?? producerEpoch : producerEpoch
+        var hostMapping = self.clockContext != nil ? clockPacket?.mapping : nil
         let sourcePresentationTime = CMSampleBufferGetPresentationTimeStamp(sourceSampleBuffer)
         guard sourcePresentationTime.isValid, sourcePresentationTime.isNumeric else {
             self.recordDroppedSample(detail: "Capture delivered audio without a valid presentation timestamp.")
@@ -404,9 +463,17 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             self.recordDroppedSample(detail: "Capture delivered audio from a retired producer epoch.")
             return
         }
+        self.diagnosticSampleObserver?(sourceSampleBuffer, producerEpoch)
 
-        let duration = Self.sampleDuration(sourceSampleBuffer)
+        let mappedEnd = hostMapping?.spans.last.map { CMTime(value: $0.hostEnd.value, timescale: $0.hostEnd.timescale) }
+        let duration = mappedEnd.map { $0 - sourcePresentationTime } ?? Self.sampleDuration(sourceSampleBuffer)
         let previousEnd = self.activeChunk?.end ?? self.lastFinalizedEnd
+        // The same measured gap represents excluded input, not clock drift. It must remain
+        // a boundary even when it is shorter than the legacy half-second chunk threshold.
+        if let previousEnd, let first = hostMapping?.spans.first,
+           first.hostStart.seconds > previousEnd.seconds + 1e-9 {
+            hostMapping?.spans[0].discontinuityBefore = true
+        }
         let epochChanged = self.currentProducerEpoch.map { producerEpoch > $0 } ?? false
         self.currentProducerEpoch = max(self.currentProducerEpoch ?? producerEpoch, producerEpoch)
 
@@ -417,9 +484,14 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             self.canonicalTimelineOffsetEpoch = nil
         }
 
-        var presentationTime = sourcePresentationTime + self.canonicalTimelineOffset
+        var presentationTime = sourcePresentationTime + (hostMapping == nil ? self.canonicalTimelineOffset : .zero)
         var backwardReset = false
-        if let previousEnd, presentationTime < previousEnd {
+        if hostMapping != nil {
+            if let previousEnd, presentationTime < previousEnd - CMTime(value: 1, timescale: 1_000_000) {
+                self.reportWriterFailure(detail: PichiLocalization.text("Audio timing could not be verified."), sampleBuffer: sourceSampleBuffer)
+                return
+            }
+        } else if let previousEnd, presentationTime < previousEnd {
             // SCK nanosecond stamps and frame-derived durations can differ by tens of
             // nanoseconds after CMTime rescaling. Keep them contiguous without creating
             // hundreds of tiny analysis epochs. A real one-frame overlap still rotates.
@@ -463,7 +535,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             let gap = CMTimeGetSeconds(presentationTime - activeChunk.end)
             // Compared on the canonical timeline: once the epoch's offset is established, later
             // samples are contiguous here even though their raw stamps are far behind `end`.
-            let clockBoundary = epochChanged || backwardReset
+            let clockBoundary = epochChanged || backwardReset || hostMapping?.spans.first?.discontinuityBefore == true
             if elapsed >= self.chunkDuration || clockBoundary || gap > 0.5 {
                 if clockBoundary || gap > 0.5 {
                     self.silenceAccumulatedSeconds = 0
@@ -501,6 +573,20 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 )
             }
             guard var activeChunk = self.activeChunk else { return }
+            if let hostMapping {
+                // Irreducible clock detail is bounded independently of chunk duration. Rotate
+                // the container before that budget is spent; valid PCM must not be discarded
+                // merely because its optional timing representation needs another record.
+                if let mapping = activeChunk.clockMapping,
+                   mapping.spans.count > self.maximumClockSpans - hostMapping.spans.count {
+                    self.scheduleActiveChunkFinalization()
+                    try self.beginChunk(with: sampleBuffer, at: presentationTime, producerEpoch: producerEpoch,
+                        discontinuities: [])
+                    guard let replacement = self.activeChunk else { return }
+                    activeChunk = replacement
+                }
+                activeChunk.clockMapping = try activeChunk.clockMapping.map { try $0.appending(hostMapping) } ?? hostMapping
+            }
             let receipt = try activeChunk.sink.append(sampleBuffer)
             guard receipt.framesAccepted == receipt.framesWritten,
                   receipt.framesAccepted == Int64(CMSampleBufferGetNumSamples(sampleBuffer))
@@ -508,7 +594,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 throw MeetingCaptureError.writerFailed("PCM sink reported a short write.")
             }
 
-            activeChunk.end = presentationTime + duration
+            activeChunk.end = mappedEnd ?? (presentationTime + duration)
             activeChunk.framesWritten += receipt.framesWritten
             if activeChunk.framesWritten - activeChunk.lastCheckpointFrames >= Int64((activeChunk.format.sampleRate).rounded()) {
                 try self.writeCheckpoint(for: &activeChunk)
@@ -536,17 +622,16 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             self.track.health.detail = nil
             self.emitHealthIfNeeded(force: recoveredFromWriterFailure)
         } catch {
+            self.track.health.droppedSampleCount += 1
             // A sink failure poisons the current container. Retire it immediately so the next
             // callback can establish a fresh chunk. Chunk-start failures have no sink to retire,
             // but must use the same failure-episode reporting as append/finalization failures.
             if let failedChunk = self.activeChunk {
                 self.activeChunk = nil
                 self.lastFinalizedEnd = failedChunk.end
-                failedChunk.sink.cancel()
-                self.applyFinalization(.failed(
-                    Self.failedChunk(from: failedChunk),
-                    "PCM chunk write failed: \(error.localizedDescription)"
-                ))
+                self.activeChunk = failedChunk
+                self.scheduleActiveChunkFinalization()
+                self.reportWriterFailure(detail: "PCM chunk write failed: \(error.localizedDescription)")
             } else {
                 self.reportWriterFailure(detail: error.localizedDescription, sampleBuffer: sampleBuffer)
             }
@@ -606,20 +691,10 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         }
         try sink.begin(relativeFilePath: relativePath, format: clientFormat, contract: formatContract)
         let id = UUID()
-        do {
-            try self.ledger.writeIntent(MeetingAudioChunkLedgerIntent(
-                chunkID: id,
-                sequence: sequence,
-                canonicalStart: Self.mediaTime(start),
-                producerEpoch: producerEpoch,
-                sourceFormat: format,
-                partialRelativeFilePath: sink.partialRelativeFilePath ?? relativePath,
-                createdAt: Date()
-            ))
-        } catch {
-            sink.cancel()
-            throw error
-        }
+        self.activeIntent = MeetingAudioChunkLedgerIntent(chunkID: id, sequence: sequence,
+            canonicalStart: Self.mediaTime(start), producerEpoch: producerEpoch, sourceFormat: format,
+            partialRelativeFilePath: sink.partialRelativeFilePath ?? relativePath, createdAt: Date())
+        self.latestCheckpoint = nil
         self.track.format = format
         self.activeChunk = ActiveChunk(
             id: id,
@@ -636,82 +711,69 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             framesWritten: 0,
             lastCheckpointFrames: 0
         )
+        self.publishJournal()
     }
 
     private func scheduleActiveChunkFinalization() {
-        guard var activeChunk = self.activeChunk else { return }
+        guard var chunk = self.activeChunk else { return }
         self.activeChunk = nil
-        self.lastFinalizedEnd = activeChunk.end
+        self.lastFinalizedEnd = chunk.end
+        // Only a bounded per-file recovery capsule and handle close belong to capture.
+        // Hashing, fsync, ledger and index writes are owned by the coalescing journal.
+        try? self.writeCheckpoint(for: &chunk)
+        guard chunk.framesWritten > 0 else { chunk.sink.cancel(); return }
+        let mapping = (try? chunk.clockMapping?.compacted()) ?? chunk.clockMapping
+        let partial = chunk.sink.partialRelativeFilePath ?? chunk.relativeFinalPath
+        let record = MeetingAudioChunk(id: chunk.id, sequence: chunk.sequence, relativeFilePath: chunk.relativeFinalPath,
+            presentationStart: Self.mediaTime(chunk.start), presentationEnd: Self.mediaTime(chunk.end),
+            discontinuities: chunk.discontinuities, sha256: "", byteCount: 0, finalizationState: .writing,
+            audioSchemaVersion: 2, captureAnalysisAsset: .init(role: .captureAnalysis,
+                encoding: .linearPCMFloat32CAFV1, presence: .partial, relativeFilePath: partial, byteCount: 0,
+                sampleRate: chunk.format.sampleRate, channelCount: chunk.format.channelCount, frameCount: chunk.framesWritten),
+            clockMapping: mapping)
         do {
-            try self.writeCheckpoint(for: &activeChunk)
+            let eras = (self.scheduledMetadata ?? self.track).captureEras ?? []
+            let first = eras.lastIndex(where: { $0.startSeconds <= record.presentationStart.seconds }) ?? 0
+            let relevant = eras.isEmpty ? [] : Array(eras.dropFirst(first).prefix(while: { $0.startSeconds <= record.presentationEnd.seconds }))
+            let capsule = MeetingAudioRecoveryCapsule(trackID: self.track.id, kind: self.track.kind, chunk: record, sessionID: UUID(uuidString: self.sessionDirectory.lastPathComponent),
+                captureEras: relevant.isEmpty ? nil : relevant)
+            try chunk.sink.writeRecoveryMetadata(JSONEncoder().encode(capsule))
         } catch {
-            activeChunk.sink.cancel()
-            self.applyFinalization(.failed(
-                Self.failedChunk(from: activeChunk),
-                "PCM chunk checkpoint failed: \(error.localizedDescription)"
-            ))
-            return
+            self.eventHandler(.interrupted(kind: .metadataPersistenceDelayed, trackID: self.track.id,
+                detail: PichiLocalization.text("Audio recording continues. Metadata recovery is pending.")))
         }
-
-        guard self.finalizationSlots.wait(timeout: .now()) == .success else {
-            activeChunk.sink.cancel()
-            self.applyFinalization(.failed(
-                Self.failedChunk(from: activeChunk),
-                "Audio chunk finalization was saturated; the chunk was closed without blocking capture."
-            ))
-            return
-        }
-
-        self.finalizationGroup.enter()
-        // The active chunk has been removed from the writer queue, so ownership of this sink can
-        // transfer to the finalization queue with no concurrent append/cancel calls. Reopen, hash
-        // and fsync are intentionally off the capture queue: a 60-second Float32 CAF is large
-        // enough to overflow the bounded producer queue if finalization blocks it.
-        self.finalizationQueue.async { [self, activeChunk] in
-            let result = Self.finalize(activeChunk)
-            self.queue.async { [self] in
-                self.applyFinalization(result)
-                self.finalizationSlots.signal()
-                self.finalizationGroup.leave()
-            }
-        }
+        do { try chunk.sink.sealForRecovery() }
+        catch { self.reportWriterFailure(detail: "Audio container close will be retried during recovery.") }
+        self.track.chunks.append(record)
+        self.publishJournal()
     }
 
-    private func applyFinalization(_ result: FinalizationResult) {
-        switch result {
-        case let .finalized(chunk, format):
-            self.track.chunks.append(chunk)
-            do {
-                try self.ledger.writeTerminal(MeetingAudioChunkLedgerTerminal(
-                    chunkID: chunk.id,
-                    status: .ready,
-                    updatedAt: Date(),
-                    detail: nil
-                ), for: chunk.id)
-            } catch {
-                // A PCM file that finalized without a durable ready terminal is not publishable.
-                // Keep the chunk fail-closed and surface the ledger failure to the capture owner.
-                try? FileManager.default.removeItem(at: self.sessionDirectory.appendingPathComponent(chunk.relativeFilePath))
-                if let index = self.track.chunks.firstIndex(where: { $0.id == chunk.id }) {
-                    self.track.chunks[index].finalizationState = .failed
-                    self.track.chunks[index].captureAnalysisAsset?.presence = .failed
-                }
-                self.reportWriterFailure(detail: "PCM chunk ledger terminal failed: \(error.localizedDescription)")
-                try? self.persistTrackManifest()
-                return
+    private func publishJournal(track: MeetingAudioTrack? = nil, final: Bool = false,
+                                completion: MeetingAudioRecordingJournal.Completion? = nil) {
+        var snapshot = track ?? self.scheduledMetadata ?? self.track
+        snapshot.chunks = self.track.chunks; snapshot.health = self.track.health; snapshot.format = self.track.format
+        self.journal?.submit(.init(track: snapshot, intent: self.activeIntent,
+            checkpoint: self.latestCheckpoint, final: final), completion: completion)
+    }
+
+    private func receiveJournal(_ chunks: [MeetingAudioChunk], error: Error?) {
+        for chunk in chunks {
+            guard let index = self.track.chunks.firstIndex(where: { $0.id == chunk.id }) else { continue }
+            let wasReady = self.track.chunks[index].finalizationState == .finalized
+            self.track.chunks[index] = chunk
+            if !wasReady, chunk.finalizationState == .finalized, let asset = chunk.captureAnalysisAsset,
+               let rate = asset.sampleRate, let channels = asset.channelCount {
+                self.eventHandler(.chunkFinalized(trackID: self.track.id, chunk: chunk,
+                    format: .init(codec: "lpcm-f32", sampleRate: rate, channelCount: channels, bitRate: nil)))
             }
-            try? self.persistTrackManifest()
-            self.eventHandler(.chunkFinalized(trackID: self.track.id, chunk: chunk, format: format))
-        case let .failed(chunk, detail):
-            self.track.chunks.append(chunk)
-            try? self.ledger.writeTerminal(MeetingAudioChunkLedgerTerminal(
-                chunkID: chunk.id,
-                status: .failed,
-                updatedAt: Date(),
-                detail: detail
-            ), for: chunk.id)
-            self.reportWriterFailure(detail: detail)
-            try? self.persistTrackManifest()
+        }
+        if error != nil, !self.metadataFailureReported {
+            self.metadataFailureReported = true
+            self.eventHandler(.interrupted(kind: .metadataPersistenceDelayed, trackID: self.track.id,
+                detail: PichiLocalization.text("Audio recording continues. Metadata recovery is pending.")))
+        } else if error == nil, self.metadataFailureReported {
+            self.metadataFailureReported = false
+            self.eventHandler(.interrupted(kind: .metadataPersistenceRecovered, trackID: self.track.id, detail: nil))
         }
     }
 
@@ -744,7 +806,6 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         if self.track.health.status == .stopped {
             self.track.health.detail = nil
         }
-        try? self.persistTrackManifest()
 
         self.stateLock.lock()
         self.lifecycle = .stopped
@@ -755,77 +816,12 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         waiters.forEach { $0.resume(returning: self.track) }
     }
 
-    private nonisolated static func finalize(_ activeChunk: ActiveChunk) -> FinalizationResult {
-        guard activeChunk.end >= activeChunk.start else {
-            return .failed(
-                self.failedChunk(from: activeChunk),
-                "Audio chunk timing was not monotonic."
-            )
-        }
-        switch activeChunk.sink.finalize() {
-        case let .success(finalization):
-            let asset = MeetingAudioAsset(
-                role: .captureAnalysis,
-                encoding: .linearPCMFloat32CAFV1,
-                presence: .ready,
-                relativeFilePath: finalization.relativeFilePath,
-                byteCount: finalization.byteCount,
-                sha256: finalization.sha256,
-                sampleRate: finalization.sampleRate,
-                channelCount: finalization.channelCount,
-                frameCount: finalization.frameCount
-            )
-            return .finalized(MeetingAudioChunk(
-                id: activeChunk.id,
-                sequence: activeChunk.sequence,
-                relativeFilePath: finalization.relativeFilePath,
-                presentationStart: self.mediaTime(activeChunk.start),
-                presentationEnd: self.mediaTime(activeChunk.end),
-                discontinuities: activeChunk.discontinuities,
-                sha256: finalization.sha256,
-                byteCount: finalization.byteCount,
-                finalizationState: .finalized,
-                audioSchemaVersion: 2,
-                captureAnalysisAsset: asset,
-                playbackArchiveAsset: nil
-            ), activeChunk.format)
-        case let .failure(error):
-            return .failed(self.failedChunk(from: activeChunk), "PCM chunk finalization failed: \(error)")
-        }
-    }
-
-    private nonisolated static func failedChunk(from activeChunk: ActiveChunk) -> MeetingAudioChunk {
-        MeetingAudioChunk(
-            id: activeChunk.id,
-            sequence: activeChunk.sequence,
-            relativeFilePath: activeChunk.relativeFinalPath,
-            presentationStart: self.mediaTime(activeChunk.start),
-            presentationEnd: self.mediaTime(max(activeChunk.end, activeChunk.start)),
-            discontinuities: activeChunk.discontinuities,
-            sha256: "",
-            byteCount: 0,
-            finalizationState: .failed,
-            audioSchemaVersion: 2,
-            captureAnalysisAsset: MeetingAudioAsset(
-                role: .captureAnalysis,
-                encoding: .linearPCMFloat32CAFV1,
-                presence: .failed,
-                relativeFilePath: activeChunk.relativeFinalPath,
-                byteCount: 0
-            ),
-            playbackArchiveAsset: nil
-        )
-    }
-
     private func writeCheckpoint(for activeChunk: inout ActiveChunk) throws {
         guard activeChunk.framesWritten > 0 else { return }
-        try self.ledger.writeCheckpoint(MeetingAudioChunkLedgerCheckpoint(
-            chunkID: activeChunk.id,
-            expectedFrames: activeChunk.framesWritten,
-            writtenFrames: activeChunk.framesWritten,
-            lastCanonicalPTS: Self.mediaTime(activeChunk.end),
-            updatedAt: Date()
-        ), for: activeChunk.id)
+        self.latestCheckpoint = MeetingAudioChunkLedgerCheckpoint(chunkID: activeChunk.id,
+            expectedFrames: activeChunk.framesWritten, writtenFrames: activeChunk.framesWritten,
+            lastCanonicalPTS: Self.mediaTime(activeChunk.end), updatedAt: Date())
+        self.publishJournal()
         activeChunk.lastCheckpointFrames = activeChunk.framesWritten
     }
 
@@ -857,15 +853,6 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         guard force || now.timeIntervalSince(self.lastHealthEmission) >= 0.25 else { return }
         self.lastHealthEmission = now
         self.eventHandler(.trackHealth(trackID: self.track.id, health: self.track.health))
-    }
-
-    private func persistTrackManifest(_ track: MeetingAudioTrack? = nil) throws {
-        let data = try self.encoder.encode(track ?? self.track)
-        try data.write(to: self.manifestURL, options: .atomic)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: NSNumber(value: Int16(0o600))],
-            ofItemAtPath: self.manifestURL.path
-        )
     }
 
     private static func mediaTime(_ time: CMTime) -> MeetingMediaTime {
@@ -941,18 +928,6 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             sampleBufferOut: &copy
         )
         return status == noErr ? copy : nil
-    }
-
-    private static func sha256(of url: URL) throws -> String {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        var hasher = SHA256()
-        while true {
-            let data = try handle.read(upToCount: 1_048_576) ?? Data()
-            if data.isEmpty { break }
-            hasher.update(data: data)
-        }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     private static func normalizedLevel(fromPeak peak: Float) -> Float {

@@ -1862,7 +1862,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             mainActorSamples.setPhase("modelPreparation")
             try await services.asr.downloadModel(asrModel)
             mainActorSamples.setPhase("configurationPreparation")
-            let configuration = try await coordinator.defaultConfiguration(mode: .inRoom, title: "Combined Russian probe")
+            var configuration = try await coordinator.defaultConfiguration(mode: .inRoom, title: "Combined Russian probe")
+            // This opt-in diagnostic deliberately exercises the retained legacy processing
+            // contract; ordinary new recordings always use the common streaming policy.
+            if !streaming { configuration.speakerProcessingMode = nil }
             if streaming {
                 XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, .streaming,
                                "The ordinary configuration service must preserve the explicit streaming preference")

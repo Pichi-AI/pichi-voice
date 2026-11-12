@@ -20,9 +20,13 @@ enum SimpleUpdateError: Error, LocalizedError {
     case installedAppChanged
     case rollbackUnavailable
     case rollbackRestoreFailed
+    case activeWork
+    case stagingCleanupFailed(String)
 
     var errorDescription: String? {
         switch self {
+        case .activeWork: return PichiLocalization.text("Finish the current recording, transcription, microphone preview, or voice model operation, then try installing again.")
+        case let .stagingCleanupFailed(path): return "The previous update could not be cleaned up. Retained staging: \(path)."
         case .invalidURL: return "Invalid URL."
         case .distributionNotConfigured: return "Signed app updates are not configured for this distribution. Install a reviewed build manually."
         case .invalidResponse: return "Invalid HTTP response from GitHub."
@@ -43,29 +47,64 @@ enum SimpleUpdateError: Error, LocalizedError {
     }
 }
 
-struct UpdateOperationGate {
+@MainActor
+final class UpdateOperationGate {
+    nonisolated deinit {}
     private(set) var isActive = false
+    private(set) var commitStarted = false
+    private var terminationAllowed = true
+    private var terminationWaiters: [CheckedContinuation<Void, Never>] = []
 
-    mutating func begin() -> Bool {
+    func begin() -> Bool {
         guard !self.isActive else { return false }
         self.isActive = true
+        self.commitStarted = false
+        self.terminationAllowed = false
         return true
     }
 
-    mutating func finish() {
+    func beginCommit() -> Bool {
+        guard self.isActive, !self.commitStarted else { return false }
+        self.commitStarted = true
+        return true
+    }
+
+    func finish() {
         self.isActive = false
+        self.allowTermination()
+    }
+
+    func allowTermination() {
+        self.terminationAllowed = true
+        let waiters = self.terminationWaiters
+        self.terminationWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitForTermination() async {
+        guard self.isActive, !self.terminationAllowed else { return }
+        await withCheckedContinuation { self.terminationWaiters.append($0) }
     }
 }
 
-struct GHRelease: Decodable {
-    struct Asset: Decodable {
+nonisolated struct GHRelease: Decodable, Sendable {
+    struct Asset: Decodable, Sendable {
         let name: String
         let browser_download_url: URL
         let content_type: String
+        let size: Int64?
+        let digest: String?
     }
 
     let tag_name: String
     let prerelease: Bool
+    private let draftValue: Bool?
+    var draft: Bool { draftValue ?? false }
+
+    enum CodingKeys: String, CodingKey {
+        case tag_name, prerelease, assets, body, name, published_at, html_url
+        case draftValue = "draft"
+    }
     let assets: [Asset]
     let body: String?
     let name: String?
@@ -83,6 +122,7 @@ private struct SemanticVersion: Comparable {
     let minor: Int
     let patch: Int
     let prerelease: [Identifier]
+    var build: Int = 0
 
     static func < (lhs: SemanticVersion, rhs: SemanticVersion) -> Bool {
         if lhs.major != rhs.major { return lhs.major < rhs.major }
@@ -90,7 +130,7 @@ private struct SemanticVersion: Comparable {
         if lhs.patch != rhs.patch { return lhs.patch < rhs.patch }
 
         // Stable release has higher precedence than prerelease for same core version.
-        if lhs.prerelease.isEmpty && rhs.prerelease.isEmpty { return false }
+        if lhs.prerelease.isEmpty && rhs.prerelease.isEmpty { return lhs.build < rhs.build }
         if lhs.prerelease.isEmpty { return false }
         if rhs.prerelease.isEmpty { return true }
 
@@ -125,6 +165,9 @@ final class SimpleUpdater: ObservableObject {
     struct ReleaseBuildOption {
         let version: String
         let url: URL
+        var displayVersion: String {
+            UpdateReleaseSelection.pichiVersion(version).map { "\($0.version) (\($0.build))" } ?? version
+        }
     }
 
     struct ReleaseNote: Codable, Hashable {
@@ -140,16 +183,56 @@ final class SimpleUpdater: ObservableObject {
     init(
         session: URLSession = .shared,
         defaults: UserDefaults = .standard,
-        promptPresenter: UpdatePromptPresenter = .shared
+        promptPresenter: UpdatePromptPresenter = .shared,
+        operationGate: UpdateOperationGate? = nil,
+        installationAdmission: @escaping @MainActor () throws -> (@MainActor () -> Void) = {
+            try SimpleUpdater.reserveInstallation(using: AppServices.shared.asr)
+        }
     ) {
         self.updateSession = session
         self.updateDefaults = defaults
         self.updatePrompts = promptPresenter
+        self.updateOperationGate = operationGate ?? UpdateOperationGate()
+        self.installationAdmission = installationAdmission
     }
 
     @Published private(set) var availableUpdateVersion: String?
     @Published private(set) var isCheckingForUpdates = false
     @Published private(set) var isUpdateInProgress = false
+    enum DownloadState: Equatable {
+        case idle, downloading(String), ready(String), failed(String)
+    }
+    @Published private(set) var downloadState: DownloadState = .idle
+    @Published private(set) var canCancelUpdate = false
+    private let installationAdmission: @MainActor () throws -> (@MainActor () -> Void)
+    private var releaseInstallationAdmission: (@MainActor () -> Void)?
+    private var selectedRelease: UpdateReleaseSelection?
+    private var downloadSelection: UpdateReleaseSelection?
+    private var downloadTask: Task<StagedDownload, Error>?
+    private var downloadObserver: Task<Void, Never>?
+    private var downloadGeneration = UUID()
+    private var installTask: Task<Void, Never>?
+    private var cancellationRequested = false
+    private var failedInstallation: PreparedInstallation?
+    private var previousSelections: [String: UpdateReleaseSelection] = [:]
+    private var previousSelectionsRevision: Int?
+    private var stagedDownload: StagedDownload?
+    private var downloadCleanup: Task<[URL: Bool], Never>?
+    private struct StagedDownload: Sendable {
+        let selection: UpdateReleaseSelection
+        let root: URL
+        let app: URL
+        let workspace: UpdateDownload.Workspace
+    }
+    #if DEBUG
+    /// External staging/security boundary only. Release selection and operation ownership stay real.
+    var stageDownloadForTesting: (@Sendable (URL, URL, UpdateReleaseSelection) throws -> URL)?
+    var installStagedForTesting: (@MainActor (URL, UpdateReleaseSelection) async throws -> Void)?
+    var downloadTemporaryDirectoryForTesting: URL?
+    var currentVersionForTesting: String?
+    var currentBuildForTesting: String?
+    var currentBundleInformationForTesting: [String: Any]?
+    #endif
     private let updateSession: URLSession
     private let updateDefaults: UserDefaults
     private let updatePrompts: UpdatePromptPresenter
@@ -162,12 +245,12 @@ final class SimpleUpdater: ObservableObject {
     var simulationInstallHandler: (@MainActor () async throws -> Void)?
     var simulationHasUpdate = true
     // URLProtocol fixtures can verify upstream update UI without enabling a distribution feed.
-    var updatesEnabledForTesting = false
+    var updatesEnabledForTesting: Bool?
     #endif
 
     private var appUpdatesEnabled: Bool {
         #if DEBUG
-        AppBrand.updatesEnabled || self.updatesEnabledForTesting
+        self.updatesEnabledForTesting ?? AppBrand.updatesEnabled
         #else
         AppBrand.updatesEnabled
         #endif
@@ -192,7 +275,7 @@ final class SimpleUpdater: ObservableObject {
     private let fileManager = FileManager.default
     private let maxRollbackBackups = 3
     private let rollbackBackupDirectoryName = "RollbackBackups"
-    private var updateOperationGate = UpdateOperationGate()
+    private let updateOperationGate: UpdateOperationGate
     private var updateStatusWindow: NSWindow?
 
     private var installedAppName: String {
@@ -200,7 +283,37 @@ final class SimpleUpdater: ObservableObject {
     }
 
     private var currentAppVersion: String {
-        return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        #if DEBUG
+        if let currentVersionForTesting { return currentVersionForTesting }
+        #endif
+        return self.currentBundleInformation["CFBundleShortVersionString"] as? String ?? "unknown"
+    }
+
+    private var currentAppBuild: String {
+        #if DEBUG
+        if let currentBuildForTesting { return currentBuildForTesting }
+        #endif
+        return self.currentBundleInformation["CFBundleVersion"] as? String ?? ""
+    }
+
+    private var currentBundleInformation: [String: Any] {
+        #if DEBUG
+        if let currentBundleInformationForTesting { return currentBundleInformationForTesting }
+        #endif
+        return Bundle.main.infoDictionary ?? [:]
+    }
+
+    private var currentComparableVersion: String { "v\(self.currentAppVersion)+\(self.currentAppBuild)-public.1" }
+    private func installedSemanticVersion() throws -> SemanticVersion {
+        let value = self.isPichiDistribution ? self.currentComparableVersion : self.currentAppVersion
+        // Unknown installed build metadata must fail closed, never compare as build zero.
+        guard !self.isPichiDistribution || UpdateReleaseSelection.pichiVersion(value) != nil,
+              let version = self.parseSemanticVersion(value) else { throw SimpleUpdateError.noSuitableRelease }
+        return version
+    }
+
+    private var isPichiDistribution: Bool {
+        AppBrand.repositoryOwner == "Pichi-AI" && AppBrand.repositoryName == "pichi-voice"
     }
 
     func hasRollbackBackup() -> Bool {
@@ -217,7 +330,9 @@ final class SimpleUpdater: ObservableObject {
             throw SimpleUpdateError.updateAlreadyInProgress
         }
 
+        self.cancellationRequested = false
         self.isUpdateInProgress = true
+        self.canCancelUpdate = true
         self.cancelUpdateCheck()
         self.availableUpdateVersion = nil
         self.availableChannelRevision = nil
@@ -240,7 +355,8 @@ final class SimpleUpdater: ObservableObject {
             try await self.performSwapAndRelaunch(
                 installedAppURL: Bundle.main.bundleURL,
                 downloadedAppURL: rollbackBundleURL,
-                expectedVersion: expectedVersion,
+                expectedVersion: Bundle(url: rollbackBundleURL)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+                expectedBuild: Bundle(url: rollbackBundleURL)?.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
                 isRollback: true
             )
             DebugLogger.shared.info(
@@ -249,15 +365,19 @@ final class SimpleUpdater: ObservableObject {
             )
             shouldKeepOperationActive = true
         } catch {
-            throw SimpleUpdateError.rollbackRestoreFailed
+            throw error
         }
     }
 
     /// Explicit user-selected downgrade. Re-fetch the tag so a stale picker never installs another release.
     func installPreviousRelease(version: String) async throws {
         guard self.appUpdatesEnabled else { throw SimpleUpdateError.distributionNotConfigured }
+        let approvedRevision = self.previousSelectionsRevision ?? self.channelRevision
+        guard approvedRevision == self.channelRevision else { throw SimpleUpdateError.releaseChanged }
         guard self.updateOperationGate.begin() else { throw SimpleUpdateError.updateAlreadyInProgress }
+        self.cancellationRequested = false
         self.isUpdateInProgress = true
+        self.canCancelUpdate = true
         self.cancelUpdateCheck()
         self.updatePrompts.dismissUpdateOffers()
         var installed = false
@@ -267,9 +387,13 @@ final class SimpleUpdater: ObservableObject {
         let releases = try await self.fetchReleases(owner: AppBrand.repositoryOwner, repo: AppBrand.repositoryName)
         guard let release = releases.first(where: { $0.tag_name == version }),
               let target = self.parseSemanticVersion(version),
-              let current = self.parseSemanticVersion(self.currentAppVersion),
-              target < current
+              let current = self.parseSemanticVersion(self.currentComparableVersion),
+              target < current, self.releaseArchiveAsset(release, repo: AppBrand.repositoryName) != nil
         else { throw SimpleUpdateError.noSuitableRelease }
+        guard approvedRevision == self.channelRevision else { throw SimpleUpdateError.releaseChanged }
+        if let approved = self.previousSelections[version], self.selection(for: release, repo: AppBrand.repositoryName) != approved {
+            throw SimpleUpdateError.releaseChanged
+        }
         try Task.checkCancellation()
         #if DEBUG
         if let simulationInstallHandler {
@@ -295,19 +419,27 @@ final class SimpleUpdater: ObservableObject {
             includePrerelease: includePrerelease
         ).filter { entry in
             guard olderThanCurrent else { return true }
-            guard let current = self.parseSemanticVersion(self.currentAppVersion),
+            if self.isPichiDistribution, let selection = self.selection(for: entry.release, repo: repo) {
+                return UpdateReleaseSelection.isOlder(version: selection.version, build: selection.build,
+                    than: self.currentAppVersion, build: self.currentAppBuild)
+            }
+            guard let current = self.parseSemanticVersion(self.currentComparableVersion),
                   let target = self.parseSemanticVersion(entry.release.tag_name)
             else { return false }
-            return target < current && self.releaseArchiveAsset(entry.release, repo: repo)?.name.lowercased().hasSuffix(".zip") == true
+            return target < current && self.releaseArchiveAsset(entry.release, repo: repo) != nil
         }.prefix(count)
 
+        if olderThanCurrent {
+            self.previousSelectionsRevision = self.channelRevision
+            self.previousSelections = candidates.reduce(into: [:]) { selections, entry in
+                if selections[entry.release.tag_name] == nil {
+                    selections[entry.release.tag_name] = self.selection(for: entry.release, repo: repo)
+                }
+            }
+        }
         return candidates.map { entry in
             let release = entry.release
-            let zipAsset = release.assets.first {
-                $0.content_type == "application/zip" ||
-                    $0.content_type == "application/x-zip-compressed" ||
-                    $0.name.lowercased().hasSuffix(".zip")
-            }
+            let zipAsset = self.releaseArchiveAsset(release, repo: repo)
             let fallbackTagURL = URL(string: "https://github.com/\(owner)/\(repo)/releases/tag/\(release.tag_name)")
             let fallbackReleasesURL = URL(string: "https://github.com/\(owner)/\(repo)/releases")
             let url = zipAsset?.browser_download_url ??
@@ -336,8 +468,9 @@ final class SimpleUpdater: ObservableObject {
         .map { entry in
             let release = entry.release
             return ReleaseNote(
-                version: release.tag_name,
-                title: Self.nonEmpty(release.name) ?? release.tag_name,
+                version: self.selection(for: release, repo: repo)?.displayVersion ?? release.tag_name,
+                title: (release.name == release.tag_name ? nil : Self.nonEmpty(release.name))
+                    ?? self.selection(for: release, repo: repo)?.displayVersion ?? release.tag_name,
                 notes: Self.nonEmpty(release.body) ?? "No release notes available.",
                 publishedAt: Self.parseGitHubDate(release.published_at),
                 url: release.html_url,
@@ -348,7 +481,9 @@ final class SimpleUpdater: ObservableObject {
 
     // Allowed Apple Developer Team IDs for code-sign validation
     // No additional signing teams are approved for this downstream distribution.
-    private nonisolated static let allowedTeamIDs: Set<String> = []
+    private nonisolated static var allowedTeamIDs: Set<String> {
+        Set([AppBrand.distribution.expectedSigningTeam].compactMap { $0 })
+    }
 
     private static let githubDateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -389,7 +524,7 @@ final class SimpleUpdater: ObservableObject {
             throw SimpleUpdateError.noSuitableRelease
         }
 
-        let version = latest.tag_name
+        let version = self.selection(for: latest, repo: repo)?.displayVersion ?? latest.tag_name
         let notes = latest.body ?? "No release notes available."
 
         return (version, notes)
@@ -421,20 +556,17 @@ final class SimpleUpdater: ObservableObject {
             throw SimpleUpdateError.noSuitableRelease
         }
 
-        let currentVersionString = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-        let current = self.parseSemanticVersion(currentVersionString) ?? SemanticVersion(
-            major: 0,
-            minor: 0,
-            patch: 0,
-            prerelease: []
-        )
+        let current = try self.installedSemanticVersion()
         let latestTag = latest.tag_name
         guard let latestVersion = self.parseSemanticVersion(latestTag) else {
             throw SimpleUpdateError.noSuitableRelease
         }
 
-        // Return whether update is available
-        return (latestVersion > current, latestTag)
+        let selection = self.selection(for: latest, repo: repo)
+        let next = latestVersion > current ? selection : nil
+        if self.selectedRelease != next { self.invalidateDownload() }
+        self.selectedRelease = next
+        return (latestVersion > current, selection?.displayVersion ?? latestTag)
     }
 
     func checkForUpdatesAutomatically() {
@@ -464,6 +596,9 @@ final class SimpleUpdater: ObservableObject {
         let revision = self.channelRevision
         if self.checkID != nil, self.checkChannelRevision != revision { self.cancelUpdateCheck() }
         if self.availableChannelRevision != revision {
+            self.selectedRelease = nil
+            self.invalidateDownload()
+            if self.canCancelUpdate { self.cancellationRequested = true; self.installTask?.cancel() }
             self.availableUpdateVersion = nil
             self.availableChannelRevision = nil
             self.updatePrompts.dismissUpdateOffers()
@@ -498,6 +633,7 @@ final class SimpleUpdater: ObservableObject {
                 self.availableChannelRevision = channelRevision
                 self.availableUpdateVersion = result.hasUpdate ? result.latestVersion : nil
                 if result.hasUpdate {
+                    if self.automaticDownloadsEnabled { self.startAutomaticDownload() }
                     if self.checkIsExplicit {
                         self.presentUpdateOffer(version: result.latestVersion, automatic: false)
                     } else if self.popupsEnabled, self.popupRevision == popupRevision,
@@ -517,6 +653,8 @@ final class SimpleUpdater: ObservableObject {
                 self.recordUpdateCheckDate()
                 self.availableUpdateVersion = nil
                 self.availableChannelRevision = nil
+                self.selectedRelease = nil
+                self.invalidateDownload()
                 self.updatePrompts.dismissUpdateOffers()
                 if self.checkIsExplicit {
                     self.showUpdateCheckResult(title: "Update Check Failed", message: "Unable to check for updates. Please try again later.\n\nError: \(error.localizedDescription)")
@@ -574,7 +712,9 @@ final class SimpleUpdater: ObservableObject {
     }
 
     private func installApprovedUpdate(version: String, channel: Bool) {
-        Task {
+        let approvedRevision = self.channelRevision
+        self.installTask = Task {
+            defer { self.installTask = nil }
             do {
                 try await self.checkAndUpdate(owner: AppBrand.repositoryOwner, repo: AppBrand.repositoryName, includePrerelease: channel, expectedVersion: version)
             } catch SimpleUpdateError.releaseChanged {
@@ -585,7 +725,14 @@ final class SimpleUpdater: ObservableObject {
                 }
             } catch SimpleUpdateError.updateAlreadyInProgress {
                 return
+            } catch is CancellationError {
+                if self.channelRevision != approvedRevision { self.checkForUpdatesManually() }
+                return
             } catch {
+                if Task.isCancelled || self.cancellationRequested || (error as? URLError)?.code == .cancelled {
+                    if self.channelRevision != approvedRevision { self.checkForUpdatesManually() }
+                    return
+                }
                 let cancelled = (error as? PMKError)?.isCancelled == true
                 self.showUpdateCheckResult(
                     title: cancelled ? "No Updates" : "Update Failed",
@@ -611,8 +758,11 @@ final class SimpleUpdater: ObservableObject {
             throw SimpleUpdateError.updateAlreadyInProgress
         }
 
+        let approvedSelection = self.selectedRelease
         let approvedChannelRevision = self.channelRevision
+        self.cancellationRequested = false
         self.isUpdateInProgress = true
+        self.canCancelUpdate = true
         self.cancelUpdateCheck()
         self.updatePrompts.dismissUpdateOffers()
         var shouldKeepOperationActive = false
@@ -639,13 +789,7 @@ final class SimpleUpdater: ObservableObject {
             throw SimpleUpdateError.noSuitableRelease
         }
 
-        let currentVersionString = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-        let current = self.parseSemanticVersion(currentVersionString) ?? SemanticVersion(
-            major: 0,
-            minor: 0,
-            patch: 0,
-            prerelease: []
-        )
+        let current = try self.installedSemanticVersion()
         let latestTag = latest.tag_name
         guard let latestVersion = self.parseSemanticVersion(latestTag) else {
             throw SimpleUpdateError.noSuitableRelease
@@ -663,9 +807,13 @@ final class SimpleUpdater: ObservableObject {
             self.availableChannelRevision = nil
             throw SimpleUpdateError.releaseChanged
         }
-        if let expectedVersion, expectedVersion != latestTag {
+        let selection = self.selection(for: latest, repo: repo)
+        if let expectedVersion, (expectedVersion != selection?.displayVersion && expectedVersion != latestTag)
+            || (approvedSelection != nil && approvedSelection != selection) {
             self.availableChannelRevision = self.channelRevision
-            self.availableUpdateVersion = latestTag
+            self.availableUpdateVersion = selection?.displayVersion ?? latestTag
+            self.selectedRelease = selection
+            self.invalidateDownload()
             throw SimpleUpdateError.releaseChanged
         }
         if expectedVersion != nil, self.betaChannel != includePrerelease {
@@ -684,7 +832,22 @@ final class SimpleUpdater: ObservableObject {
         shouldKeepOperationActive = true
     }
 
+    private func selection(for release: GHRelease, repo: String) -> UpdateReleaseSelection? {
+        if self.isPichiDistribution {
+            return UpdateReleaseSelection.pichi(release, owner: AppBrand.repositoryOwner, repo: repo)
+        }
+        guard let asset = self.releaseArchiveAsset(release, repo: repo) else { return nil }
+        return UpdateReleaseSelection(tag: release.tag_name,
+            version: release.tag_name.hasPrefix("v") ? String(release.tag_name.dropFirst()) : release.tag_name,
+            build: nil, assetName: asset.name, assetURL: asset.browser_download_url, digest: asset.digest)
+    }
+
     private func releaseArchiveAsset(_ release: GHRelease, repo: String) -> GHRelease.Asset? {
+        if self.isPichiDistribution {
+            guard repo == AppBrand.repositoryName,
+                  let selection = UpdateReleaseSelection.pichi(release, owner: AppBrand.repositoryOwner, repo: repo) else { return nil }
+            return release.assets.first { $0.name == selection.assetName && $0.browser_download_url == selection.assetURL }
+        }
         // Find asset matching: "{repo-lower}-{version-from-tag}.*" and zip preferred
         let rawVersion = release.tag_name.hasPrefix("v") ? String(release.tag_name.dropFirst()) : release.tag_name
         let prefix = "\(repo.lowercased())-\(rawVersion)"
@@ -699,46 +862,25 @@ final class SimpleUpdater: ObservableObject {
     }
 
     private func installReleaseArchive(_ release: GHRelease, repo: String) async throws {
-        let rawVersion = release.tag_name.hasPrefix("v") ? String(release.tag_name.dropFirst()) : release.tag_name
-        guard let asset = self.releaseArchiveAsset(release, repo: repo) else { throw SimpleUpdateError.noAsset }
-
-        self.showUpdateInstallStatus(version: rawVersion)
-
-        let tempDir = try FileManager.default.url(
-            for: .itemReplacementDirectory,
-            in: .userDomainMask,
-            appropriateFor: Bundle.main.bundleURL,
-            create: true
-        )
-        defer {
-            Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: tempDir) }
+        guard let selection = self.selection(for: release, repo: repo) else { throw SimpleUpdateError.noAsset }
+        self.showUpdateInstallStatus(version: selection.displayVersion)
+        self.canCancelUpdate = true
+        let revision = self.channelRevision
+        let staged = try await self.verifiedDownload(for: selection)
+        try Task.checkCancellation()
+        guard revision == self.channelRevision else { throw SimpleUpdateError.releaseChanged }
+        guard !self.cancellationRequested else { throw CancellationError() }
+        self.releaseInstallationAdmission = try self.acquireInstallationAdmission()
+        #if DEBUG
+        if let installStagedForTesting {
+            defer { self.resetUpdateOperation() }
+            try await installStagedForTesting(staged.app, selection)
+            return
         }
-        let downloadURL = tempDir.appendingPathComponent(asset.browser_download_url.lastPathComponent)
-
-        do {
-            let (tmpFile, _) = try await URLSession.shared.download(from: asset.browser_download_url)
-            try FileManager.default.moveItem(at: tmpFile, to: downloadURL)
-        } catch {
-            throw SimpleUpdateError.downloadFailed
-        }
-
-        // unzip
-        let extractedBundleURL: URL
-        do {
-            extractedBundleURL = try await self.unzip(at: downloadURL)
-        } catch {
-            throw SimpleUpdateError.unzipFailed
-        }
-
-        guard extractedBundleURL.pathExtension == "app" else {
-            throw SimpleUpdateError.notAnAppBundle
-        }
-
+        #endif
         try await self.performSwapAndRelaunch(
-            installedAppURL: Bundle.main.bundleURL,
-            downloadedAppURL: extractedBundleURL,
-            expectedVersion: rawVersion,
-            isRollback: false
+            installedAppURL: Bundle.main.bundleURL, downloadedAppURL: staged.app,
+            expectedVersion: selection.version, expectedBuild: selection.build, isRollback: false
         )
     }
 
@@ -749,7 +891,7 @@ final class SimpleUpdater: ObservableObject {
         guard self.updateStatusWindow == nil else { return }
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 132),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 164),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -771,30 +913,35 @@ final class SimpleUpdater: ObservableObject {
         content.maskImage = .roundedRectMask(cornerRadius: 16)
         content.autoresizingMask = [.width, .height]
 
-        let icon = NSImageView(frame: NSRect(x: 22, y: 42, width: 52, height: 52))
+        let icon = NSImageView(frame: NSRect(x: 22, y: 74, width: 52, height: 52))
         icon.image = NSApp.applicationIconImage
         icon.imageScaling = .scaleProportionallyUpOrDown
         content.addSubview(icon)
 
         let title = NSTextField(labelWithString: AppBrand.text("Installing FluidVoice \(version)"))
-        title.frame = NSRect(x: 92, y: 76, width: 304, height: 24)
+        title.frame = NSRect(x: 92, y: 108, width: 304, height: 24)
         title.font = .fluidSystemFont(ofSize: 16, weight: .semibold)
         content.addSubview(title)
 
         let detail = NSTextField(wrappingLabelWithString: AppBrand.text("Downloading the update. FluidVoice will restart automatically."))
-        detail.frame = NSRect(x: 92, y: 42, width: 304, height: 34)
+        detail.frame = NSRect(x: 92, y: 74, width: 304, height: 34)
         detail.font = .fluidSystemFont(ofSize: 13)
         detail.textColor = .secondaryLabelColor
         detail.maximumNumberOfLines = 2
         content.addSubview(detail)
 
-        let progress = NSProgressIndicator(frame: NSRect(x: 92, y: 24, width: 304, height: 6))
+        let progress = NSProgressIndicator(frame: NSRect(x: 92, y: 56, width: 304, height: 6))
         progress.style = .bar
         progress.isIndeterminate = true
         progress.controlSize = .small
         progress.startAnimation(nil)
         content.addSubview(progress)
 
+        let cancel = UpdateCancelButton { [weak self] in
+            Task { await self?.cancelPendingUpdate() }
+        }
+        cancel.frame = NSRect(x: 300, y: 12, width: 96, height: 28)
+        content.addSubview(cancel)
         panel.contentView = content
         panel.center()
         panel.orderFrontRegardless()
@@ -809,6 +956,9 @@ final class SimpleUpdater: ObservableObject {
     #endif
 
     private func resetUpdateOperation() {
+        self.releaseInstallationAdmission?()
+        self.releaseInstallationAdmission = nil
+        self.canCancelUpdate = false
         self.updateOperationGate.finish()
         self.isUpdateInProgress = false
         self.dismissUpdateInstallStatus()
@@ -821,20 +971,24 @@ final class SimpleUpdater: ObservableObject {
     }
 
     private func fetchReleases(owner: String, repo: String) async throws -> [GHRelease] {
-        guard let releasesURL = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases") else {
-            throw SimpleUpdateError.invalidURL
+        guard owner == AppBrand.repositoryOwner, repo == AppBrand.repositoryName else { throw SimpleUpdateError.invalidURL }
+        var releases: [GHRelease] = []
+        // Runtime/source publications can share the repository. Search a bounded
+        // number of pages rather than assuming GitHub's first entry is an app.
+        for page in 1...5 {
+            guard let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases?per_page=100&page=\(page)") else { throw SimpleUpdateError.invalidURL }
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 30
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            let data = try await UpdateDownload.metadata(request, session: self.updateSession)
+            try Task.checkCancellation()
+            let entries: [GHRelease]
+            do { entries = try JSONDecoder().decode([GHRelease].self, from: data) }
+            catch { throw SimpleUpdateError.jsonDecoding }
+            releases.append(contentsOf: entries)
+            if entries.count < 100 { break }
         }
-
-        let (data, response) = try await self.updateSession.data(from: releasesURL)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw SimpleUpdateError.invalidResponse
-        }
-
-        do {
-            return try JSONDecoder().decode([GHRelease].self, from: data)
-        } catch {
-            throw SimpleUpdateError.jsonDecoding
-        }
+        return releases
     }
 
     private func selectLatestRelease(from releases: [GHRelease], includePrerelease: Bool) -> GHRelease? {
@@ -847,7 +1001,9 @@ final class SimpleUpdater: ObservableObject {
     ) -> [(release: GHRelease, version: SemanticVersion)] {
         return releases
             .compactMap { release in
-                guard let version = self.parseSemanticVersion(release.tag_name) else {
+                guard !release.draft,
+                      !self.isPichiDistribution || self.selection(for: release, repo: AppBrand.repositoryName) != nil,
+                      let version = self.parseSemanticVersion(release.tag_name) else {
                     return nil
                 }
                 let isPrerelease = self.isPrereleaseRelease(release)
@@ -869,7 +1025,7 @@ final class SimpleUpdater: ObservableObject {
     }
 
     private func isPrereleaseRelease(_ release: GHRelease) -> Bool {
-        return release.prerelease || self.hasPrereleaseSuffix(in: release.tag_name)
+        return release.prerelease || release.tag_name.contains("-beta.") || self.hasPrereleaseSuffix(in: release.tag_name)
     }
 
     private func hasPrereleaseSuffix(in version: String) -> Bool {
@@ -893,7 +1049,7 @@ final class SimpleUpdater: ObservableObject {
         let base = self.fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         let support = base ?? URL(fileURLWithPath: NSTemporaryDirectory())
         return support
-            .appendingPathComponent("Fluid", isDirectory: true)
+            .appendingPathComponent(AppBrand.storageNamespace, isDirectory: true)
             .appendingPathComponent(self.rollbackBackupDirectoryName, isDirectory: true)
             .appendingPathComponent(self.installedAppName, isDirectory: true)
     }
@@ -919,7 +1075,7 @@ final class SimpleUpdater: ObservableObject {
     }
 
     private func latestRollbackBackup() -> URL? {
-        let currentVersion = self.currentAppVersion
+        let currentVersion = "\(self.currentAppVersion) (\(self.currentAppBuild))"
         return self.availableRollbackBackups().first {
             Self.isRollbackVersion(self.versionString(for: $0), differentFrom: currentVersion)
         }
@@ -927,7 +1083,9 @@ final class SimpleUpdater: ObservableObject {
 
     private func versionString(for appURL: URL) -> String? {
         guard let bundle = Bundle(url: appURL) else { return nil }
-        return bundle.infoDictionary?["CFBundleShortVersionString"] as? String
+        guard let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String,
+              let build = bundle.infoDictionary?["CFBundleVersion"] as? String else { return nil }
+        return "\(version) (\(build))"
     }
 
     private func sanitizeVersion(_ version: String) -> String {
@@ -1020,7 +1178,8 @@ final class SimpleUpdater: ObservableObject {
             trimmed.removeFirst()
         }
 
-        // Ignore build metadata for precedence.
+        let pichiBuild = UpdateReleaseSelection.pichiVersion(version).flatMap { Int($0.build) } ?? 0
+        // Upstream semantic metadata has no precedence; Pichi numeric builds do.
         if let plusIndex = trimmed.firstIndex(of: "+") {
             trimmed = String(trimmed[..<plusIndex])
         }
@@ -1057,36 +1216,9 @@ final class SimpleUpdater: ObservableObject {
             major: major,
             minor: minor,
             patch: patch,
-            prerelease: prereleaseIdentifiers
+            prerelease: prereleaseIdentifiers,
+            build: pichiBuild
         )
-    }
-
-    private func unzip(at url: URL) async throws -> URL {
-        let workDir = url.deletingLastPathComponent()
-        let proc = Process()
-        proc.currentDirectoryURL = workDir
-        proc.launchPath = "/usr/bin/unzip"
-        proc.arguments = [url.path]
-
-        return try await withCheckedThrowingContinuation { cont in
-            proc.terminationHandler = { _ in
-                // Find first .app in workDir
-                if let appURL = try? FileManager.default.contentsOfDirectory(
-                    at: workDir,
-                    includingPropertiesForKeys: [
-                        .isDirectoryKey,
-                    ],
-                    options: [.skipsSubdirectoryDescendants]
-                )
-                .first(where: { $0.pathExtension == "app"
-                }) {
-                    cont.resume(returning: appURL)
-                } else {
-                    cont.resume(throwing: SimpleUpdateError.unzipFailed)
-                }
-            }
-            do { try proc.run() } catch { cont.resume(throwing: error) }
-        }
     }
 
     nonisolated struct PreparedInstallation: Sendable {
@@ -1100,8 +1232,13 @@ final class SimpleUpdater: ObservableObject {
         downloadedAppURL: URL,
         installedExpectation: UpdateBundleValidator.Expectation,
         expectedVersion: String?,
+        expectedBuild: String? = nil,
         backupURL: URL,
-        isRollback: Bool
+        isRollback: Bool,
+        commit: Bool = true,
+        validateBundle: @escaping @Sendable (URL, UpdateBundleValidator.Expectation, UpdateBundleValidator.SigningPolicy) throws -> UpdateBundleValidator.ValidatedBundle = {
+            try UpdateBundleValidator.validate(at: $0, expectation: $1, policy: $2)
+        }
     ) throws -> PreparedInstallation {
         let teams = Self.allowedTeamIDs
         guard isRollback || expectedVersion != nil, installedExpectation.version != nil, installedExpectation.build != nil
@@ -1112,11 +1249,7 @@ final class SimpleUpdater: ObservableObject {
             replacementAppURL: downloadedAppURL,
             validateInstalledApp: { url in
                 do {
-                    _ = try UpdateBundleValidator.validate(
-                        at: url,
-                        expectation: installedExpectation,
-                        policy: .installedApp(allowedTeamIDs: teams)
-                    )
+                    _ = try validateBundle(url, installedExpectation, .installedApp(allowedTeamIDs: teams))
                 } catch UpdateBundleValidator.ValidationError.versionMismatch {
                     throw SimpleUpdateError.installedAppChanged
                 } catch UpdateBundleValidator.ValidationError.buildMismatch {
@@ -1127,18 +1260,12 @@ final class SimpleUpdater: ObservableObject {
         var backupCreated = false
         do {
             try Task.checkCancellation()
-            _ = try UpdateBundleValidator.validate(
-                at: replacement.stagedAppURL,
-                expectation: .init(bundleIdentifier: installedExpectation.bundleIdentifier, version: expectedVersion),
-                policy: isRollback ? .installedApp(allowedTeamIDs: teams) : .developerID(allowedTeamIDs: teams)
-            )
+            _ = try validateBundle(replacement.stagedAppURL,
+                .init(bundleIdentifier: installedExpectation.bundleIdentifier, version: expectedVersion, build: expectedBuild),
+                isRollback ? .installedApp(allowedTeamIDs: teams) : .developerID(allowedTeamIDs: teams))
             do {
                 try UpdateRollbackBackup.create(installedAppURL: installedAppURL, backupURL: backupURL) { url in
-                    _ = try UpdateBundleValidator.validate(
-                        at: url,
-                        expectation: installedExpectation,
-                        policy: .installedApp(allowedTeamIDs: teams)
-                    )
+                    _ = try validateBundle(url, installedExpectation, .installedApp(allowedTeamIDs: teams))
                 }
                 backupCreated = true
             } catch let failure as UpdateRollbackBackup.Failure where failure.retainedDirectoryURL != nil {
@@ -1147,7 +1274,7 @@ final class SimpleUpdater: ObservableObject {
                 throw SimpleUpdateError.backupFailed
             }
             try Task.checkCancellation()
-            try replacement.commit()
+            if commit { try replacement.commit() }
             return PreparedInstallation(replacement: replacement, backupURL: backupURL)
         } catch {
             let originalError = error
@@ -1173,18 +1300,38 @@ final class SimpleUpdater: ObservableObject {
         }
     }
 
+    /// Reuse the existing conservative admission barrier, including preview,
+    /// draining capture and failed-ASR meeting leases, without stopping any owner.
+    static func reserveInstallation(using service: ASRService) throws -> (@MainActor () -> Void) {
+        guard !service.isDictionaryTrainingCaptureActive else { throw SimpleUpdateError.activeWork }
+        do {
+            let lease = try service.beginSettingsBackupRestore()
+            return { service.releaseExclusiveActivity(lease) }
+        } catch is ASRActivityError { throw SimpleUpdateError.activeWork }
+    }
+
+    private func acquireInstallationAdmission() throws -> (@MainActor () -> Void) {
+        do { return try self.installationAdmission() }
+        catch is ASRActivityError { throw SimpleUpdateError.activeWork }
+    }
+
     private func performSwapAndRelaunch(
         installedAppURL: URL,
         downloadedAppURL: URL,
         expectedVersion: String?,
+        expectedBuild: String? = nil,
         isRollback: Bool
     ) async throws {
         guard let identifier = Bundle.main.bundleIdentifier,
               let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
         else { throw SimpleUpdateError.notAnAppBundle }
+        if self.releaseInstallationAdmission == nil {
+            self.releaseInstallationAdmission = try self.acquireInstallationAdmission()
+        }
+        try Task.checkCancellation()
         let version = self.currentAppVersion
         let name = self.installedAppName
-        let safeVersion = self.sanitizeVersion(version)
+        let safeVersion = self.sanitizeVersion("\(version)-\(build)")
         let suffix = "\(isRollback ? "rollback-" : "")\(UUID().uuidString)-\(Int(Date().timeIntervalSince1970))"
         let backupURL = self.rollbackRootDirectory().appendingPathComponent("\(name)-\(safeVersion)-\(suffix).app")
         let preparation = Task.detached(priority: .utility) {
@@ -1193,8 +1340,10 @@ final class SimpleUpdater: ObservableObject {
                 downloadedAppURL: downloadedAppURL,
                 installedExpectation: .init(bundleIdentifier: identifier, version: version, build: build),
                 expectedVersion: expectedVersion,
+                expectedBuild: expectedBuild,
                 backupURL: backupURL,
-                isRollback: isRollback
+                isRollback: isRollback,
+                commit: false
             )
         }
         let installation = try await withTaskCancellationHandler {
@@ -1203,6 +1352,26 @@ final class SimpleUpdater: ObservableObject {
             preparation.cancel()
         }
 
+        do {
+            // No suspension between the final cancellation decision and closing
+            // admission to Cancel. The filesystem exchange itself is indivisible.
+            try Task.checkCancellation()
+            guard !self.cancellationRequested else { throw CancellationError() }
+            guard self.updateOperationGate.beginCommit() else { throw SimpleUpdateError.updateAlreadyInProgress }
+            self.canCancelUpdate = false
+            self.updateStatusWindow?.contentView?.subviews.compactMap { $0 as? UpdateCancelButton }.forEach { $0.isEnabled = false }
+            try await Task.detached(priority: .utility) { try installation.replacement.commit() }.value
+        } catch {
+            let original = error
+            try await Task.detached(priority: .utility) {
+                try installation.replacement.discardPrepared()
+                try FileManager.default.removeItem(at: installation.backupURL)
+            }.value
+            throw original
+        }
+        self.canCancelUpdate = false
+        await self.discardDownload()
+        self.downloadState = .idle
         self.availableUpdateVersion = nil
         self.availableChannelRevision = nil
         self.dismissUpdateInstallStatus()
@@ -1241,6 +1410,7 @@ final class SimpleUpdater: ObservableObject {
                 if let cleanupWarning {
                     DebugLogger.shared.warning("SimpleUpdater: Update completed; cleanup failed: \(cleanupWarning)", source: "SimpleUpdater")
                 }
+                self.updateOperationGate.allowTermination()
                 UpdateTerminationScheduler.requestTermination()
             }
         }
@@ -1255,7 +1425,16 @@ final class SimpleUpdater: ObservableObject {
                 return error.localizedDescription
             }
         }.value
-        self.resetUpdateOperation()
+        if recoveryWarning == nil {
+            self.failedInstallation = nil
+            self.resetUpdateOperation()
+        } else {
+            // Keep the admission lease and filesystem lock when restoration fails.
+            // The old process must not resume capture with an unresolved replacement.
+            self.failedInstallation = installation
+            self.canCancelUpdate = false
+            self.dismissUpdateInstallStatus()
+        }
         if let error {
             DebugLogger.shared.error("SimpleUpdater: Relaunch failed: \(error.localizedDescription)", source: "SimpleUpdater")
         }
@@ -1268,5 +1447,217 @@ final class SimpleUpdater: ObservableObject {
                 ? "The new app could not start. Your previous version has been restored. Please try again."
                 : "The app could not restart. Your previous version is saved at \(installation.backupURL.path)."
         )
+        self.updateOperationGate.allowTermination()
     }
+}
+
+extension SimpleUpdater {
+    private var automaticDownloadsEnabled: Bool {
+        self.updateDefaults.object(forKey: SettingsStore.UpdateKeys.automaticUpdateDownloads) as? Bool ?? true
+    }
+
+    func automaticDownloadPreferenceDidChange() {
+        if self.canCancelUpdate { self.cancellationRequested = true; self.installTask?.cancel() }
+        self.invalidateDownload()
+        if self.automaticDownloadsEnabled { self.startAutomaticDownload() }
+    }
+
+    private func startAutomaticDownload() {
+        guard let selection = self.selectedRelease, self.automaticDownloadsEnabled, !self.isUpdateInProgress else { return }
+        #if DEBUG
+        // Legacy popup tests substitute the entire install. Download lifecycle tests
+        // substitute only extraction and trust, and still use the real transport.
+        if self.simulationInstallHandler != nil { return }
+        #endif
+        if self.downloadSelection == selection,
+           (self.stagedDownload != nil || (self.downloadTask != nil && self.downloadTask?.isCancelled == false)) { return }
+        self.downloadObserver = Task { [weak self] in
+            guard let self else { return }
+            do { _ = try await self.verifiedDownload(for: selection) }
+            catch is CancellationError {}
+            catch { DebugLogger.shared.debug("Update download failed: \(error.localizedDescription)", source: "SimpleUpdater") }
+        }
+    }
+
+    /// Invalidate synchronously; the next download and explicit cancellation join
+    /// the old worker before deleting its files or allocating another staging root.
+    private func invalidateDownload() {
+        self.downloadGeneration = UUID()
+        self.downloadTask?.cancel()
+        self.downloadObserver?.cancel()
+        self.downloadState = .idle
+        _ = self.retireDownload()
+    }
+
+    func cancelPendingUpdate() async {
+        if self.updateOperationGate.isActive && self.updateOperationGate.commitStarted { return }
+        self.cancellationRequested = true
+        self.installTask?.cancel()
+        if self.releaseInstallationAdmission == nil {
+            self.invalidateDownload()
+            let retained = await self.discardDownload()
+            if !retained.isEmpty { self.downloadState = .failed(SimpleUpdateError.stagingCleanupFailed(retained.map(\.path).sorted().joined(separator: ", ")).localizedDescription) }
+        }
+        await self.updateOperationGate.waitForTermination()
+    }
+
+    /// Normal quit joins background transport/staging before AppKit exits.
+    /// A committed replacement keeps ownership until its relaunch callback finishes.
+    func shutdownForTermination() async {
+        let check = self.checkTask
+        self.cancelUpdateCheck()
+        await check?.value
+        let observer = self.downloadObserver
+        await self.cancelPendingUpdate()
+        await self.updateOperationGate.waitForTermination()
+        await observer?.value
+        self.downloadObserver = nil
+    }
+
+    @discardableResult
+    private func discardDownload() async -> Set<URL> {
+        Set(await self.retireDownload().value.keys)
+    }
+
+    private func retireDownload() -> Task<[URL: Bool], Never> {
+        let oldTask = self.downloadTask
+        let oldCache = self.stagedDownload
+        self.downloadTask = nil
+        self.stagedDownload = nil
+        self.downloadSelection = nil
+        oldTask?.cancel()
+        let previousCleanup = self.downloadCleanup
+        let cleanup = Task.detached(priority: .utility) {
+            defer { withExtendedLifetime(oldTask) {}; withExtendedLifetime(oldCache) {} }
+            var roots = await previousCleanup?.value ?? [:]
+            do {
+                if let completed = try await oldTask?.value { roots[completed.root] = false }
+            } catch let failure as UpdateDMGStager.Failure {
+                roots[failure.retainedRoot] = failure.mayBeMounted
+            } catch {}
+            if let oldCache { roots[oldCache.root] = false }
+            var retained: [URL: Bool] = [:]
+            for (root, mayBeMounted) in roots {
+                // A failed detach needs explicit recovery, never recursive deletion.
+                if mayBeMounted { retained[root] = true; continue }
+                do { try FileManager.default.removeItem(at: root) }
+                catch let error as CocoaError where error.code == .fileNoSuchFile {}
+                catch { retained[root] = false }
+            }
+            return retained
+        }
+        self.downloadCleanup = cleanup
+        return cleanup
+    }
+
+    private func verifiedDownload(for selection: UpdateReleaseSelection) async throws -> StagedDownload {
+        if self.downloadSelection == selection, let cached = self.stagedDownload { return cached }
+        if self.downloadSelection == selection, let task = self.downloadTask, !task.isCancelled {
+            return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+        }
+        let generation = self.downloadGeneration
+        let retained = await self.discardDownload()
+        guard retained.isEmpty else { throw SimpleUpdateError.stagingCleanupFailed(retained.map(\.path).sorted().joined(separator: ", ")) }
+        try Task.checkCancellation()
+        guard generation == self.downloadGeneration else { throw CancellationError() }
+        // Another waiter may have started this same release during joined cleanup.
+        if self.downloadSelection == selection, let task = self.downloadTask {
+            return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+        }
+        let session = self.updateSession
+        let identifier = Bundle.main.bundleIdentifier ?? ""
+        let teams = Self.allowedTeamIDs
+        let appName = self.isPichiDistribution ? "Pichi Voice.app" : self.installedAppName + ".app"
+        let installationURL = Bundle.main.bundleURL
+        let namespace = AppBrand.storageNamespace
+        #if DEBUG
+        let stageOverride = self.stageDownloadForTesting
+        let temporaryDirectory = self.downloadTemporaryDirectoryForTesting ?? FileManager.default.temporaryDirectory
+        #endif
+        self.downloadSelection = selection
+        self.downloadState = .downloading(selection.displayVersion)
+        let task = Task.detached(priority: .utility) {
+            #if DEBUG
+            let workspace = try UpdateDownload.Workspace.open(installation: installationURL, namespace: namespace, temporaryDirectory: temporaryDirectory)
+            #else
+            let workspace = try UpdateDownload.Workspace.open(installation: installationURL, namespace: namespace)
+            #endif
+            let root = workspace.directory
+            defer { withExtendedLifetime(workspace) {} }
+            do {
+                let archive = root.appendingPathComponent(selection.assetName)
+                try await UpdateDownload.fetch(selection, session: session, to: archive)
+                try Task.checkCancellation()
+                let app: URL
+                #if DEBUG
+                if let stageOverride { app = try stageOverride(archive, root, selection) }
+                else { app = try Self.stageAndValidate(archive: archive, root: root, appName: appName, selection: selection, identifier: identifier, teams: teams) }
+                #else
+                app = try Self.stageAndValidate(archive: archive, root: root, appName: appName, selection: selection, identifier: identifier, teams: teams)
+                #endif
+                try Task.checkCancellation()
+                try FileManager.default.removeItem(at: archive)
+                return StagedDownload(selection: selection, root: root, app: app, workspace: workspace)
+            } catch let error as UpdateDMGStager.Failure {
+                // The mount may still be attached. Its retained path is surfaced for recovery.
+                throw error
+            } catch {
+                let original = error
+                do { try FileManager.default.removeItem(at: root) }
+                catch { throw UpdateDMGStager.Failure(retainedRoot: root, underlying: error, mayBeMounted: false) }
+                throw original
+            }
+        }
+        self.downloadTask = task
+        do {
+            let result = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+            guard self.downloadGeneration == generation, !Task.isCancelled else {
+                await Task.detached { try? FileManager.default.removeItem(at: result.root) }.value
+                throw CancellationError()
+            }
+            self.stagedDownload = result
+            self.downloadState = .ready(selection.displayVersion)
+            return result
+        } catch {
+            if self.downloadGeneration == generation {
+                self.downloadSelection = nil
+                self.downloadState = (error is CancellationError || Task.isCancelled || (error as? URLError)?.code == .cancelled) ? .idle : .failed(error.localizedDescription)
+            }
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled { throw CancellationError() }
+            throw error
+        }
+    }
+
+    private nonisolated static func stageAndValidate(
+        archive: URL, root: URL, appName: String, selection: UpdateReleaseSelection, identifier: String, teams: Set<String>
+    ) throws -> URL {
+        let app: URL
+        if archive.pathExtension == "dmg" {
+            app = try UpdateDMGStager.stage(image: archive, root: root, appName: appName)
+        } else {
+            let extraction = root.appendingPathComponent("extracted", isDirectory: true)
+            try FileManager.default.createDirectory(at: extraction, withIntermediateDirectories: false)
+            try UpdateDMGStager.run("/usr/bin/ditto", ["-x", "-k", archive.path, extraction.path], root, true)
+            let apps = try FileManager.default.contentsOfDirectory(at: extraction, includingPropertiesForKeys: nil).filter { $0.pathExtension == "app" }
+            guard apps.count == 1, let only = apps.first else { throw SimpleUpdateError.notAnAppBundle }
+            app = only
+        }
+        _ = try UpdateBundleValidator.validate(at: app,
+            expectation: .init(bundleIdentifier: identifier, version: selection.version, build: selection.build),
+            policy: .developerID(allowedTeamIDs: teams))
+        return app
+    }
+}
+
+/// A native status-window button shares the same action as Settings cancellation.
+@MainActor
+final class UpdateCancelButton: NSButton {
+    var cancelUpdate: (@MainActor () -> Void)?
+    convenience init(cancel: @escaping @MainActor () -> Void) {
+        self.init(title: PichiLocalization.text("Cancel"), target: nil, action: #selector(cancelClicked))
+        self.target = self
+        self.cancelUpdate = cancel
+        self.setAccessibilityIdentifier("updater.cancel")
+    }
+    @objc private func cancelClicked() { self.cancelUpdate?() }
 }

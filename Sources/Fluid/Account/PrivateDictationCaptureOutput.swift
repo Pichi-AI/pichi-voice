@@ -11,14 +11,17 @@ import Foundation
     let savesAudio: Bool
     let transcriptionModel: String
     private var audioWrites: [Task<Void, Never>] = []
+    private var dictionaryEvidenceWrites: [Task<Void, Never>] = []
+    private let dictionaryEvidence: DictionaryNegativeExampleStore
     private var requiresPersistenceRetry = false
     var hasPendingPersistenceRetry: Bool { requiresPersistenceRetry }
 
     init(id: UUID, savesHistory: Bool, savesAudio: Bool, transcriptionModel: String,
-         history: TranscriptionHistoryStore? = nil) throws {
+         history: TranscriptionHistoryStore? = nil, dictionaryEvidence: DictionaryNegativeExampleStore? = nil) throws {
         self.id = id
         self.profile = PrivateProfileStorage.current
         self.history = history ?? TranscriptionHistoryStore.shared
+        self.dictionaryEvidence = dictionaryEvidence ?? DictionaryNegativeExampleStore.scoped(to: self.profile)
         self.savesAudio = savesHistory && savesAudio
         self.transcriptionModel = transcriptionModel
         self.admission = savesHistory ? try self.history.admitRecordingWrite() : nil
@@ -66,10 +69,37 @@ import Foundation
         audioWrites.append(worker)
     }
 
+    /// Features for a later explicit rejection follow the same capture/history
+    /// authority and deletion generation as retained audio, with a global cap.
+    func saveDictionaryEvidence(_ replacements: [DictionaryHistoryReplacement]) {
+        guard self.savesAudio, self.isVisible, DictionaryMatcherExperiment.collectNegatives,
+              let admission, admission.acceptsDictionaryEvidence else { return }
+        let evidence = replacements.compactMap(\.evidence)
+        guard !evidence.isEmpty else { return }
+        let ids = Set(evidence.map(\.id)), store = self.dictionaryEvidence
+        func current() -> Bool {
+            self.isVisible && admission.acceptsDictionaryEvidence &&
+                self.history.entries.first(where: { $0.id == admission.entryID }).map { entry in
+                    ids.isSubset(of: Set(entry.dictionaryReplacements.compactMap(\.evidenceID)))
+                } == true
+        }
+        self.dictionaryEvidenceWrites.append(Task { @MainActor in
+            guard current() else { return }
+            do {
+                try await store.retainEvidence(evidence)
+                if !current() { try await store.removeRetainedEvidence(ids: ids) }
+            } catch {
+                if self.isVisible { DebugLogger.shared.error("Dictionary rejection evidence could not be retained", source: "DictionaryLearning") }
+            }
+        })
+    }
+
     /// False keeps the original capture owner alive until the same payload can be retried.
     @discardableResult func finish() async -> Bool {
         for worker in audioWrites { await worker.value }
         audioWrites.removeAll()
+        for worker in dictionaryEvidenceWrites { await worker.value }
+        dictionaryEvidenceWrites.removeAll()
         do {
             if requiresPersistenceRetry { try await admission?.retryPersistence() }
             else { try await admission?.finish() }

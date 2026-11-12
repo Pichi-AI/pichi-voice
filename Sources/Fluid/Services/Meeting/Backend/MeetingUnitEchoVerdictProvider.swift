@@ -43,25 +43,17 @@ nonisolated struct MeetingFailClosedEchoVerdictProvider: MeetingUnitEchoVerdictP
 /// and the manifest's mapping only. Quarantined units are never read for interval arithmetic —
 /// the assembler never consults their verdicts either.
 nonisolated struct MeetingTextOverlapEchoVerdictProvider: MeetingUnitEchoVerdictProviding {
-    private let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
-    private let wordContextSeconds: TimeInterval = 2
-
     init() {}
 
     func echoVerdicts(
         for evidence: MeetingFinalTranscriptEvidence,
         manifest: MeetingAnalysisManifest,
-        plan _: MeetingBackendPlan
+        plan: MeetingBackendPlan
     ) async throws -> [String: MeetingUnitEchoVerdict] {
         guard manifest.captureMode == .onlineCall else { return [:] }
 
-        struct PositionedUnit {
-            let unit: MeetingFinalTextUnit
-            let presentation: MeetingAnalysisInterval
-        }
-
-        var microphoneUnits: [PositionedUnit] = []
-        var applicationUnits: [PositionedUnit] = []
+        var microphoneUnits: [MeetingPositionedEchoUnit] = []
+        var applicationUnits: [MeetingPositionedEchoUnit] = []
         let activityByEpoch = Dictionary(grouping: evidence.speakerActivity) { $0.token.analysisEpochID }
         let boundaryAssignments = MeetingWordBoundaryRecovery.assignments(
             units: evidence.units.filter { $0.quarantineReason(in: manifest) == nil },
@@ -82,7 +74,8 @@ nonisolated struct MeetingTextOverlapEchoVerdictProvider: MeetingUnitEchoVerdict
                 end: lastSpan.presentationMapping.presentationTime(forAnalysisTime: unit.analysisEnd)
             )
             guard presentation.isValid else { continue }
-            let positioned = PositionedUnit(unit: unit, presentation: presentation)
+            let positioned = MeetingPositionedEchoUnit(id: unit.id, trackID: unit.trackID,
+                text: unit.text, presentation: presentation)
             switch track.kind {
             case .applicationAudio:
                 // An application unit outside its own speaker activity can never become a visible
@@ -90,7 +83,8 @@ nonisolated struct MeetingTextOverlapEchoVerdictProvider: MeetingUnitEchoVerdict
                 guard !MeetingSpeakerActivityCoverage.isOutside(
                     unit,
                     activityByEpoch: activityByEpoch,
-                    boundaryAssignments: boundaryAssignments
+                    boundaryAssignments: boundaryAssignments,
+                    preservesTokenEmissions: plan.request.configuration.speakerAttributionPolicy?.enableTokenEmissionContext == true
                 ) else { continue }
                 applicationUnits.append(positioned)
             case .microphone:
@@ -98,9 +92,31 @@ nonisolated struct MeetingTextOverlapEchoVerdictProvider: MeetingUnitEchoVerdict
             }
         }
 
-        applicationUnits.sort {
-            ($0.presentation.start, $0.presentation.end, $0.unit.id)
-                < ($1.presentation.start, $1.presentation.end, $1.unit.id)
+        return try MeetingPositionedEchoScoring.verdicts(microphoneUnits: microphoneUnits,
+            applicationUnits: applicationUnits)
+    }
+}
+
+/// Positioned raw text is shared by the recorded-manifest and live-PCM admissions. Source
+/// clocks are projected by their owning input adapter before invoking the same echo policy.
+nonisolated struct MeetingPositionedEchoUnit: Sendable {
+    let id: String
+    let trackID: MeetingAudioTrackID
+    let text: String
+    let presentation: MeetingAnalysisInterval
+}
+
+/// The deterministic text/time policy does not own inference, privacy, source clocks or IO.
+/// Keeping one implementation preserves the canonical causal and short-phrase rules online.
+nonisolated enum MeetingPositionedEchoScoring {
+    static let wordContextSeconds: TimeInterval = 2
+    private static let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
+
+    static func verdicts(microphoneUnits: [MeetingPositionedEchoUnit],
+                         applicationUnits: [MeetingPositionedEchoUnit]) throws -> [String: MeetingUnitEchoVerdict] {
+        let applicationUnits = applicationUnits.sorted {
+            ($0.presentation.start, $0.presentation.end, $0.id)
+                < ($1.presentation.start, $1.presentation.end, $1.id)
         }
 
         var verdicts: [String: MeetingUnitEchoVerdict] = [:]
@@ -110,40 +126,40 @@ nonisolated struct MeetingTextOverlapEchoVerdictProvider: MeetingUnitEchoVerdict
             // deliberately refuses fewer than four words, so classify a short temporal phrase and
             // then apply that verdict only to target words that actually occur in the remote phrase.
             let context = MeetingAnalysisInterval(
-                start: max(0, mic.presentation.start - self.wordContextSeconds),
-                end: mic.presentation.end + self.wordContextSeconds
+                start: max(0, mic.presentation.start - Self.wordContextSeconds),
+                end: mic.presentation.end + Self.wordContextSeconds
             )
             let micContext = microphoneUnits.filter {
-                $0.unit.trackID == mic.unit.trackID
+                $0.trackID == mic.trackID
                     && min($0.presentation.end, context.end)
-                    - max($0.presentation.start, context.start) > self.tolerance
+                    - max($0.presentation.start, context.start) > Self.tolerance
             }.sorted {
-                ($0.presentation.start, $0.presentation.end, $0.unit.id)
-                    < ($1.presentation.start, $1.presentation.end, $1.unit.id)
+                ($0.presentation.start, $0.presentation.end, $0.id)
+                    < ($1.presentation.start, $1.presentation.end, $1.id)
             }
             let applicationContext = applicationUnits.filter {
                 min($0.presentation.end, context.end)
-                    - max($0.presentation.start, context.start) > self.tolerance
+                    - max($0.presentation.start, context.start) > Self.tolerance
             }
             let causalMatches = applicationContext.filter {
-                $0.presentation.start <= mic.presentation.end + self.tolerance
+                $0.presentation.start <= mic.presentation.end + Self.tolerance
             }
-            let micText = micContext.map(\.unit.text).joined(separator: " ")
-            let remoteText = applicationContext.map(\.unit.text).joined(separator: " ")
-            let targetWords = Set(MeetingEchoDetector.normalizedWords(mic.unit.text))
+            let micText = micContext.map(\.text).joined(separator: " ")
+            let remoteText = applicationContext.map(\.text).joined(separator: " ")
+            let targetWords = Set(MeetingEchoDetector.normalizedWords(mic.text))
             let causalRemoteWords = Set(causalMatches.flatMap {
-                MeetingEchoDetector.normalizedWords($0.unit.text)
+                MeetingEchoDetector.normalizedWords($0.text)
             })
             guard MeetingEchoDetector.isLikelyEcho(micText: micText, remoteText: remoteText),
                   !targetWords.isDisjoint(with: causalRemoteWords)
             else {
-                verdicts[mic.unit.id] = .notEcho
+                verdicts[mic.id] = .notEcho
                 continue
             }
             let duplicate = causalMatches.first {
-                !targetWords.isDisjoint(with: Set(MeetingEchoDetector.normalizedWords($0.unit.text)))
+                !targetWords.isDisjoint(with: Set(MeetingEchoDetector.normalizedWords($0.text)))
             } ?? causalMatches.first
-            verdicts[mic.unit.id] = .echoSuppressed(duplicateOfUnitID: duplicate?.unit.id)
+            verdicts[mic.id] = .echoSuppressed(duplicateOfUnitID: duplicate?.id)
         }
         return verdicts
     }

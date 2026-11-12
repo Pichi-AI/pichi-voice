@@ -1,82 +1,27 @@
-# Contributing to FluidVoice
+# Contributing to Pichi Voice
 
-Thanks for taking the time to improve FluidVoice. This repository keeps GitHub Issues focused on actionable work, and uses Discussions for questions, ideas, and early design conversations.
+This is the [Pichi Voice repository](https://github.com/Pichi-AI/pichi-voice). The shared development policy is [AGENTS.md](AGENTS.md). It applies to human and AI-assisted contributions; detailed procedures have one owning guide rather than separate rules for each contributor. See [acknowledgements](docs/product/acknowledgements.md) for the project's origin and license.
 
-## Before you write code
+## Propose a useful, reviewable change
 
-- **Every PR must link a tracking issue**, including bug fixes, small changes, and documentation updates. Search for an existing issue first; open one if none exists. A Discussion or roadmap item alone does not replace the issue.
-- **Major features and UI or UX changes need explicit approval before implementation.** Describe the proposal in an issue and wait for a maintainer or moderator to confirm the scope. Opening an issue or receiving no response is not approval.
-- **Major feature requests must start in [Discussions](https://github.com/altic-dev/FluidVoice/discussions/new?category=ideas).** Wait for maintainer or moderator approval, then create or link a tracking issue before starting the PR. Link both the issue and the accepted Discussion in the PR.
-- **Keep PRs atomic and include evidence.** Submit one focused fix or change at a time, with a screenshot, image, or video and clear steps that let a maintainer reproduce and verify it.
+Explain the problem, intended behavior and acceptance criteria. Link an existing issue or design discussion when one exists. A direct task from the repository owner can define the scope; creating a duplicate issue or seeking FluidVoice maintainer approval is not a prerequisite for downstream work. Resolve unclear scope or consequential product decisions with the owner.
 
-Agreeing on the direction first helps avoid work that cannot be accepted. Small bug fixes do not need advance design approval, but they still need a linked issue and reproduction evidence.
+Keep changes focused and preserve upstream integration boundaries, privacy and ownership. Work in an isolated worktree and task branch. See [Agent workflow](docs/development/agent-workflow.md) for coordination, signing and cleanup, and [upstream strategy](docs/development/upstream.md) for extension contracts.
 
-## AI-assisted contributions
+## Include behavioral evidence
 
-AI-assisted coding is welcome. A human must create the final PR or review and approve it before submission, and take responsibility for the entire change.
+New and changed executable behavior includes unit tests in the same change. UI interaction changes also include integration tests. Follow [Testing](docs/development/testing.md) for test locations, meaningful assertions, actual target discovery and bounded execution. Documentation-only changes need diff/link/consistency checks.
 
-- Read the full diff, understand the code, and verify the behavior before requesting review. Be ready to explain your implementation and respond to feedback yourself.
-- Check AI-generated explanations, reproduction steps, test claims, and references against what you actually observed. Report checks you did not run; do not present generated claims as verified results.
-- Keep the PR description, code comments, and review replies concise and relevant. Remove redundant generated commentary, unrelated suggestions, and repeated explanations. Do not post unsolicited automated PRs or batches of unrelated comments.
-- State briefly how AI was used and what you personally reviewed and tested.
+Describe what changed and why, then report checks actually run against the candidate, environment when relevant, skips and gaps. Attach native visual evidence when appearance or interaction changes. Text logs are sufficient for non-visual checks. Keep private recordings, user content, credentials and personal identifiers out of commits and attachments.
 
-**Example:** "Used Claude to draft the fix. I reviewed every changed line, reproduced the bug, tested the fix on macOS [version] / [architecture], and attached before-and-after evidence. I did not test on Intel."
+## Review and publication
 
-AI use alone is not a reason to reject a contribution. Signs that generated work has not been vetted by a human—such as fabricated test results, irrelevant changes, or an author unable to explain the code—will block review and merging until corrected. Maintainers may close unvetted or spam-like submissions.
+Review the full diff and obtain an independent automated review of the integrated revision before publishing a PR to this repository. Address material findings and rerun affected checks. Use the [PR template](.github/pull_request_template.md) to make the result reviewable. Do not report generated explanations or earlier-revision checks as fresh observations.
 
-## Start with Discussions
+AI assistance does not change responsibility for the diff or accuracy of evidence. Briefly describe relevant AI assistance and what was independently reviewed and tested. Publication and merge follow the owner's authorization and repository access controls; these instructions do not grant authority outside the assigned task.
 
-Start a GitHub Discussion first when you want to:
+## Contributions to FluidVoice itself
 
-- Ask a support question.
-- Propose a broad idea or feature.
-- Explore a design direction.
-- Report behavior that you are not sure is a FluidVoice bug.
-- Ask whether a change would be accepted before writing code.
+When submitting to `altic-dev/FluidVoice`, follow its current [contribution policy](https://github.com/altic-dev/FluidVoice/blob/main/CONTRIBUTING.md) and templates. Its issue, discussion, approval and human-review requirements apply to upstream submissions. Do not treat downstream authorization as permission to post unsolicited upstream changes.
 
-Major feature ideas must begin in the Ideas discussion category. After approval, you or a maintainer must create or link a tracking issue before implementation begins.
-
-## Issues
-
-Issues are for work that maintainers can triage and act on.
-
-Use a bug issue only when you can provide:
-
-- A clear description of the bug.
-- Exact reproduction steps.
-- Expected behavior and actual behavior.
-- FluidVoice version, macOS version, and architecture.
-- Logs, crash reports, screenshots, or recordings when relevant.
-
-For an approved major feature, link the accepted Discussion in the tracking issue. For a UI or UX change, record the agreed scope and maintainer or moderator approval in the issue before implementation.
-
-Incomplete bug reports may be labeled `needs reproduction`. If the missing reproduction details are not provided after 14 days, the issue may be closed.
-
-## Pull Requests
-
-Every pull request must link a tracking issue. Before opening a PR:
-
-- Keep the PR focused on one fix or change; split unrelated work into separate PRs.
-- Fill out every required section of the PR template.
-- Select a type of change.
-- Link the tracking issue using `Fixes #123` or `Closes #123` when the PR resolves it, or `Related to #123` for partial work.
-- For major features, also link the accepted Discussion. For major features and UI or UX changes, link the maintainer or moderator's approval of the scope.
-- Provide exact reproduction or verification steps, expected behavior, and the result after your change.
-- Describe what you tested, including the FluidVoice version, macOS version, and Mac architecture. State any checks you could not run.
-- Attach a screenshot, image, or video showing the issue and the result. For UI or UX changes, include before-and-after evidence. For non-visual changes, include a screenshot of relevant test results or diagnostic output, plus copyable logs or test output.
-
-Evidence should let a maintainer verify the change without guessing how to reproduce it. Missing evidence or unclear steps can delay review; remove personal information and secrets from attachments.
-
-The `PR Policy` check validates required template information, but a passing check does not replace these contribution requirements or maintainer approval. PRs missing a tracking issue, required approval, or reproduction evidence may be returned for updates or closed. If required template information is still missing after the existing 48-hour correction window, the PR may be closed so maintainers can keep review queues focused.
-
-**These requirements are mandatory, including human review of AI-assisted work. PRs that do not follow them will not be reviewed or merged until they comply, and may be closed. Maintainer review time is limited; please provide the required issue links, approvals, reproduction steps, and evidence before requesting review.**
-
-## Repository Settings
-
-Maintainers should enable GitHub Discussions with these categories:
-
-- Ideas
-- Help
-- General
-
-Maintainers should require the existing build/test check and the `PR Policy` check before merging to `main`.
+Inherited upstream moderation/archive workflows are repository-guarded. They are not a second contribution policy for Pichi Voice. Preserve upstream copyright and license notices regardless of destination.

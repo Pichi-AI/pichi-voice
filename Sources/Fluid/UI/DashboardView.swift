@@ -117,11 +117,11 @@ struct DashboardView: View {
             Task { await self.screenPermission.refresh() }
         }
         .onChange(of: self.busy) { _, busy in
-            if busy { self.screenPermissionRequestTask?.cancel() }
+            if busy { self.cancelScreenPermissionRequest() }
         }
         .onDisappear {
             self.stats.deactivate(self.statsOwner)
-            self.screenPermissionRequestTask?.cancel()
+            self.cancelScreenPermissionRequest()
         }
         .onChange(of: self.stats.snapshot?.hasFluidIntelligenceUse, initial: true) { _, hasUsed in
             if hasUsed == true { self.settings.recordFluidIntelligenceUse(output: "existing successful use") }
@@ -265,7 +265,7 @@ struct DashboardView: View {
                 icon: "display",
                 detail: "Optional · Helps with Edit Mode and on-screen context.",
                 actionTitle: self.screenPermission.requiresSettings ? "Open settings" : "Set up",
-                action: self.requestScreenAccess
+                action: self.beginScreenPermissionRequest
             )
         }
     }
@@ -292,18 +292,26 @@ struct DashboardView: View {
         }
     }
 
-    private func requestScreenAccess() {
+    private func beginScreenPermissionRequest() {
         guard !self.busy, self.screenPermissionRequestTask == nil else { return }
-        if self.screenPermission.requiresSettings {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                NSWorkspace.shared.open(url)
-            }
-            return
-        }
         self.screenPermissionRequestTask = Task {
             defer { self.screenPermissionRequestTask = nil }
-            await self.screenPermission.requestIfNeeded { !self.busy && !Task.isCancelled }
+            await Self.requestScreenAccess(permission: self.screenPermission, isBusy: { self.busy })
         }
+    }
+
+    /// The permission button's UI-to-service boundary. Refresh/toggles never call it.
+    static func requestScreenAccess(
+        permission: DictationScreenPermissionController,
+        isBusy: @MainActor () -> Bool
+    ) async {
+        guard !isBusy() else { return }
+        await permission.requestIfNeeded { !isBusy() && !Task.isCancelled }
+    }
+
+    func cancelScreenPermissionRequest() {
+        self.screenPermissionRequestTask?.cancel()
+        self.screenPermission.cancel()
     }
 
     private func quickActions(horizontal: Bool) -> some View {

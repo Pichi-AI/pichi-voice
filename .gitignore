@@ -232,6 +232,8 @@ builds/
 # Internal Markdown plans and reports stay local by default
 *.md
 !README.md
+!README.ru.md
+!SUPPORT.md
 !CONTRIBUTING.md
 !.github/pull_request_template.md
 
@@ -248,11 +250,21 @@ builds/
 !/.codex/hooks/session-start.py
 !/docs/
 /docs/*
+!/docs/product/
+/docs/product/*
+!/docs/product/user-guide.md
+!/docs/product/user-guide.ru.md
+!/docs/product/privacy.md
+!/docs/product/acknowledgements.md
 !/docs/development/
 /docs/development/*
 !/docs/development/automatic-recording-titles.md
 !/docs/development/upstream-1.6.12-beta1-20261013.md
 !/docs/development/codex.md
+!/docs/development/testing.md
+!/docs/development/agent-workflow.md
+!/docs/development/initial-verification-2026-10.md
+!/docs/development/instruction-refactor-2026-11-05.md
 !/docs/development/upstream.md
 !/docs/development/least-change-refactoring.md
 !/docs/development/pichi-sso-delivery-plan.md
@@ -289,6 +301,7 @@ builds/
 !/scripts/dev/check-transcribe-sdk.py
 !/scripts/dev/check-diarization-repeatability.py
 !/scripts/dev/check-xcode-build-settings.py
+!/scripts/dev/lint-changed.py
 !/scripts/dev/mobile-framework-metadata.py
 !/scripts/dev/capture-mobile-frames.py
 !/scripts/dev/mobile-screen-stream.swift
@@ -298,6 +311,10 @@ builds/
 !/scripts/dev/standalone-regression.py
 !/scripts/dev/local-api-live.py
 !/scripts/dev/verify-published-upstream-release.py
+!/scripts/dev/package-macos-dmg.py
+!/scripts/dev/package-macos-pkg.py
+!/scripts/dev/macos-pkg-resources/
+!/docs/development/macos-distribution.md
 
 # Keep future public history free of personal data and local model artifacts
 /private_assets/
@@ -315,3 +332,14 @@ builds/
 !/docs/development/onboarding-integration-2026-10-22.md
 !docs/development/upstream-sync-1.6.13-beta1.md
 !docs/development/pichi-native-account-core.md
+
+# Reviewed public Pichi Voice landing assets
+!/website/dist/voice/assets/
+/website/dist/voice/assets/*
+!/website/dist/voice/assets/pichi.png
+!/website/dist/voice/assets/site.css
+!/website/dist/voice/assets/voice-demo.mjs
+
+# Official service marks used only to identify conferencing applications
+!/website/dist/voice/assets/services/
+!/website/dist/voice/assets/services/*

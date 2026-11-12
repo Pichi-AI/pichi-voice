@@ -21,10 +21,12 @@ final class SettingsBackupRoundTripTests: XCTestCase {
         XCTAssertFalse(reloaded.onboardingCompleted)
         reloaded.onboardingCurrentStep = 7
         XCTAssertEqual(reloaded.onboardingCurrentStep, 7, "The optional account step must survive relaunch")
+        reloaded.onboardingCurrentStep = 8
+        XCTAssertEqual(reloaded.onboardingCurrentStep, 8, "The current final setup step must survive relaunch")
         reloaded.onboardingCurrentStep = Int.max
-        XCTAssertEqual(reloaded.onboardingCurrentStep, 7)
+        XCTAssertEqual(reloaded.onboardingCurrentStep, 8)
         defaults.set(Int.max, forKey: "OnboardingCurrentStep")
-        XCTAssertEqual(reloaded.onboardingCurrentStep, 7)
+        XCTAssertEqual(reloaded.onboardingCurrentStep, 8)
         reloaded.onboardingCurrentStep = -1
         XCTAssertEqual(reloaded.onboardingCurrentStep, 0)
     }

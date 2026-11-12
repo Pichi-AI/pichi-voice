@@ -94,7 +94,7 @@ actor MeetingStreamingTranscriptState {
          speakerNameFormat: String = PichiLocalization.text("Speaker %lld")) throws {
         guard configuration.speakerLabelsEnabled,
               configuration.effectiveSpeakerProcessingMode == .streaming,
-              track.kind == .microphone,
+              (track.kind == .microphone || track.kind == .applicationAudio),
               limits.maximumPendingWords > 0, limits.maximumPendingTextBytes > 0,
               limits.maximumPendingSeconds.isFinite, limits.maximumPendingSeconds > 0 else {
             throw Failure.invalidConfiguration
@@ -517,11 +517,11 @@ actor MeetingStreamingTranscriptState {
         let pendingText = self.pending.map(\.text).joined(separator: " ")
         let text = [pendingText, tail?.text ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
         guard !text.isEmpty else { return nil }
-        let starts = self.pending.map { $0.start.seconds } + (tail.map { [$0.start] } ?? [])
+        let starts = self.pending.map { $0.nativeTiming?.start ?? $0.start.seconds } + (tail.map { [$0.start] } ?? [])
         guard let start = starts.min() else { return nil }
         // A partial lexical tail can have approved text without an approved endpoint.
         // In that case only complete pending fragments contribute audio coverage.
-        let ends = self.pending.map { $0.end.seconds } + (tail?.end.map { [$0] } ?? [])
+        let ends = self.pending.map { $0.nativeTiming?.end ?? $0.end.seconds } + (tail?.end.map { [$0] } ?? [])
         return MeetingLivePartial(id: self.previewID, text: text, start: start, end: ends.max())
     }
 
