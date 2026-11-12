@@ -375,7 +375,7 @@ final class MacUpdaterLifecycleTests: XCTestCase {
 
 private nonisolated func fixtureRelease(_ build: Int, tag: String? = nil, draft: Bool = false, beta: Bool = false, wrongAsset: Bool = false, wrongURL: Bool = false) -> [String: Any] {
     let tag = tag ?? "v0.1.0+\(build)-\(beta ? "beta" : "public").1"
-    let asset = "Pichi-Voice-0.1.0-\(build)-macos-arm64.dmg"
+    let asset = "Pichi-Voice.dmg"
     return ["tag_name": tag, "draft": draft, "prerelease": beta, "assets": [[
         "name": wrongAsset ? "runtime.zip" : asset,
         "content_type": "application/x-apple-diskimage",
