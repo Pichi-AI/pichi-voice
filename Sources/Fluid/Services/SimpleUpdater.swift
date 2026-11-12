@@ -184,7 +184,7 @@ final class SimpleUpdater: ObservableObject {
         session: URLSession = .shared,
         defaults: UserDefaults = .standard,
         promptPresenter: UpdatePromptPresenter = .shared,
-        operationGate: UpdateOperationGate = .init(),
+        operationGate: UpdateOperationGate? = nil,
         installationAdmission: @escaping @MainActor () throws -> (@MainActor () -> Void) = {
             try SimpleUpdater.reserveInstallation(using: AppServices.shared.asr)
         }
@@ -192,7 +192,7 @@ final class SimpleUpdater: ObservableObject {
         self.updateSession = session
         self.updateDefaults = defaults
         self.updatePrompts = promptPresenter
-        self.updateOperationGate = operationGate
+        self.updateOperationGate = operationGate ?? UpdateOperationGate()
         self.installationAdmission = installationAdmission
     }
 

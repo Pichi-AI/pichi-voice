@@ -112,6 +112,27 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
         try fixture.assertNoStage()
     }
 
+    func testSameMarketingVersionInstallsOnlyTheApprovedBuildAndKeepsPreviousBuild() throws {
+        let fixture = try Fixture(candidateVersion: Fixture.installedVersion)
+        defer { fixture.cleanup() }
+        let installation = try fixture.prepare(expectedVersion: Fixture.installedVersion)
+        XCTAssertEqual(try fixture.validated(fixture.installed).build, "27")
+        XCTAssertEqual(try fixture.validated(fixture.backup).build, Fixture.installedBuild)
+        try installation.replacement.recover()
+        try fixture.assertOriginalUnchanged()
+    }
+
+    func testUnapprovedBuildCannotReplaceOriginalOrCreateBackup() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        XCTAssertThrowsError(try fixture.prepare(expectedBuild: "28")) {
+            XCTAssertEqual($0 as? UpdateBundleValidator.ValidationError, .buildMismatch)
+        }
+        try fixture.assertOriginalUnchanged()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.backup.path))
+        try fixture.assertNoStage()
+    }
+
     func testInstalledVersionChangedSinceApprovalRejectsPreparation() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -292,20 +313,21 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
             installedVersion: String = Self.installedVersion,
             installedBuild: String = Self.installedBuild,
             expectedVersion: String? = Self.incomingVersion,
+            expectedBuild: String? = "27",
             isRollback: Bool = false
         ) throws -> SimpleUpdater.PreparedInstallation {
-            try SimpleUpdater.prepareValidatedInstallation(
+            let assessments = PipelineValidationLog()
+            let result = try SimpleUpdater.prepareValidatedInstallation(
                 installedAppURL: self.installed,
                 downloadedAppURL: self.incoming,
                 installedExpectation: .init(bundleIdentifier: Self.identifier, version: installedVersion, build: installedBuild),
                 expectedVersion: expectedVersion,
+                expectedBuild: expectedBuild,
                 backupURL: self.backup,
                 isRollback: isRollback,
                 validateBundle: { url, expectation, policy in
-                    if !isRollback, expectation.version == expectedVersion {
-                        guard case let .developerID(teams) = policy else {
-                            throw NSError(domain: "FixtureExpectedDeveloperIDPolicy", code: 1)
-                        }
+                    if case let .developerID(teams) = policy {
+                        assessments.recordReleaseAssessment()
                         if self.simulateReleaseAssessment {
                             return try UpdateBundleValidator.validate(at: url, expectation: expectation,
                                 policy: .appleDevelopment(allowedTeamIDs: teams))
@@ -314,6 +336,9 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
                     return try UpdateBundleValidator.validate(at: url, expectation: expectation, policy: policy)
                 }
             )
+            XCTAssertEqual(assessments.releaseAssessments, isRollback ? 0 : 1,
+                "The production pipeline must request Developer ID authority for an incoming release")
+            return result
         }
 
         func validated(_ bundle: URL) throws -> UpdateBundleValidator.ValidatedBundle {
@@ -429,4 +454,11 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
             }
         }
     }
+}
+
+private final nonisolated class PipelineValidationLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var releaseAssessments: Int { self.lock.withLock { self.count } }
+    func recordReleaseAssessment() { self.lock.withLock { self.count += 1 } }
 }
