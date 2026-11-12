@@ -235,6 +235,8 @@ builds/
 !README.ru.md
 !SUPPORT.md
 !CONTRIBUTING.md
+!SECURITY.md
+!CODE_OF_CONDUCT.md
 !.github/pull_request_template.md
 
 # Pichi Voice shared development configuration

@@ -6,7 +6,7 @@
 
 Голосовой ввод на Mac, локальная запись и расшифровка встреч на Mac, iPhone и iPad. Меньше печати и больше контроля над своими записями.
 
-[English](README.md) · [Сайт](https://pichi.ai/ru/voice) · [Релизы](https://github.com/Pichi-AI/pichi-voice/releases) · [Руководство](docs/product/user-guide.ru.md) · [Поддержка](SUPPORT.md)
+[English](README.md) · [Сайт](https://pichi.ai/ru/voice) · [Релизы](https://github.com/Pichi-AI/pichi-voice/releases) · [Руководство](docs/product/user-guide.ru.md) · [Поддержка](SUPPORT.md) · [Безопасность](SECURITY.md)
 
 ## Возможности
 
@@ -24,7 +24,7 @@
 
 | Платформа | Требования | Загрузка |
 | --- | --- | --- |
-| macOS | macOS 15 или новее; Apple Silicon | [Скачать установщик для Mac](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B69-public.1/Pichi-Voice-0.1.0-69-macos-arm64.dmg) |
+| macOS | macOS 15 или новее; Apple Silicon | [Скачать установщик для Mac](https://github.com/Pichi-AI/pichi-voice/releases/latest/download/Pichi-Voice.dmg) |
 | Windows | - | Coming Soon |
 | iOS (iPhone / iPad) | iOS / iPadOS 17 или новее; память и место для выбранной модели | Coming Soon |
 | Android | - | Coming Soon |
@@ -33,7 +33,7 @@
 
 ## Начало работы
 
-1. [Скачайте установщик для Mac](https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0%2B69-public.1/Pichi-Voice-0.1.0-69-macos-arm64.dmg) для Apple Silicon и macOS 15 или новее.
+1. [Скачайте установщик для Mac](https://github.com/Pichi-AI/pichi-voice/releases/latest/download/Pichi-Voice.dmg) для Apple Silicon и macOS 15 или новее.
 2. Откройте образ диска и перетащите Pichi Voice в «Программы». Запустите Pichi Voice из «Программ».
 3. Пройдите первоначальную настройку, когда Pichi Voice откроется. Разрешите микрофон, Accessibility для ввода в другие приложения и запись экрана/системного аудио для компьютерного звука.
 4. Выберите и загрузите модель для своего языка, пока есть интернет.
@@ -60,6 +60,8 @@
 Подробнее: [обработка данных](docs/product/privacy.md) и [политика мобильного приложения](https://pichi.ai/ru/voice/privacy).
 
 ## Разработка
+
+Приветствуются вопросы, сообщения об ошибках, переводы, документация и код на русском и английском. [Откройте issue](https://github.com/Pichi-AI/pichi-voice/issues/new/choose) или воспользуйтесь [инструкцией для fork и PR](CONTRIBUTING.md#your-first-pull-request). Изменения рассматривает и принимает владелец проекта. Соблюдайте [правила общения](CODE_OF_CONDUCT.md).
 
 ```sh
 git clone https://github.com/Pichi-AI/pichi-voice.git

@@ -49,21 +49,29 @@ body:
       placeholder: "1.2.3"
     validations:
       required: true
-  - type: input
-    id: macos-version
+  - type: dropdown
+    id: platform
     attributes:
-      label: macOS Version
-      placeholder: "macOS 15.5"
+      label: Platform
+      options:
+        - Mac
+        - iPhone
+        - iPad
     validations:
       required: true
-  - type: dropdown
-    id: architecture
+  - type: input
+    id: os-version
     attributes:
-      label: Architecture
-      options:
-        - Apple Silicon
-        - Intel
-        - Unknown
+      label: Operating system version
+      placeholder: "macOS 15.5, iOS 17.6 or iPadOS 17.6"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and selected model
+      description: Include your device model, memory if known, and the speech or summary model in use.
+      placeholder: "MacBook Air M2, 16 GB, GigaAM; or iPad model and speech model"
     validations:
       required: true
   - type: textarea
