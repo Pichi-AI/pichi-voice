@@ -15,26 +15,14 @@
   },
   {
    "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testDisablingFluidMeetDuringModelPreparationDoesNotStartCapture()",
-   "owner": "#138 unify live meeting processing (commit 3731cb52)",
-   "reason": "Expectation is out of date after an intended change. 3731cb52 registered Parakeet v2 (the default model) as a meeting provider, so registeredModelsExistOnDisk is now true when v2 is installed and the coordinator skips...",
+   "owner": "test-infra",
+   "reason": "Depends on speech models in the test identity's Application Support: it passes with an empty container and fails once Parakeet models are there, and the suite itself downloads Parakeet v3 from huggingface.co during a run. Remove when regression runs start from an empty container.",
    "expires": "2026-11-26"
   },
   {
    "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testFluidMeetLongTranscriptRendersWithoutSideEffects()",
    "owner": "#115 codex/speaker-assignment-20261106",
    "reason": "Expectation is out of date after an intended change. The unresolved anonymous passage now receives a reading participant caption instead of staying '[02:40] text' with no caption; this is exactly the behaviour #115...",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testMicrophoneButtonActionRoutesThroughCoordinatorAndAttemptControl()",
-   "owner": "#138 unify live meeting processing (commit 3731cb52)",
-   "reason": "Expectation is out of date after an intended change. The test (added in #114 on 11-06) uses languageCode 'es' to avoid the English caption model, relying on the then-unregistered v2 default. 3731cb52 registered...",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testHarnessPinsEnglishBackendWhenAmbientSelectionIsRussianOnly()",
-   "owner": "#138 unify live meeting processing (commit 3731cb52)",
-   "reason": "Expectation is out of date after an intended change. 3731cb52 registers Parakeet v2 under its own backend id local-parakeet-tdt-v2-v1, so a recording with the default v2 model now records that id instead of the old...",
    "expires": "2026-11-26"
   },
   {
@@ -80,12 +68,6 @@
    "expires": "2026-11-26"
   },
   {
-   "test": "FluidDictationIntegrationTests/SettingsBackupRoundTripTests/testMeetingLocationOnboardingStepResumesWithoutResettingCompletedSetup()",
-   "owner": "#112 codex/mute-stream-integration-20261105-efd24f29ef",
-   "reason": "Expectation is out of date after an intended change. Commit b964d2e3 ('Add shared owner voice enrollment to desktop onboarding') added an onboarding step and raised the onboardingCurrentStep clamp from 7 to 8 in...",
-   "expires": "2026-11-26"
-  },
-  {
    "test": "PichiVoiceMobileIntegrationTests/MeetingSavedTranscriptPresentationTests/testActualSpeakerIDsAndKnownToUnknownStateRemainBoundaries()",
    "owner": "#115 codex/speaker-assignment-20261106",
    "reason": "Fails on iOS since reading participants were assigned to every fragment. Not analysed one by one.",
@@ -116,105 +98,87 @@
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:dictation_capture_admission",
-   "owner": "#117 codex/ctc-emission-utterances-20261106",
-   "reason": "The probe harness is out of date. #117 added ASRWordTimingProvenance (used by TranscriptionProvider.swift), which the generated AdmissionTests sources do not include.",
+   "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testCancellationDuringAdmittedDependencyPreparationJoinsBeforeLeaseRelease()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "#157 keeps recording when model validation, speaker preparation or input validation fails and defers speech. This test states the opposite contract: cancellation during admitted preparation joins before the lease is released. Needs a decision from the owner of #157: change the contract or restore the refusal. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:dictionary_training_save",
-   "owner": "#101 codex/consistent-corrections-20261105-1512772559",
-   "reason": "The probe harness is out of date. #101 added DictionaryCorrectionReplacementPlan and TextMap after DictionaryTrainingSpellingPolicy in DictionaryCorrectionEditPolicy.swift; the probe compiles that tail...",
+   "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testEveryMeetingModelPublishesLiveSpeakersAndReleasesDictationAfterStop()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "#157 keeps recording when model validation, speaker preparation or input validation fails and defers speech. This test states the opposite contract: every meeting model publishes live speakers and the session stays in recording, not recordingDegraded. Needs a decision from the owner of #157: change the contract or restore the refusal. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:file_operation_isolation",
-   "owner": "#117 codex/ctc-emission-utterances-20261106",
-   "reason": "The probe harness is out of date. #117 added ASRWordTimingProvenance referenced from TranscriptionProvider.swift:146, not provided by the probe's source list.",
+   "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testExplicitRetainedBackendRefusedBeforePreparationOrPermission()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "#157 keeps recording when model validation, speaker preparation or input validation fails and defers speech. This test states the opposite contract: an explicit unsupported backend request is refused before preparation or permission. Needs a decision from the owner of #157: change the contract or restore the refusal. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:fluid_serve",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "The probe harness is out of date. #115 gave MeetingSpeakerAttribution init(readingParticipant:source:policy:) three arguments and the exporter now calls it that way, but the probe's stub init takes fewer.",
+   "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testMissingModelBlocksCaptureAndClearsStartReservation()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "#157 keeps recording when model validation, speaker preparation or input validation fails and defers speech. This test states the opposite contract: recording must not start without the required model. Needs a decision from the owner of #157: change the contract or restore the refusal. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:gigaam_artifact_ownership",
-   "owner": "#117 codex/ctc-emission-utterances-20261106",
-   "reason": "The probe harness is out of date. #117 introduced GigaAMWordTiming, used in PichiGigaAMProvider.swift, which the probe does not compile in.",
+   "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testModelChangedDuringAdmittedDependencyPreparationRollsBackBeforeCapture()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "#157 keeps recording when model validation, speaker preparation or input validation fails and defers speech. This test states the opposite contract: a model changed during admitted preparation rolls back before capture. Needs a decision from the owner of #157: change the contract or restore the refusal. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:meeting_asr_prepared_provider",
-   "owner": "#120 codex/unified-meeting-clock-20261106",
-   "reason": "The probe harness is out of date. #120 added MeetingRecordingTimePolicy, now referenced from MeetingProcessingConfiguration.swift, missing from the probe's source set.",
+   "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testUnsupportedStreamingModeIsRefusedBeforePreparationForEitherStoragePolicy()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "#157 keeps recording when model validation, speaker preparation or input validation fails and defers speech. This test states the opposite contract: a saved recording must not silently downgrade an unsupported streaming mode. Needs a decision from the owner of #157: change the contract or restore the refusal. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:meeting_backup_refresh",
-   "owner": "#138 unify live meeting processing",
-   "reason": "The probe harness is out of date. #138 made PichiMeetingProviderFactory's descriptors reference ParakeetSpeechModelCatalog.v3/v2/pro; the probe slices the factory but does not compile...",
+   "test": "FluidDictationIntegrationTests/MeetingAudioChunkLedgerRecoveryTests/testPartialOrEscapingNewAssetIsNeverPromoted()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "Possible regression: since #157 an unrecoverable or escaping partial capture stays .writing instead of becoming .failed on restore (recoverClosedCapture rejects the path and the store swallows the error). Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:meeting_capture_activity",
-   "owner": "#120 codex/unified-meeting-clock-20261106",
-   "reason": "The probe harness is out of date. #120 introduced MeetingCaptureClockMetadata, used in MeetingCapturePCMTransport.swift, which the probe does not supply.",
+   "test": "FluidDictationIntegrationTests/MeetingSummaryInputTests/testLegacyISOManifestStillMatchesSummaryMadeBeforeReload()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "Possible regression: since #157 the store reconciles a session without track.json on load, rewrites the legacy session.json on read (1561 instead of 1653 bytes) and drops firstPresentationTime of a track without chunks. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:meeting_capture_pcm",
-   "owner": "#120 codex/unified-meeting-clock-20261106",
-   "reason": "The probe harness is out of date. #120 removed the InRoom enqueueForTranscription method and the 'self.stopRequestedAt = (session.id, Date())' line, which the script's declaration()/assert lookups still...",
+   "test": "FluidDictationIntegrationTests/MeetingSummaryInputTests/testSummaryMadeRightAfterRecordingStillMatchesOnceTheMeetingIsReloaded()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "Possible regression: since #157 a reload drops firstPresentationTime of a track without chunks, so the reloaded session differs from the one the summary was made from. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:meeting_pending_speech",
-   "owner": "#120 codex/unified-meeting-clock-20261106",
-   "reason": "The probe harness is out of date. Same as meeting_capture_activity: MeetingCaptureClockMetadata added by #120 is not in the probe's sources.",
+   "test": "FluidDictationIntegrationTests/MeetingVoiceProcessingCaptureTests/testRawRouteResumePersistenceFailureDoesNotOpenAdmission()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "Possible regression: after #157 a failed durable write during a raw route resume no longer propagates, and echo protection stays unfiltered. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:meeting_speaker_attribution",
-   "owner": "#117 codex/ctc-emission-utterances-20261106",
-   "reason": "The probe harness is out of date. #117 added ASRWordTimingProvenance to MeetingCanonicalEvidenceTypes.swift (absent at 234f3b08), a type the probe does not define.",
+   "test": "FluidDictationIntegrationTests/MeetingVoiceProcessingCaptureTests/testRawRouteResumeWithoutNewPCMReopensOnlyAfterDurableBoundary()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "After #157 track.json is not written where this test reads the durable boundary. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:meeting_streaming_echo",
-   "owner": "#117 codex/ctc-emission-utterances-20261106",
-   "reason": "The probe harness is out of date. #117 added ASRWordTimingProvenance, which the generated ActualEchoContracts.swift does not declare.",
+   "test": "FluidDictationIntegrationTests/MeetingMicrophoneCaptureTests/testWriterPublishesPCMCAFMetadataAndReadyLedgerTerminal()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "After #157 the PCM writer no longer publishes a ready ledger terminal where this test expects it. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:private_capture_feedback",
-   "owner": "#112 codex/mute-stream-integration-20261105-efd24f29ef",
-   "reason": "The probe harness is out of date. #112 added SettingsStore.applyingMeetingRecordingPreferences(to:), now called from AppServices+MeetingMenuBar.startMeetingRecordingFromMenuBar, but the probe's...",
+   "test": "FluidDictationIntegrationTests/MeetingCaptureStorageAdmissionTests/testDesktopRefusesStreamingWithoutConsumerBeforeStorageOrPermissionWork()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "After #157 the refusal path fails with Cocoa error 4 while removing a session directory. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:private_profile_defaults",
-   "owner": "#112 codex/mute-stream-integration-20261105-efd24f29ef",
-   "reason": "The probe harness is out of date. #112 widened the onboardingCurrentStep clamp in SettingsStore from min(7) to min(8) (extra voice enrollment step), while the probe still expects 7; the product change...",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "probe:publication_composition",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "The probe harness is out of date. Same as fluid_serve: #115 changed the speakerAttribution init(readingParticipant:source:policy:) signature used by MeetingTranscriptExporter.swift:937.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "probe:publication_outbox",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "The probe harness is out of date. Same as fluid_serve: #115 changed the speakerAttribution init(readingParticipant:source:policy:) signature used by MeetingTranscriptExporter.swift:937.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "probe:test-meeting-microphone-privacy",
-   "owner": "#120 codex/unified-meeting-clock-20261106",
-   "reason": "The probe harness is out of date. #120 added MeetingRecordingClockContext, used by MeetingMicrophonePrivacyGate.swift:84, which the probe does not include.",
+   "test": "FluidDictationIntegrationTests/MeetingAudioComparisonProbeTests/testFullComparisonCompletesRequestOnlyAfterReportIsSaved()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "After #157 the full comparison does not save a usable report within 5 seconds. Passes on c66a80fd^1 and fails after #157.",
    "expires": "2026-11-26"
   }
  ]
