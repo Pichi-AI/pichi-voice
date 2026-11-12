@@ -23,7 +23,8 @@ permissions:
 
 concurrency:
   group: pichi-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # A newer pull request commit replaces an older run; every main commit keeps its own result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   portable:
@@ -54,19 +55,48 @@ jobs:
             --swiftlint "docker run --rm --volume $PWD:$PWD --workdir $PWD ghcr.io/realm/swiftlint:0.65.1@sha256:f47e083201e47a136cda5ae847595bfe00226c444ca226fa74fa5dc648a9b057"
 
   macos:
-    name: macOS integration tests
-    if: (github.event_name == 'workflow_dispatch' && inputs.run_macos) || vars.PICHI_VOICE_MACOS_CI == 'true'
-    runs-on: macos-latest
-    timeout-minutes: 30
+    name: macOS gate L1
+    # Pull requests and main only: a push to a codex/** branch is checked through its pull request.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.run_macos) ||
+      (vars.PICHI_VOICE_MACOS_CI == 'true' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main'))
+    runs-on: xcode-27
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+          # The gate compares the tree with origin/main.
+          fetch-depth: 0
       - name: Create isolated build worktree
         run: git worktree add --detach ../pichi-voice-ci HEAD
-      - name: Run macOS tests
+      - name: Install SwiftLint when the image has none
+        run: command -v swiftlint >/dev/null || brew install swiftlint
+      - name: Show the tools the gate uses
+        run: |
+          python3 --version
+          xcodebuild -version
+          swiftlint version
+          df -h "$GITHUB_WORKSPACE"
+      - name: Run the L1 gate
         working-directory: ../pichi-voice-ci
-        run: bash scripts/dev/macos.sh test
+        run: python3 -S scripts/dev/verify --layer L1
+      - name: Show the receipt and the logs of failed steps
+        if: always()
+        working-directory: ../pichi-voice-ci
+        run: |
+          for receipt in .build/verify/*/receipt.json; do
+            [ -f "$receipt" ] || continue
+            cat "$receipt"
+            python3 -S - "$receipt" <<'PY'
+          import json, sys
+          for step in json.load(open(sys.argv[1]))["steps"]:
+              if step["status"] != "passed" and step.get("log"):
+                  print(f"--- last lines of {step['name']}")
+                  with open(step["log"], errors="replace") as log:
+                      print("".join(log.readlines()[-80:]))
+          PY
+          done
 
   ios:
     name: iOS simulator build

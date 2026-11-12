@@ -80,6 +80,6 @@ A path with no rule takes L1, so a new kind of file cannot skip the app. A red s
 
 ## CI and review
 
-The checked-in [Pichi CI workflow](../../.github/workflows/pichi-ci.yml) runs portable checks. macOS tests and mobile builds have separate opt-ins; inherited [FluidVoice CI](../../.github/workflows/build.yml) is guarded to upstream. Inspect actual job conditions and repository settings before claiming native tests ran. A green portable status is not native regression or device acceptance. This instruction refactor does not enable runners or change CI settings.
+The checked-in [Pichi CI workflow](../../.github/workflows/pichi-ci.yml) runs portable checks. Its optional macOS job runs the [L1 gate](#gate-layers), and mobile builds have a separate opt-in; inherited [FluidVoice CI](../../.github/workflows/build.yml) is guarded to upstream. Inspect actual job conditions and repository settings before claiming native tests ran. A green portable status is not native regression or device acceptance. This instruction refactor does not enable runners or change CI settings.
 
 Independent review maps changed behavior to unit tests and UI interaction to integration coverage. Check target membership, discovery, meaningful assertions, privacy, immutable selection, cancellation and restoration. Treat skipped, unexecuted or all-skipped cases as limitations. Coverage collection or required CI gates need an infrastructure change and an agreed baseline; do not invent a percentage here.

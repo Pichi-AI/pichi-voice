@@ -174,7 +174,7 @@ Feature results and then-open validation gaps are retained in [Initial verificat
 
 `python3 -S scripts/dev/lint-changed.py` lints only the Swift lines a branch changed. The repository has a large inherited baseline, so `force_cast`, `force_try` and `force_unwrapping` in `Sources/` block a change and every other rule is a note, including anything in `Vendor/`. The same check runs on each PR in `pichi-ci.yml`.
 
-[Pichi Voice CI](../../.github/workflows/pichi-ci.yml) runs portable checks. For macOS testing, manually dispatch the workflow with `run_macos` selected. To enable macOS testing on every code change, set the repository variable `PICHI_VOICE_MACOS_CI` to `true` after reviewing runner usage and the baseline results.
+[Pichi Voice CI](../../.github/workflows/pichi-ci.yml) runs portable checks. Its macOS job runs `python3 -S scripts/dev/verify --layer L1` on the `xcode-27` runner: dispatch the workflow manually with `run_macos` selected, or set the repository variable `PICHI_VOICE_MACOS_CI` to `true` to run it on every pull request to `main` and every push to `main`. Quarantined tests stay out of that run, so a red result means a new failure.
 
 Upstream community moderation and archive workflows are retained but guarded to run only in `altic-dev/FluidVoice`. Our repository does not inherit their scheduled issue closing or comment policies.
 
