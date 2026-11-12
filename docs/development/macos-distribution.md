@@ -49,14 +49,18 @@ Never publish an export merely because Xcode reports success.
 ## Manual public release runbook
 
 Release stages are deliberately initiated by an operator. No commit, CI run or
-app launch publishes a release. The macOS updater downloads the exact versioned
-DMG selected from its release. The website uses this constant latest-release URL:
+app launch publishes a release. The release helper requires Python 3.11 or later.
+The macOS updater downloads `Pichi-Voice.dmg` from the exact selected
+release tag. Version and numeric build come from release metadata and the sealed
+application bundle, not the filename. The website uses this constant latest-release URL:
 
-`https://github.com/Pichi-AI/pichi-voice/releases/latest/download/Pichi-Voice-macos-arm64.dmg`
+`https://github.com/Pichi-AI/pichi-voice/releases/latest/download/Pichi-Voice.dmg`
 
-Each new public release includes both that alias and its versioned DMG, with
-identical bytes, plus exact corresponding source, `release-manifest.json` and
-`SHA256SUMS`. Keep earlier public releases and tags immutable. A different source
+Each new public release includes one product-named `Pichi-Voice.dmg`, exact
+corresponding source, `release-manifest.json` and `SHA256SUMS`. The website
+always follows GitHub Latest without a site edit. This product-only DMG filename
+was requested by the product owner on November 12, 2026. Historical release
+assets remain immutable; the updater can still read their versioned names. Keep earlier public releases and tags immutable. A different source
 commit or artifact needs a new release tag, never replacement assets. This does
 not change iOS delivery. Publication must advance the latest stable version and
 numeric build, so the website alias cannot accidentally downgrade its download.
@@ -188,12 +192,12 @@ python3 scripts/dev/macos-release.py plan --source "$pichi_source" \
 # Package once using the existing owning packager. It never re-signs the app.
 .build/dmg-tool/bin/python scripts/dev/package-macos-dmg.py \
   --app "$pichi_app" \
-  --output "$pichi_release_root/Pichi-Voice-0.1.0-71-macos-arm64.dmg"
+  --output "$pichi_release_root/Pichi-Voice.dmg"
 
-# Reuse that exact image, validate its mounted payload, and prepare five public files.
+# Reuse that exact image, validate its mounted payload, and prepare four public files.
 python3 scripts/dev/macos-release.py prepare --source "$pichi_source" \
   --version 0.1.0 --build 71 --app "$pichi_app" \
-  --dmg "$pichi_release_root/Pichi-Voice-0.1.0-71-macos-arm64.dmg" \
+  --dmg "$pichi_release_root/Pichi-Voice.dmg" \
   --output "$pichi_release_root/public"
 ```
 
@@ -225,7 +229,7 @@ The helper explicitly targets the public `Pichi-AI/pichi-voice` repository and
 fails closed on malformed API status/JSON, identity, size or digest. `draft`
 creates the exact pinned tag if absent; an existing annotated/lightweight tag
 must peel to that same source commit. It never moves a tag. It uploads only the
-five verified files, never signing logs or private evidence.
+four verified files, never signing logs or private evidence.
 
 ```sh
 python3 scripts/dev/macos-release.py draft --source "$pichi_source" \
@@ -279,12 +283,12 @@ python3 scripts/dev/macos-release.py verify --source "$pichi_source" \
   --artifacts "$pichi_release_root/public"
 ```
 
-After publication, verification downloads the **entire** five public assets
+After publication, verification downloads the **entire** four public assets
 anonymously without GitHub credentials and checks sizes/hashes. It also downloads
 the website's latest alias in full, checks latest release identity and rechecks
 the exact tag source. A post-publication download failure can leave a published
 release; never recreate or retarget it to retry verification. Preserve the
-source, frozen app/archive, five public files and private acceptance evidence
+source, frozen app/archive, four public files and private acceptance evidence
 outside disposable worktrees. Remove only owned temporary resources.
 
 ### Tooling verification limits
@@ -407,7 +411,7 @@ python3 -m venv .build/dmg-tool
 .build/dmg-tool/bin/python -m pip install dmgbuild==1.6.7 Pillow==12.2.0
 .build/dmg-tool/bin/python scripts/dev/package-macos-dmg.py \
   --app '/absolute/path/Pichi Voice.app' \
-  --output '/absolute/path/Pichi-Voice-macos-arm64.dmg'
+  --output '/absolute/path/Pichi-Voice.dmg'
 python3 -m unittest discover -s Tests -p test_macos_dmg_packaging.py
 ```
 

@@ -30,7 +30,7 @@ from urllib.request import HTTPSHandler, HTTPRedirectHandler, Request, build_ope
 REPO = "Pichi-AI/pichi-voice"
 TEAM = "LU46F7HGJM"
 BUNDLE = "ai.pichi.voice"
-ALIAS = "Pichi-Voice-macos-arm64.dmg"
+ALIAS = "Pichi-Voice.dmg"
 MANIFEST = "release-manifest.json"
 CHECKSUMS = "SHA256SUMS"
 PUBLICATION_LOCK = "pichi-macos-publication-lock"
@@ -249,8 +249,9 @@ class Release:
         require(re.fullmatch(re.escape(f"v{args.version}+{args.build}-public.") + r"[1-9][0-9]*", self.tag), "Tag identity mismatch")
         self.source = Source(args.repo, args.source, self.commands)
         self.prefix = f"Pichi-Voice-{args.version}-{args.build}-source"
-        self.dmg_name = f"Pichi-Voice-{args.version}-{args.build}-macos-arm64.dmg"
-        self.names = [self.dmg_name, ALIAS, self.prefix + ".tar.gz"]
+        self.dmg_name = ALIAS
+        self.source_name = self.prefix + ".tar.gz"
+        self.names = [self.dmg_name, self.source_name]
 
     def app(self, app):
         spec = importlib.util.spec_from_file_location("pichi_dmg_packaging", Path(__file__).with_name("package-macos-dmg.py"))
@@ -353,12 +354,9 @@ class Release:
             self.commands.run([sys.executable, str(Path(__file__).with_name("package-macos-dmg.py")),
                                "--app", str(app), "--output", str(image)])
         self.verify_dmg(image, frozen)
-        with image.open("rb") as src, (output / ALIAS).open("xb") as dest:
-            shutil.copyfileobj(src, dest)
         require(self.app(app) == frozen, "Frozen input changed during packaging")
-        require(digest(output / ALIAS) == digest(image), "Alias copy mismatch")
-        self.source.archive(output / self.names[2], self.prefix)
-        self.source.verify_archive(output / self.names[2], self.prefix)
+        self.source.archive(output / self.source_name, self.prefix)
+        self.source.verify_archive(output / self.source_name, self.prefix)
         self.source.clean()
         with (output / MANIFEST).open("xb") as stream:
             stream.write(json_bytes(self.metadata(output, frozen)))
@@ -373,9 +371,8 @@ class Release:
             regular(directory / name)
         frozen = self.app(Path(self.args.app).absolute())
         self.verify_dmg(directory / self.dmg_name, frozen)
-        self.source.verify_archive(directory / self.names[2], self.prefix)
+        self.source.verify_archive(directory / self.source_name, self.prefix)
         expected = self.metadata(directory, frozen)
-        require(expected["files"][self.dmg_name] == expected["files"][ALIAS], "Alias bytes differ from versioned DMG")
         require((directory / MANIFEST).read_bytes() == json_bytes(expected), "Manifest identity/digest/schema mismatch")
         require((directory / CHECKSUMS).read_bytes() == self.checksums(directory), "Checksum mismatch")
         return {name: {"size": (directory / name).stat().st_size, "sha256": digest(directory / name)}

@@ -3,6 +3,7 @@ import Foundation
 /// The approved tag and artifact travel together through discovery, download and install.
 /// Pichi's public tag suffix is publication provenance, not a semantic prerelease.
 nonisolated struct UpdateReleaseSelection: Equatable, Sendable {
+    static let diskImageName = "Pichi-Voice.dmg"
     let tag: String
     let version: String
     let build: String?
@@ -22,7 +23,10 @@ nonisolated struct UpdateReleaseSelection: Equatable, Sendable {
 
     static func pichi(_ release: GHRelease, owner: String, repo: String) -> Self? {
         guard !release.draft, let identity = pichiVersion(release.tag_name) else { return nil }
-        let name = "Pichi-Voice-\(identity.version)-\(identity.build)-macos-arm64.dmg"
+        // New releases use the product name only. The immutable tag and sealed
+        // bundle metadata bind version/build; old published assets stay compatible.
+        let legacyName = "Pichi-Voice-\(identity.version)-\(identity.build)-macos-arm64.dmg"
+        let name = release.assets.contains { $0.name == self.diskImageName } ? self.diskImageName : legacyName
         let expected = URL(string: "https://github.com/\(owner)/\(repo)/releases/download/\(release.tag_name)/\(name)")
         let matches = release.assets.filter { asset in
             guard let expected else { return false }

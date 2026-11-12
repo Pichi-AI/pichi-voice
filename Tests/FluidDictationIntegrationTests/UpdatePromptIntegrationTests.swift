@@ -723,7 +723,7 @@ private final nonisolated class UpdateFixture: @unchecked Sendable {
             self.held = held
             self.body = version.map {
                 let identity = UpdateReleaseSelection.pichiVersion($0)!
-                let assetName = "Pichi-Voice-\(identity.version)-\(identity.build)-macos-arm64.dmg"
+                let assetName = "Pichi-Voice.dmg"
                 let assets = downloadable
                     ? """
                     [{"name":"\(assetName)","content_type":"application/x-apple-diskimage","browser_download_url":"https://github.com/\(AppBrand.repositoryOwner)/\(archiveRepository)/releases/download/\($0)/\(assetName)"}]
@@ -733,7 +733,7 @@ private final nonisolated class UpdateFixture: @unchecked Sendable {
                 [{"tag_name":"\($0)","prerelease":false,"assets":\(assets)}]
                 """
             } ?? """
-            [{"tag_name":"v0.0.1+1-public.1","prerelease":false,"assets":[{"name":"Pichi-Voice-0.0.1-1-macos-arm64.dmg","content_type":"application/x-apple-diskimage","browser_download_url":"https://github.com/\(AppBrand.repositoryOwner)/\(AppBrand.repositoryName)/releases/download/v0.0.1+1-public.1/Pichi-Voice-0.0.1-1-macos-arm64.dmg"}]}]
+            [{"tag_name":"v0.0.1+1-public.1","prerelease":false,"assets":[{"name":"Pichi-Voice.dmg","content_type":"application/x-apple-diskimage","browser_download_url":"https://github.com/\(AppBrand.repositoryOwner)/\(AppBrand.repositoryName)/releases/download/v0.0.1+1-public.1/Pichi-Voice.dmg"}]}]
             """
         }
     }

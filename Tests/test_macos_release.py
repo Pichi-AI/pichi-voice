@@ -248,20 +248,21 @@ class ReleaseTests(unittest.TestCase):
 
     def test_prepare_exact_source_alias_and_sanitized_manifest(self):
         expected = self.prepared()
-        self.assertEqual(len(expected), 5)
+        self.assertEqual(len(expected), 4)
+        self.assertEqual([name for name in expected if name.endswith(".dmg")], ["Pichi-Voice.dmg"])
         self.assertEqual((self.output / m.ALIAS).read_bytes(), self.image.read_bytes())
         manifest = (self.output / m.MANIFEST).read_text()
         self.assertNotIn(str(self.root), manifest)
         self.assertNotIn("example.invalid", manifest)
         self.assertEqual(json.loads(manifest)["sourceRevision"], self.revision)
-        with tarfile.open(self.output / self.release.names[2]) as archive:
+        with tarfile.open(self.output / self.release.source_name) as archive:
             self.assertEqual(archive.extractfile(self.release.prefix + "/LICENSE").read(), b"Synthetic license fixture\n")
             self.assertFalse(any("private/token" in entry.name for entry in archive))
             self.assertEqual(archive.getmember(self.release.prefix + "/program").mode, 0o755)
             self.assertTrue(archive.getmember(self.release.prefix + "/link").issym())
         second = self.root / "same.tar.gz"
         self.release.source.archive(second, self.release.prefix)
-        self.assertEqual(second.read_bytes(), (self.output / self.release.names[2]).read_bytes())
+        self.assertEqual(second.read_bytes(), (self.output / self.release.source_name).read_bytes())
         self.assertFalse(self.boundaries.mounts)
         self.assertFalse(any("--clobber" in c for c in self.boundaries.calls))
 
@@ -432,7 +433,7 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(m.ReleaseError): self.release.local(self.output)
 
     def rewrite_archive(self, transform):
-        path = self.output / self.release.names[2]
+        path = self.output / self.release.source_name
         with tarfile.open(path) as archive:
             entries = [(copy.copy(member), archive.extractfile(member).read() if member.isfile() else None) for member in archive]
         entries = transform(entries)
@@ -445,7 +446,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_source_archive_rejects_blob_mode_path_missing_duplicate_and_metadata_mismatch(self):
         self.prepared()
-        archive = self.output / self.release.names[2]
+        archive = self.output / self.release.source_name
         original = archive.read_bytes()
         def changed_field(field, value):
             def change(entries):
@@ -468,12 +469,15 @@ class ReleaseTests(unittest.TestCase):
         writes = len([c for c in self.boundaries.calls if c[:3] == ["gh", "release", "upload"]])
         self.github.draft(self.output, expected)
         self.assertEqual(writes, len([c for c in self.boundaries.calls if c[:3] == ["gh", "release", "upload"]]))
-        self.assertEqual(writes, 5)
+        self.assertEqual(writes, 4)
         self.evidence()
         self.boundaries.uncertain.discard("POST")
         with patch.object(m, "public_download", side_effect=self.public) as public:
             self.github.publish(self.output, expected)
-            self.assertEqual(public.call_count, 6)  # Entire five assets plus website latest alias.
+            self.assertEqual(public.call_count, 5)  # Four assets plus the website latest URL.
+            urls = [call.args[0] for call in public.call_args_list]
+            self.assertTrue(any("/releases/download/" in url and url.endswith("/Pichi-Voice.dmg") for url in urls))
+            self.assertIn("https://github.com/Pichi-AI/pichi-voice/releases/latest/download/Pichi-Voice.dmg", urls)
         self.assertFalse(self.boundaries.release["draft"])
         for operation in (lambda: self.github.draft(self.output, expected), lambda: self.github.publish(self.output, expected)):
             before = len(self.boundaries.calls)
@@ -614,7 +618,7 @@ class ReleaseTests(unittest.TestCase):
         expected = self.prepared()
         self.boundaries.before_write_failure = {m.ALIAS}
         with self.assertRaises(m.ReleaseError): self.github.draft(self.output, expected)
-        self.assertEqual(set(self.boundaries.asset_data), {self.release.dmg_name})
+        self.assertEqual(set(self.boundaries.asset_data), set())
         self.boundaries.before_write_failure = set()
         self.github.draft(self.output, expected)
         self.assertEqual(set(self.boundaries.asset_data), set(expected))
@@ -667,7 +671,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_source_archive_trailing_bytes_and_gzip_metadata_rejected(self):
         self.prepared()
-        archive = self.output / self.release.names[2]
+        archive = self.output / self.release.source_name
         original = archive.read_bytes()
         for data in (original + b"private trailing log", original[:4] + b"\x01\x00\x00\x00" + original[8:]):
             archive.write_bytes(data)
