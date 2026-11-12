@@ -4,6 +4,56 @@ import XCTest
 
 @MainActor
 final class MacUpdaterLifecycleTests: XCTestCase {
+    func testUnknownInstalledBuildFailsClosedInsteadOfComparingAsZero() async throws {
+        let context = try Context()
+        defer { context.close() }
+        for build in ["unknown", "71.1", "999999999999999999999999999999"] {
+            context.updater.currentBuildForTesting = build
+            do {
+                _ = try await context.updater.checkForUpdate(owner: "Pichi-AI", repo: "pichi-voice")
+                XCTFail("Unsupported installed build must not offer another release")
+            } catch {}
+        }
+        XCTAssertEqual(context.fixture.downloadCount, 0)
+        XCTAssertNil(context.updater.availableUpdateVersion)
+        await context.cleanup()
+    }
+
+    func testSameMarketingVersionComparesEveryOlderEqualAndNewerBuild() async throws {
+        let context = try Context()
+        defer { context.close() }
+        for current in [69, 70, 71] {
+            context.updater.currentBuildForTesting = String(current)
+            for available in [69, 70, 71] {
+                context.fixture.releases = [fixtureRelease(available)]
+                let result = try await context.updater.checkForUpdate(owner: "Pichi-AI", repo: "pichi-voice")
+                XCTAssertEqual(result.hasUpdate, available > current, "current \(current), available \(available)")
+            }
+        }
+        await context.cleanup()
+    }
+
+    func testOlderBuildIsNotOfferedDownloadedOrInstalledAsAnUpdate() async throws {
+        let context = try Context()
+        defer { context.close() }
+        context.updater.currentBuildForTesting = "71"
+        context.fixture.releases = [fixtureRelease(69)]
+        var installs = 0
+        context.updater.installStagedForTesting = { _, _ in installs += 1 }
+        context.updater.checkForUpdatesAutomatically()
+        try await wait { !context.updater.isCheckingForUpdates }
+        XCTAssertNil(context.updater.availableUpdateVersion)
+        XCTAssertEqual(context.updater.downloadState, .idle)
+        do {
+            try await context.updater.checkAndUpdate(owner: "Pichi-AI", repo: "pichi-voice")
+            XCTFail("An ordinary update must not install an older build")
+        } catch {}
+        XCTAssertEqual(installs, 0)
+        XCTAssertEqual(context.fixture.downloadCount, 0)
+        XCTAssertFalse(context.updater.isUpdateInProgress)
+        await context.cleanup()
+    }
+
     func testQuitWaitsForCommittedRelaunchBeforeAllowingTermination() async {
         await self.assertTerminationBarrier(recoveredFailure: false)
     }
@@ -56,11 +106,6 @@ final class MacUpdaterLifecycleTests: XCTestCase {
     func testAutomaticDownloadDefaultOnDeduplicatesAndInstallReusesVerifiedFile() async throws {
         let context = try Context()
         defer { context.close() }
-        context.updater.checkForUpdatesAutomatically()
-        try await wait { context.updater.downloadState == .ready("0.1.0 (71)") }
-        context.updater.checkForUpdatesAutomatically()
-        try await wait { !context.updater.isCheckingForUpdates }
-        XCTAssertEqual(context.fixture.downloadCount, 1)
         var installs = 0
         context.updater.installStagedForTesting = { app, selected in
             XCTAssertTrue(FileManager.default.fileExists(atPath: app.path))
@@ -72,6 +117,13 @@ final class MacUpdaterLifecycleTests: XCTestCase {
             XCTAssertFalse(context.asr.isMicrophonePreviewActive)
             installs += 1
         }
+        context.updater.checkForUpdatesAutomatically()
+        try await wait { context.updater.downloadState == .ready("0.1.0 (71)") }
+        context.updater.checkForUpdatesAutomatically()
+        try await wait { !context.updater.isCheckingForUpdates }
+        XCTAssertEqual(context.fixture.downloadCount, 1)
+        XCTAssertEqual(installs, 0, "Automatic download must never install without an explicit approval action")
+        XCTAssertFalse(context.updater.isUpdateInProgress)
         // The offer's actual native button routes through SimpleUpdater's approval action.
         context.updater.showAvailableUpdate()
         let offer = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.title == "Update Available" })

@@ -295,7 +295,15 @@ final class SimpleUpdater: ObservableObject {
         return Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
     }
 
-    private var currentComparableVersion: String { "\(self.currentAppVersion)+\(self.currentAppBuild)-public.1" }
+    private var currentComparableVersion: String { "v\(self.currentAppVersion)+\(self.currentAppBuild)-public.1" }
+    private func installedSemanticVersion() throws -> SemanticVersion {
+        let value = self.isPichiDistribution ? self.currentComparableVersion : self.currentAppVersion
+        // Unknown installed build metadata must fail closed, never compare as build zero.
+        guard !self.isPichiDistribution || UpdateReleaseSelection.pichiVersion(value) != nil,
+              let version = self.parseSemanticVersion(value) else { throw SimpleUpdateError.noSuitableRelease }
+        return version
+    }
+
     private var isPichiDistribution: Bool {
         AppBrand.repositoryOwner == "Pichi-AI" && AppBrand.repositoryName == "pichi-voice"
     }
@@ -540,13 +548,7 @@ final class SimpleUpdater: ObservableObject {
             throw SimpleUpdateError.noSuitableRelease
         }
 
-        let currentVersionString = self.currentComparableVersion
-        let current = self.parseSemanticVersion(currentVersionString) ?? SemanticVersion(
-            major: 0,
-            minor: 0,
-            patch: 0,
-            prerelease: []
-        )
+        let current = try self.installedSemanticVersion()
         let latestTag = latest.tag_name
         guard let latestVersion = self.parseSemanticVersion(latestTag) else {
             throw SimpleUpdateError.noSuitableRelease
@@ -779,13 +781,7 @@ final class SimpleUpdater: ObservableObject {
             throw SimpleUpdateError.noSuitableRelease
         }
 
-        let currentVersionString = self.currentComparableVersion
-        let current = self.parseSemanticVersion(currentVersionString) ?? SemanticVersion(
-            major: 0,
-            minor: 0,
-            patch: 0,
-            prerelease: []
-        )
+        let current = try self.installedSemanticVersion()
         let latestTag = latest.tag_name
         guard let latestVersion = self.parseSemanticVersion(latestTag) else {
             throw SimpleUpdateError.noSuitableRelease
