@@ -46,6 +46,252 @@ entitlement parity were required before submission. This is evidence for that
 archive and export configuration, not a claim that all unsigned archives fail.
 Never publish an export merely because Xcode reports success.
 
+## Manual public release runbook
+
+Release stages are deliberately initiated by an operator. No commit, CI run or
+app launch publishes a release. The macOS updater downloads the exact versioned
+DMG selected from its release. The website uses this constant latest-release URL:
+
+`https://github.com/Pichi-AI/pichi-voice/releases/latest/download/Pichi-Voice-macos-arm64.dmg`
+
+Each new public release includes both that alias and its versioned DMG, with
+identical bytes, plus exact corresponding source, `release-manifest.json` and
+`SHA256SUMS`. Keep earlier public releases and tags immutable. A different source
+commit or artifact needs a new release tag, never replacement assets. This does
+not change iOS delivery. Build 71 below is the planned example, not evidence of
+publication or acceptance.
+
+### Freeze the reviewed source and archive once
+
+Integrate the updater, signed distribution configuration and release tooling,
+complete independent review and required unit/integration tests, then pin the
+full combined commit on `origin/main`. Use a clean checkout of exactly that
+commit, with no untracked files. The release helper checks HEAD, origin identity,
+a freshly fetched main ancestry and source cleanliness on every non-plan command.
+It does not switch branches, merge, build, sign or install anything.
+
+The signed `Contents/Resources/brand-distribution.json` must contain
+`formatVersion: 1`, `updatesEnabled: true`,
+`repository: "https://github.com/Pichi-AI/pichi-voice"` and
+`expectedSigningTeam: "LU46F7HGJM"`. Change these in reviewed source before the
+archive, never in the exported signed bundle. `AppSourceRevision`, app version,
+build, bundle ID `ai.pichi.voice` and arm64 architecture must match the selection.
+Retain bundled GPL/upstream and dependency notices and verify distribution
+licenses, including separately downloaded runtimes/models.
+
+Use new owned artifact directories outside the checkout, or ignored paths inside
+it. The following commands are for the authorized release owner. The local
+identity available on November 11 was Apple Development; Xcode's authenticated
+managed automatic export can use Developer ID for team `LU46F7HGJM`. Do not
+export credentials, assume a local Developer ID private key exists, or weaken
+trust. Preserve the original archive and use it for subsequent exports.
+
+```sh
+# Replace this with the full reviewed integrated source, then verify HEAD equals it.
+pichi_source='<full reviewed integrated source SHA>'
+pichi_release_root='/absolute/owned/release-71'
+mkdir "$pichi_release_root"
+xcodebuild -project Fluid.xcodeproj -scheme Fluid -configuration Release \
+  -destination 'generic/platform=macOS' \
+  -archivePath "$pichi_release_root/original.xcarchive" \
+  -derivedDataPath "$pichi_release_root/DerivedData" \
+  -clonedSourcePackagesDirPath "$pichi_release_root/SourcePackages" \
+  -jobs 2 ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+  CURRENT_PROJECT_VERSION=71 MARKETING_VERSION=0.1.0 \
+  PICHI_SOURCE_REVISION="$pichi_source" DEVELOPMENT_TEAM=LU46F7HGJM \
+  CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY='Apple Development' \
+  -allowProvisioningUpdates archive
+```
+
+Inspect nested signatures, requirements, entitlements, hardened runtime and UUIDs
+as described in [archive signing preparation](#archive-signing-preparation).
+If that exact nested-signature issue recurs, prepare an independently verified
+owned archive copy inside-out under the existing signing policy. Do not modify
+the original archive or repeat compilation to fix an export-only issue. The
+helper accepts only the final Developer ID signed, notarized, stapled frozen app;
+an Apple Development archive is not a public release artifact.
+
+### Managed Developer ID export and notarization
+
+Create two local export options files with no credentials. `developer-id` and
+`destination=upload` request the macOS notarization path, not Mac App Store.
+
+```sh
+python3 - "$pichi_release_root" <<'PYOPTIONS'
+import pathlib, plistlib, sys
+root = pathlib.Path(sys.argv[1])
+for destination in ('export', 'upload'):
+    with (root / ('developer-id-' + destination + '.plist')).open('xb') as stream:
+        plistlib.dump({'method': 'developer-id', 'destination': destination,
+                      'teamID': 'LU46F7HGJM', 'signingStyle': 'automatic'}, stream)
+PYOPTIONS
+
+# Optional local distribution inspection export, from the same archive.
+xcodebuild -exportArchive -archivePath "$pichi_release_root/original.xcarchive" \
+  -exportOptionsPlist "$pichi_release_root/developer-id-export.plist" \
+  -exportPath "$pichi_release_root/inspection-export" -allowProvisioningUpdates
+
+# One notarization upload, then retrieve the accepted notarized app.
+xcodebuild -exportArchive -archivePath "$pichi_release_root/original.xcarchive" \
+  -exportOptionsPlist "$pichi_release_root/developer-id-upload.plist" \
+  -exportPath "$pichi_release_root/upload-export" -allowProvisioningUpdates
+xcodebuild -exportNotarizedApp -archivePath "$pichi_release_root/original.xcarchive" \
+  -exportPath "$pichi_release_root/notarized-export"
+
+pichi_app="$pichi_release_root/notarized-export/Pichi Voice.app"
+codesign --verify --deep --strict "$pichi_app"
+xcrun stapler validate "$pichi_app"
+spctl --assess --type execute "$pichi_app"
+```
+
+If an owned prepared archive copy was required, use its path consistently for
+both export and retrieval commands. Retain the original and the preparation
+comparison evidence. Inspect Xcode upload acknowledgement/status before retrying
+an uncertain operation. The November 11 build 70 path succeeded with Xcode
+upload followed by `-exportNotarizedApp`; two prior notarytool S3 uploads failed
+before acknowledgement. An encrypted notarytool profile exists locally, but the
+runbook does not expose its identifier or require credential exports. A failed
+upload is not an Apple rejection, and submission is not acceptance.
+
+Freeze the retrieved app after strict Developer ID/team/timestamp/runtime,
+notary, Gatekeeper, identity and entitlement checks. Perform native acceptance
+on the exact frozen signed bundle with recording continuity, updater download,
+explicit installation admission and preservation of users' data. The release
+helper never runs the app or overwrites an existing installation.
+
+### Package and prepare sanitized public artifacts
+
+Use Python 3.11 or later. The orchestration itself uses only the standard
+library, Git, GitHub CLI and macOS tools. Packaging also uses the pinned
+`dmgbuild`/Pillow environment from [Create the primary disk image](#create-the-primary-disk-image).
+The source tarball is generated directly from tracked Git blobs, including
+executable modes, symlinks, GPL and notices. Git `export-ignore` and
+`export-subst` cannot omit or rewrite source. Ignored recordings, model weights,
+private files, archives and signing logs never enter this source archive.
+
+```sh
+# Safe, read-only plan: no fetch, mounts, app checks or GitHub calls.
+python3 scripts/dev/macos-release.py plan --source "$pichi_source" \
+  --version 0.1.0 --build 71
+
+# Package once using the existing owning packager. It never re-signs the app.
+.build/dmg-tool/bin/python scripts/dev/package-macos-dmg.py \
+  --app "$pichi_app" \
+  --output "$pichi_release_root/Pichi-Voice-0.1.0-71-macos-arm64.dmg"
+
+# Reuse that exact image, validate its mounted payload, and prepare five public files.
+python3 scripts/dev/macos-release.py prepare --source "$pichi_source" \
+  --version 0.1.0 --build 71 --app "$pichi_app" \
+  --dmg "$pichi_release_root/Pichi-Voice-0.1.0-71-macos-arm64.dmg" \
+  --output "$pichi_release_root/public"
+```
+
+Alternatively invoke `prepare` with the packaging environment's Python and omit
+`--dmg`; it calls the same packager. Every output directory must be new. Failed
+partial preparation remains local for inspection and cannot pass verification;
+use a new output after resolving the cause. Do not mix private evidence/logs into
+`public`. The manifest contains only public identity, payload digest, artifact
+names, sizes and SHA-256 values. `SHA256SUMS` covers both DMGs, source and manifest.
+
+The helper verifies the image, mounts read-only at a unique owned path without
+opening Finder, compares all mounted app files, modes, directories and symlinks
+with the frozen input, and repeats strict signature/stapler/Gatekeeper checks.
+Container metadata is limited to known Finder/filesystem entries. The pinned
+[dmgbuild 1.6.7 implementation](https://github.com/dmgbuild/dmgbuild/blob/v1.6.7/src/dmgbuild/core.py)
+uses a root `.background.tiff` for the Retina artwork (or `.background.png`
+without a Retina variant), rather than a `.background` directory. Unknown root
+files, metadata links and extra files beneath metadata directories are rejected.
+It detaches its own mount on success, error and ordinary cancellation. If native
+detach fails, it preserves scratch rather than deleting a mounted tree; resolve
+the reported owned mount before cleanup. SIGKILL, power loss and native command
+failure still require operator recovery. Finder visual review and copied-app
+acceptance below remain separate native checks.
+
+### Create or reconcile a draft, then explicitly publish
+
+Authenticate GitHub CLI to `github.com` using its existing authorized account.
+The helper explicitly targets the public `Pichi-AI/pichi-voice` repository and
+fails closed on malformed API status/JSON, identity, size or digest. `draft`
+creates the exact pinned tag if absent; an existing annotated/lightweight tag
+must peel to that same source commit. It never moves a tag. It uploads only the
+five verified files, never signing logs or private evidence.
+
+```sh
+python3 scripts/dev/macos-release.py draft --source "$pichi_source" \
+  --version 0.1.0 --build 71 --app "$pichi_app" \
+  --artifacts "$pichi_release_root/public"
+```
+
+Each existing draft asset must have the expected uploaded state, size, GitHub
+SHA-256 digest and full downloaded bytes. Exact matches are retained; only
+missing assets are uploaded. Unexpected/partial/different assets stop the
+operation. There is no clobber, delete or overwrite mode. After uncertain
+create/upload responses the helper rereads and reconciles once, rather than
+repeating the write. If state remains uncertain, inspect it before another
+explicit invocation. An already published release is never changed by `draft`
+or `publish`; use `verify` to check it.
+
+Prepare a **private**, fresh evidence JSON file outside `public`. Set
+`sourceRevision` to the full integrated SHA and `manifestSHA256` to the current
+manifest's SHA-256. Set `verifiedAt` to the actual UTC verification time in ISO
+8601 form, within the last 24 hours. Include nonempty `independentReview`,
+`tests` and `nativeAcceptance` strings identifying actual revision-bound results
+and their private evidence locations. These are operator attestations, not an
+automatic proof that the checks happened. Never substitute mock results for
+native acceptance. For example, write this shape with real values:
+
+```json
+{
+  "sourceRevision": "<full reviewed source SHA>",
+  "manifestSHA256": "<sha256 of public/release-manifest.json>",
+  "verifiedAt": "<actual ISO 8601 UTC verification time>",
+  "independentReview": "<reviewed SHA, reviewer and resolved findings>",
+  "tests": "<exact checks, results and evidence>",
+  "nativeAcceptance": "<exact frozen bundle and real native acceptance evidence>"
+}
+```
+
+The private evidence file is read locally and is never uploaded. Publication
+rechecks clean pinned source, app trust, mounted payload, exact source archive,
+manifest, checksums, tag identity and full draft downloads. Only then does it
+publish that draft and mark it latest.
+
+```sh
+python3 scripts/dev/macos-release.py publish --source "$pichi_source" \
+  --version 0.1.0 --build 71 --app "$pichi_app" \
+  --artifacts "$pichi_release_root/public" \
+  --evidence "$pichi_release_root/private-release-evidence.json"
+
+# Also use after an uncertain publish response; this command performs no writes.
+python3 scripts/dev/macos-release.py verify --source "$pichi_source" \
+  --version 0.1.0 --build 71 --app "$pichi_app" \
+  --artifacts "$pichi_release_root/public"
+```
+
+After publication, verification downloads the **entire** five public assets
+anonymously without GitHub credentials and checks sizes/hashes. It also downloads
+the website's latest alias in full, checks latest release identity and rechecks
+the exact tag source. A post-publication download failure can leave a published
+release; never recreate or retarget it to retry verification. Preserve the
+source, frozen app/archive, five public files and private acceptance evidence
+outside disposable worktrees. Remove only owned temporary resources.
+
+### Tooling verification limits
+
+```sh
+python3 -B -S Tests/test_macos_release.py
+bash scripts/dev/check.sh
+```
+
+The portable suite uses real synthetic Git repositories and deterministic
+substitutes for native and GitHub commands. It tests archive reproducibility,
+privacy exclusion, mismatches, cleanup/cancellation, draft retries, uncertain
+writes and explicit publication admission. Safe real `--help` and `plan` runs
+are included. These tests do not establish real signing, notarization, mounted
+payload acceptance, GitHub publication, anonymous production downloads or the
+updater's Swift/UI behavior. The integration owner performs these on the exact
+combined build after independent review.
+
 ## Historical PKG tooling
 
 Start with the frozen Developer ID Application-signed, notarized and stapled
