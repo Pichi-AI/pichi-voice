@@ -1,16 +1,29 @@
+@testable import FluidVoice_Debug
 import Darwin
 import Foundation
+import XCTest
 
-@main
-struct PichiPublicationConsentTests {
-    static func main() async throws {
+@MainActor
+final class PichiPublicationConsentXCTests: XCTestCase {
+    /// Synthetic fixtures live in Tests/Fixtures/PichiAccountSyncV1, four levels above this file.
+    /// PICHI_TEST_FIXTURES overrides the Tests/Fixtures root (needed where the repository path is not readable by the test host).
+    static let fixtures: URL = {
+        let root = ProcessInfo.processInfo.environment["PICHI_TEST_FIXTURES"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Fixtures", isDirectory: true)
+        return root.appendingPathComponent("PichiAccountSyncV1", isDirectory: true)
+    }()
+
+    func testConsentStoreAndPublicationWire() async throws {
+        continueAfterFailure = false
         let manager = FileManager.default
-        let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true).resolvingSymlinksInPath()
+        let root = manager.temporaryDirectory.appendingPathComponent("pichi-consent-xctest-\(UUID().uuidString)", isDirectory: true).resolvingSymlinksInPath()
         try manager.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        defer { try? manager.removeItem(at: root) }
+        addTeardownBlock { try? manager.removeItem(at: root) }
         var checks = 0
-        func check(_ value: Bool, _ message: String) {
-            precondition(value, message)
+        func check(_ value: Bool, _ message: String, line: UInt = #line) {
+            XCTAssertTrue(value, message, line: line)
             checks += 1
         }
         func configuration(_ field: String = "") -> AccountConfiguration {
@@ -181,7 +194,7 @@ struct PichiPublicationConsentTests {
         try Data("interrupted synthetic write".utf8).write(to: stray)
         check(try await store.automaticPublicationEnabled(for: a), "An interrupted temporary file cannot replace the last complete setting")
         print("Publication consent tests passed: \(checks) checks; synthetic account/configuration/filesystem inputs only")
-        let wireChecks = try await Self.checkPublicationWire(fixtures: URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true))
+        let wireChecks = try await Self.checkPublicationWire(fixtures: Self.fixtures)
         print("Publication wire tests passed: \(wireChecks) checks; frozen W2 fixtures and synthetic legacy replies, no network or server acceptance")
     }
 }

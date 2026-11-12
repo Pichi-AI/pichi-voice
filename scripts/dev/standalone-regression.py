@@ -295,7 +295,6 @@ PROBES = tuple(sorted(
        Probe("Tests/run_meeting_streaming_echo_tests.sh", "bash"),
        Probe("Tests/run_process_cpu_diagnostics_tests.sh", "bash"),
        Probe("Tests/run_publication_composition_tests.sh", "bash"),
-       Probe("Tests/run_publication_consent_tests.sh", "bash"),
        Probe("Tests/run_publication_outbox_tests.sh", "bash"),
        Probe("Tests/run_transcript_privacy_tests.sh", "bash"),
        Probe("Tests/run_sensitive_topic_classifier_tests.sh", "bash"),

@@ -57,6 +57,11 @@ struct SensitiveTopicClassifierTests {
         let redactions = try classifier.detect(in: sensitive, complete: true)
         check(!redactions.spans.isEmpty, "native actual learned-model positive")
         check(redactions.spans.first?.range == NSRange(location: 0, length: sensitive.utf16.count), "original UTF16 including emoji")
+        // The unterminated last sentence is classified like any other when an earlier sentence exists.
+        let trailingSentence = String(sensitive[sensitive.startIndex...]).trimmingCharacters(in: CharacterSet(charactersIn: " .!?"))
+        let trailing = "Привет всем. " + trailingSentence
+        let trailingRedactions = try classifier.detect(in: trailing, complete: true)
+        check(trailingRedactions.spans.contains { NSMaxRange($0.range) == trailing.utf16.count }, "final unterminated sentence is classified")
         let technical = try classifier.detect(in: "Откат обновления восстановил работу сервера.", complete: true)
         check(technical.spans.isEmpty, "technical rollback negative")
         fails(.sentenceTooLong) {
