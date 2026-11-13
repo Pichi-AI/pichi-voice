@@ -2,21 +2,11 @@
 """Exercise production meeting model policy without models, capture, or user preferences."""
 import os
 from pathlib import Path
-import re
 import subprocess
 import tempfile
+from Standalone.ProbeContractDependencies import declaration, meeting_metadata, parakeet_metadata, speech_model_cases, brand_text
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def declaration(source: str, marker: str) -> str:
-    start = source.index(marker)
-    brace = source.index("{", start)
-    depth, end = 1, brace + 1
-    while depth:
-        depth += (source[end] == "{") - (source[end] == "}")
-        end += 1
-    return source[start:end]
 
 
 def main() -> None:
@@ -27,27 +17,10 @@ def main() -> None:
     provider = (ROOT / "Sources/Fluid/Services/FluidAudioProvider.swift").read_text()
     config = (ROOT / "Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift").read_text()
     pipeline = (ROOT / "Sources/Fluid/Services/Meeting/MeetingProcessingPipeline.swift").read_text()
-    catalog = (ROOT / "Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift").read_text()
-    languages = re.search(r"supportedLanguageCodes: (\[[\s\S]*?\])", catalog.split("static let v3 =", 1)[1]).group(1)
     swift = '''import CryptoKit
 import Foundation
 enum SettingsStore {
-    enum SpeechModel: String, Sendable {
-        case parakeetTDT = "parakeet-tdt", parakeetTDTv2 = "parakeet-tdt-v2"
-        case fluidParakeetPro = "fluid-parakeet-pro", whisperTiny = "whisper-tiny"
-    }
-}
-enum VoiceEngineLanguageCatalog { static let parakeetV3LanguageIDs: Set<String> = LANGUAGES }
-enum ParakeetSpeechModelCatalog {
-    struct Descriptor: Sendable { let modelID: String; let supportedLanguageCodes: Set<String> }
-    static let pro = Descriptor(modelID: "fluid-parakeet-pro", supportedLanguageCodes: VoiceEngineLanguageCatalog.parakeetV3LanguageIDs)
-    static let v3 = Descriptor(modelID: "parakeet-tdt", supportedLanguageCodes: VoiceEngineLanguageCatalog.parakeetV3LanguageIDs)
-    static func descriptor(forModelID id: String) -> Descriptor? {
-        if id == pro.modelID { return pro }
-        if id == v3.modelID { return v3 }
-        if id == "parakeet-tdt-v2" { return Descriptor(modelID: id, supportedLanguageCodes: ["en"]) }
-        return nil
-    }
+    SPEECH_MODEL_CASES
 }
 enum MeetingProcessingCheckpoint { static let currentDiarizationFingerprint = "fixture" }
 @MainActor enum SpeechModelInstallationSnapshot {
@@ -62,15 +35,28 @@ enum MeetingProcessingCheckpoint { static let currentDiarizationFingerprint = "f
         return installed
     }
 }
-'''.replace("LANGUAGES", languages)
-    settings = (ROOT / "Sources/Fluid/Persistence/SettingsStore.swift").read_text()
+'''.replace("SPEECH_MODEL_CASES", speech_model_cases())
+    checkpoint = declaration((ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text(), "nonisolated struct MeetingProcessingCheckpoint:")
+    fingerprint = checkpoint.split("static let currentDiarizationFingerprint =", 1)[1].split("\n\n", 1)[0].strip()
+    swift = swift.replace('static let currentDiarizationFingerprint = "fixture"', 'static let currentDiarizationFingerprint = ' + fingerprint)
+    swift += (ROOT / "Sources/Fluid/Localization/PichiLocalization.swift").read_text() + brand_text()
+    swift += parakeet_metadata() + meeting_metadata()
+    models = (ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text()
+    for marker in ["nonisolated enum MeetingSpeakerProcessingMode:", "nonisolated enum MeetingRecordingTimePolicy:"]:
+        swift += declaration(models, marker) + "\n"
+    attribution = (ROOT / "Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift").read_text()
+    swift += declaration(attribution, "nonisolated enum MeetingSpeakerAttributionError:") + "\n"
+    swift += declaration(attribution, "nonisolated struct MeetingSpeakerAttributionPolicy:") + "\n"
+
+    settings = (ROOT / "Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift").read_text()
     swift = swift.replace("enum SettingsStore {", "enum SettingsStore {\n" + declaration(settings, "nonisolated struct CustomDictionaryEntry:"), 1)
     for marker in ["nonisolated enum MeetingProviderOptionsError", "nonisolated struct MeetingProviderOptions"]:
         swift += declaration(provider, marker) + "\n"
-    for marker in ["nonisolated enum MeetingConfigFingerprintEncoding", "nonisolated struct MeetingFinalProcessingConfiguration", "nonisolated struct MeetingLiveCaptionsConfiguration"]:
+    for marker in ["nonisolated struct MeetingFinalProcessingConfiguration", "nonisolated struct MeetingLiveCaptionsConfiguration"]:
         swift += declaration(config, marker) + "\n"
-    swift += declaration((ROOT / "Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptionBackend.swift").read_text(), "nonisolated struct MeetingBackendID:") + "\n"
-    swift += "@MainActor enum MeetingProcessingPipeline { nonisolated static let pipelineVersion = 1\n"
+    swift += declaration((ROOT / "Sources/Fluid/Services/Meeting/Backend/MeetingCanonicalEvidenceTypes.swift").read_text(), "nonisolated enum MeetingConfigFingerprintEncoding") + "\n"
+    version = next(line.strip() for line in pipeline.splitlines() if "nonisolated static let pipelineVersion =" in line)
+    swift += "@MainActor enum MeetingProcessingPipeline { " + version + "\n"
     swift += declaration(pipeline, "static func defaultPreferredASRModel()") + "\n}\n"
     swift += '''
 @main struct Run {
@@ -99,15 +85,20 @@ enum MeetingProcessingCheckpoint { static let currentDiarizationFingerprint = "f
         check(next == .fluidParakeetPro && frozen.asrModel == v3 && frozen.languageCode == "de", "Installation changes affect only later requests")
         check(frozen.identityFingerprint != MeetingFinalProcessingConfiguration(languageCode: "de").identityFingerprint, "Fallback uses its own resume fingerprint")
         check(MeetingFinalProcessingConfiguration().languageCode == "en", "English remains the initial language")
-        check(MeetingFinalProcessingConfiguration().asrModel == MeetingFinalProcessingConfiguration.defaultASRModel, "Default model identity")
+        check(MeetingFinalProcessingConfiguration().asrModel == MeetingProviderOptions.preferredModel(for: "en", selected: nil).rawValue, "Default model identity follows the actual language policy")
         let legacy = MeetingFinalProcessingConfiguration(asrModel: "parakeet-tdt-v2", preferredASRModel: .fluidParakeetPro)
+        check(try MeetingProviderOptions.resolve(legacy).model == .parakeetTDTv2, "Registered English V2 retains the actual saved model")
         do {
-            _ = try MeetingProviderOptions.resolve(legacy)
-            preconditionFailure("V2 must be rejected for meeting transcription")
-        } catch MeetingProviderOptionsError.unsupportedASRModel("parakeet-tdt-v2") { checks += 1 }
+            _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(asrModel: "unknown-synthetic-model"))
+            preconditionFailure("Unregistered models must be rejected")
+        } catch MeetingProviderOptionsError.unsupportedASRModel("unknown-synthetic-model") { checks += 1 }
+        do {
+            _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(asrModel: "parakeet-tdt-v2", languageCode: "de"))
+            preconditionFailure("V2 cannot accept unsupported languages")
+        } catch MeetingProviderOptionsError.unsupportedLanguageCode("de") { checks += 1 }
         for language in VoiceEngineLanguageCatalog.parakeetV3LanguageIDs {
             let redirected = MeetingFinalProcessingConfiguration(preferredASRModel: .parakeetTDTv2, languageCode: language)
-            check(try MeetingProviderOptions.resolve(redirected).model == .fluidParakeetPro, "V2 preference cannot select V2")
+            check(try MeetingProviderOptions.resolve(redirected).model == (language == "en" ? .parakeetTDTv2 : .fluidParakeetPro), "V2 preference stays pinned only for its supported language")
         }
         let saved = MeetingBackendID.legacyCompatibility
         check(saved.forNewMeetingAttempt == .productionDefault, "Old rollback settings use current model policy")

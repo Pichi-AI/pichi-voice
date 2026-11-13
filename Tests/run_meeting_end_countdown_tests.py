@@ -4,19 +4,9 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from Standalone.ProbeContractDependencies import declaration, communication_metadata
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def declaration(source: str, marker: str) -> str:
-    start = source.index(marker)
-    brace = source.index("{", start)
-    depth = 1
-    end = brace + 1
-    while depth:
-        depth += (source[end] == "{") - (source[end] == "}")
-        end += 1
-    return source[start:end]
 
 
 def main() -> None:
@@ -47,16 +37,45 @@ def main() -> None:
             "var meetingAutomaticTarget: MeetingAutoDetector.ResolvedTarget?\n"
             "func wireTarget(_ detector: MeetingAutoDetector) {\n" + callback + "\n}\n" + gate + "\n" + can_stop + "\n" + stop + "\n}\n"
         )
+        # Build the actual data-only observation module with swiftc, without SPM.
+        observation = work / "PichiCallObservation.o"
+        subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-emit-module", "-emit-object",
+                        "-module-name", "PichiCallObservation", "-emit-module-path", str(work / "PichiCallObservation.swiftmodule"),
+                        str(ROOT / "Vendor/PichiCallObservation/Sources/PichiCallObservation/CommunicationObservation.swift"),
+                        "-o", str(observation)], check=True, env=env, timeout=60)
+        profile_types = work / "ProfileTypes.swift"
+        subprocess.run(["python3", "Tests/Support/write_private_profile_standalone_types.py",
+                        str(profile_types), "--synthetic-brand"], cwd=ROOT, env=env, check=True, timeout=15)
+        profile_service = (ROOT / "Sources/Fluid/Account/PrivateProfileService.swift").read_text()
+        (work / "ProfileService.swift").write_text("import Foundation\n" +
+            declaration(profile_service, "@MainActor protocol PrivateProfileTransitionParticipant:") +
+            "\n@MainActor final class PrivateProfileService {\nstatic let shared = PrivateProfileService()\n"
+            "static let willConceal = Notification.Name(\"ProbePrivateProfileWillConceal\")\n"
+            "var isPrivateDataVisible = true\nfunc register(_ participant: any PrivateProfileTransitionParticipant) {}\n}\n")
+        tests = (ROOT / "Tests/MeetingEndCountdownTests.swift").read_text()
+        models = (ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text()
+        tests = tests.replace(declaration(tests, "struct MeetingApplicationIdentity {"), declaration(models, "nonisolated struct MeetingApplicationIdentity:"))
+        tests = tests.replace(declaration(tests, "    enum Mode {"), "    typealias Mode = MeetingCaptureMode")
+        tests += "\n" + declaration(models, "nonisolated enum MeetingCaptureMode:") + "\n"
+        # Fixture convenience initializes the actual production optional consent field.
+        tests += "\nextension MeetingApplicationIdentity {\ninit(bundleIdentifier: String, processID: Int32?, displayName: String, capturesAllInstances: Bool) {\nself.init(bundleIdentifier: bundleIdentifier, processID: processID, displayName: displayName)\nself.capturesAllInstances = capturesAllInstances\n}\n}\n"
+        tests = tests.replace("@MainActor final class MeetingFloatingCaptionsPanel {", "@MainActor final class MeetingFloatingCaptionsPanel {\n    var contentView: NSView?")
+        (work / "Tests.swift").write_text(tests)
+        (work / "Modules.swift").write_text(communication_metadata())
         sources = [
+            work / "Modules.swift",
+            observation, profile_types, work / "ProfileService.swift",
+            ROOT / "Sources/Fluid/Account/PrivateProfileStorage.swift",
+            ROOT / "Sources/Fluid/Localization/PichiLocalization.swift",
             ROOT / "Sources/Fluid/Services/Meeting/MeetingEndCountdown.swift",
             ROOT / "Sources/Fluid/Services/Meeting/MeetingAutoDetector.swift",
             ROOT / "Sources/Fluid/Services/Meeting/MeetingAppRegistry.swift",
             ROOT / "Sources/Fluid/Services/Meeting/MeetingBrowserCallEvidence.swift",
             work / "Signals.swift", work / "Fixtures.swift", work / "Controller.swift", work / "SessionGate.swift",
-            ROOT / "Tests/MeetingEndCountdownTests.swift",
+            work / "Tests.swift",
         ]
         executable = work / "tests"
-        subprocess.run(["xcrun", "swiftc", "-parse-as-library", *map(str, sources), "-o", str(executable)], check=True, env=env)
+        subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-I", str(work), *map(str, sources), "-o", str(executable)], check=True, env=env)
         subprocess.run([str(executable)], check=True, env=env)
 
 

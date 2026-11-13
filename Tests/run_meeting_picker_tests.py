@@ -4,18 +4,9 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from Standalone.ProbeContractDependencies import declaration, meeting_metadata, parakeet_metadata, speech_model_cases, communication_metadata
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def declaration(source, marker):
-    start = source.index(marker)
-    brace = source.index('{', start)
-    depth, end = 1, brace + 1
-    while depth:
-        depth += (source[end] == '{') - (source[end] == '}')
-        end += 1
-    return source[start:end]
 
 
 def main():
@@ -37,22 +28,7 @@ def main():
     swift = '''import AppKit
 import Combine
 import SwiftUI
-struct Microphone: Sendable { var captureDeviceID = "mic"; var coreAudioUID: String? = "mic-uid" }
-struct MicOption { var id: String { identity.captureDeviceID }; let identity: Microphone }
-enum MicrophoneRole: String, Codable { case unknown }
-struct MeetingMicrophoneCatalogSnapshot: Sendable { var identities: [Microphone] = [.init()] }
-struct MeetingInstalledCallApplication: Sendable {}
-struct MeetingRecordingDefaults: Equatable, Sendable, Codable {
-    static var unconfigured: Self { .init() }
-    var mode: MeetingCaptureMode = .onlineCall
-    var isConfigured = false
-    var languageCode: String? = "en"
-    var microphoneCaptureDeviceID = "mic"
-    var microphoneCoreAudioUID: String?
-    var microphoneRole = MicrophoneRole.unknown
-    var applicationBundleIdentifier: String?
-    var applicationDisplayName: String?
-}
+struct MicOption { var id: String { identity.captureDeviceID }; let identity: MeetingMicrophoneIdentity }
 enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String) }
 enum MeetingAutoDetector { struct ResolvedTarget { var bundleIdentifier: String; var pid: Int32; var windowID: UInt32? } }
 @MainActor final class SettingsStore {
@@ -61,36 +37,50 @@ enum MeetingAutoDetector { struct ResolvedTarget { var bundleIdentifier: String;
     lazy var defaults = UserDefaults(suiteName: suite)!
     enum Keys { static let meetingRecentApplication = "MeetingRecentApplication"; static let meetingRecordingDefaults = "MeetingRecordingDefaults" }
     // PRODUCTION_PREFERENCES
+    var meetingAudioRetentionPolicy = 7
+    var selectedSpeechModel = SpeechModel.gigaam
+    SPEECH_MODEL_CASES
     var fluidMeetEnabled = true
     var meetingAutoDetectEnabled = true
     var meetingAutoDetectBrowserEnabled = true
 }
 class MeetingFloatingCaptionsPanel: NSPanel {}
 '''
-    preferences = (ROOT / 'Sources/Fluid/Persistence/SettingsStore.swift').read_text()
+    preferences = (ROOT / 'Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift').read_text()
     preference_declarations = '\n'.join(declaration(preferences, marker) for marker in [
         'var meetingRecentApplication:', 'var meetingRecordingDefaults:', 'func saveMeetingRecordingSource('
     ])
-    swift = swift.replace('// PRODUCTION_PREFERENCES', preference_declarations)
-    # The microphone label is unrelated to source choice; its model is replaced above.
-    snapshot = snapshot.replace(declaration(snapshot, 'var microphoneSelectionLabel:'), '')
+    swift = swift.replace('// PRODUCTION_PREFERENCES', preference_declarations).replace('SPEECH_MODEL_CASES', speech_model_cases())
+    swift += declaration((ROOT / 'Sources/Fluid/Services/Meeting/MeetingCaptureControlling.swift').read_text(), 'nonisolated struct MeetingMicrophoneCatalogSnapshot:') + '\n'
+    swift += declaration((ROOT / 'Sources/Fluid/Services/Meeting/MeetingInstalledCallApplications.swift').read_text(), 'nonisolated struct MeetingInstalledCallApplication:') + '\n'
     swift += declaration((ROOT / 'Sources/Fluid/Services/Meeting/MeetingInstalledCallApplications.swift').read_text(), 'nonisolated struct MeetingApplicationIcon:') + '\n'
-    swift += declaration(models, 'nonisolated enum MeetingCaptureMode:') + '\n'
-    swift += declaration(models, 'nonisolated struct MeetingApplicationIdentity:') + '\n'
+    for marker in ['nonisolated enum MeetingCaptureMode:', 'nonisolated enum MeetingMicrophoneRole:',
+                   'nonisolated enum MeetingApplicationAudioScope:', 'nonisolated enum MeetingAudioStorageMode:',
+                   'nonisolated enum MeetingSpeakerProcessingMode:', 'nonisolated struct MeetingApplicationIdentity:',
+                   'nonisolated struct MeetingMicrophoneIdentity:', 'nonisolated struct MeetingRecordingDefaults:']:
+        swift += declaration(models, marker) + '\n'
+    swift += declaration((ROOT / "Sources/Fluid/Services/Meeting/MeetingAutoDetectSignals.swift").read_text(), "nonisolated struct WindowSnapshot:") + "\n"
+    swift += parakeet_metadata() + meeting_metadata() + communication_metadata()
+    swift += (ROOT / 'Sources/Fluid/Localization/PichiLocalization.swift').read_text()
+
     swift += (ROOT / 'Sources/Fluid/Services/Meeting/MeetingAppRegistry.swift').read_text() + '\n'
     swift += source + '\n' + snapshot + '\n@MainActor\n' + controller
     page = (ROOT / 'Sources/Fluid/UI/MeetingTranscriptionView.swift').read_text()
     swift += '\n@MainActor\n' + declaration(page, 'struct MeetingTranscriptionSetupDraft:')
+    swift += '\n@MainActor\n' + declaration(page, 'private final class MeetingViewPrivateProjection:').replace('private final class', 'final class', 1)
+    swift += '\nenum MeetingCaptureSourceCatalog {\n' + declaration((ROOT / 'Sources/Fluid/Services/Meeting/MeetingCaptureEngine.swift').read_text(), 'static func resolveRecordingApplication(') + '\n}\n'
+
     swift += '\n' + declaration(page, 'nonisolated struct MeetingApplicationOption:')
     swift += '\n@MainActor final class PageHarness {\n'
     swift += '''
-    var pendingSourceChoiceRefresh = false
+    let privateState = MeetingViewPrivateProjection()
+    var pendingSourceChoiceRefresh: Bool { get { privateState.pendingSourceChoiceRefresh } set { privateState.pendingSourceChoiceRefresh = newValue } }
     var canRefreshSetupAfterBackupRestore = true
-    var setupDraft = MeetingTranscriptionSetupDraft()
+    var setupDraft: MeetingTranscriptionSetupDraft { get { privateState.setupDraft } set { privateState.setupDraft = newValue } }
     var applications: [MeetingApplicationOption] = []
     var titles = 0
-    var microphones = [MicOption(identity: .init(captureDeviceID: "custom-mic"))]
-    var actionErrorMessage: String?
+    var microphones = [MicOption(identity: .init(captureDeviceID: "custom-mic", displayName: "Custom Mic"))]
+    var actionErrorMessage: String? { get { privateState.actionErrorMessage } set { privateState.actionErrorMessage = newValue } }
     func finishRestoredMeetingSettingsIfPending() -> Bool { false }
     let appServices = TargetServices()
     func regenerateDefaultTitleIfNeeded() { titles += 1 }
@@ -103,7 +93,7 @@ class MeetingFloatingCaptionsPanel: NSPanel {}
     # are covered elsewhere and are unrelated to the source-write ordering regression.
     save = declaration(page, 'private func saveMeetingSettings()').split('        let previousRetentionPolicy')[0]
     swift += save.replace('private func', 'func', 1) + '}\n}\n'
-    preferences = (ROOT / 'Sources/Fluid/Persistence/SettingsStore.swift').read_text()
+    preferences = (ROOT / 'Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift').read_text()
     swift += '\n@MainActor final class ChoicePreferences {\nlet defaults: UserDefaults\ninit(_ defaults: UserDefaults) { self.defaults = defaults }\nenum Keys { static let meetingRecentApplication = "MeetingRecentApplication"; static let meetingRecordingDefaults = "MeetingRecordingDefaults" }\n'
     swift += declaration(preferences, 'var meetingRecentApplication:') + '\n' + declaration(preferences, 'var meetingRecordingDefaults:') + '\n}\n'
     swift += '\n@MainActor final class MenuHarness {\n'
@@ -113,10 +103,8 @@ class MeetingFloatingCaptionsPanel: NSPanel {}
     var draft: MeetingTranscriptionSetupDraft { get { page.setupDraft } set { page.setupDraft = newValue } }
     var resolvedApplication: MeetingApplicationOption? { page.applications.first { $0.id == draft.selectedApplicationID } }
     func choose(_ option: MeetingApplicationOption?) {
-        draft.mode = option == nil ? .systemAudio : .onlineCall
-        draft.usesAutomaticApplication = option == nil
-        draft.selectedApplicationID = option?.id
-        draft.preferredApplicationBundleIdentifier = option?.identity.bundleIdentifier
+        draft.mode = .onlineCall
+        if let option { draft.chooseApplication(option.identity) } else { draft.chooseSystemAudio() }
         persistSourceChoice()
     }
 """
@@ -135,8 +123,10 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
         var loadFails = false
         var delay = false
         func snapshot() -> MeetingRecordingSourceSnapshot {
-            MeetingRecordingSourceSnapshot(defaults: .init(), applications: available,
-                microphones: .init(), selectedApplication: zoom, selectedMicrophoneID: "mic")
+            var defaults = MeetingRecordingDefaults.unconfigured
+            defaults.mode = .onlineCall; defaults.applicationAudioScope = .selectedApplication
+            return MeetingRecordingSourceSnapshot(defaults: defaults, applications: available,
+                microphones: .init(identities: [.init(captureDeviceID: "mic", displayName: "Mic")], defaultCoreAudioUID: nil), selectedApplication: zoom, selectedMicrophoneID: "mic")
         }
         func picker() -> MeetingRecordingSourcePromptController {
             MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in
@@ -168,7 +158,7 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
         preferences.meetingRecentApplication = nil
         check(events.value == 2, "repeated clear is a no-op")
         var sourceDefaults = preferences.meetingRecordingDefaults
-        sourceDefaults.mode = .systemAudio
+        sourceDefaults.mode = .onlineCall; sourceDefaults.applicationAudioScope = .systemAudio
         preferences.meetingRecordingDefaults = sourceDefaults
         check(events.value == 3, "Choosing Automatic notifies even when no recent app was stored")
         sourceDefaults.languageCode = "de"
@@ -179,7 +169,8 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
         check(events.value == 3, "Repeated source defaults do not broadcast")
         let settings = SettingsStore.shared
         defer { settings.defaults.removePersistentDomain(forName: settings.suite) }
-        var oldDefaults = MeetingRecordingDefaults()
+        var oldDefaults = MeetingRecordingDefaults.unconfigured
+        oldDefaults.mode = .onlineCall; oldDefaults.applicationAudioScope = .selectedApplication
         oldDefaults.isConfigured = true
         oldDefaults.applicationBundleIdentifier = "com.openai.codex"
         oldDefaults.applicationDisplayName = "ChatGPT"
@@ -188,7 +179,7 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
         let safari = MeetingApplicationIdentity(bundleIdentifier: "com.apple.Safari", processID: 30, displayName: "Safari")
         settings.meetingRecentApplication = safari
         let initialDraft = MeetingTranscriptionSetupDraft(settings: settings)
-        check(initialDraft.preferredApplicationBundleIdentifier == safari.bundleIdentifier && !initialDraft.usesAutomaticApplication, "page restores Safari last pick instead of stale ChatGPT default")
+        check(initialDraft.selectedApplicationBundleIdentifier == safari.bundleIdentifier && !initialDraft.usesAutomaticApplication, "page restores Safari last pick instead of stale ChatGPT default")
         check(initialDraft.languageCode == "fr" && settings.meetingRecordingDefaults == oldDefaults, "resolving last pick preserves language and does not write defaults")
         let page = PageHarness()
         page.applications = [.init(identity: safari), .init(identity: zoom)]
@@ -202,8 +193,8 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
         check(page.pendingSourceChoiceRefresh && page.setupDraft.selectedApplicationID == MeetingApplicationOption(identity: safari).id, "active capture or editing sheet defers app change")
         settings.meetingRecentApplication = browser; page.changed()
         page.safe()
-        check(!page.pendingSourceChoiceRefresh && page.setupDraft.selectedApplicationID == nil, "safe point uses latest pick and cannot substitute missing app")
-        check(page.setupDraft.preferredApplicationBundleIdentifier == browser.bundleIdentifier, "missing app retains its identity")
+        check(!page.pendingSourceChoiceRefresh && !page.applications.contains(where: { $0.id == page.setupDraft.selectedApplicationID }), "safe point uses latest pick and cannot substitute missing app")
+        check(page.setupDraft.selectedApplicationBundleIdentifier == browser.bundleIdentifier, "missing app retains its identity")
         let duplicate = MeetingApplicationIdentity(bundleIdentifier: browser.bundleIdentifier, processID: 22, displayName: "Browser")
         page.applications = [.init(identity: browser), .init(identity: duplicate)]
         settings.meetingRecentApplication = duplicate; page.changed()
@@ -234,7 +225,7 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
         menu.choose(page.applications[1])
         check(sourceEvents.value == sameCount, "reselecting the same source does not notify")
         menu.choose(nil)
-        check(page.setupDraft.mode == .systemAudio && settings.meetingRecentApplication == nil, "Automatic clears both app preferences before refreshing")
+        check(page.setupDraft.applicationAudioScope == .systemAudio && settings.meetingRecentApplication == nil, "Automatic clears both app preferences before refreshing")
         check(page.setupDraft.selectedMicrophoneID == "custom-mic" && page.setupDraft.languageCode == "fr" && page.setupDraft.title == "My custom title", "source switching preserves microphone language and custom title")
         page.canRefreshSetupAfterBackupRestore = false
         menu.choose(page.applications[0]); menu.choose(page.applications[1])
@@ -246,12 +237,12 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
         page.canRefreshSetupAfterBackupRestore = false
         page.setupDraft.applicationSelectionWasEdited = false
         var automaticDefaults = settings.meetingRecordingDefaults
-        automaticDefaults.mode = .systemAudio
+        automaticDefaults.mode = .onlineCall; automaticDefaults.applicationAudioScope = .systemAudio
         automaticDefaults.applicationBundleIdentifier = nil; automaticDefaults.applicationDisplayName = nil
         settings.saveMeetingRecordingSource(automaticDefaults, recentApplication: nil)
         let beforeSheetSave = sourceEvents.value
         page.saveMeetingSettings()
-        check(settings.meetingRecordingDefaults.mode == .systemAudio && settings.meetingRecentApplication == nil, "unmodified sheet source cannot overwrite a newer Automatic choice")
+        check(settings.meetingRecordingDefaults.effectiveApplicationAudioScope == .systemAudio && settings.meetingRecentApplication == nil, "unmodified sheet source cannot overwrite a newer Automatic choice")
         check(sourceEvents.value == beforeSheetSave, "microphone and language save emits no source event")
         check(settings.meetingRecordingDefaults.microphoneCaptureDeviceID == "custom-mic" && settings.meetingRecordingDefaults.languageCode == "fr", "sheet still saves the requested microphone and language")
         page.setupDraft.applicationSelectionWasEdited = true
@@ -259,12 +250,14 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
         check(settings.meetingRecordingDefaults.applicationBundleIdentifier == browser.bundleIdentifier && settings.meetingRecentApplication?.bundleIdentifier == browser.bundleIdentifier, "explicit sheet source edit wins as one complete choice")
         page.safe()
         subscription.cancel()
-        settings.meetingRecordingDefaults = .init(); settings.meetingRecentApplication = nil
+        settings.meetingRecordingDefaults = .unconfigured; settings.meetingRecentApplication = nil
         page.changed()
-        check(page.setupDraft.usesAutomaticApplication && page.setupDraft.preferredApplicationBundleIdentifier == nil, "explicit Automatic choice clears old app")
+        check(page.setupDraft.applicationAudioScope == .systemAudio && page.setupDraft.selectedApplicationBundleIdentifier == nil, "explicit Automatic choice clears old app")
+        var narrowDefaults = MeetingRecordingDefaults.unconfigured
+        narrowDefaults.mode = .onlineCall; narrowDefaults.applicationAudioScope = .selectedApplication
         let arbitrary = MeetingApplicationIdentity(bundleIdentifier: "com.openai.codex", processID: 44, displayName: "ChatGPT")
-        check(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: .init(), target: nil, foreground: arbitrary, applications: [arbitrary]) == nil, "foreground ChatGPT is never an automatic suggestion")
-        check(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: .init(), target: nil, foreground: safari, applications: [safari]) == safari, "known meeting sources remain eligible as first-use suggestions")
+        check(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: narrowDefaults, target: nil, foreground: arbitrary, applications: [arbitrary]) == nil, "foreground ChatGPT is never an automatic suggestion")
+        check(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: narrowDefaults, target: nil, foreground: safari, applications: [safari]) == safari, "known meeting sources remain eligible as first-use suggestions")
         let manual = oldDefaults.preferringLastPickedApplication(arbitrary)
         check(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: manual, target: nil, foreground: safari, applications: [arbitrary, safari])?.bundleIdentifier == arbitrary.bundleIdentifier, "explicit other-app choices still work")
         settings.meetingRecentApplication = nil
@@ -278,10 +271,11 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
         check(second.snapshot?.applicationLabel(browser) == "Browser (Last picked)", "clear last-picked label")
         second.refresh(); try await settle(second)
         check(second.snapshot?.selectedApplication == browser, "refresh retains explicit pick")
-        second.selectApplication(nil); second.refresh(); try await settle(second)
-        check(second.snapshot?.defaults.mode == .systemAudio && second.snapshot?.selectedApplication == nil, "refresh preserves all-computer choice")
+        second.selectSystemAudio(); second.refresh(); try await settle(second)
+        check(second.snapshot?.defaults.effectiveApplicationAudioScope == .systemAudio && second.snapshot?.selectedApplication == nil, "refresh preserves all-computer choice")
         check(settings.meetingRecentApplication == nil, "Automatic clears remembered app")
-        settings.meetingRecentApplication = browser
+        var appWideBrowser = browser; appWideBrowser.capturesAllInstances = true; appWideBrowser.processID = nil
+        settings.meetingRecentApplication = appWideBrowser
         second.cancel()
         var restarted = browser; restarted.processID = 20
         available = [zoom, restarted]
@@ -289,7 +283,7 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
         check(relaunched.snapshot?.selectedApplication?.bundleIdentifier == restarted.bundleIdentifier, "relaunch resolves current PID")
         relaunched.confirm()
         for _ in 0..<200 where relaunched.isPresented { try await Task.sleep(nanoseconds: 1_000_000) }
-        check(starts == 1 && settings.meetingRecentApplication == browser, "recording does not rewrite explicit preference")
+        check(starts == 1 && settings.meetingRecentApplication == appWideBrowser, "recording does not rewrite explicit preference")
         available = [zoom]
         let missing = picker(); missing.handleShortcut(foreground: zoom); try await settle(missing)
         check(missing.snapshot?.selectedApplication == nil && !missing.canConfirm, "missing app cannot switch silently")
@@ -309,11 +303,18 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
         let stale = picker(); stale.handleShortcut(); stale.cancel()
         try await Task.sleep(nanoseconds: 50_000_000)
         check(!stale.isPresented && stale.snapshot == nil && !stale.isLoading, "late loader cannot reopen cancelled picker")
-        check(settings.meetingRecentApplication == browser && starts == 1, "failures and stale loads never write preferences or capture")
+        check(settings.meetingRecentApplication == appWideBrowser && starts == 1, "failures and stale loads never write preferences or capture")
+        FileHandle.standardOutput.write(Data("PASS: \(checks) production meeting picker checks before native icon lookup\n".utf8))
+        let finderRegistered = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.finder")
+        FileHandle.standardOutput.write(Data("NATIVE SDK: Finder registry URL = \(finderRegistered?.path ?? "nil"); system Finder exists = \(FileManager.default.fileExists(atPath: "/System/Library/CoreServices/Finder.app"))\n".utf8))
         let icons = await MeetingApplicationIcon.snapshot(bundleIdentifiers: ["com.apple.finder", "com.apple.finder", "invalid.fluidvoice.missing-app"])
-        check(icons.count == 1 && icons["com.apple.finder"] != nil, "icons are deduplicated and missing apps use fallback")
-        check(icons["com.apple.finder"]?.image.size == NSSize(width: 16, height: 16), "icons use native menu size")
-        check(await MeetingApplicationIcon.snapshot(bundleIdentifiers: []).isEmpty, "empty catalog has no icon work")
+        let deduplicated = icons.count == 1 && icons["com.apple.finder"] != nil
+        let nativeSize = icons["com.apple.finder"]?.image.size == NSSize(width: 16, height: 16)
+        let emptyCatalog = await MeetingApplicationIcon.snapshot(bundleIdentifiers: []).isEmpty
+        FileHandle.standardOutput.write(Data("NATIVE SDK controls: deduplication=\(deduplicated), size16=\(nativeSize), emptyCatalog=\(emptyCatalog)\n".utf8))
+        check(deduplicated, "icons are deduplicated and missing apps use fallback")
+        check(nativeSize, "icons use native menu size")
+        check(emptyCatalog, "empty catalog has no icon work")
         print("PASS: \(checks) production meeting picker checks")
     }
 }
@@ -321,10 +322,32 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
     with tempfile.TemporaryDirectory(prefix='fluidvoice-picker-') as directory:
         directory = Path(directory)
         file = directory / 'Tests.swift'
+        profile = directory / 'ProfileTypes.swift'
+        subprocess.run(['python3', 'Tests/Support/write_private_profile_standalone_types.py', str(profile), '--synthetic-brand'], cwd=ROOT, check=True)
+        service = (ROOT / 'Sources/Fluid/Account/PrivateProfileService.swift').read_text()
+        swift += '\n' + declaration(service, '@MainActor protocol PrivateProfileTransitionParticipant:') + '''
+@MainActor final class PrivateProfileService {
+    static let shared = PrivateProfileService()
+    static let willConceal = Notification.Name("ProbeProfileWillConceal")
+    var projectionRevision = UUID()
+    var isPrivateDataVisible = true
+    var isTransitioning = false
+    func register(_ participant: any PrivateProfileTransitionParticipant) {}
+}
+typealias MeetingSessionID = UUID
+struct MeetingSession { let id: UUID }
+final class DebugLogger { static let shared = DebugLogger(); func warning(_ message: String, source: String) {} }
+'''
         file.write_text(swift)
         binary = directory / 'tests'
         env = dict(os.environ, DEVELOPER_DIR=developer)
-        subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(file), '-o', str(binary)], check=True, env=env, timeout=90)
+        observation = directory / 'PichiCallObservation.o'
+        subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-emit-module', '-emit-object', '-module-name', 'PichiCallObservation',
+                        '-emit-module-path', str(directory / 'PichiCallObservation.swiftmodule'),
+                        str(ROOT / 'Vendor/PichiCallObservation/Sources/PichiCallObservation/CommunicationObservation.swift'),
+                        '-o', str(observation)], check=True, env=env, timeout=60)
+        subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-I', str(directory), str(observation), str(profile),
+                        str(ROOT / 'Sources/Fluid/Account/PrivateProfileStorage.swift'), str(file), '-o', str(binary)], check=True, env=env, timeout=90)
         subprocess.run([str(binary)], check=True, env=env, timeout=15)
 
 

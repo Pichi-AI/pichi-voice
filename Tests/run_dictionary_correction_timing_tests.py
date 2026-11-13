@@ -13,7 +13,7 @@ import tempfile
 repo = Path(__file__).resolve().parent.parent
 tracker_path = Path(sys.argv[1]) if len(sys.argv) > 1 else repo / 'Sources/Fluid/Services/AutomaticDictionaryCorrectionTracker.swift'
 tracker = tracker_path.read_text()
-settings = (repo / 'Sources/Fluid/Persistence/SettingsStore.swift').read_text()
+settings = (repo / 'Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift').read_text()
 
 def block(source, marker):
     start = source.index(marker)
@@ -45,13 +45,7 @@ DETECTOR
 }
 struct Recording { let id = UUID() }
 @MainActor final class Harness {
-    struct PendingCorrection {
-        let id = UUID()
-        let beforeValue: String
-        var afterValue: String
-        let insertedRange: NSRange
-        var correctedRange: NSRange?
-    }
+    PENDING
     struct Session {
         var element = 0
         var learningRecording: Recording?
@@ -59,7 +53,18 @@ struct Recording { let id = UUID() }
         var lastSelection = NSRange(location: 5, length: 0)
         var insertedRange = NSRange(location: 0, length: 5)
         var pendingCorrection: PendingCorrection?
+        var textMap = DictionaryCorrectionTextMap(originalText: "claud")
+        var approvals: [Approval] = []
+        var pendingRepeat: PendingRepeat?
     }
+    final class Approval { var isValid = false; var range = NSRange(); var text = "" }
+    struct PendingRepeat { let plan: DictionaryCorrectionReplacementPlan; let selectionBefore: NSRange; let selectionAfter: NSRange }
+    var repeatVerificationTask: Task<Void, Never>?
+    func commitRepeat(_ plan: DictionaryCorrectionReplacementPlan, to session: inout Session) -> Bool { fatalError("Unexpected repeat in timing probe") }
+    static func setSelectedRange(_ range: NSRange, of element: Int) -> Bool { fatalError("Unexpected AX write in timing probe") }
+    func propagateAcceptedCorrections() { fatalError("Unexpected propagation in timing probe") }
+    func revoke(_ approval: Approval) { fatalError("Unexpected approval revocation in timing probe") }
+    func evaluate(_ pending: PendingCorrection) { fatalError("Unexpected cross-word evaluation in timing probe") }
     static var selected: NSRange? = NSRange(location: 5, length: 0)
     static var value = "claud"
     static let maximumFieldLength = 100_000
@@ -119,7 +124,7 @@ struct Recording { let id = UUID() }
         Harness.selected = NSRange(location: 2, length: 0)
         h.handleObservedSelectionChange()
         precondition(h.session!.lastSelection == Harness.selected && h.scheduled.isEmpty)
-        h.session!.pendingCorrection = .init(beforeValue: "claud", afterValue: "claude", insertedRange: .init(location: 0, length: 5), correctedRange: .init(location: 0, length: 6))
+        h.session!.pendingCorrection = .init(beforeValue: "claud", afterValue: "claude", insertedRange: .init(location: 0, length: 5), correctedRange: .init(location: 0, length: 6), sourceMap: .init(originalText: "claud"))
         h.handleObservedSelectionChange()
         precondition(h.scheduled.isEmpty)
         print("PASS: production handlers preserve deadlines across duplicate/missing AX events; real edits/moves, all delays, completion cap, cancellation and pre-edit baseline")
@@ -127,6 +132,8 @@ struct Recording { let id = UUID() }
 }
 '''
 swift = swift.replace('DETECTOR', (repo / 'Sources/Fluid/Services/AutomaticDictionaryCorrectionDetector.swift').read_text() + (repo / 'Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift').read_text()).replace('DELAY', delay).replace('VALUE', value).replace('SELECTION', selection)
+swift = swift.replace('PENDING', block(tracker, '    private struct PendingCorrection').replace('private struct', 'struct', 1))
+swift += '\n' + (repo / 'Sources/Fluid/Localization/PichiLocalization.swift').read_text()
 selected = os.environ.get('DEVELOPER_DIR', subprocess.check_output(['xcode-select', '-p'], text=True).strip())
 if '.app/Contents/Developer' not in selected:
     raise SystemExit('Select a full Xcode toolchain before running this test')

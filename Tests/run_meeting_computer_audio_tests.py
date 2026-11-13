@@ -4,18 +4,9 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from Standalone.ProbeContractDependencies import declaration
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def declaration(source, marker):
-    start = source.index(marker)
-    brace = source.index("{", start)
-    depth, end = 1, brace + 1
-    while depth:
-        depth += (source[end] == "{") - (source[end] == "}")
-        end += 1
-    return source[start:end]
 
 
 def main():
@@ -27,7 +18,8 @@ def main():
     engine = (ROOT / "Sources/Fluid/Services/Meeting/MeetingCaptureEngine.swift").read_text()
     swift = '''import Foundation
 import CoreMedia
-enum VoiceEngineLanguageCatalog { static let parakeetV3LanguageIDs: Set<String> = ["en", "de"] }
+import ScreenCaptureKit
+import CryptoKit
 enum MeetingAutoDetector { struct ResolvedTarget { var bundleIdentifier: String; var pid: Int32; var windowID: UInt32? } }
 enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String), noCaptureDisplay, screenCapturePermissionDenied(String) }
 struct SCRunningApplication { let bundleIdentifier: String; let processID: Int32; let applicationName: String }
@@ -36,7 +28,7 @@ struct SCWindow {}
 struct SCShareableContent {
     static var fixture = Self(applications: [], displays: [SCDisplay(displayID: 1)])
     static var fail = false
-    static var current: Self { get async throws { if fail { throw CocoaError(.fileReadNoPermission) }; return fixture } }
+    static var current: Self { get async throws { if fail { throw NSError(domain: SCStreamErrorDomain, code: SCStreamError.Code.userDeclined.rawValue) }; return fixture } }
     let applications: [SCRunningApplication]; let displays: [SCDisplay]
 }
 struct SCContentFilter {
@@ -65,11 +57,17 @@ struct MeetingSession {
     var title = "Saved meeting"
     var languageCode = "de"
     var platform: MeetingPlatformProfile?
+    var applicationAudioScope: MeetingApplicationAudioScope? = .systemAudio
+    SESSION_SCOPE
 }
 struct AppOption { let identity: MeetingApplicationIdentity }
 struct MicOption { let identity: MeetingMicrophoneIdentity }
-struct ReplayHarness {
-    var actionErrorMessage: String?
+@MainActor final class ReplayState { var actionErrorMessage: String? }
+@MainActor struct ReplayHarness {
+    let privateState = ReplayState()
+    var actionErrorMessage: String? { get { privateState.actionErrorMessage } set { privateState.actionErrorMessage = newValue } }
+    let settings = SettingsStore()
+
     var applications: [AppOption] = []
     var microphones = [MicOption(identity: .init(captureDeviceID: "mic", displayName: "Mic"))]
 }
@@ -80,8 +78,18 @@ struct MeetingAudioTrack {
     let format: Int?; let timebase: Int; let health: Health; let chunks: [Int]; let captureMethod: CaptureMethod
 }
 '''
-    for marker in ["nonisolated enum MeetingCaptureMode:", "nonisolated enum MeetingMicrophoneRole:", "nonisolated struct MeetingMicrophoneIdentity:", "nonisolated struct MeetingApplicationIdentity:", "nonisolated struct MeetingRecordingDefaults:", "nonisolated struct MeetingPlatformProfile:", "nonisolated struct MeetingCaptureConfiguration:", "nonisolated enum MeetingModelValidationError:", "nonisolated enum MeetingCaptureScope:", "nonisolated enum MeetingAudioTrackKind:"]:
+    session = declaration(models, "nonisolated struct MeetingSession:")
+    swift = swift.replace("SESSION_SCOPE", declaration(session, "var effectiveApplicationAudioScope:"))
+    for marker in ["nonisolated enum MeetingLanguageCode", "nonisolated enum MeetingAudioStorageMode:", "nonisolated enum MeetingSpeakerProcessingMode:", "nonisolated enum MeetingApplicationAudioScope:", "nonisolated enum MeetingApplicationAudioSource:", "nonisolated enum MeetingCaptureMode:", "nonisolated enum MeetingMicrophoneRole:", "nonisolated struct MeetingMicrophoneIdentity:", "nonisolated struct MeetingApplicationIdentity:", "nonisolated struct MeetingRecordingDefaults:", "nonisolated struct MeetingPlatformProfile:", "nonisolated struct MeetingCaptureConfiguration:", "nonisolated enum MeetingModelValidationError:", "nonisolated enum MeetingCaptureScope:", "nonisolated enum MeetingAudioTrackKind:"]:
         swift += declaration(models, marker) + "\n"
+    swift += declaration((ROOT / "Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift").read_text(), "nonisolated extension MeetingCaptureConfiguration {") + "\n"
+    swift += (ROOT / "Sources/Fluid/Localization/PichiLocalization.swift").read_text() + "\n"
+    recovery = (ROOT / "Sources/Fluid/Services/Meeting/MeetingScreenCaptureRecoveryPolicy.swift").read_text()
+    swift += "enum MeetingScreenCaptureRecoveryPolicy {\n" + declaration(recovery, "static func isPermissionFailure(") + "\n}\n"
+    preferences = (ROOT / "Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift").read_text()
+    swift += "@MainActor final class SettingsStore {\nvar meetingSpeakerLabelsEnabled = true\nvar meetingSaveAudio = true\nvar meetingPIIRedactionEnabled = false\n"
+    swift += declaration(preferences, "func meetingSpeakerProcessingMode(for mode:") + "\n"
+    swift += declaration(preferences, "func applyingMeetingRecordingPreferences(") + "\n}\n"
     swift += (ROOT / "Sources/Fluid/Services/Meeting/MeetingRecordingSource.swift").read_text() + "\n"
     swift += (ROOT / "Sources/Fluid/Services/Meeting/MeetingPCMStoragePolicy.swift").read_text() + "\n"
     swift += declaration(engine, "nonisolated enum MeetingScreenCaptureAudioSettings") + "\n"
@@ -94,7 +102,7 @@ struct MeetingAudioTrack {
     swift += "static func selectWindow(for app: SCRunningApplication, in content: SCShareableContent, preferredWindowID: UInt32?) -> SCWindow? { nil }\n}\n"
     swift += '''
 @main struct Run {
-    static func main() async throws {
+    @MainActor static func main() async throws {
         var count = 0
         func check(_ value: Bool, _ reason: String) { precondition(value, reason); count += 1 }
         let mic = MeetingMicrophoneIdentity(captureDeviceID: "mic", avCaptureDeviceID: "av-mic", displayName: "Mic")
@@ -110,14 +118,14 @@ struct MeetingAudioTrack {
         let again = replay.recordAgainConfiguration(from: saved)
         check(again?.mode == .systemAudio && again?.application == nil && replay.actionErrorMessage == nil, "Record Again accepts Automatic without a running app")
         check(again?.languageCode == saved.languageCode && again?.title == saved.title, "Record Again preserves language and title")
-        var legacySession = saved; legacySession.mode = .inRoom
-        check(replay.recordAgainConfiguration(from: legacySession)?.mode == .systemAudio && legacySession.mode == .inRoom, "Repeating historical mic-only audio uses the new default without rewriting history")
-        var appSession = saved; appSession.mode = .onlineCall
+        var legacySession = saved; legacySession.mode = .inRoom; legacySession.applicationAudioScope = nil
+        check(replay.recordAgainConfiguration(from: legacySession)?.mode == .inRoom && legacySession.mode == .inRoom, "Repeating historical mic-only audio preserves its narrow source")
+        var appSession = saved; appSession.mode = .onlineCall; appSession.applicationAudioScope = .selectedApplication
         appSession.capturedApplication = .init(bundleIdentifier: "missing", displayName: "Missing")
         check(replay.recordAgainConfiguration(from: appSession) == nil, "Record Again cannot broaden a missing app to system audio")
         replay.actionErrorMessage = nil; replay.microphones = []
         check(replay.recordAgainConfiguration(from: saved) == nil && replay.actionErrorMessage == "microphone unavailable", "Automatic still requires the chosen microphone")
-        let all = MeetingCaptureConfiguration(mode: .systemAudio, title: "Meeting", microphone: mic)
+        let all = MeetingCaptureConfiguration(mode: .systemAudio, title: "Meeting", applicationAudioScope: .systemAudio, microphone: mic)
         try all.validate()
         let tracks = Runtime.makeTracks(session: MeetingSession(), configuration: all)
         check(Set(tracks.map(\\.kind)) == [.applicationAudio, .microphone], "System capture always has two tracks")
@@ -127,9 +135,9 @@ struct MeetingAudioTrack {
         var old = MeetingRecordingDefaults.unconfigured
         old.mode = .inRoom; old.languageCode = "de"
         let normalized = old.preferringLastPickedApplication(nil)
-        check(normalized.mode == .systemAudio && normalized.languageCode == "de" && old.mode == .inRoom, "Old mic-only defaults normalize without rewriting history or language")
+        check(normalized.mode == .inRoom && normalized.languageCode == "de" && old.mode == .inRoom, "Old mic-only defaults retain their topology and language")
         old.mode = .onlineCall
-        check(old.preferringLastPickedApplication(nil).mode == .systemAudio, "Old Automatic becomes system audio")
+        check(old.preferringLastPickedApplication(nil).effectiveApplicationAudioScope == .systemAudio, "Unscoped preferences adopt system audio without rewriting the saved mode")
         let legacy = MeetingCaptureConfiguration(mode: .inRoom, title: "Old", microphone: mic)
         try legacy.validate()
         check(Runtime.makeTracks(session: MeetingSession(), configuration: legacy).count == 1, "Old mic-only recordings remain supported")
@@ -141,49 +149,59 @@ struct MeetingAudioTrack {
         let choices = MeetingRecordingSourceResolver.applicationChoices(from: [chrome, other, second])
         check(choices.count == 2 && choices[0].processID == nil && choices[0].capturesAllInstances == true, "One app row explicitly covers every instance")
         SCShareableContent.fixture = .init(applications: [chrome, second, other].map { .init(bundleIdentifier: $0.bundleIdentifier, processID: $0.processID!, applicationName: $0.displayName) }, displays: [.init(displayID: 1)])
-        let broad = try await Runtime.buildStream(application: nil, microphone: mic, includeMicrophone: true)
+        let broad = try await Runtime.buildStream(audioSource: .systemAudio, microphone: mic, includeMicrophone: true)
         check(broad.stream.filter.kind == .all, "Automatic includes all apps, not a first-app fallback")
         check(broad.stream.configuration.capturesAudio && broad.stream.configuration.captureMicrophone, "System and microphone capture are enabled")
         check(broad.stream.configuration.microphoneCaptureDeviceID == "av-mic", "Selected microphone is preserved")
         check(!broad.stream.configuration.showsCursor && broad.stream.configuration.width == 2, "Audio capture uses minimal video configuration")
-        let group = try await Runtime.buildStream(application: choices[0], microphone: mic, includeMicrophone: true)
+        let group = try await Runtime.buildStream(audioSource: .application(choices[0]), microphone: mic, includeMicrophone: true)
         check(group.stream.filter.kind == .applications([10, 20]), "All Chrome instances included, other app excluded")
-        let exact = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true)
+        let exact = try await Runtime.buildStream(audioSource: .application(second), microphone: mic, includeMicrophone: true)
         check(exact.stream.filter.kind == .applications([20]), "Detected call keeps exact process")
-        let unchanged = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true)
+        let unchanged = try await Runtime.buildStream(audioSource: .application(second), microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true)
         check(unchanged.stream.filter.kind == .applications([20]), "Recovery keeps the original process while it is available")
         SCShareableContent.fixture = .init(applications: [.init(bundleIdentifier: "chrome", processID: 99, applicationName: "Chrome")], displays: [.init(displayID: 1)])
-        do { _ = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true); preconditionFailure("Initial capture cannot follow an unconfirmed process") }
+        do { _ = try await Runtime.buildStream(audioSource: .application(second), microphone: mic, includeMicrophone: true); preconditionFailure("Initial capture cannot follow an unconfirmed process") }
         catch MeetingCaptureError.applicationUnavailable { count += 1 }
-        let recovered = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true)
+        let recovered = try await Runtime.buildStream(audioSource: .application(second), microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true)
         check(recovered.stream.filter.kind == .applications([99]), "Recovery follows the sole relaunched instance of the chosen app")
         SCShareableContent.fixture = .init(applications: [
             .init(bundleIdentifier: "chrome", processID: 98, applicationName: "Chrome"),
             .init(bundleIdentifier: "chrome", processID: 99, applicationName: "Chrome")
         ], displays: [.init(displayID: 1)])
-        do { _ = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true); preconditionFailure("Recovery cannot guess between replacements") }
+        do { _ = try await Runtime.buildStream(audioSource: .application(second), microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true); preconditionFailure("Recovery cannot guess between replacements") }
         catch MeetingCaptureError.applicationUnavailable { count += 1 }
         SCShareableContent.fixture = .init(applications: [.init(bundleIdentifier: "other", processID: 20, applicationName: "Other")], displays: [.init(displayID: 1)])
-        do { _ = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true); preconditionFailure("Reused PID cannot capture another app") }
+        do { _ = try await Runtime.buildStream(audioSource: .application(second), microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true); preconditionFailure("Reused PID cannot capture another app") }
         catch MeetingCaptureError.applicationUnavailable { count += 1 }
         SCShareableContent.fixture = .init(applications: [], displays: [.init(displayID: 1)])
-        let empty = try await Runtime.buildStream(application: nil, microphone: mic, includeMicrophone: true)
+        let empty = try await Runtime.buildStream(audioSource: .systemAudio, microphone: mic, includeMicrophone: true)
         check(empty.stream.filter.kind == .all, "No open app is required for Automatic")
-        do { _ = try await Runtime.buildStream(application: choices[0], microphone: mic, includeMicrophone: true); preconditionFailure("Missing app cannot broaden capture") }
+        do { _ = try await Runtime.buildStream(audioSource: .application(choices[0]), microphone: mic, includeMicrophone: true); preconditionFailure("Missing app cannot broaden capture") }
         catch MeetingCaptureError.applicationUnavailable { count += 1 }
         SCShareableContent.fail = true
-        do { _ = try await Runtime.buildStream(application: nil, microphone: mic, includeMicrophone: true); preconditionFailure("Denied audio access cannot become mic-only") }
+        do { _ = try await Runtime.buildStream(audioSource: .systemAudio, microphone: mic, includeMicrophone: true); preconditionFailure("Denied audio access cannot become mic-only") }
         catch MeetingCaptureError.screenCapturePermissionDenied { count += 1 }
         SCShareableContent.fail = false
         SCShareableContent.fixture = .init(applications: [], displays: [])
-        do { _ = try await Runtime.buildStream(application: nil, microphone: mic, includeMicrophone: true); preconditionFailure("No display cannot become mic-only") }
+        do { _ = try await Runtime.buildStream(audioSource: .systemAudio, microphone: mic, includeMicrophone: true); preconditionFailure("No display cannot become mic-only") }
         catch MeetingCaptureError.noCaptureDisplay { count += 1 }
-        var missingApp = all; missingApp.mode = .onlineCall
+        var missingApp = all; missingApp.mode = .onlineCall; missingApp.applicationAudioScope = .selectedApplication
         do { try missingApp.validate(); preconditionFailure("App mode requires its app") }
         catch MeetingModelValidationError.missingOnlineApplication { count += 1 }
         var wrongScope = all; wrongScope.application = chrome
         do { try wrongScope.validate(); preconditionFailure("System mode cannot hide an app filter") }
-        catch MeetingModelValidationError.unexpectedSystemApplication { count += 1 }
+        catch MeetingModelValidationError.unexpectedSystemAudioApplication { count += 1 }
+        FileHandle.standardOutput.write(Data("PASS: \\(count) production computer-audio checks with explicit system scope\\n".utf8))
+        // Retain the inherited mode-only constructor contract after exercising every
+        // negative control. This is a production validation inconsistency, not a fixture fix.
+        let modeOnly = MeetingCaptureConfiguration(mode: .systemAudio, title: "Meeting", microphone: mic)
+        do { try modeOnly.validate() }
+        catch {
+            FileHandle.standardOutput.write(Data("FAIL production default: mode=systemAudio, applicationAudioScope=nil, applicationAudioSource=systemAudio; validation=\\(error)\\n".utf8))
+            throw error
+        }
+        check(modeOnly.application == nil, "Default system mode needs no selected app")
         print("PASS: \\(count) production computer-audio checks")
     }
 }

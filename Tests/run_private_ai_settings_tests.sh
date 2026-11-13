@@ -6,11 +6,12 @@ test -d "$task_developer_dir/Platforms/MacOSX.platform"
 export DEVELOPER_DIR="$task_developer_dir"
 task_test_dir=$(mktemp -d /tmp/fluidvoice-model-settings.XXXXXX)
 trap 'rm -rf "$task_test_dir"' EXIT
+python3 Tests/Standalone/write_private_ai_settings_fixture.py "$task_test_dir/Fixture.swift"
 xcrun swiftc -parse-as-library \
     Sources/Fluid/UI/AISettings/PrivateAISettingsSession.swift \
     Sources/Fluid/UI/AISettings/PrivateAISettingsController.swift \
     Sources/Fluid/UI/AISettings/PrivateAIModelPresentation.swift \
-    Tests/PrivateAISettingsControllerDoubles.swift \
+    "$task_test_dir/Fixture.swift" \
     Tests/PrivateAISettingsBoundaryTests.swift \
     -o "$task_test_dir/model-settings-tests"
 "$task_test_dir/model-settings-tests"
