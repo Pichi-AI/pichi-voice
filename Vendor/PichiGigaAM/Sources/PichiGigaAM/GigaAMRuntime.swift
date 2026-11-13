@@ -23,13 +23,29 @@ public actor GigaAMRuntime {
     private var loadedIdentity: String?
     private let resources: @Sendable () -> GigaAMResourcePolicy
     public private(set) var executionStatus: GigaAMExecutionStatus?
+    public private(set) var lastTranscriptionWork = GigaAMTranscriptionWork()
+    private var windowReuse = GigaAMWindowReuse()
+    #if DEBUG
+    private var windowInferenceForTesting: (@Sendable ([Float], Bool) throws -> GigaAMTranscript)?
+
+    init(windowInferenceForTesting: @escaping @Sendable ([Float], Bool) throws -> GigaAMTranscript) throws {
+        self.resources = { .current }
+        self.frontend = try GigaAMFrontend()
+        self.windowInferenceForTesting = windowInferenceForTesting
+    }
+    #endif
 
     public init(resources: @escaping @Sendable () -> GigaAMResourcePolicy = { .current }) throws {
         self.resources = resources
         self.frontend = try GigaAMFrontend()
     }
 
-    public var isReady: Bool { self.session != nil || self.coreML?.isLoaded == true || self.gguf?.isLoaded == true }
+    public var isReady: Bool {
+        #if DEBUG
+        if self.windowInferenceForTesting != nil { return true }
+        #endif
+        return self.session != nil || self.coreML?.isLoaded == true || self.gguf?.isLoaded == true
+    }
     public static var encoderFeatureAPIAvailable: Bool { TranscribeCpp.Session.nativeEncoderFeatureAPIAvailable }
     public var supportsEncoderFeatureCapture: Bool { self.gguf?.supportsEncoderFeatures == true }
 
@@ -186,6 +202,7 @@ public actor GigaAMRuntime {
     /// A transient fallback is sticky within an admitted operation. A later
     /// operation tries GPU again using the same frozen compilation derivative.
     public func beginAttempt() throws {
+        self.windowReuse.removeAll()
         try autoreleasepool {
             try Task.checkCancellation()
             if let native = self.gguf {
@@ -222,6 +239,10 @@ public actor GigaAMRuntime {
     }
 
     public func unload() {
+        self.windowReuse.removeAll()
+        #if DEBUG
+        self.windowInferenceForTesting = nil
+        #endif
         autoreleasepool {
             self.gguf?.unload()
             self.gguf = nil
@@ -239,12 +260,24 @@ public actor GigaAMRuntime {
 
     /// Audio is 16 kHz mono float PCM. Long inputs use overlapping, bounded windows.
     /// Every word keeps its CTC-derived timing; midpoint ownership avoids duplicated overlap.
-    public func transcribe(_ samples: [Float], captureEncoderFeatures: Bool = false) async throws -> GigaAMTranscript {
-        try Task.checkCancellation()
+    public func transcribe(_ samples: [Float], captureEncoderFeatures: Bool = false,
+                           reusingWindowsFor session: GigaAMWindowReuseSession? = nil) async throws -> GigaAMTranscript {
+        self.lastTranscriptionWork = GigaAMTranscriptionWork()
         let cancellation = TranscribeCpp.CancellationToken()
-        return try await withTaskCancellationHandler {
-            try self.transcribeWithFallback(samples, cancellation: cancellation, captureEncoderFeatures: captureEncoderFeatures)
-        } onCancel: { cancellation.cancel() }
+        do {
+            try Task.checkCancellation()
+            self.windowReuse.prepare(session: session, sampleCount: samples.count)
+            return try await withTaskCancellationHandler {
+                try self.transcribeWithFallback(samples, cancellation: cancellation, captureEncoderFeatures: captureEncoderFeatures)
+            } onCancel: { cancellation.cancel() }
+        } catch {
+            self.windowReuse.removeAll()
+            throw error
+        }
+    }
+
+    public func discardWindowReuse(for sessionID: UUID) {
+        self.windowReuse.discard(for: sessionID)
     }
 
     private func transcribeWithFallback(_ samples: [Float], cancellation: TranscribeCpp.CancellationToken, captureEncoderFeatures: Bool) throws -> GigaAMTranscript {
@@ -252,6 +285,10 @@ public actor GigaAMRuntime {
         do { return try self.transcribeAttempt(samples, cancellation: cancellation, captureEncoderFeatures: captureEncoderFeatures) }
         catch {
             try Task.checkCancellation()
+            // A fallback result must contain only the replacement backend's work.
+            let reuseSession = self.windowReuse.session
+            self.windowReuse.removeAll()
+            self.windowReuse.prepare(session: reuseSession, sampleCount: samples.count)
             if samples.allSatisfy(\.isFinite), Self.permitsExecutionFallback(error),
                self.executionStatus?.backend == .gpu, let native = self.gguf {
                 do {
@@ -308,7 +345,23 @@ public actor GigaAMRuntime {
             let coreEnd = min(samples.count, coreStart + coreSamples)
             let windowStart = max(0, coreStart - overlapSamples)
             let windowEnd = min(samples.count, coreEnd + overlapSamples)
-            let output = try self.infer(Array(samples[windowStart..<windowEnd]), cancellation: cancellation, captureEncoderFeatures: capture)
+            let windowSamples = Array(samples[windowStart..<windowEnd])
+            let digest = self.windowReuse.sessionID.map { _ in GigaAMWindowReuse.digest(windowSamples) }
+            let output: GigaAMTranscript
+            if let digest, let reused = self.windowReuse.output(coreStart: coreStart, sampleRange: windowStart..<windowEnd,
+                                                    digest: digest, captureFeatures: capture) {
+                output = reused
+                self.lastTranscriptionWork.reusedWindows += 1
+            } else {
+                self.lastTranscriptionWork.inferredWindows += 1
+                self.lastTranscriptionWork.inferredSamples += windowSamples.count
+                output = try self.infer(windowSamples, cancellation: cancellation, captureEncoderFeatures: capture)
+                try Task.checkCancellation()
+                if let digest {
+                    self.windowReuse.store(output, coreStart: coreStart, sampleRange: windowStart..<windowEnd,
+                                           digest: digest, capturedFeatures: capture && !output.encoderWindows.isEmpty)
+                }
+            }
             let offset = Double(windowStart) / Double(GigaAMFrontend.sampleRate)
             let lower = Double(coreStart) / Double(GigaAMFrontend.sampleRate)
             let upper = Double(coreEnd) / Double(GigaAMFrontend.sampleRate)
@@ -386,9 +439,12 @@ public actor GigaAMRuntime {
     }
 
     private func infer(_ samples: [Float], cancellation: TranscribeCpp.CancellationToken, captureEncoderFeatures: Bool) throws -> GigaAMTranscript {
+        #if DEBUG
+        if let infer = self.windowInferenceForTesting { return try infer(samples, captureEncoderFeatures) }
+        #endif
         // A model call can create autoreleased Objective-C tensors and backing buffers.
         // Only the Swift transcript escapes this bounded window.
-        try autoreleasepool {
+        return try autoreleasepool {
             guard self.isReady else { throw GigaAMError.notPrepared }
             let start = ProcessInfo.processInfo.systemUptime
             if let native = self.gguf {
