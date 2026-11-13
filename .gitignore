@@ -274,6 +274,7 @@ builds/
 !/docs/development/pichi-production-account-migration.md
 !/docs/development/branding.md
 !/docs/development/localization.md
+!/docs/development/release-notes.md
 !/docs/development/analytics.md
 !/docs/development/test-infrastructure-audit.md
 !/docs/development/test-infrastructure-probes.json
