@@ -130,3 +130,10 @@ Every initial conflicted path is listed for traceability. Resolution and validat
 - `Tests/PasteReadReceiptReproductionTests.swift`
 - `Tests/run_command_cancellation_tests.sh`
 - `Tests/run_meeting_backup_refresh_tests.py`
+
+
+## Open privacy/normalization limitation
+
+Independent review identified a P2 parity gap that remains open: PCM final normalization receives already-protected capture text, so a saved rule cannot match a trigger that privacy already masked. Retained canonical processing can apply that rule before final redaction. A second focused architecture review confirmed no existing complete raw transcript can supply that trigger: the bounded privacy tail and streaming state deliberately discard it. Retaining unprotected full text or replaying healthy ASR would change the accepted privacy/resource/Stop contracts. Neither workaround is introduced in this sync.
+
+The source keeps protected-text normalization and the final redaction pass, discloses the limitation with the dictionary controls, and adds a caller-level synthetic PCM finalization test with privacy-on/off controls and no-additional-ASR assertions. This records the limitation; it does not establish sensitive-trigger parity or close the review finding. The draft must not be described as fully accepted or merge-ready. A future fix needs a concrete, bounded existing-boundary design that preserves protected checkpoints, native evidence and joined healthy Stop. The user has not accepted this tradeoff as a permanent product decision.

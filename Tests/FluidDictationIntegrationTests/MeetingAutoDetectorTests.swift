@@ -1,5 +1,6 @@
 @testable import FluidVoice_Debug
 import Foundation
+import PichiCallObservation
 import XCTest
 
 // MARK: - Fakes (protocols only — no CoreAudio/AX/NSWorkspace)

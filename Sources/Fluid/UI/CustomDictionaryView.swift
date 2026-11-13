@@ -592,6 +592,10 @@ struct CustomDictionaryView: View {
                 }
             }
             Text("Saved replacements apply to dictation and finished meeting transcripts.")
+            Text(PichiLocalization.text("Phrases already hidden by live privacy filtering cannot be matched by saved replacements."))
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)

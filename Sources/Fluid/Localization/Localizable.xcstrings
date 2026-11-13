@@ -69261,6 +69261,23 @@
           }
         }
       }
+    },
+    "Phrases already hidden by live privacy filtering cannot be matched by saved replacements.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Phrases already hidden by live privacy filtering cannot be matched by saved replacements."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Словарные замены не могут найти фразы, уже скрытые фильтром чувствительных данных во время записи."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -2259,7 +2259,8 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
     }
     private func verifyScheduling(policy: Bool, capability: Bool, privacy: Bool,
                                   refusingPrivacy: Bool = false, permitsProvisionalDisplay: Bool = true,
-                                  completesAttempt: Bool = false) async throws {
+                                  completesAttempt: Bool = false,
+                                  finalDictionaryRules: [SettingsStore.CustomDictionaryEntry] = []) async throws {
         let runtime = Runtime(progressive: capability)
         let registered = try descriptor(policy: policy)
         let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: .whisperTiny)
@@ -2282,7 +2283,7 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
             privacyRedactorProvider: { redactor }, backendRegistry: registry,
             meetingRuntimeFactory: { _ in runtime }, prepareDiarizationDependencies: { _ in
                 XCTFail("Disabled speaker labels cannot prepare speaker weights")
-            })
+            }, dictionaryEntriesProvider: { finalDictionaryRules })
         let capture = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic", languageCode: "auto",
             microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic"),
             audioStorageMode: .memoryOnly, speakerLabelsEnabled: false, piiRedactionEnabled: privacy)
@@ -2364,8 +2365,11 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
                 diarizationModel: nil, lastCompletedTrackID: nil, errorCode: nil))
             session.audioTracks = [track]
             session.transcriptSegments = observations.checkpoints.flatMap(\.segments)
+            let inferenceCountBeforeStop = runtime.sealedCalls + runtime.progressiveCalls
             let result = try await pipeline.process(session: session,
                 sessionDirectory: URL(fileURLWithPath: "/synthetic-never-created"), progress: { _ in })
+            XCTAssertEqual(runtime.sealedCalls + runtime.progressiveCalls, inferenceCountBeforeStop,
+                "Healthy final normalization must reuse accepted speech without ASR replay")
             XCTAssertEqual(result.attempt.id, frozen.attemptID)
             XCTAssertNotEqual(result.attempt.id, unrelatedID)
             XCTAssertEqual(result.attempt.stage, .completed)
@@ -2379,12 +2383,34 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
             XCTAssertEqual(result.attempt.asrProvider, registered.id.rawValue)
             XCTAssertEqual(result.attempt.backendVersion, registered.version)
             XCTAssertFalse(result.segments.isEmpty)
-            XCTAssertTrue(result.segments.allSatisfy { $0.originalText == nil && !$0.text.contains("Иван") })
+            if privacy {
+                XCTAssertTrue(result.segments.allSatisfy { $0.originalText == nil && !$0.text.contains("Иван") })
+            }
+            if !finalDictionaryRules.isEmpty {
+                let text = result.segments.map(\.text).joined(separator: " ")
+                if privacy {
+                    XCTAssertFalse(text.contains("Synthetic participant"),
+                        "Known limitation: final rules cannot match text already hidden during capture")
+                    XCTAssertTrue(text.contains("[PERSON]"))
+                } else {
+                    XCTAssertTrue(text.contains("Synthetic participant"),
+                        "Negative control: the same final rule matches when its trigger remains visible")
+                }
+            }
         } else {
             await pipeline.cancelMemoryAudio(sessionID: session.id)
         }
         XCTAssertTrue(pipeline.memoryAttempts.isEmpty)
     }
+    /// Documents a bounded privacy-contract limitation, not sensitive-trigger parity with retained ASR.
+    func testCompletedPCMFinalRulesCannotRestoreMaskedTriggersWithoutReplay() async throws {
+        let rules: [SettingsStore.CustomDictionaryEntry] = [.init(triggers: ["Иван Тестов"], replacement: "Synthetic participant")]
+        for privacy in [true, false] {
+            try await verifyScheduling(policy: true, capability: true, privacy: privacy,
+                completesAttempt: true, finalDictionaryRules: rules)
+        }
+    }
+
     func testCompletedStrictAttemptRetainsFrozenRuntimeLineageAndProtectedText() async throws {
         try await verifyScheduling(policy: true, capability: true, privacy: true, completesAttempt: true)
     }
