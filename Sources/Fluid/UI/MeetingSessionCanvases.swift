@@ -149,20 +149,20 @@ struct MeetingRecordingCanvas: View {
 
     @ViewBuilder
     private var sourceHealth: some View {
-        if self.session.mode == .onlineCall {
+        if self.session.mode.capturesComputerAudio {
             MeetingTrackHealthRow(title: PichiLocalization.text(self.session.effectiveApplicationAudioScope == .systemAudio ? "System audio" : "Meeting audio"), systemImage: "macwindow", health: self.trackHealth[.applicationAudio] ?? .waiting)
         }
         MeetingTrackHealthRow(
             title: PichiLocalization.text("Microphone"), systemImage: "mic",
             health: self.trackHealth[.microphone] ?? .waiting,
-            microphoneMuteState: self.session.mode == .onlineCall ? self.microphoneMuteState : .notApplicable,
+            microphoneMuteState: self.session.mode.capturesComputerAudio ? self.microphoneMuteState : .notApplicable,
             onToggleMicrophone: self.isStopping ? nil : self.onToggleMicrophone
         )
     }
 
     private var sourceSummary: String {
         let microphoneName = self.session.selectedMicrophone.displayName
-        guard self.session.mode == .onlineCall else { return microphoneName }
+        guard self.session.mode.capturesComputerAudio else { return microphoneName }
         let applicationName = self.session.capturedApplication?.displayName ?? PichiLocalization.text(self.session.audioSourceDisplayName)
         return "\(applicationName) · \(microphoneName)"
     }
@@ -1017,7 +1017,7 @@ struct MeetingResultCanvas: View {
                     .fixedSize()
                 Text("·").accessibilityHidden(true)
                 Label { Text(verbatim: self.sourceName) } icon: {
-                    Image(systemName: self.session.mode == .onlineCall ? "macwindow" : "person.2")
+                    Image(systemName: self.session.mode.capturesComputerAudio ? "macwindow" : "person.2")
                 }
                     .lineLimit(1)
                     .help(self.sourceName + "\n" + PichiLocalization.format("microphone: %@", self.session.selectedMicrophone.displayName))

@@ -51,6 +51,7 @@ class MeetingFloatingCaptionsPanel: NSPanel {}
         'var meetingRecentApplication:', 'var meetingRecordingDefaults:', 'func saveMeetingRecordingSource('
     ])
     swift = swift.replace('// PRODUCTION_PREFERENCES', preference_declarations).replace('SPEECH_MODEL_CASES', speech_model_cases())
+    swift += declaration(preferences, 'extension Notification.Name {') + '\n'
     swift += declaration((ROOT / 'Sources/Fluid/Services/Meeting/MeetingCaptureControlling.swift').read_text(), 'nonisolated struct MeetingMicrophoneCatalogSnapshot:') + '\n'
     swift += declaration((ROOT / 'Sources/Fluid/Services/Meeting/MeetingInstalledCallApplications.swift').read_text(), 'nonisolated struct MeetingInstalledCallApplication:') + '\n'
     swift += declaration((ROOT / 'Sources/Fluid/Services/Meeting/MeetingInstalledCallApplications.swift').read_text(), 'nonisolated struct MeetingApplicationIcon:') + '\n'

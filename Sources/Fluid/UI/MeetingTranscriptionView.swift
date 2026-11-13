@@ -83,9 +83,11 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         self.browserDetectionEnabled = browserDetectionEnabled
         self.languageCode = defaults.languageCode
             ?? fallbackLanguageCode
-        self.mode = defaults.mode
+        // The existing setup UI separates meeting kind from computer-audio scope.
+        // Adapt the upstream combined mode at this boundary, preserving mic-only intent.
+        self.mode = defaults.mode == .systemAudio ? .onlineCall : defaults.mode
         self.applicationAudioScope = defaults.effectiveApplicationAudioScope
-        self.title = Self.defaultTitle(mode: defaults.mode, applicationDisplayName: nil)
+        self.title = Self.defaultTitle(mode: self.mode, applicationDisplayName: nil)
         self.usesAutomaticApplication = defaults.usesAutomaticApplication
         self.selectedApplicationBundleIdentifier = defaults.usesAutomaticApplication ? nil : defaults.applicationBundleIdentifier
         self.selectedApplicationID = nil

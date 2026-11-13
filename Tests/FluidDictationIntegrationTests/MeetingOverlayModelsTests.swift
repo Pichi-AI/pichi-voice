@@ -525,6 +525,18 @@ final class MeetingMenuBarStartTests: XCTestCase {
 
 @MainActor
 final class MeetingSetupSourceSelectionTests: XCTestCase {
+    func testUpstreamSystemModeAdaptsToExistingSetupScopeWithoutLosingMicrophoneOnly() {
+        var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .systemAudio
+        let system = self.draft(defaults)
+        XCTAssertEqual(system.mode, .onlineCall)
+        XCTAssertEqual(system.applicationAudioScope, .systemAudio)
+        XCTAssertNil(system.selectedApplicationID)
+        defaults.mode = .inRoom
+        let microphoneOnly = self.draft(defaults)
+        XCTAssertEqual(microphoneOnly.mode, .inRoom)
+    }
+
     private let app = MeetingApplicationIdentity(bundleIdentifier: "manual.app", processID: 42, displayName: "Manual App", windowID: 100)
     private let other = MeetingApplicationIdentity(bundleIdentifier: "other.app", processID: 73, displayName: "Other App")
     private let microphone = MeetingMicrophoneIdentity(captureDeviceID: "mic", coreAudioUID: "mic", displayName: "Microphone")

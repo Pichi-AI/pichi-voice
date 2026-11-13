@@ -31,6 +31,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
 
     private func selectedAppDefaults() -> MeetingRecordingDefaults {
         var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
         defaults.applicationAudioScope = .selectedApplication
         return defaults
     }
@@ -235,13 +236,24 @@ final class MeetingRecordingSourceTests: XCTestCase {
         let defaults = self.selectedAppDefaults()
         let target = MeetingAutoDetector.ResolvedTarget(bundleIdentifier: "zoom", pid: 42, windowID: 7)
         XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: .unconfigured, target: target, foreground: self.browser, applications: [self.zoom, self.browser]))
+        let detected = MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: target, foreground: self.browser, applications: [self.zoom, self.browser])
+        XCTAssertEqual(detected?.processID, self.zoom.processID)
+        XCTAssertEqual(detected?.windowID, 7)
+        let foreground = MeetingApplicationIdentity(bundleIdentifier: "com.google.Chrome", processID: 44, displayName: "Chrome")
+        XCTAssertEqual(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: foreground, applications: [self.zoom, foreground]), foreground)
+        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: nil, applications: [self.zoom]))
+        var restarted = foreground
+        restarted.processID = 99
+        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: foreground, applications: [restarted]))
+        let unsupported = MeetingApplicationIdentity(bundleIdentifier: "synthetic.unsupported", processID: 45, displayName: "Unsupported")
+        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: unsupported, applications: [unsupported]))
     }
 
     func testInPersonSettingsKeepTheRememberedAppWithoutRunningApplications() throws {
         var defaults = self.selectedAppDefaults()
         defaults.isConfigured = true
-        defaults.applicationBundleIdentifier = "com.openai.codex"
-        defaults.applicationDisplayName = "ChatGPT"
+        defaults.applicationBundleIdentifier = self.browser.bundleIdentifier
+        defaults.applicationDisplayName = self.browser.displayName
         defaults.microphoneCaptureDeviceID = "chosen-mic"
         defaults.languageCode = "fr"
         var draft = MeetingTranscriptionSetupDraft(defaults: defaults, autoDetectEnabled: true, browserDetectionEnabled: true, fallbackLanguageCode: "en")
@@ -283,11 +295,14 @@ final class MeetingRecordingSourceTests: XCTestCase {
         defaults.isConfigured = true
         defaults.applicationBundleIdentifier = "browser"
         let target = MeetingAutoDetector.ResolvedTarget(bundleIdentifier: "zoom", pid: 42, windowID: nil)
-        XCTAssertEqual(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: target, foreground: self.zoom, applications: [self.zoom, self.browser])?.bundleIdentifier, self.browser.bundleIdentifier)
+        XCTAssertEqual(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: target, foreground: self.zoom, applications: [self.zoom, self.browser]), self.browser)
         XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: target, foreground: self.zoom, applications: [self.zoom]))
         var duplicate = self.browser
         duplicate.processID = 99
+        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: self.zoom, applications: [self.browser, duplicate]), "A legacy saved bundle must not authorize multiple processes")
+        defaults.applicationCapturesAllInstances = true
         XCTAssertEqual(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: self.zoom, applications: [self.browser, duplicate])?.capturesAllInstances, true)
+        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: target, foreground: self.zoom, applications: [self.zoom]), "An explicit app-wide choice must also stay unavailable when the app is missing")
     }
 
     func testConfirmationCannotChangeAppProcessOrMicrophone() throws {
@@ -310,11 +325,23 @@ final class MeetingRecordingSourceTests: XCTestCase {
 
     func testUnconfiguredAndExplicitSystemAudioDoNotRequireAnApplication() throws {
         let defaults = MeetingRecordingDefaults.unconfigured
+        XCTAssertEqual(defaults.mode, .systemAudio)
+        XCTAssertEqual(defaults.effectiveApplicationAudioScope, .systemAudio)
         XCTAssertEqual(MeetingRecordingSource(defaults: defaults), .systemAudio)
+        XCTAssertEqual(MeetingTranscriptionSetupDraft(defaults: defaults, autoDetectEnabled: true, browserDetectionEnabled: true, fallbackLanguageCode: "en").mode, .systemAudio)
         XCTAssertNil(try MeetingRecordingSourceResolver.resolve(
             mode: .onlineCall, source: .systemAudio, target: nil, applications: []
         ))
         var snapshot = self.snapshot()
+        snapshot.defaults = defaults
+        snapshot.selectedApplication = nil
+        let currentDefault = try snapshot.configuration(applications: [], microphones: [self.mic])
+        XCTAssertEqual(currentDefault.mode, .systemAudio)
+        XCTAssertEqual(currentDefault.effectiveApplicationAudioScope, .systemAudio)
+        XCTAssertNil(currentDefault.application)
+        XCTAssertNoThrow(try currentDefault.validate())
+        XCTAssertThrowsError(try snapshot.configuration(applications: [], microphones: []))
+        snapshot.defaults.mode = .onlineCall
         snapshot.defaults.applicationAudioScope = .systemAudio
         snapshot.selectedApplication = nil
         let configuration = try snapshot.configuration(applications: [], microphones: [self.mic])
@@ -424,11 +451,13 @@ final class MeetingRecordingSourceTests: XCTestCase {
         let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in self.snapshot() }, start: { _ in XCTFail("Refreshing must not record") })
         controller.handleShortcut()
         await self.waitUntil { !controller.isLoading }
-        controller.selectApplication(nil)
+        controller.selectSystemAudio()
         controller.refresh()
         await self.waitUntil { !controller.isLoading }
-        XCTAssertEqual(controller.snapshot?.defaults.mode, .systemAudio)
+        XCTAssertEqual(controller.snapshot?.defaults.mode, .onlineCall)
+        XCTAssertEqual(controller.snapshot?.defaults.effectiveApplicationAudioScope, .systemAudio)
         XCTAssertNil(controller.snapshot?.selectedApplication)
+        XCTAssertTrue(controller.canConfirm)
         controller.cancel()
     }
 
@@ -623,7 +652,11 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertEqual(controller.snapshot?.applicationLabel(self.zoom), PichiLocalization.format("%@ (Last picked)", "Zoom"))
         XCTAssertEqual(controller.snapshot?.applicationLabel(self.browser), "Browser")
         controller.selectApplication(nil)
-        XCTAssertNil(SettingsStore.shared.meetingRecentApplication, "Automatic clears the previous app choice")
+        XCTAssertEqual(SettingsStore.shared.meetingRecentApplication, self.zoom, "In person keeps the last explicit app choice")
+        XCTAssertEqual(controller.snapshot?.defaults.mode, .inRoom)
+        XCTAssertNil(controller.snapshot?.selectedApplication)
+        controller.selectSystemAudio()
+        XCTAssertNil(SettingsStore.shared.meetingRecentApplication, "Explicit system audio clears the previous app choice")
         controller.selectApplication(self.browser)
         controller.cancel()
 
@@ -666,13 +699,21 @@ final class MeetingRecordingSourceTests: XCTestCase {
         var restarted = self.browser
         restarted.processID = 99
         snapshot.applications = [self.zoom, restarted]
-        XCTAssertEqual(snapshot.availableRecentApplication, restarted)
-        XCTAssertEqual(snapshot.applicationLabel(restarted), PichiLocalization.format("%@ (Last picked)", "Browser"))
+        XCTAssertNil(snapshot.availableRecentApplication, "A missing exact PID must never select a replacement process")
+        XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser")
+        var allInstances = self.browser
+        allInstances.processID = nil
+        allInstances.capturesAllInstances = true
+        snapshot.recentApplication = allInstances
+        XCTAssertEqual(snapshot.availableRecentApplication, allInstances)
+        XCTAssertEqual(snapshot.applicationLabel(allInstances), PichiLocalization.format("%@ (Last picked)", "Browser"))
         var duplicate = restarted
         duplicate.processID = 100
         snapshot.applications.append(duplicate)
         XCTAssertEqual(snapshot.availableRecentApplication?.capturesAllInstances, true)
         XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser")
+        snapshot.recentApplication = self.browser
+        XCTAssertNil(snapshot.availableRecentApplication, "Duplicate replacements cannot widen a missing exact process choice")
         snapshot.recentApplication = duplicate
         XCTAssertEqual(snapshot.availableRecentApplication, duplicate)
         XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser")
@@ -683,8 +724,8 @@ final class MeetingRecordingSourceTests: XCTestCase {
     }
 
     func testRecentApplicationFormatsPreserveTheAppNameInBothCatalogLanguages() {
-        XCTAssertEqual(PichiLocalization.format("%@ (Last picked)", language: .russian, bundle: .main, arguments: ["Browser"]), "Browser (Недавнее)")
-        XCTAssertEqual(PichiLocalization.format("%@ (Last picked)", language: .english, bundle: .main, arguments: ["Browser"]), "Browser (Recent)")
+        XCTAssertEqual(PichiLocalization.format("%@ (Last picked)", language: .russian, bundle: .main, arguments: ["Browser"]), "Browser (последний выбор)")
+        XCTAssertEqual(PichiLocalization.format("%@ (Last picked)", language: .english, bundle: .main, arguments: ["Browser"]), "Browser (Last picked)")
     }
 
     func testRecentAppPersistenceDoesNotKeepWindowOrDisplayTargets() {

@@ -3,6 +3,18 @@ import Foundation
 import XCTest
 
 final class MeetingTranscriptNormalizerTests: XCTestCase {
+    func testFinalPublicationKeepsUserEditedRowsVerbatim() async throws {
+        let session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic edited wording",
+            microphone: .init(captureDeviceID: "synthetic-mic", displayName: "Fixture"), audioStorageMode: .memoryOnly),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        var edited = self.segment("twenty dollars")
+        edited.originalText = "original wording"
+        edited.isUserTextEdited = true
+        let output = try await MeetingProcessingPipeline.normalizedPublicationSegments([edited], speakers: [],
+            session: session, coverageGaps: [], configuration: .init(), redactor: nil, privacyIdentity: nil)
+        XCTAssertEqual(output, [edited], "Automatic final normalization cannot rewrite an explicit user edit")
+    }
+
     func testFinalPhraseFormattingRetainsNativeWordRowsAndTiming() async throws {
         let session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic quantities",
             microphone: .init(captureDeviceID: "synthetic-mic", displayName: "Fixture"), audioStorageMode: .memoryOnly),
