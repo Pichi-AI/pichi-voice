@@ -4,6 +4,21 @@ import XCTest
 
 final class PichiLocalizationTests: XCTestCase {
     @MainActor
+    func testShortcutPresentationLocalizesNamedKeysWithoutChangingMatchingOrCoding() throws {
+        let shortcut = HotkeyShortcut(keyCode: 61, modifierFlags: [])
+        let encoded = try JSONEncoder().encode(shortcut)
+        XCTAssertEqual(shortcut.displayString, PichiLocalization.language == .russian ? "Правая ⌥" : "Right ⌥")
+        XCTAssertEqual(shortcut.keyCode, 61)
+        XCTAssertEqual(try JSONDecoder().decode(HotkeyShortcut.self, from: encoded), shortcut)
+        XCTAssertTrue(shortcut.modifierFlags.isEmpty)
+        XCTAssertEqual(HotkeyShortcut.mouseButtonToString(4),
+                       PichiLocalization.language == .russian ? "Кнопка мыши 5" : "Mouse 5")
+        XCTAssertEqual(HotkeyShortcut.mouseButtonToString(0),
+                       PichiLocalization.language == .russian ? "Левая кнопка мыши" : "Left Click")
+        XCTAssertEqual(HotkeyShortcut.keyCodeToString(49), PichiLocalization.language == .russian ? "Пробел" : "Space")
+    }
+
+    @MainActor
     func testUserFacingFailureFamiliesUseCompiledCatalogAndKeepArgumentsVerbatim() {
         let data = "fixture/Settings %@"
         let path = URL(fileURLWithPath: "/tmp/\(data)")

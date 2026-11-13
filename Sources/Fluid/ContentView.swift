@@ -1082,7 +1082,7 @@ struct ContentView: View {
         DebugLogger.shared.debug("NSEvent monitor: Recording new mouse shortcut: \(newShortcut.displayString)", source: "ContentView")
 
         if newShortcut.isUnmodifiedLeftOrRightClick, let mouseButton = newShortcut.mouseButton {
-            self.shortcutRecordingMessage = "\(HotkeyShortcut.mouseButtonToString(mouseButton)) needs a modifier key"
+            self.shortcutRecordingMessage = PichiLocalization.format("%@ needs a modifier key", HotkeyShortcut.mouseButtonToString(mouseButton))
             self.resetPendingShortcutState()
             return event
         }
@@ -1359,7 +1359,7 @@ struct ContentView: View {
             }
 
             if shortcut.isUnmodifiedLeftOrRightClick, let mouseButton = shortcut.mouseButton {
-                return "\(HotkeyShortcut.mouseButtonToString(mouseButton)) needs a modifier key"
+                return PichiLocalization.format("%@ needs a modifier key", HotkeyShortcut.mouseButtonToString(mouseButton))
             }
         }
 
