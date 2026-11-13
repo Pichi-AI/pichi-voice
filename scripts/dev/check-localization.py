@@ -19,7 +19,7 @@ FORMAT_TOKEN = re.compile(r'%(?:(?P<position>\d+)\$)?#@(?P<name>[^%@\s]+)@|(?P<o
 NAMED_PREFIX = re.compile(r'%(?:\d+\$)?#@')
 LANGUAGE = re.compile(r'^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$')
 EXPLICIT = re.compile(r'\b(?:PichiLocalization\.(?:text|format)|AppBrand\.(?:text|format)|Text|Button|Label|Toggle|Picker|Menu|TextField|SecureField|GroupBox|Section|ProgressView|Link)\(\s*("(?:[^"\\]|\\.)*")')
-NATIVE_COPY = re.compile(r'\b(?:(?:messageText|informativeText)\s*=\s*|addButton\(\s*withTitle:\s*|(?:NSMenuItem|FloatingPromptAction)\(\s*title:\s*)("(?:[^"\\]|\\.)*")')
+NATIVE_COPY = re.compile(r'\b(?:(?:messageText|informativeText)\s*=\s*|addButton\(\s*withTitle:\s*|(?:NSMenuItem|FloatingPromptAction|presentFloatingPrompt)\(\s*title:\s*)("(?:[^"\\]|\\.)*")')
 
 # These named arguments are declared trusted onboarding UI copy. Restrict the audit
 # to these presentation sources; generic title/model/user-data fields elsewhere are not UI keys.

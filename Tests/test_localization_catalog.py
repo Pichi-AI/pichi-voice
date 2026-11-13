@@ -17,6 +17,8 @@ class LocalizationCatalogValidationTests(unittest.TestCase):
             root = pathlib.Path(directory)
             (root / 'Native.swift').write_text('''
 alert.messageText = "No Updates"
+presentFloatingPrompt(
+    title: "No Updates", message: message, actions: actions)
 alert.informativeText = "Nothing to install."
 alert.addButton(withTitle: "OK")
 NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
