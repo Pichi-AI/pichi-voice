@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory(prefix="encoder-storage-", dir=root / ".build")
     package = root / "Vendor/PichiGigaAM/Sources/PichiGigaAM"
     subprocess.run(["xcrun", "swiftc", "-O", "-parse-as-library", "-emit-library", "-emit-module", "-module-name", "PichiGigaAM",
                     "-module-cache-path", str(cache), "-emit-module-path", str(temporary / "PichiGigaAM.swiftmodule"),
-                    *[str(package / name) for name in ["GigaAMFrontend.swift", "GigaAMAcousticFeatures.swift", "GigaAMEncoderFeatures.swift", "GigaAMAcousticMatcher.swift", "GigaAMCTC.swift"]],
+                    *[str(package / name) for name in ["GigaAMFrontend.swift", "GigaAMAcousticFeatures.swift", "GigaAMEncoderFeatures.swift", "GigaAMAcousticMatcher.swift", "GigaAMCTC.swift", "GigaAMWindowReuse.swift"]],
                     "-o", str(temporary / "libPichiGigaAM.dylib")], check=True, cwd=root)
     projected = temporary / "Policies.swift"; projected.write_text(projection)
     tests = temporary / "StorageTests.swift"; tests.write_text(test)

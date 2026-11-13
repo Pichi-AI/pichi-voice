@@ -13,6 +13,7 @@ experiment = (repo / "Sources/Fluid/Services/DictionaryPronunciationExperiment.s
 references = (repo / "Sources/Fluid/Services/DictionaryPronunciationReferences.swift").read_text()
 negative = (repo / "Sources/Fluid/Services/DictionaryNegativeExamples.swift").read_text()
 native = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMCoreMLInference.swift").read_text()
+window_reuse = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMWindowReuse.swift").read_text()
 
 def between(source, start, end):
     index = source.index(start)
@@ -85,7 +86,12 @@ projection = projection.replace("// GIGAAM_STORE_FIELDS", """
     func encoderDictionarySupported(fingerprint: String) -> Bool { false }
 """)
 gigaam_hooks = between(gigaam, "    private var admittedSource:", "    // MARK: - Provider lifecycle")
-projection += "\n@MainActor final class PichiGigaAMProvider { let modelStore: PichiGigaAMModelStore; let expectedModelFingerprint: String?; let pronunciationStore = PronunciationDictionaryStore.shared; var loadedModelFingerprint: String?; var dictionaryUsesEncoderFeatures = false; var dictionarySnapshot: GigaAMDictionaryAcoustics.Snapshot?; var executionAttemptPending = false; init(store: PichiGigaAMModelStore, expected: String? = nil) { modelStore = store; expectedModelFingerprint = expected }\n" + gigaam_hooks.replace("    private ", "    ") + "\n}\n"
+# Ending admission discards window reuse through the runtime, which this probe never loads.
+inference_runtime = method(gigaam, "nonisolated protocol PichiGigaAMInferenceRuntime")
+projection += "\n" + inference_runtime[:inference_runtime.index("{") + 1] + "\n" + between(inference_runtime, "    func discardWindowReuse(", "\n") + "\n}\n"
+# Package sources build without default actor isolation.
+projection += "\nnonisolated " + method(window_reuse, "public final class GigaAMWindowReuseSession") + "\n"
+projection += "\n@MainActor final class PichiGigaAMProvider { let modelStore: PichiGigaAMModelStore; let expectedModelFingerprint: String?; let pronunciationStore = PronunciationDictionaryStore.shared; var loadedModelFingerprint: String?; var runtime: (any PichiGigaAMInferenceRuntime)?; var previewReuseSession: GigaAMWindowReuseSession?; var dictionaryUsesEncoderFeatures = false; var dictionarySnapshot: GigaAMDictionaryAcoustics.Snapshot?; var executionAttemptPending = false; init(store: PichiGigaAMModelStore, expected: String? = nil) { modelStore = store; expectedModelFingerprint = expected }\n" + gigaam_hooks.replace("    private ", "    ") + "\n}\n"
 assert "self.modelStore.ensureInstalled(selection: admittedSelection" in method(gigaam, "    func prepare(")
 assert "let selection = try admittedSelection ?? self.selectedArtifact()" in method(gigaam, "    func ensureInstalled(")
 

@@ -40,6 +40,12 @@ nonisolated enum DictionaryNegativeEvidenceResolver {
         preconditionFailure("Artifact ownership tests must never hash pronunciation profiles")
     }
 }
+nonisolated struct PrivateProfileSnapshot: Sendable {}
+nonisolated enum PrivateProfileStorage {
+    static func isReadable(_ profile: PrivateProfileSnapshot) -> Bool {
+        preconditionFailure("Artifact ownership tests must never check private profile access")
+    }
+}
 nonisolated enum DictionaryMatchPlaygroundError: Error { case unavailable(String) }
 nonisolated enum PronunciationDictionaryStoreError: Error { case inconsistentEnrollment }
 nonisolated struct PronunciationDictionaryProfile: Sendable {
@@ -53,9 +59,13 @@ nonisolated struct PronunciationDictionaryProfile: Sendable {
 actor PronunciationDictionaryStore {
     static let shared = PronunciationDictionaryStore()
     nonisolated final class CaptureRead: @unchecked Sendable {
+        var profile: PrivateProfileSnapshot {
+            preconditionFailure("Artifact ownership tests must never read private profile metadata")
+        }
         var profiles: [PronunciationDictionaryProfile] {
             preconditionFailure("Artifact ownership tests must never read private profile metadata")
         }
+        var isOpen: Bool { preconditionFailure("This probe never admits dictionary evidence") }
         func close(leaseID: UUID) { preconditionFailure("This probe never admits dictionary evidence") }
         func matchingEnrollments(for profile: PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] {
             preconditionFailure("Artifact ownership tests must never read pronunciation references")
@@ -73,6 +83,8 @@ actor PronunciationDictionaryStore {
 actor DictionaryNegativeExampleStore {
     static let shared = DictionaryNegativeExampleStore()
     nonisolated final class CaptureRead: @unchecked Sendable {
+        var profile: PrivateProfileSnapshot { preconditionFailure("This probe never admits negative evidence") }
+        var isOpen: Bool { preconditionFailure("This probe never admits negative evidence") }
         func close(leaseID: UUID) { preconditionFailure("This probe never admits negative evidence") }
     }
     nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>) throws -> CaptureRead {
@@ -95,7 +107,7 @@ nonisolated enum GigaAMDictionaryAcoustics {
         preconditionFailure("Artifact ownership tests must never select pronunciation references")
     }
     // ACTUAL_LEGACY_MODEL_KEY
-    static func referenceCacheKey(_ snapshot: Snapshot) -> String {
+    static func referenceCacheKey(_ snapshot: Snapshot, stableNegativeEvidence: Bool = false) -> String {
         preconditionFailure("Artifact ownership tests must never prepare dictionary references")
     }
     static func preparedWords(_ snapshot: Snapshot) async throws -> [Word] {
@@ -133,7 +145,7 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
 }
 nonisolated enum GigaAMEncoderDictionary {
     struct PreparedTerm: Sendable {}
-    struct Preparation: Sendable { let words: [PreparedTerm] }
+    // ACTUAL_ENCODER_PREPARATION
     struct AcceptedSpan: Sendable {
         let entryID: UUID; let label: String; let wordRange: ClosedRange<Int>; let frameRange: Range<Int>; let frameOffset: Int
         var absoluteFrameRange: Range<Int> { (frameOffset + frameRange.lowerBound)..<(frameOffset + frameRange.upperBound) }

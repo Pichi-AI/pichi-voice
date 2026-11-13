@@ -10,7 +10,12 @@ catalog = repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMModelCatalog.swif
 ctc = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMCTC.swift").read_text()
 error = ctc[ctc.index("public enum GigaAMError:"):]
 # 117: the provider converts GigaAMWordTiming (with its source context) into ASRWordTiming provenance.
-word_timing = ctc[ctc.index("/// Exact inference input and word position"):ctc.index("public struct GigaAMTranscript:")]
+# 174: the real GigaAMTranscript follows, since GigaAMWindowReuse.swift builds it; 175 reads its inferenceWork.
+transcript_values = ctc[ctc.index("/// Exact inference input and word position"):ctc.index("struct GigaAMVocabulary:")]
+# 174: the provider loads through PichiGigaAMInferenceRuntime with an explicit execution provider.
+native_runtime = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMRuntime.swift").read_text()
+execution_provider_start = native_runtime.index("public enum GigaAMExecutionProvider:")
+execution_provider = native_runtime[execution_provider_start:native_runtime.index("\n}\n", execution_provider_start) + 3]
 persisted = (repo / "Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift").read_text()
 provenance_start = persisted.index("nonisolated struct ASRWordTimingProvenance:")
 word_provenance = persisted[provenance_start:persisted.index("\n}\n", provenance_start) + 3]
@@ -39,11 +44,15 @@ acoustics = (repo / "Sources/Fluid/Services/GigaAMDictionaryAcoustics.swift").re
 encoder = (repo / "Sources/Fluid/Services/GigaAMEncoderDictionaryStorage.swift").read_text()
 neighbors = neighbors.replace("// ACTUAL_LEGACY_MODEL_KEY", method(acoustics, "    static func modelKey("))
 neighbors = neighbors.replace("// ACTUAL_ENCODER_MODEL_KEY", method(encoder, "    private static var keyPrefix:") + "\n" + method(encoder, "    static func modelKey("))
+# 175: final correction counts retryable reference diagnostics of the real preparation result.
+encoder_dictionary = (repo / "Sources/Fluid/Services/GigaAMEncoderDictionary.swift").read_text()
+neighbors = neighbors.replace("// ACTUAL_ENCODER_PREPARATION", "\n".join(method(encoder_dictionary, signature)
+    for signature in ("    enum Reason:", "    struct Diagnostic:", "    struct Preparation:")))
 
 with tempfile.TemporaryDirectory(prefix="pichi-gigaam-artifact-ownership-") as temporary:
     temporary = Path(temporary)
     runtime = temporary / "Runtime.swift"
-    runtime.write_text((repo / "Tests/Support/GigaAMArtifactOwnershipRuntime.swift").read_text() + "\n" + error + "\n" + runtime_status + "\n" + word_timing)
+    runtime.write_text((repo / "Tests/Support/GigaAMArtifactOwnershipRuntime.swift").read_text() + "\n" + error + "\n" + runtime_status + "\n" + transcript_values + "\n" + execution_provider)
     library = temporary / "libPichiGigaAM.dylib"
     subprocess.run([
         "xcrun", "swiftc", "-swift-version", "5", "-parse-as-library", "-emit-module", "-emit-library",
@@ -53,7 +62,9 @@ with tempfile.TemporaryDirectory(prefix="pichi-gigaam-artifact-ownership-") as t
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMFrontend.swift"),
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMAcousticFeatures.swift"),
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMEncoderFeatures.swift"),
-        str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMAcousticMatcher.swift"), str(runtime), "-o", str(library),
+        str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMAcousticMatcher.swift"),
+        # 174: the provider owns GigaAMWindowReuseSession handles and reads GigaAMTranscriptionWork.
+        str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMWindowReuse.swift"), str(runtime), "-o", str(library),
     ], check=True, cwd=repo)
     progress_source = temporary / "PreparationProgress.swift"
     progress_source.write_text("import Foundation\n" + progress + "\n" + execution_status + "\n" + result_values + "\n" + enrollment + "\n" + word_provenance)
