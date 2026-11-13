@@ -2131,6 +2131,19 @@ final class MeetingManualRecordingEndTests: XCTestCase {
             XCTAssertEqual(h.withdrawals, 1)
         }
     }
+    func testEndWatchIncludesBothSystemAudioRepresentations() {
+        let target = MeetingAutoDetector.ResolvedTarget(bundleIdentifier: "synthetic.call", pid: 321, windowID: 22)
+        for mode in [MeetingCaptureMode.systemAudio, .onlineCall] {
+            var session = self.session(bundle: nil)
+            session.mode = mode
+            session.applicationAudioScope = mode == .onlineCall ? .systemAudio : nil
+            let watched = AppServices.meetingEndWatchApplication(session: session, target: target)
+            XCTAssertEqual(watched?.bundleIdentifier, target.bundleIdentifier)
+            XCTAssertEqual(watched?.processID, target.pid)
+            XCTAssertNil(AppServices.meetingEndWatchApplication(session: session, target: nil))
+        }
+    }
+
     private func session(bundle: String? = "us.zoom.xos", pid: Int32? = 100) -> MeetingSession {
         var session = MeetingSession(
             configuration: MeetingCaptureConfiguration(

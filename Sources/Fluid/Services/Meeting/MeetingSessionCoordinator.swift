@@ -479,12 +479,17 @@ final class MeetingSessionCoordinator: ObservableObject {
         var application: MeetingApplicationIdentity?
         if mode == .onlineCall, scope == .selectedApplication {
             let applications = try await MeetingCaptureSourceCatalog.availableApplications()
-            var resolved = try MeetingCaptureSourceCatalog.resolveApplication(
-                from: applications,
-                preferredBundleIdentifier: defaults.usesAutomaticApplication ? preferredBundleIdentifier : defaults.applicationBundleIdentifier,
-                preferredProcessID: defaults.usesAutomaticApplication ? preferredProcessID : nil,
-                requirePreferredApplication: requirePreferredApplication || !defaults.usesAutomaticApplication
-            )
+            var resolved: MeetingApplicationIdentity
+            if defaults.usesAutomaticApplication {
+                resolved = try MeetingCaptureSourceCatalog.resolveApplication(
+                    from: applications, preferredBundleIdentifier: preferredBundleIdentifier,
+                    preferredProcessID: preferredProcessID, requirePreferredApplication: requirePreferredApplication)
+            } else {
+                guard let saved = try MeetingRecordingSourceResolver.resolve(mode: .onlineCall,
+                    source: MeetingRecordingSource(defaults: defaults), target: nil, applications: applications)
+                else { throw MeetingCaptureError.applicationNotSelected }
+                resolved = saved
+            }
             if let preferredWindowID, resolved.bundleIdentifier == preferredBundleIdentifier {
                 resolved.windowID = preferredWindowID
             }

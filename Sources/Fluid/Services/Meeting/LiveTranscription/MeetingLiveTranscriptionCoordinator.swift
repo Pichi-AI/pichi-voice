@@ -234,7 +234,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         let modelID = configuration.asrModel
         let admission = PichiMeetingProviderFactory.registeredLiveAdmission(for: modelID)
         let requiredMemory = admission?.minimumPhysicalMemoryBytes ?? Self.minimumPhysicalMemoryBytes
-        let trackCount = mode == .onlineCall ? 2 : 1
+        let trackCount = mode.capturesComputerAudio ? 2 : 1
         let physicalMemory = ProcessInfo.processInfo.physicalMemory
         self.diag("[live/buffered] admission model=\(modelID) physicalMemoryBytes=\(physicalMemory) requiredMemoryBytes=\(requiredMemory) tracks=\(trackCount)")
         guard trackCount <= (admission?.maximumTrackCount ?? 2),
@@ -248,7 +248,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         // There must be no asynchronous no-engine interval at the beginning of a recording.
         let recognizer = PichiMeetingCaptionRecognizer(configuration: configuration)
         let microphone = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
-        let application = mode == .onlineCall
+        let application = mode.capturesComputerAudio
             ? PichiMeetingBufferedTrackEngine(kind: .applicationAudio, recognizer: recognizer) : nil
         let installed = self.stateLock.withLock {
             guard !self.isStopped, self.bufferedStopTask == nil,

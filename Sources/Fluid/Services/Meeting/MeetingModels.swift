@@ -16,7 +16,7 @@ nonisolated enum MeetingLanguageCode {
 nonisolated enum MeetingCaptureMode: String, Codable, CaseIterable, Sendable {
     case onlineCall
     case systemAudio
-    /// Retained only to read and process older microphone-only recordings.
+    /// Pichi retains active microphone-only recording as well as older sessions.
     case inRoom
 
     var capturesComputerAudio: Bool { self != .inRoom }

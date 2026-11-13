@@ -148,7 +148,7 @@ nonisolated extension MeetingCaptureConfiguration {
             guard application == nil, scope != .systemAudio else {
                 throw MeetingModelValidationError.unexpectedInRoomApplication
             }
-        } else if scope == .systemAudio {
+        } else if mode == .systemAudio || scope == .systemAudio {
             guard application == nil else { throw MeetingModelValidationError.unexpectedSystemAudioApplication }
         } else if application == nil {
             throw MeetingModelValidationError.missingOnlineApplication

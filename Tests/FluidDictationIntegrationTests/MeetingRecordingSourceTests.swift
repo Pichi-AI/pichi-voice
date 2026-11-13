@@ -765,7 +765,7 @@ extension MeetingRecordingSourceTests {
         let configuration = MeetingCaptureConfiguration(mode: .systemAudio, title: "Synthetic system audio",
             microphone: microphone, speakerProcessingMode: .streaming)
         XCTAssertTrue(configuration.mode.capturesComputerAudio)
-        XCTAssertEqual(configuration.applicationAudioSource, .systemAudio)
+        if case .systemAudio? = configuration.applicationAudioSource {} else { XCTFail("System audio must not select an application filter") }
         XCTAssertNoThrow(try configuration.validate())
         let session = MeetingSession(configuration: configuration,
             timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))

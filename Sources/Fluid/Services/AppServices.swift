@@ -532,11 +532,13 @@ final class AppServices: ObservableObject {
         target: MeetingAutoDetector.ResolvedTarget?
     ) -> MeetingApplicationIdentity? {
         guard session.mode.capturesComputerAudio else { return nil }
-        if session.mode == .onlineCall, session.capturedApplication?.capturesAllInstances != true {
+        let isSystemAudio = session.mode == .systemAudio
+            || (session.mode == .onlineCall && session.effectiveApplicationAudioScope == .systemAudio)
+        if !isSystemAudio, session.capturedApplication?.capturesAllInstances != true {
             return session.capturedApplication
         }
         guard let target,
-              session.mode == .systemAudio || session.capturedApplication?.bundleIdentifier == target.bundleIdentifier
+              isSystemAudio || session.capturedApplication?.bundleIdentifier == target.bundleIdentifier
         else { return nil }
         return MeetingApplicationIdentity(
             bundleIdentifier: target.bundleIdentifier,
@@ -561,12 +563,14 @@ final class AppServices: ObservableObject {
                 return
             }
             let application = Self.meetingEndWatchApplication(session: session, target: detector.automaticTarget)
+            let isSystemAudio = session.mode == .systemAudio
+                || (session.mode == .onlineCall && session.effectiveApplicationAudioScope == .systemAudio)
             if application == nil,
-               session.mode == .systemAudio || (session.mode == .onlineCall && session.capturedApplication?.capturesAllInstances == true)
+               isSystemAudio || (session.mode == .onlineCall && session.capturedApplication?.capturesAllInstances == true)
             {
                 detector.awaitDetectedCall(
                     sessionID: id,
-                    applicationBundleIdentifier: session.mode == .systemAudio ? nil : session.capturedApplication?.bundleIdentifier
+                    applicationBundleIdentifier: isSystemAudio ? nil : session.capturedApplication?.bundleIdentifier
                 )
             } else {
                 detector.recordingStarted(sessionID: id, application: application)
