@@ -84,8 +84,13 @@ projection = projection.replace("// GIGAAM_STORE_FIELDS", """
     let defaultCPUReason: GigaAMExecutionStatus.FallbackReason? = nil
     func encoderDictionarySupported(fingerprint: String) -> Bool { false }
 """)
+# The admission hook now joins the existing reusable-window session on end.
+# Keep its production handle and an inert native-runtime boundary in this probe.
+window_reuse = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMWindowReuse.swift").read_text()
+projection += "\nnonisolated " + method(window_reuse, "public final class GigaAMWindowReuseSession") + "\n"
+projection += "\nnonisolated final class CaptureGigaAMRuntime { func discardWindowReuse(for sessionID: UUID) async {} }\n"
 gigaam_hooks = between(gigaam, "    private var admittedSource:", "    // MARK: - Provider lifecycle")
-projection += "\n@MainActor final class PichiGigaAMProvider { let modelStore: PichiGigaAMModelStore; let expectedModelFingerprint: String?; let pronunciationStore = PronunciationDictionaryStore.shared; var loadedModelFingerprint: String?; var dictionaryUsesEncoderFeatures = false; var dictionarySnapshot: GigaAMDictionaryAcoustics.Snapshot?; var executionAttemptPending = false; init(store: PichiGigaAMModelStore, expected: String? = nil) { modelStore = store; expectedModelFingerprint = expected }\n" + gigaam_hooks.replace("    private ", "    ") + "\n}\n"
+projection += "\n@MainActor final class PichiGigaAMProvider { let modelStore: PichiGigaAMModelStore; let expectedModelFingerprint: String?; let pronunciationStore = PronunciationDictionaryStore.shared; var loadedModelFingerprint: String?; var dictionaryUsesEncoderFeatures = false; var dictionarySnapshot: GigaAMDictionaryAcoustics.Snapshot?; var executionAttemptPending = false; var previewReuseSession: GigaAMWindowReuseSession?; var runtime: CaptureGigaAMRuntime?; init(store: PichiGigaAMModelStore, expected: String? = nil) { modelStore = store; expectedModelFingerprint = expected }\n" + gigaam_hooks.replace("    private ", "    ") + "\n}\n"
 assert "self.modelStore.ensureInstalled(selection: admittedSelection" in method(gigaam, "    func prepare(")
 assert "let selection = try admittedSelection ?? self.selectedArtifact()" in method(gigaam, "    func ensureInstalled(")
 
