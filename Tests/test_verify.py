@@ -358,10 +358,11 @@ class ReceiptTests(unittest.TestCase):
             receipt = VERIFY.Receipt(directory)
             started = time.monotonic()
             with contextlib.redirect_stdout(io.StringIO()):
-                slow = receipt.begin("slow", ["sh", "-c", "sleep 0.4; exit 3"])
-                quick = receipt.begin("quick", ["sh", "-c", "sleep 0.4"])
+                slow = receipt.begin("slow", ["sh", "-c", "sleep 1; exit 3"])
+                quick = receipt.begin("quick", ["sh", "-c", "sleep 1"])
                 rows = receipt.join(slow, quick)
-            self.assertLess(time.monotonic() - started, 0.75)
+            # One after the other would take at least 2 seconds; the margin absorbs a slow machine's process start.
+            self.assertLess(time.monotonic() - started, 1.8)
             self.assertEqual([(row["name"], row["status"]) for row in rows], [("slow", "failed"), ("quick", "passed")])
             self.assertEqual(receipt.running, [])
 
