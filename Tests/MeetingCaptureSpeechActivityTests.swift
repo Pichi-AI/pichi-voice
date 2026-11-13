@@ -347,7 +347,10 @@ struct MeetingCaptureSpeechActivityTests {
         try require(snapshot.activityBySource[.you] == .nonSpeech && !snapshot.tokens.isEmpty
                     && snapshot.tokens.allSatisfy { $0.source == .them },
                     "Quiet microphone cannot inherit application speech or mint waves through the scalar fallback")
-        try require(capture.confidentlyNonSpeech(start: 0.256, end: 1.5),
+        // Latest activity may arrive before the worker has scored the complete requested interval.
+        // Use its existing bounded coverage acknowledgement rather than assuming two milliseconds drained it.
+        let quietCoverage = await capture.awaitConfidentNonSpeech(start: 0.256, end: 1.5)
+        try require(quietCoverage,
                     "Application speech does not contaminate microphone-only negative evidence")
         await capture.stopAndWait()
         try require(capture.reconcile(visible: .empty).tokens.isEmpty, "Both source workers join and close with the capture")
