@@ -734,6 +734,9 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
     }
 
     func testFirstCompositeProcessingRetainsRecordedModelInsteadOfReadingPreference() async throws {
+        // The composite path checks for an installed diarization package before it plans. A synthetic
+        // package keeps the test independent of the models on the machine that runs it.
+        try self.useSyntheticNemotronPackage()
         var captured: MeetingBackendRequest?
         let marker = CocoaError(.userCancelled)
         let pipeline = MeetingProcessingPipeline(
@@ -754,6 +757,24 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         } catch { XCTAssertEqual(error as? CocoaError, marker) }
         XCTAssertEqual(captured?.configuration.asrModel, "fluid-parakeet-pro")
         XCTAssertEqual(captured?.configuration.asrArtifactFingerprint, "synthetic-pro-recording")
+    }
+
+    /// Points the Nemotron locator at a structurally valid package for the rest of the test.
+    private func useSyntheticNemotronPackage() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NemotronFixture-\(UUID().uuidString)", isDirectory: true)
+        let package = root.appendingPathComponent("nemotron_diar_fp16.mlpackage", isDirectory: true)
+        let coreML = package.appendingPathComponent("Data/com.apple.CoreML", isDirectory: true)
+        try FileManager.default.createDirectory(at: coreML, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: package.appendingPathComponent("Manifest.json"))
+        try Data("model".utf8).write(to: coreML.appendingPathComponent("model.mlmodel"))
+        let key = MeetingNemotronModelLocator.environmentOverrideKey
+        let previous = ProcessInfo.processInfo.environment[key]
+        setenv(key, package.path, 1)
+        self.addTeardownBlock {
+            if let previous { setenv(key, previous, 1) } else { unsetenv(key) }
+            try? FileManager.default.removeItem(at: root)
+        }
     }
 
     func testIncompatibleRecordedCompositeModelFailsBeforeDependencyPreparation() async throws {
