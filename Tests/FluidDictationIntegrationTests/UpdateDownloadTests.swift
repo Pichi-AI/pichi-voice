@@ -86,7 +86,7 @@ final nonisolated class UpdateDownloadTests: XCTestCase {
         do { try await task.value; XCTFail("Cancelled download must fail") }
         catch { XCTAssertTrue(error is CancellationError || (error as? URLError)?.code == .cancelled) }
         let activeTasks = await fixture.session.allTasks
-        print("UPDATE_CANCEL_DIAGNOSTIC cancellations=\(fixture.cancellations) tasks=\(activeTasks.count) states=\(activeTasks.map { $0.state.rawValue })")
+        XCTAssertTrue(activeTasks.isEmpty, "Cancellation leaves no owned URLSession transport task active")
         XCTAssertGreaterThanOrEqual(fixture.cancellations, 1)
     }
 }
