@@ -314,9 +314,14 @@ PROBES = tuple(sorted(
 
 # Probes that share mutable build storage never overlap, whatever --jobs asks for.
 EXCLUSIVE_PROBES = (frozenset({"meeting_privacy_context", "transcript_privacy"}),)
+# Timing probes run alone, after every other probe. On the three-core CI runner, parallel compiles stretched
+# a 60 ms sleep of private_ai_idle_unloader past its 150 ms countdown. That test comes from upstream unchanged.
+ALONE_PROBES = frozenset({"private_ai_idle_unloader"})
 
 
 def overlaps_running(name, running_names):
+    if running_names and (name in ALONE_PROBES or running_names & ALONE_PROBES):
+        return True
     return any(name in group and group & running_names for group in EXCLUSIVE_PROBES)
 
 
@@ -382,6 +387,7 @@ def timestamp():
 
 
 def run_suite(root, probes, *, include_ui=False, revision="unknown", dirty=False, jobs=1):
+    probes = sorted(probes, key=lambda probe: probe.name in ALONE_PROBES)
     state = {}
     try:
         with suite_signal_handlers() as protect_creation:
