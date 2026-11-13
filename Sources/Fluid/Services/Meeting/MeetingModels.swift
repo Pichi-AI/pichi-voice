@@ -389,6 +389,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     }
 
     var applicationAudioSource: MeetingApplicationAudioSource? {
+        if self.mode == .systemAudio { return .systemAudio }
         guard self.mode == .onlineCall else { return nil }
         if self.effectiveApplicationAudioScope == .systemAudio { return .systemAudio }
         return self.application.map(MeetingApplicationAudioSource.application)
@@ -1386,7 +1387,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.startedAt = startedAt
         self.timebase = timebase
         if (timebase.recordingTimePolicy == .hostMonotonicV1
-            || (configuration.mode == .onlineCall && configuration.effectiveSpeakerProcessingMode == .streaming)),
+            || (configuration.mode.capturesComputerAudio && configuration.effectiveSpeakerProcessingMode == .streaming)),
            timebase.machTimebaseDenominator > 0 {
             let seconds = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
                 / Double(timebase.machTimebaseDenominator) / 1_000_000_000

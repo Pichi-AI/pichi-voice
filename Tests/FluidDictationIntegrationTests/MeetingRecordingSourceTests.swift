@@ -760,6 +760,23 @@ final class MeetingRecordingSourceTests: XCTestCase {
 }
 
 extension MeetingRecordingSourceTests {
+    func testSystemAudioModeKeepsTwoTrackContractAndNoApplicationFilter() throws {
+        let microphone = MeetingMicrophoneIdentity(captureDeviceID: "synthetic-mic", displayName: "Fixture")
+        let configuration = MeetingCaptureConfiguration(mode: .systemAudio, title: "Synthetic system audio",
+            microphone: microphone, speakerProcessingMode: .streaming)
+        XCTAssertTrue(configuration.mode.capturesComputerAudio)
+        XCTAssertEqual(configuration.applicationAudioSource, .systemAudio)
+        XCTAssertNoThrow(try configuration.validate())
+        let session = MeetingSession(configuration: configuration,
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        XCTAssertEqual(session.effectiveSpeakerProcessingMode, .streaming)
+        let registered = MeetingTranscriptionBackendRegistry.makeDefault()
+        let descriptor = try XCTUnwrap(registered.descriptor(for: .parakeetV2))
+        let request = PichiMeetingProviderFactory.configuration(asrModel: "parakeet-tdt-v2", languageCode: "en",
+            artifactFingerprintOverride: "synthetic-export", speakerProcessingMode: .streaming)
+        XCTAssertNoThrow(try descriptor.validatePCMInput(configuration: request, mode: .systemAudio))
+    }
+
     func testLegacySavedBundleDoesNotAuthorizeMultipleProcesses() throws {
         let first = MeetingApplicationIdentity(bundleIdentifier: "synthetic.browser", processID: 11, displayName: "Browser")
         let second = MeetingApplicationIdentity(bundleIdentifier: "synthetic.browser", processID: 12, displayName: "Browser")

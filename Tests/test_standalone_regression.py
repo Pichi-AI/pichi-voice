@@ -57,9 +57,9 @@ class StandaloneRunnerTests(unittest.TestCase):
         self.assertEqual(len(pending), 1)
         self.assertEqual(pending[0].interpreter, "sh")
         self.assertFalse(pending[0].requires_ui)
-        self.assertEqual(len(RUNNER.PROBES), 116)
-        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 74)
-        self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 22)
+        self.assertEqual(len(RUNNER.PROBES), 125)
+        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 78)
+        self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 27)
         self.assertEqual(sum(probe.interpreter == "bash" for probe in RUNNER.PROBES), 20)
         for name, interpreter in (("account_session", "sh"), ("mobile_account", "sh"), ("publication_outbox", "bash"), ("sensitive_topic_classifier", "bash"), ("sensitive_policy_settings", "bash")):
             matching = [probe for probe in RUNNER.PROBES if probe.name == name]

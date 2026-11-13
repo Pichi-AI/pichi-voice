@@ -202,8 +202,8 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
             throw MeetingBackendError.unsupportedSpeakerProcessingMode(backend: self.id, mode: processingMode)
         }
         if processingMode == .streaming {
-            let input: MeetingBackendInputKind = mode == .onlineCall ? .boundedMultiTrackPCM : .boundedMicrophonePCM
-            let requiredTracks: Set<MeetingAudioTrackKind> = mode == .onlineCall ? [.microphone, .applicationAudio] : [.microphone]
+            let input: MeetingBackendInputKind = mode.capturesComputerAudio ? .boundedMultiTrackPCM : .boundedMicrophonePCM
+            let requiredTracks: Set<MeetingAudioTrackKind> = mode.capturesComputerAudio ? [.microphone, .applicationAudio] : [.microphone]
             guard self.supportedInputs.contains(input), requiredTracks.isSubset(of: self.supportedTrackKinds),
                   self.resultContract == .canonicalEvidence else {
                 throw MeetingBackendError.unsupportedTrackTopology(backend: self.id)
@@ -216,8 +216,8 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     /// existing offline microphone contract for other registrations.
     func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {
         try self.validateSpeakerProcessingMode(configuration: configuration, mode: mode)
-        let input: MeetingBackendInputKind = mode == .onlineCall ? .boundedMultiTrackPCM : .boundedMicrophonePCM
-        guard self.supportedInputs.contains(input), mode != .onlineCall || configuration.effectiveSpeakerProcessingMode == .streaming else {
+        let input: MeetingBackendInputKind = mode.capturesComputerAudio ? .boundedMultiTrackPCM : .boundedMicrophonePCM
+        guard self.supportedInputs.contains(input), !mode.capturesComputerAudio || configuration.effectiveSpeakerProcessingMode == .streaming else {
             throw MeetingBackendError.unsupportedInput(backend: self.id, input: input)
         }
         guard self.resultContract == .canonicalEvidence else {
@@ -236,7 +236,7 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         guard self.supportedLanguageCodes.contains(configuration.languageCode) else {
             throw MeetingBackendError.unsupportedLanguage(backend: self.id, languageCode: configuration.languageCode)
         }
-        let requiredTracks: Set<MeetingAudioTrackKind> = mode == .onlineCall ? [.microphone, .applicationAudio] : [.microphone]
+        let requiredTracks: Set<MeetingAudioTrackKind> = mode.capturesComputerAudio ? [.microphone, .applicationAudio] : [.microphone]
         guard requiredTracks.isSubset(of: self.supportedTrackKinds) else {
             throw MeetingBackendError.unsupportedTrackTopology(backend: self.id)
         }
@@ -259,7 +259,7 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         guard request.configuration.languageCode == request.session.languageCode else {
             throw MeetingBackendError.unsupportedLanguage(backend: self.id, languageCode: request.session.languageCode)
         }
-        let multiTrack = request.session.mode == .onlineCall
+        let multiTrack = request.session.mode.capturesComputerAudio
         let requiredKinds: Set<MeetingAudioTrackKind> = multiTrack ? [.microphone, .applicationAudio] : [.microphone]
         let kinds = request.session.audioTracks.map(\.kind)
         guard request.session.audioStorageMode == .memoryOnly || request.session.effectiveSpeakerProcessingMode == .streaming,

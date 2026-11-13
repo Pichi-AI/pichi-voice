@@ -93,7 +93,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         let clockContexts = Dictionary(uniqueKeysWithValues: tracks.compactMap { track in
             recordingClock.map { (track.kind, $0.source(track.id)) }
         })
-        let privacyGate = configuration.mode == .onlineCall
+        let privacyGate = configuration.mode.capturesComputerAudio
             ? MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions),
                                           clockContext: clockContexts[.microphone]) : nil
         let muteMonitor: MeetingCallMicrophoneObservation?
@@ -155,7 +155,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             }
             let runtime: any MeetingCaptureRuntime
             switch configuration.mode {
-            case .onlineCall:
+            case .onlineCall, .systemAudio:
                 guard let audioSource = configuration.applicationAudioSource,
                       let applicationWriter = writersByKind[.applicationAudio],
                       let microphoneWriter = writersByKind[.microphone]
@@ -6904,7 +6904,7 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
                 detail: PichiLocalization.text("Audio recording continues. Live transcription will be retried later.")))
             return nil
         }
-        let required: Set<MeetingAudioTrackKind> = configuration.mode == .onlineCall
+        let required: Set<MeetingAudioTrackKind> = configuration.mode.capturesComputerAudio
             ? [.microphone, .applicationAudio] : [.microphone]
         guard tracks.count == required.count, Set(tracks.map(\.kind)) == required else {
             throw MeetingCaptureError.captureStartFailed(PichiLocalization.text("In-memory transcription is not available for this attempt."))

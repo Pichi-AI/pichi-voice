@@ -127,7 +127,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     func toggleMicrophoneRecording(expectedSessionID: MeetingSessionID?) async {
         guard !self.isMicrophoneControlPending, self.isRecording,
               let session = self.activeSession, session.id == expectedSessionID,
-              session.mode == .onlineCall else { return }
+              session.mode.capturesComputerAudio else { return }
         self.isMicrophoneControlPending = true
         defer { self.isMicrophoneControlPending = false }
         try? await self.capture.setMicrophoneManuallyMuted(self.microphoneMuteState != .manuallyMuted, sessionID: session.id)
@@ -866,7 +866,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.activeSession = session
         self.state = .preparing(session.id)
         #if os(macOS)
-        self.microphoneMuteState = configuration.mode == .onlineCall ? .unmuted : .notApplicable
+        self.microphoneMuteState = configuration.mode.capturesComputerAudio ? .unmuted : .notApplicable
         #endif
         self.startupTrackHealth.removeAll()
         self.startupWriterFailures.removeAll()
@@ -877,7 +877,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         await self.pendingSpeechTeardownTask?.value
         self.pendingSpeechTeardownTask = nil
         let captureOrigin = MeetingLiveOriginBox()
-        if timebase.recordingTimePolicy == .hostMonotonicV1 || (configuration.mode == .onlineCall && Self.usesPCMProcessing(configuration)) {
+        if timebase.recordingTimePolicy == .hostMonotonicV1 || (configuration.mode.capturesComputerAudio && Self.usesPCMProcessing(configuration)) {
             let seconds = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
                 / Double(timebase.machTimebaseDenominator) / 1_000_000_000
             let origin = CMTime(seconds: seconds, preferredTimescale: 1_000_000_000)
@@ -923,7 +923,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         await MeetingTimelineTrace.shared?.claimSession(session.id.uuidString)
         let pendingSpeechCapture = MeetingPendingSpeechCapture(originBox: captureOrigin,
             activityModel: self.speechActivityModel,
-            activitySources: configuration.mode == .onlineCall ? [.you, .them] : [.you], diagnostics: pendingDiagnostics) { [weak self] snapshot in
+            activitySources: configuration.mode.capturesComputerAudio ? [.you, .them] : [.you], diagnostics: pendingDiagnostics) { [weak self] snapshot in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 guard self.captureGeneration == generation,

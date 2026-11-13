@@ -36,7 +36,7 @@ nonisolated extension MeetingSession {
         if [.recording, .recordingDegraded, .stopping, .processing, .completed, .interrupted]
             .contains(self.state)
         {
-            let expectedKinds: Set<MeetingAudioTrackKind> = self.mode == .onlineCall
+            let expectedKinds: Set<MeetingAudioTrackKind> = self.mode.capturesComputerAudio
                 ? [.applicationAudio, .microphone]
                 : [.microphone]
             guard Set(trackKinds) == expectedKinds else {

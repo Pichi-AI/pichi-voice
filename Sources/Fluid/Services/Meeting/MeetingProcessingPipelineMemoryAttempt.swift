@@ -350,7 +350,7 @@ extension MeetingProcessingPipeline {
         let runtime = try backend.makePCMRuntime(request)
         let configuration = request.configuration
         if configuration.effectiveSpeakerProcessingMode == .streaming,
-           !runtime.supportsStreamingPCMProcessing || (session.mode == .onlineCall && !runtime.supportsMultiTrackStreamingPCMProcessing) {
+           !runtime.supportsStreamingPCMProcessing || (session.mode.capturesComputerAudio && !runtime.supportsMultiTrackStreamingPCMProcessing) {
             throw MeetingPCMInputError.unsupportedRuntime
         }
         // Pin offline resources without a throwaway ASR load/unload. The first bounded
@@ -412,7 +412,7 @@ extension MeetingProcessingPipeline {
         guard let attempt = self.memoryAttempts[sessionID],
               attempt.consumer == nil || (attempt.request.configuration.effectiveSpeakerProcessingMode == .streaming
                 && attempt.streamingConsumers[track.id] == nil) else { throw MeetingMemoryAudioError.invalidBudget }
-        guard (track.kind == .microphone || (attempt.request.session.mode == .onlineCall
+        guard (track.kind == .microphone || (attempt.request.session.mode.capturesComputerAudio
                 && attempt.request.configuration.effectiveSpeakerProcessingMode == .streaming)),
               attempt.descriptor.supportedTrackKinds.contains(track.kind) else {
             throw MeetingBackendError.unsupportedTrackTopology(backend: attempt.descriptor.id)

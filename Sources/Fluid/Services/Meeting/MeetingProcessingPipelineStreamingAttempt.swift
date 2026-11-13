@@ -31,7 +31,7 @@ extension MeetingProcessingPipeline {
             nonSpeech = { start, end in await query(track.kind, start, end) }
         } else { nonSpeech = attempt.request.session.mode == .inRoom ? attempt.confidentlyNonSpeech : nil }
         let sourceTimeline: MeetingPCMSourceTimeline
-        if attempt.request.session.mode == .onlineCall {
+        if attempt.request.session.mode.capturesComputerAudio {
             let timebase = attempt.request.session.timebase
             let origin = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
                 / Double(timebase.machTimebaseDenominator) / 1_000_000_000
@@ -49,7 +49,7 @@ extension MeetingProcessingPipeline {
             attempt.sourceTimelines[track.id] = sourceTimeline
         }
         let state = try MeetingStreamingTranscriptState(attemptID: attemptID, track: track,
-            configuration: configuration, privacyContext: attempt.request.session.mode == .onlineCall
+            configuration: configuration, privacyContext: attempt.request.session.mode.capturesComputerAudio
                 ? attempt.redactor.map { MeetingTranscriptPrivacyContext(redactor: $0) } : attempt.privacyContext,
             priorSpeakers: attempt.request.session.speakers)
         let retireSourceTimeline: @Sendable () async -> Void = {
@@ -80,7 +80,7 @@ extension MeetingProcessingPipeline {
             try await publish(emission, "progress")
             await retireSourceTimeline()
         }
-        let expectedTrackCount = attempt.request.session.mode == .onlineCall ? 2 : 1
+        let expectedTrackCount = attempt.request.session.mode.capturesComputerAudio ? 2 : 1
         if attempt.streamingTracks.count == expectedTrackCount {
             let tracks = attempt.streamingTracks
             let progress = attempt.streamingProgress
