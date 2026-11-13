@@ -497,6 +497,8 @@ final class MobileFirstUseModelTests: XCTestCase {
 
     func testInstallationFailureLeavesNoCaptureAndReleasesPreparation() async throws {
         let (settings, _, name) = try self.settings()
+        // This case exercises strict admission. Retained capture intentionally survives a speech-preparation failure.
+        settings.meetingSaveAudio = false
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         defer { try? FileManager.default.removeItem(at: root) }
         let provider = FirstUseProvider(failing: true)

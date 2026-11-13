@@ -323,7 +323,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
         languageSupport: "25 Languages",
         supportedLanguageCodes: ParakeetSpeechModelCatalog.v3.supportedLanguageCodes,
         downloadSize: "~622.3 MiB",
-        cardDescription: "Our most accurate model, built for clear dictation in noisy places. Runs on your Mac.",
+        cardDescription: "Our most accurate model, built for clear dictation in noisy places. Runs on your device.",
         performanceRatings: .init(speedRating: 5, accuracyRating: 5, speedPercent: 0.99, accuracyPercent: 0.98),
         manifestSHA256: "94651862cdad19f1ba0a2bed8ec205d664fd2ecd5c031098b347fff77fd79f1d"
     )

@@ -560,6 +560,14 @@
   "PichiVoiceMobileIntegrationTests/WhisperDiagnosticsTests/testRealTinyProviderPreservesAnUncertainNativeSpeechResult()": {
    "layer": "L3-real-model",
    "reason": "Enable a verified local Tiny model and synthetic noisy speech fixture explicitly"
+  },
+  "FluidDictationIntegrationTests/GigaAMPreviewFinalizationXCTests/testRealModelLongDictationReusesWindowsAndMatchesFullFinalizationWhenEnabled()": {
+   "layer": "L3-real-model",
+   "reason": "Existing opt-in requires approved local GigaAM weights, public or synthetic speech and a private report destination; no inputs are supplied by ordinary CI."
+  },
+  "FluidDictationIntegrationTests/GigaAMPrivateLatencyReplayXCTests/testRecentLocalDictationsWithTheirActualPronunciationSnapshotWhenEnabled()": {
+   "layer": "diagnostic-tool",
+   "reason": "Existing opt-in requires explicitly approved private replay, matching model and report destinations; private recordings and dictionaries must not be supplied by ordinary CI."
   }
  }
 }

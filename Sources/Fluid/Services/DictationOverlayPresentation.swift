@@ -25,7 +25,7 @@ nonisolated struct DictationOverlayPresentationInput: Equatable, Sendable {
 
         func resolve(verifiedModelID: String?, modelName: (String) -> String) -> DictationOverlayPresentation {
             let modelID = self.usesSelectedPrivateModel ? (verifiedModelID ?? "") : self.modelID
-            let model = modelName(modelID).replacingOccurrences(of: "Fluid-1 ", with: "")
+            let model = modelName(modelID)
             let displayName = self.builtInLabel.map { PichiLocalization.text($0) } ?? self.name
             return DictationOverlayPresentation(
                 label: model.isEmpty ? PichiLocalization.text("Basic") : "\(displayName) · \(model)",

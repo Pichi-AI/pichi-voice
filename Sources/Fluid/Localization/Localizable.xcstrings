@@ -69278,6 +69278,23 @@
           }
         }
       }
+    },
+    "Our most accurate model, built for clear dictation in noisy places. Runs on your device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Our most accurate model, built for clear dictation in noisy places. Runs on your device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Наша наиболее точная модель для чёткой диктовки в шумной обстановке. Работает на вашем устройстве."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
