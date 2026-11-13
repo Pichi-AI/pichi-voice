@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix="encoder-storage-", dir=root / ".build")
         executable = temporary / ("tests-main-actor" if isolation else "tests-default")
         subprocess.run(["xcrun", "swiftc", "-O", "-swift-version", "5", "-parse-as-library", "-D", "GIGAAM_ENCODER_STORAGE_STANDALONE",
                         *isolation, "-module-cache-path", str(cache), "-I", str(temporary), "-L", str(temporary), "-lPichiGigaAM",
-                        "-Xlinker", "-rpath", "-Xlinker", str(temporary), str(projected), str(tests),
+                        "-Xlinker", "-rpath", "-Xlinker", str(temporary), str(root / "Sources/Fluid/Localization/PichiLocalization.swift"), str(projected), str(tests),
                         *[str(root / "Sources/Fluid/Services" / name) for name in sources], "-o", str(executable)], check=True, cwd=root)
         subprocess.run([str(executable)], check=True, cwd=root, timeout=30)
 print("Encoder storage bridge temporary build resources removed.")

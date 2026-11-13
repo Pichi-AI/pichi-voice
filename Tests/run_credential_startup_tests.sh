@@ -42,7 +42,7 @@ run_isolation_case() {
     printf 'Credential test isolation: %s\n' "$task_isolation_name"
     xcrun swiftc -I "$task_libraries" -L "$task_libraries" -lXCTestSwiftSupport -Xlinker -rpath -Xlinker "$task_libraries" -F "$task_frameworks" -Xlinker -rpath -Xlinker "$task_frameworks" -swift-version 5 -D PICHI_CREDENTIAL_TEST_BACKEND_ONLY -module-cache-path "$task_isolation_dir/ModuleCache" "$@" \
         Sources/Fluid/Localization/PichiLocalization.swift \
-    Sources/Fluid/Persistence/KeychainService.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
+        Sources/Fluid/Persistence/KeychainService.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
         "$task_test_dir/ProfileTypes.swift" "$task_test_dir/Brand.swift" \
         "$task_test_dir/CacheTests.swift" "$task_test_dir/main.swift" -o "$task_isolation_dir/tests"
     "$task_isolation_dir/tests"
