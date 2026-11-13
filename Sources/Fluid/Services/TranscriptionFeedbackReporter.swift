@@ -17,13 +17,13 @@ enum TranscriptionFeedbackReporter {
         var errorDescription: String? {
             switch self {
             case .notConfigured:
-                return "Transcription feedback uploads are not configured for this distribution."
+                return PichiLocalization.text("Transcription feedback uploads are not configured for this distribution.")
             case .invalidURL:
-                return "Invalid report endpoint."
+                return PichiLocalization.text("Invalid report endpoint.")
             case .invalidResponse:
-                return "Invalid report response."
+                return PichiLocalization.text("Invalid report response.")
             case let .httpError(statusCode):
-                return "Report failed with HTTP \(statusCode)."
+                return PichiLocalization.format("Report failed with HTTP %@.", String(describing: statusCode))
             }
         }
     }

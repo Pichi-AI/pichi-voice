@@ -275,15 +275,15 @@ final class MeetingDiarizationModelStore: ObservableObject {
 
     nonisolated static func userMessage(for error: Error) -> String {
         if error is MeetingModelInstaller.InstallError {
-            return "The downloaded speaker model was damaged. Try again."
+            return PichiLocalization.text("The downloaded speaker model was damaged. Try again.")
         }
         let nsError = error as NSError
         if nsError.domain == NSURLErrorDomain {
-            return "Couldn't download the speaker model. Check your internet connection and try again."
+            return PichiLocalization.text("Couldn't download the speaker model. Check your internet connection and try again.")
         }
         if nsError.domain == "HF", [401, 403, 404].contains(nsError.code) {
-            return "The speaker model isn't available for download right now. Try again later."
+            return PichiLocalization.text("The speaker model isn't available for download right now. Try again later.")
         }
-        return "Couldn't download the speaker model (\(error.localizedDescription)). Try again."
+        return PichiLocalization.format("Couldn't download the speaker model (%@). Try again.", String(describing: error.localizedDescription))
     }
 }

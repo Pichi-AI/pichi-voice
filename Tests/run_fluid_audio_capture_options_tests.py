@@ -13,7 +13,6 @@ experiment = (repo / "Sources/Fluid/Services/DictionaryPronunciationExperiment.s
 references = (repo / "Sources/Fluid/Services/DictionaryPronunciationReferences.swift").read_text()
 negative = (repo / "Sources/Fluid/Services/DictionaryNegativeExamples.swift").read_text()
 native = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMCoreMLInference.swift").read_text()
-window_reuse = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMWindowReuse.swift").read_text()
 
 def between(source, start, end):
     index = source.index(start)
@@ -85,13 +84,13 @@ projection = projection.replace("// GIGAAM_STORE_FIELDS", """
     let defaultCPUReason: GigaAMExecutionStatus.FallbackReason? = nil
     func encoderDictionarySupported(fingerprint: String) -> Bool { false }
 """)
-gigaam_hooks = between(gigaam, "    private var admittedSource:", "    // MARK: - Provider lifecycle")
-# Ending admission discards window reuse through the runtime, which this probe never loads.
-inference_runtime = method(gigaam, "nonisolated protocol PichiGigaAMInferenceRuntime")
-projection += "\n" + inference_runtime[:inference_runtime.index("{") + 1] + "\n" + between(inference_runtime, "    func discardWindowReuse(", "\n") + "\n}\n"
-# Package sources build without default actor isolation.
+# The admission hook now joins the existing reusable-window session on end.
+# Keep its production handle and an inert native-runtime boundary in this probe.
+window_reuse = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMWindowReuse.swift").read_text()
 projection += "\nnonisolated " + method(window_reuse, "public final class GigaAMWindowReuseSession") + "\n"
-projection += "\n@MainActor final class PichiGigaAMProvider { let modelStore: PichiGigaAMModelStore; let expectedModelFingerprint: String?; let pronunciationStore = PronunciationDictionaryStore.shared; var loadedModelFingerprint: String?; var runtime: (any PichiGigaAMInferenceRuntime)?; var previewReuseSession: GigaAMWindowReuseSession?; var dictionaryUsesEncoderFeatures = false; var dictionarySnapshot: GigaAMDictionaryAcoustics.Snapshot?; var executionAttemptPending = false; init(store: PichiGigaAMModelStore, expected: String? = nil) { modelStore = store; expectedModelFingerprint = expected }\n" + gigaam_hooks.replace("    private ", "    ") + "\n}\n"
+projection += "\nnonisolated final class CaptureGigaAMRuntime { func discardWindowReuse(for sessionID: UUID) async {} }\n"
+gigaam_hooks = between(gigaam, "    private var admittedSource:", "    // MARK: - Provider lifecycle")
+projection += "\n@MainActor final class PichiGigaAMProvider { let modelStore: PichiGigaAMModelStore; let expectedModelFingerprint: String?; let pronunciationStore = PronunciationDictionaryStore.shared; var loadedModelFingerprint: String?; var dictionaryUsesEncoderFeatures = false; var dictionarySnapshot: GigaAMDictionaryAcoustics.Snapshot?; var executionAttemptPending = false; var previewReuseSession: GigaAMWindowReuseSession?; var runtime: CaptureGigaAMRuntime?; init(store: PichiGigaAMModelStore, expected: String? = nil) { modelStore = store; expectedModelFingerprint = expected }\n" + gigaam_hooks.replace("    private ", "    ") + "\n}\n"
 assert "self.modelStore.ensureInstalled(selection: admittedSelection" in method(gigaam, "    func prepare(")
 assert "let selection = try admittedSelection ?? self.selectedArtifact()" in method(gigaam, "    func ensureInstalled(")
 
@@ -113,6 +112,6 @@ with tempfile.TemporaryDirectory(prefix="pichi-fluid-capture-options-") as direc
     source.write_text(template.replace("// ACTUAL_PROVIDER_CAPTURE_SOURCE", projection))
     for isolation in ([], ["-default-isolation", "MainActor"]):
         executable = directory / ("tests-actor" if isolation else "tests-default")
-        subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-strict-concurrency=targeted", "-D", "DEBUG", *isolation, "-module-cache-path", str(directory / "ModuleCache"), str(source), "-o", str(executable)], check=True, cwd=repo)
+        subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-strict-concurrency=targeted", "-D", "DEBUG", *isolation, "-module-cache-path", str(directory / "ModuleCache"), str(repo / "Sources/Fluid/Localization/PichiLocalization.swift"), str(source), "-o", str(executable)], check=True, cwd=repo)
         subprocess.run([str(executable)], check=True, cwd=repo)
 print("FluidAudio actual capture source paths passed with both compiler isolation modes; temporary files removed.")

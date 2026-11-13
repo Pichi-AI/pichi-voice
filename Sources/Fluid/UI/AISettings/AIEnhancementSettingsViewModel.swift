@@ -898,7 +898,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     private func keychainPermissionExplanation(for status: OSStatus) -> String {
         var message = AppBrand.text("FluidVoice stores provider API keys securely in your macOS Keychain but does not currently have permission to access it.")
         if let detail = SecCopyErrorMessageString(status, nil) as String? {
-            message += "\n\nmacOS reported: \(detail) (\(status))"
+            message += PichiLocalization.format("\n\nmacOS reported: %@ (%lld)", detail, Int(status))
         }
         message += AppBrand.text("\n\nClick \"Always Allow\" when the Keychain prompt appears, or open Keychain Access > login > Passwords, locate the FluidVoice entry, and grant access.")
         return message
@@ -909,14 +909,14 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         if let keychainError = error as? KeychainServiceError {
             switch keychainError {
             case .invalidData:
-                message += "\n\nmacOS returned unreadable Keychain data."
+                message += PichiLocalization.text("\n\nmacOS returned unreadable Keychain data.")
             case .unavailable, .readbackMismatch, .cleanupUnconfirmed:
                 message += "\n\n\(keychainError.localizedDescription)"
             case let .unhandled(status):
                 if let detail = SecCopyErrorMessageString(status, nil) as String? {
-                    message += "\n\nmacOS reported: \(detail) (\(status))"
+                    message += PichiLocalization.format("\n\nmacOS reported: %@ (%lld)", detail, Int(status))
                 } else {
-                    message += "\n\nmacOS reported Keychain status \(status)."
+                    message += PichiLocalization.format("\n\nmacOS reported Keychain status %lld.", Int(status))
                 }
             }
         } else {

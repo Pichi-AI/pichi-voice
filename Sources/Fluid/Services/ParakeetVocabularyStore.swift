@@ -71,9 +71,9 @@ import FluidAudio
         var errorDescription: String? {
             switch self {
             case let .invalidJSON(details):
-                return "Invalid vocabulary JSON: \(details)"
+                return PichiLocalization.format("Invalid vocabulary JSON: %@", String(describing: details))
             case .applicationSupportUnavailable:
-                return "Could not access Application Support directory."
+                return PichiLocalization.text("Could not access Application Support directory.")
             }
         }
     }

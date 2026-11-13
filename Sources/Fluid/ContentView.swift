@@ -25,15 +25,15 @@ nonisolated enum AIProcessingError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noVerifiedProvider:
-            return "No verified AI provider selected"
+            return PichiLocalization.text("No verified AI provider selected")
         case let .missingAPIKey(provider):
-            return "API key not set for \(provider)"
+            return PichiLocalization.format("API key not set for %@", String(describing: provider))
         case let .missingModel(provider):
-            return "No model selected for \(provider)"
+            return PichiLocalization.format("No model selected for %@", String(describing: provider))
         case .emptyResponse:
-            return "AI returned an empty response"
+            return PichiLocalization.text("AI returned an empty response")
         case .dictationExceedsAIContextWindow:
-            return "Dictation exceeded the AI context window"
+            return PichiLocalization.text("Dictation exceeded the AI context window")
         }
     }
 
@@ -55,7 +55,7 @@ nonisolated enum DictationAIFailurePresentationPolicy {
 
     static func notificationMessage(for error: Error) -> String {
         if let aiError = error as? AIProcessingError, aiError.isConfigurationError {
-            return "\(aiError.localizedDescription). Open AI Settings to configure a provider."
+            return PichiLocalization.format("%@. Open AI Settings to configure a provider.", aiError.localizedDescription)
         }
         return error.localizedDescription
     }
@@ -1082,7 +1082,7 @@ struct ContentView: View {
         DebugLogger.shared.debug("NSEvent monitor: Recording new mouse shortcut: \(newShortcut.displayString)", source: "ContentView")
 
         if newShortcut.isUnmodifiedLeftOrRightClick, let mouseButton = newShortcut.mouseButton {
-            self.shortcutRecordingMessage = "\(HotkeyShortcut.mouseButtonToString(mouseButton)) needs a modifier key"
+            self.shortcutRecordingMessage = PichiLocalization.format("%@ needs a modifier key", HotkeyShortcut.mouseButtonToString(mouseButton))
             self.resetPendingShortcutState()
             return event
         }
@@ -1359,7 +1359,7 @@ struct ContentView: View {
             }
 
             if shortcut.isUnmodifiedLeftOrRightClick, let mouseButton = shortcut.mouseButton {
-                return "\(HotkeyShortcut.mouseButtonToString(mouseButton)) needs a modifier key"
+                return PichiLocalization.format("%@ needs a modifier key", HotkeyShortcut.mouseButtonToString(mouseButton))
             }
         }
 
@@ -5991,7 +5991,7 @@ extension ContentView {
             await MainActor.run { self.aiOutputText = result }
         } catch {
             DebugLogger.shared.error("callOpenAIChat failed: \(error.localizedDescription)", source: "ContentView")
-            await MainActor.run { self.aiOutputText = "Error: \(error.localizedDescription)" }
+            await MainActor.run { self.aiOutputText = PichiLocalization.format("Error: %@", error.localizedDescription) }
         }
     }
 

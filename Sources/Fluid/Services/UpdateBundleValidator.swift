@@ -70,16 +70,16 @@ nonisolated enum UpdateBundleValidator {
 
         var errorDescription: String? {
             switch self {
-            case .missingRuntimeOrTimestamp: return "The update requires hardened runtime and a secure signing timestamp."
-            case .notarizationRejected: return "The update could not pass stapled notarization and Gatekeeper checks."
-            case .invalidBundle: return "The update is not a valid application bundle."
-            case .invalidExpectation: return "The update's expected identity or signing policy is invalid."
-            case .invalidSignature: return "The update's signature or sealed contents could not be verified."
-            case .missingSigningMetadata: return "The update has no trusted signing identity."
-            case .invalidBundleMetadata: return "The update has invalid application metadata."
-            case .identityMismatch: return "The update belongs to a different application."
-            case .versionMismatch: return "The update does not match the selected release version."
-            case .buildMismatch: return "The update does not match the expected build."
+            case .missingRuntimeOrTimestamp: return PichiLocalization.text("The update requires hardened runtime and a secure signing timestamp.")
+            case .notarizationRejected: return PichiLocalization.text("The update could not pass stapled notarization and Gatekeeper checks.")
+            case .invalidBundle: return PichiLocalization.text("The update is not a valid application bundle.")
+            case .invalidExpectation: return PichiLocalization.text("The update's expected identity or signing policy is invalid.")
+            case .invalidSignature: return PichiLocalization.text("The update's signature or sealed contents could not be verified.")
+            case .missingSigningMetadata: return PichiLocalization.text("The update has no trusted signing identity.")
+            case .invalidBundleMetadata: return PichiLocalization.text("The update has invalid application metadata.")
+            case .identityMismatch: return PichiLocalization.text("The update belongs to a different application.")
+            case .versionMismatch: return PichiLocalization.text("The update does not match the selected release version.")
+            case .buildMismatch: return PichiLocalization.text("The update does not match the expected build.")
             }
         }
     }

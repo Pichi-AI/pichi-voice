@@ -25,6 +25,7 @@ PYCODE
 if ! xcrun swiftc -parse-as-library -swift-version 5 -strict-concurrency=targeted -default-isolation MainActor -D DEBUG \
     -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/PipelineVersion.swift" "$task_test_dir/RecordingTimePolicy.swift" \
+    Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Services/ASRActivityLease.swift \
     Tests/Support/StandaloneMeetingProcessingDependencies.swift \
     Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift \

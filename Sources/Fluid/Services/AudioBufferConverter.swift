@@ -13,17 +13,17 @@ enum AudioBufferConverter {
         var errorDescription: String? {
             switch self {
             case .invalidSourceFormat:
-                return "Audio buffer has an invalid sample rate or channel count."
+                return PichiLocalization.text("Audio buffer has an invalid sample rate or channel count.")
             case .invalidTargetSampleRate:
-                return "Target audio sample rate must be greater than zero."
+                return PichiLocalization.text("Target audio sample rate must be greater than zero.")
             case .inaccessibleChannelData:
-                return "Could not access Float32 audio channel data."
+                return PichiLocalization.text("Could not access Float32 audio channel data.")
             case .targetFormatCreationFailed:
-                return "Could not create the target mono audio format."
+                return PichiLocalization.text("Could not create the target mono audio format.")
             case .converterCreationFailed:
-                return "Could not create an audio converter."
+                return PichiLocalization.text("Could not create an audio converter.")
             case .outputBufferAllocationFailed:
-                return "Could not allocate the converted audio buffer."
+                return PichiLocalization.text("Could not allocate the converted audio buffer.")
             }
         }
     }

@@ -14,17 +14,17 @@ nonisolated enum LLMError: Error, LocalizedError, @unchecked Sendable {
     var errorDescription: String? {
         switch self {
         case .invalidURL:
-            return "Invalid URL"
+            return PichiLocalization.text("Invalid URL")
         case .invalidResponse:
-            return "Invalid response from LLM"
+            return PichiLocalization.text("Invalid response from LLM")
         case let .httpError(code, message):
-            return "HTTP \(code): \(message.trimmingCharacters(in: .whitespacesAndNewlines))"
+            return PichiLocalization.format("HTTP %@: %@", String(describing: code), String(describing: message.trimmingCharacters(in: .whitespacesAndNewlines)))
         case let .networkError(error):
             return Self.userFacingNetworkMessage(from: error)
         case .encodingError:
-            return "Failed to encode request"
+            return PichiLocalization.text("Failed to encode request")
         case let .timeout(seconds):
-            return "Request timed out after \(Int(seconds)) seconds"
+            return PichiLocalization.format("Request timed out after %@ seconds", String(describing: Int(seconds)))
         case let .invalidRequest(message):
             return message
         }
@@ -32,24 +32,24 @@ nonisolated enum LLMError: Error, LocalizedError, @unchecked Sendable {
 
     private static func userFacingNetworkMessage(from error: Error) -> String {
         guard let urlError = error as? URLError else {
-            return "Network error: \(error.localizedDescription)"
+            return PichiLocalization.format("Network error: %@", String(describing: error.localizedDescription))
         }
 
         switch urlError.code {
         case .notConnectedToInternet:
-            return "Network error: no internet connection."
+            return PichiLocalization.text("Network error: no internet connection.")
         case .timedOut:
-            return "Network error: request timed out."
+            return PichiLocalization.text("Network error: request timed out.")
         case .cannotFindHost:
-            return "Network error: could not find API host."
+            return PichiLocalization.text("Network error: could not find API host.")
         case .cannotConnectToHost:
-            return "Network error: could not connect to API host."
+            return PichiLocalization.text("Network error: could not connect to API host.")
         case .networkConnectionLost:
-            return "Network error: connection dropped during the request."
+            return PichiLocalization.text("Network error: connection dropped during the request.")
         case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateNotYetValid:
-            return "Network error: TLS certificate validation failed."
+            return PichiLocalization.text("Network error: TLS certificate validation failed.")
         default:
-            return "Network error: \(urlError.localizedDescription)"
+            return PichiLocalization.format("Network error: %@", String(describing: urlError.localizedDescription))
         }
     }
 }

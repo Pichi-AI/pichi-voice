@@ -29,11 +29,11 @@ nonisolated enum ParakeetArchiveInstaller {
 
         var errorDescription: String? {
             switch self {
-            case .invalidStaging: "The model staging folder is not safe to use."
-            case .missingFolder: "The downloaded model is incomplete."
-            case .manifestMismatch: "The downloaded model is not the expected release."
-            case let .fileMismatch(path): "The downloaded model failed verification (\(path))."
-            case let .unlistedFile(path): "The downloaded model holds an unexpected file (\(path))."
+            case .invalidStaging: PichiLocalization.text("The model staging folder is not safe to use.")
+            case .missingFolder: PichiLocalization.text("The downloaded model is incomplete.")
+            case .manifestMismatch: PichiLocalization.text("The downloaded model is not the expected release.")
+            case let .fileMismatch(path): PichiLocalization.format("The downloaded model failed verification (%@).", String(describing: path))
+            case let .unlistedFile(path): PichiLocalization.format("The downloaded model holds an unexpected file (%@).", String(describing: path))
             }
         }
     }
