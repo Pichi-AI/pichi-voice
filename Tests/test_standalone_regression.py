@@ -750,9 +750,14 @@ sys.exit(status)
     def test_permission_error_from_signals_keeps_escalating_and_joins(self):
         # Darwin has returned EPERM from killpg for an owned group whose members were changing state. The
         # signal may still be delivered: cleanup must escalate and wait instead of leaving the group running.
-        process = subprocess.Popen(["/bin/sh", "-c", "trap '' TERM; while :; do sleep 1; done"], start_new_session=True)
+        ready = self.root / "trap-installed"
+        process = subprocess.Popen(["/bin/sh", "-c", f"trap '' TERM; touch {shlex.quote(str(ready))}; while :; do sleep 1; done"],
+                                   start_new_session=True)
         self.addCleanup(lambda: process.poll() is None and process.kill())
-        time.sleep(0.2)  # Let the shell install its TERM trap.
+        deadline = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(ready.exists(), "The shell must ignore TERM before cleanup starts")
         real_killpg = os.killpg
         sent = []
 
