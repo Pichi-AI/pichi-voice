@@ -876,11 +876,10 @@ final class CommandModeService: ObservableObject, PrivateProfileTransitionPartic
     private func callLLM(isOutputValid: @escaping @MainActor () -> Bool) async throws -> LLMResponse {
         guard isOutputValid() else { throw CancellationError() }
         let settings = SettingsStore.shared
-        if let issue = settings.commandModeReadinessIssue {
-            throw LLMError.invalidRequest(issue)
-        }
-
         if settings.effectiveCommandModeProviderID == AppleIntelligenceAvailability.providerID {
+            if let issue = settings.commandModeReadinessIssue {
+                throw LLMError.invalidRequest(issue)
+            }
             self.streamingText = ""
             self.streamingThinkingText = ""
             let history = self.conversationHistory.map {
