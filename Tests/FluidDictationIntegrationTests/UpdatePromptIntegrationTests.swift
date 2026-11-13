@@ -4,6 +4,90 @@ import XCTest
 
 @MainActor
 final class UpdatePromptIntegrationTests: XCTestCase {
+    func testLaunchUpdateThrottleUsesTheExactHourBoundary() throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        let settings = SettingsStore(defaults: context.defaults, initializeDesktop: false)
+        let completed = Date(timeIntervalSince1970: 10_000)
+        XCTAssertTrue(settings.shouldCheckForUpdates(now: completed))
+        context.defaults.set(completed, forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate)
+        for elapsed in [-1.0, 0, 3_597, 3_599.999] {
+            XCTAssertFalse(settings.shouldCheckForUpdates(now: completed.addingTimeInterval(elapsed)))
+        }
+        XCTAssertTrue(settings.shouldCheckForUpdates(now: completed.addingTimeInterval(3_600)))
+        context.defaults.set(false, forKey: SettingsStore.UpdateKeys.autoUpdateCheckEnabled)
+        XCTAssertFalse(settings.shouldCheckForUpdates(now: completed.addingTimeInterval(7_200)))
+    }
+
+    func testEveryHourlyTimerFireChecksDespiteThePreviousCompletionDelay() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        context.defaults.set(false, forKey: SettingsStore.UpdateKeys.showUpdatePopups)
+        context.fixture.setReply(version: nil)
+        let settings = SettingsStore(defaults: context.defaults, initializeDesktop: false)
+        let delegate = AppDelegate()
+        let timer = delegate.schedulePeriodicUpdateChecks(updater: context.updater)
+        defer { timer.invalidate() }
+        XCTAssertEqual(timer.timeInterval, 3_600)
+        let launch = Date(timeIntervalSince1970: 10_000)
+        // Each preceding request finished three seconds after its scheduled tick.
+        // The launch throttle would reject the next tick; periodic work must run.
+        for hour in 1 ... 3 {
+            let previousCompletion = launch.addingTimeInterval(Double(hour - 1) * 3_600 + 3)
+            let tick = launch.addingTimeInterval(Double(hour) * 3_600)
+            context.defaults.set(previousCompletion, forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate)
+            XCTAssertFalse(settings.shouldCheckForUpdates(now: tick))
+            timer.fire()
+            try await self.finishCheck(context, requests: hour)
+            XCTAssertEqual(context.fixture.requestCount, hour)
+        }
+        XCTAssertFalse(context.updater.isUpdateInProgress)
+        XCTAssertFalse(self.isVisible("Update Available"))
+    }
+
+    func testHourlyTimerHonorsCurrentAutomaticCheckPreferenceAndDistribution() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        context.fixture.setReply(version: nil)
+        let delegate = AppDelegate()
+        let timer = delegate.schedulePeriodicUpdateChecks(updater: context.updater)
+        defer { timer.invalidate() }
+        context.defaults.set(false, forKey: SettingsStore.UpdateKeys.autoUpdateCheckEnabled)
+        timer.fire()
+        XCTAssertFalse(context.updater.isCheckingForUpdates)
+        XCTAssertEqual(context.fixture.requestCount, 0)
+        context.defaults.set(true, forKey: SettingsStore.UpdateKeys.autoUpdateCheckEnabled)
+        timer.fire()
+        try await self.finishCheck(context)
+        context.updater.updatesEnabledForTesting = false
+        timer.fire()
+        XCTAssertFalse(context.updater.isCheckingForUpdates)
+        XCTAssertEqual(context.fixture.requestCount, 1)
+        context.updater.updatesEnabledForTesting = true
+        timer.fire()
+        try await self.finishCheck(context, requests: 2)
+    }
+
+    func testHourlyTimerReusesPendingCheckAndRetriesAtNextFireAfterFailure() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        context.fixture.setReply(version: nil, held: true)
+        let delegate = AppDelegate()
+        let timer = delegate.schedulePeriodicUpdateChecks(updater: context.updater)
+        defer { timer.invalidate() }
+        timer.fire()
+        timer.fire()
+        try await self.waitFor { context.fixture.requestCount == 1 }
+        context.fixture.release()
+        try await self.finishCheck(context)
+        context.fixture.setReply(version: nil, status: 503)
+        timer.fire()
+        try await self.finishCheck(context, requests: 2)
+        context.fixture.setReply(version: nil)
+        timer.fire()
+        try await self.finishCheck(context, requests: 3)
+    }
+
     func testUnconfiguredDistributionRejectsUpdateOperations() async {
         let updater = SimpleUpdater()
         updater.updatesEnabledForTesting = false

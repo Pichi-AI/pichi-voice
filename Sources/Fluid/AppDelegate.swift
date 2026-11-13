@@ -495,16 +495,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     // MARK: - Periodic Update Checks
 
-    private func schedulePeriodicUpdateChecks() {
-        // Schedule a timer to check for updates every hour (3600 seconds)
-        // The actual check logic inside checkForUpdatesAutomatically() handles:
-        // - Whether auto-updates are enabled
-        // - Whether enough time has passed since last check
-        // - Whether the user snoozed the prompt
-        self.updateCheckTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+    @discardableResult
+    func schedulePeriodicUpdateChecks(updater: SimpleUpdater = .shared) -> Timer {
+        // Only launch checks need the last-check throttle and startup delay.
+        // Applying them to this hourly timer can skip a tick after a delayed reply.
+        let timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
             DebugLogger.shared.debug("Periodic update check timer fired", source: "AppDelegate")
-            self?.checkForUpdatesAutomatically()
+            updater.checkForUpdatesAutomatically()
         }
+        self.updateCheckTimer = timer
+        return timer
     }
 
     // MARK: - Manual Update Check
