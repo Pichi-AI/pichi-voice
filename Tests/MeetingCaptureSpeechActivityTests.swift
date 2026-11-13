@@ -341,7 +341,9 @@ struct MeetingCaptureSpeechActivityTests {
         var snapshot = capture.reconcile(visible: .empty)
         for _ in 0..<2000 {
             snapshot = capture.reconcile(visible: .empty)
-            if snapshot.activityBySource[.you] == .nonSpeech && snapshot.tokens.contains(where: { $0.source == .them }) { break }
+            if snapshot.activityBySource[.you] == .nonSpeech,
+               snapshot.tokens.contains(where: { $0.source == .them }),
+               capture.confidentlyNonSpeech(start: 0.256, end: 1.5) { break }
             try await Task.sleep(for: .milliseconds(1))
         }
         try require(snapshot.activityBySource[.you] == .nonSpeech && !snapshot.tokens.isEmpty
