@@ -28,8 +28,8 @@ nonisolated enum UpdateRollbackBackup {
         let underlyingError: Error
 
         var errorDescription: String? {
-            let retained = self.retainedDirectoryURL.map { " Retained backup files: \($0.path)." } ?? ""
-            return "The current app could not be backed up. Nothing was replaced.\(retained) \(self.underlyingError.localizedDescription)"
+            let retained = self.retainedDirectoryURL.map { PichiLocalization.format(" Retained backup files: %@.", $0.path) } ?? ""
+            return PichiLocalization.format("The current app could not be backed up. Nothing was replaced.%@ %@", retained, self.underlyingError.localizedDescription)
         }
     }
 

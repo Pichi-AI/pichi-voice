@@ -12,6 +12,25 @@ spec.loader.exec_module(check)
 
 
 class LocalizationCatalogValidationTests(unittest.TestCase):
+    def testNativeAlertMenuAndUpdaterActionsRequireCatalogCoverageWithoutInspectingUserData(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / 'Native.swift').write_text('''
+alert.messageText = "No Updates"
+alert.informativeText = "Nothing to install."
+alert.addButton(withTitle: "OK")
+NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
+FloatingPromptAction(
+    title: "Install Now") {}
+NSMenuItem(
+    title: "Settings", action: nil, keyEquivalent: "")
+alert.informativeText = error.localizedDescription
+NSMenuItem(title: device.name, action: nil, keyEquivalent: "")
+''')
+            expected = {'No Updates', 'Nothing to install.', 'OK', 'Settings', 'Install Now'}
+            self.assertEqual(set(check.missing_literal_keys({}, source_root=root)), expected)
+            self.assertEqual(check.missing_literal_keys(dict.fromkeys(expected, {}), source_root=root), {})
+
     def catalog(self, russian='%lld запись', forms=None):
         unit = lambda value: {'stringUnit': {'state': 'translated', 'value': value}}
         russian_node = unit(russian) if forms is None else {'variations': {'plural': {key: unit(value) for key, value in forms.items()}}}

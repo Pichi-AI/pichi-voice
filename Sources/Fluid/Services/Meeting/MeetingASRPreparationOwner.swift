@@ -10,13 +10,13 @@ nonisolated enum MeetingASRPreparationError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidActivityLease:
-            return "The meeting no longer holds the exclusive audio activity lease."
+            return PichiLocalization.text("The meeting no longer holds the exclusive audio activity lease.")
         case .userModelDownloadInProgress:
-            return "Wait for the active voice model download to finish."
+            return PichiLocalization.text("Wait for the active voice model download to finish.")
         case .preparationInProgress:
-            return "Meeting transcription preparation is already in progress."
+            return PichiLocalization.text("Meeting transcription preparation is already in progress.")
         case .invalidPreparedProvider:
-            return "The prepared transcription resource is unavailable or does not match this meeting."
+            return PichiLocalization.text("The prepared transcription resource is unavailable or does not match this meeting.")
         }
     }
 }

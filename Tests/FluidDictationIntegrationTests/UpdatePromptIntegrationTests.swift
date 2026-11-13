@@ -4,6 +4,88 @@ import XCTest
 
 @MainActor
 final class UpdatePromptIntegrationTests: XCTestCase {
+    func testLanguageChangeRefreshesVisibleAndQueuedCopyWithoutApprovingInstallation() throws {
+        var language = PichiInterfaceLanguage.english
+        let presenter = UpdatePromptPresenter(language: { language })
+        defer { presenter.dismissAll() }
+        var installs = 0
+        presenter.presentFloatingPrompt(title: "No Updates",
+            message: PichiLocalization.text("No release notes available.", language: language, bundle: .main),
+            actions: [FloatingPromptAction(title: "OK") {}])
+        presenter.presentFloatingPrompt(title: "Update Available",
+            message: AppBrand.format("Installing FluidVoice %@", profile: AppBrand.profile, language: language, arguments: ["0.2.3"]),
+            actions: [FloatingPromptAction(title: "Install Now") { installs += 1 }])
+        let english = try self.visibleWindow("No Updates")
+        language = .russian
+        NotificationCenter.default.post(name: PichiLocalization.languageChanged, object: nil)
+        XCTAssertFalse(english.isVisible)
+        let russian = try self.visibleWindow("Обновлений нет")
+        let labels = russian.contentView?.subviews.compactMap { $0 as? NSTextField }.map(\.stringValue) ?? []
+        XCTAssertTrue(labels.contains("Описание изменений отсутствует."))
+        XCTAssertFalse(russian.isKeyWindow)
+        presenter.dismissUpdateCheckResults()
+        let queued = try self.visibleWindow("Доступно обновление")
+        let queuedLabels = queued.contentView?.subviews.compactMap { $0 as? NSTextField }.map(\.stringValue) ?? []
+        XCTAssertTrue(queuedLabels.contains("Установка \(AppBrand.appName) 0.2.3"))
+        XCTAssertEqual(installs, 0)
+        try self.button("Установить", in: queued).performClick(nil)
+        XCTAssertEqual(installs, 1)
+    }
+
+    func testRussianManualCheckRendersLocalizedNativeTitleAndDismissAction() async throws {
+        let context = try UpdateTestContext(language: .russian)
+        defer { context.cleanup() }
+        context.fixture.setReply(version: nil)
+        context.updater.checkForUpdatesManually()
+        try await self.finishCheck(context)
+        let window = try self.visibleWindow("Обновлений нет")
+        XCTAssertFalse(self.isVisible("No Updates"))
+        if PichiLocalization.language == .russian {
+            let labels = window.contentView?.subviews.compactMap { $0 as? NSTextField }.map(\.stringValue) ?? []
+            XCTAssertTrue(labels.contains("У вас уже установлена последняя доступная версия \(AppBrand.appName)."))
+        }
+        try self.button("Понятно", in: window).performClick(nil)
+        XCTAssertFalse(window.isVisible)
+        XCTAssertFalse(context.updater.isUpdateInProgress)
+        XCTAssertNil(NSApp.modalWindow)
+    }
+
+    func testRussianOfferUsesSourceIdentityForDeduplicationAndChannelDismissal() async throws {
+        let context = try UpdateTestContext(language: .russian)
+        defer { context.cleanup() }
+        context.fixture.setReply(version: "v99.0.0")
+        var installs = 0
+        context.updater.simulationInstallHandler = { installs += 1 }
+        context.updater.checkForUpdatesManually()
+        try await self.finishCheck(context)
+        context.updater.showAvailableUpdate()
+        let window = try self.visibleWindow("Доступно обновление")
+        XCTAssertEqual(NSApp.windows.filter { $0.isVisible && $0.title == "Доступно обновление" }.count, 1)
+        _ = try self.button("Установить", in: window)
+        try self.button("Позже", in: window).performClick(nil)
+        XCTAssertEqual(installs, 0)
+        XCTAssertFalse(window.isVisible)
+        context.updater.showAvailableUpdate()
+        let renewed = try self.visibleWindow("Доступно обновление")
+        let revision = context.defaults.integer(forKey: SettingsStore.UpdateKeys.channelPreferenceRevision)
+        context.defaults.set(revision &+ 1, forKey: SettingsStore.UpdateKeys.channelPreferenceRevision)
+        context.updater.updateChannelDidChange()
+        XCTAssertFalse(renewed.isVisible)
+        XCTAssertEqual(installs, 0)
+    }
+
+    func testRussianPromptQueueDismissesCheckResultsWithoutTranslatingMessageData() throws {
+        let presenter = UpdatePromptPresenter(language: { .russian })
+        defer { presenter.dismissAll() }
+        let path = "/Users/fixture/No Updates %@/Pichi Voice.app"
+        presenter.presentFloatingPrompt(title: "Update Check Failed", message: path,
+                                        actions: [FloatingPromptAction(title: "OK") {}])
+        let window = try self.visibleWindow("Не удалось проверить обновления")
+        XCTAssertTrue(window.contentView!.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue == path })
+        presenter.dismissUpdateCheckResults()
+        XCTAssertFalse(window.isVisible)
+    }
+
     func testPublicVersionOnlyOfferStillRequiresExplicitInstallation() async throws {
         let context = try UpdateTestContext()
         defer { context.cleanup() }
@@ -907,11 +989,12 @@ private final class UpdateTestContext {
     let token = UUID().uuidString
     let defaults: UserDefaults
     let session: URLSession
-    let presenter = UpdatePromptPresenter()
+    let presenter: UpdatePromptPresenter
     let fixture = UpdateFixture()
     let updater: SimpleUpdater
 
-    init() throws {
+    init(language: PichiInterfaceLanguage? = nil) throws {
+        self.presenter = UpdatePromptPresenter(language: { language ?? PichiLocalization.language })
         self.defaults = try XCTUnwrap(UserDefaults(suiteName: self.token))
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [UpdateFixtureURLProtocol.self]

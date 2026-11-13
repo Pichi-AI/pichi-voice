@@ -123,11 +123,11 @@ nonisolated enum MeetingProviderOptionsError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case let .unsupportedASRModel(model):
-            return "The meeting backend cannot use the requested speech model (\(model))."
+            return PichiLocalization.format("The meeting backend cannot use the requested speech model (%@).", String(describing: model))
         case let .unsupportedLanguageCode(language):
-            return "The selected speech model does not support meeting language \(language). Choose a compatible model or change the meeting language."
+            return PichiLocalization.format("The selected speech model does not support meeting language %@. Choose a compatible model or change the meeting language.", String(describing: language))
         case let .unsupportedFeature(feature):
-            return "Meeting transcription does not support \(feature)."
+            return PichiLocalization.format("Meeting transcription does not support %@.", String(describing: feature))
         case .unsupportedArchitecture:
             return AppBrand.text("The selected meeting model requires Apple Silicon.")
         }

@@ -161,7 +161,8 @@ final class PichiLocalizationPresentationTests: XCTestCase {
         let segment = try XCTUnwrap(session.transcriptSegments.first)
         let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
         let canonicalTurns = PichiMeetingSummaryInput.turns(for: session)
-        XCTAssertEqual(canonicalTurns.first?.speaker, "Unknown speaker")
+        // Canonical summary input keeps the existing stable anonymous speaker ordinal.
+        XCTAssertEqual(canonicalTurns.first?.speaker, "Speaker 1")
         for (language, expected) in [(PichiInterfaceLanguage.russian, "Неизвестный участник"), (.english, "Unknown speaker")] {
             XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: segment, in: session, speakerNames: [:], language: language), expected)
             XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: segment, in: session, speakerNames: [:]), "Unknown speaker")

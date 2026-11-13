@@ -96,7 +96,9 @@ nonisolated enum UpdateDMGStager {
         let retainedRoot: URL
         let underlying: Error
         var mayBeMounted: Bool = true
-        var errorDescription: String? { "The update image could not be detached. Retained staging: \(retainedRoot.path). \(underlying.localizedDescription)" }
+        var errorDescription: String? {
+            PichiLocalization.format("The update image could not be detached. Retained staging: %@. %@", self.retainedRoot.path, self.underlying.localizedDescription)
+        }
     }
 
     /// Bounded, joined subprocess lifetime. Cancellation never abandons a mounted image.

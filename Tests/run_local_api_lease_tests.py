@@ -423,5 +423,5 @@ with tempfile.TemporaryDirectory(prefix="probe-", dir=build_root) as directory:
     root = Path(directory)
     (root / 'api-proof.swift').write_text(swift)
     subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', str(root/'module-cache'),
-                    str(root/'api-proof.swift'), '-o', str(root/'api-proof')], check=True, timeout=120)
+                    str(repo / 'Sources/Fluid/Localization/PichiLocalization.swift'), str(root/'api-proof.swift'), '-o', str(root/'api-proof')], check=True, timeout=120)
     subprocess.run([str(root/'api-proof')], check=True, timeout=30)

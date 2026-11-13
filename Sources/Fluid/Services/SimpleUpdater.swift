@@ -26,23 +26,23 @@ enum SimpleUpdateError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .activeWork: return PichiLocalization.text("Finish the current recording, transcription, microphone preview, or voice model operation, then try installing again.")
-        case let .stagingCleanupFailed(path): return "The previous update could not be cleaned up. Retained staging: \(path)."
-        case .invalidURL: return "Invalid URL."
-        case .distributionNotConfigured: return "Signed app updates are not configured for this distribution. Install a reviewed build manually."
-        case .invalidResponse: return "Invalid HTTP response from GitHub."
-        case .jsonDecoding: return "The data couldn’t be read because it isn’t in the correct format."
-        case .noSuitableRelease: return "No suitable release found."
-        case .releaseChanged: return "A different update is now available. Please review it before installing."
-        case .noAsset: return "No matching asset found in the latest release."
-        case .updateAlreadyInProgress: return "An update is already being installed."
-        case .downloadFailed: return "Failed to download update."
-        case .unzipFailed: return "Failed to extract the update archive."
-        case .notAnAppBundle: return "Extracted content does not contain an app bundle."
-        case .codesignMismatch: return "Downloaded app’s code signature does not match current app."
-        case .backupFailed: return "The current app could not be backed up. Nothing was replaced."
+        case let .stagingCleanupFailed(path): return PichiLocalization.format("The previous update could not be cleaned up. Retained staging: %@.", path)
+        case .invalidURL: return PichiLocalization.text("Invalid URL.")
+        case .distributionNotConfigured: return PichiLocalization.text("Signed app updates are not configured for this distribution. Install a reviewed build manually.")
+        case .invalidResponse: return PichiLocalization.text("Invalid HTTP response from GitHub.")
+        case .jsonDecoding: return PichiLocalization.text("The data couldn’t be read because it isn’t in the correct format.")
+        case .noSuitableRelease: return PichiLocalization.text("No suitable release found.")
+        case .releaseChanged: return PichiLocalization.text("A different update is now available. Please review it before installing.")
+        case .noAsset: return PichiLocalization.text("No matching asset found in the latest release.")
+        case .updateAlreadyInProgress: return PichiLocalization.text("An update is already being installed.")
+        case .downloadFailed: return PichiLocalization.text("Failed to download update.")
+        case .unzipFailed: return PichiLocalization.text("Failed to extract the update archive.")
+        case .notAnAppBundle: return PichiLocalization.text("Extracted content does not contain an app bundle.")
+        case .codesignMismatch: return PichiLocalization.text("Downloaded app’s code signature does not match current app.")
+        case .backupFailed: return PichiLocalization.text("The current app could not be backed up. Nothing was replaced.")
         case .installedAppChanged: return AppBrand.text("The installed app changed. Restart FluidVoice before trying the update again.")
-        case .rollbackUnavailable: return "No rollback backup is available."
-        case .rollbackRestoreFailed: return "Failed to restore a previous version."
+        case .rollbackUnavailable: return PichiLocalization.text("No rollback backup is available.")
+        case .rollbackRestoreFailed: return PichiLocalization.text("Failed to restore a previous version.")
         }
     }
 }
@@ -481,7 +481,7 @@ final class SimpleUpdater: ObservableObject {
                 version: self.selection(for: release, repo: repo)?.displayVersion ?? release.tag_name,
                 title: (release.name == release.tag_name ? nil : Self.nonEmpty(release.name))
                     ?? self.selection(for: release, repo: repo)?.displayVersion ?? release.tag_name,
-                notes: Self.nonEmpty(release.body) ?? "No release notes available.",
+                notes: Self.nonEmpty(release.body) ?? PichiLocalization.text("No release notes available."),
                 publishedAt: Self.parseGitHubDate(release.published_at),
                 url: release.html_url,
                 isPrerelease: release.prerelease
@@ -535,7 +535,7 @@ final class SimpleUpdater: ObservableObject {
         }
 
         let version = self.selection(for: latest, repo: repo)?.displayVersion ?? latest.tag_name
-        let notes = latest.body ?? "No release notes available."
+        let notes = latest.body ?? PichiLocalization.text("No release notes available.")
 
         return (version, notes)
     }
@@ -667,7 +667,7 @@ final class SimpleUpdater: ObservableObject {
                 self.invalidateDownload()
                 self.updatePrompts.dismissUpdateOffers()
                 if self.checkIsExplicit {
-                    self.showUpdateCheckResult(title: "Update Check Failed", message: "Unable to check for updates. Please try again later.\n\nError: \(error.localizedDescription)")
+                    self.showUpdateCheckResult(title: "Update Check Failed", message: PichiLocalization.format("Unable to check for updates. Please try again later.\n\nError: %@", error.localizedDescription))
                 } else {
                     DebugLogger.shared.debug("Automatic update check failed: \(error.localizedDescription)", source: "SimpleUpdater")
                 }
@@ -702,7 +702,7 @@ final class SimpleUpdater: ObservableObject {
         let revision = self.channelRevision
         self.updatePrompts.presentFloatingPrompt(
             title: "Update Available",
-            message: AppBrand.text("FluidVoice \(version) is now available. The app will restart automatically after installation."),
+            message: AppBrand.format("FluidVoice %@ is now available. The app will restart automatically after installation.", version),
             actions: [
                 FloatingPromptAction(title: "Install Now") { [weak self] in
                     guard let self, self.availableUpdateVersion == version, self.channelRevision == revision, !self.isUpdateInProgress else { return }
@@ -747,14 +747,14 @@ final class SimpleUpdater: ObservableObject {
                 self.showUpdateCheckResult(
                     title: cancelled ? "No Updates" : "Update Failed",
                     message: cancelled ? AppBrand.text("You're already running the latest available version of FluidVoice.")
-                        : "Unable to install the update. Please try again later.\n\nError: \(error.localizedDescription)"
+                        : PichiLocalization.format("Unable to install the update. Please try again later.\n\nError: %@", error.localizedDescription)
                 )
             }
         }
     }
 
-    private func showUpdateCheckResult(title: String, message: String) {
-        self.updatePrompts.presentFloatingPrompt(title: title, message: message, actions: [FloatingPromptAction(title: "OK") {}])
+    private func showUpdateCheckResult(title: String, message: @autoclosure @escaping () -> String) {
+        self.updatePrompts.presentFloatingPrompt(title: title, message: message(), actions: [FloatingPromptAction(title: "OK") {}])
     }
 
     func checkAndUpdate(
@@ -907,7 +907,7 @@ final class SimpleUpdater: ObservableObject {
             backing: .buffered,
             defer: false
         )
-        panel.title = AppBrand.text("Installing FluidVoice \(version)")
+        panel.title = AppBrand.format("Installing FluidVoice %@", version)
         panel.isReleasedWhenClosed = false
         panel.level = .floating
         panel.isOpaque = false
@@ -929,7 +929,7 @@ final class SimpleUpdater: ObservableObject {
         icon.imageScaling = .scaleProportionallyUpOrDown
         content.addSubview(icon)
 
-        let title = NSTextField(labelWithString: AppBrand.text("Installing FluidVoice \(version)"))
+        let title = NSTextField(labelWithString: AppBrand.format("Installing FluidVoice %@", version))
         title.frame = NSRect(x: 92, y: 108, width: 304, height: 24)
         title.font = .fluidSystemFont(ofSize: 16, weight: .semibold)
         content.addSubview(title)
@@ -1459,8 +1459,8 @@ final class SimpleUpdater: ObservableObject {
         self.showUpdateCheckResult(
             title: "Update Failed",
             message: recoveryWarning == nil
-                ? "The new app could not start. Your previous version has been restored. Please try again."
-                : "The app could not restart. Your previous version is saved at \(installation.backupURL.path)."
+                ? PichiLocalization.text("The new app could not start. Your previous version has been restored. Please try again.")
+                : PichiLocalization.format("The app could not restart. Your previous version is saved at %@.", installation.backupURL.path)
         )
         self.updateOperationGate.allowTermination()
     }
