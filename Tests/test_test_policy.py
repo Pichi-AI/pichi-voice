@@ -48,6 +48,11 @@ class QuarantineTests(unittest.TestCase):
         self.assertTrue(POLICY.quarantine_problems(quarantine(entry(), entry()), TODAY))
         self.assertTrue(POLICY.quarantine_problems({"entries": []}, TODAY))
 
+    def test_scope_can_only_name_the_ci_runner(self):
+        self.assertEqual(POLICY.quarantine_problems(quarantine(entry(test="probe:ui_contrast", scope="ci")), TODAY), [])
+        for value in ("local", "", None, True):
+            self.assertIn("scope", POLICY.quarantine_problems(quarantine(entry(scope=value)), TODAY)[0], value)
+
     def test_expiry_cannot_be_far_away(self):
         self.assertEqual(POLICY.quarantine_problems(quarantine(entry(expires="2027-02-03")), TODAY), [])
         self.assertIn("90 days", POLICY.quarantine_problems(quarantine(entry(expires="2027-02-04")), TODAY)[0])

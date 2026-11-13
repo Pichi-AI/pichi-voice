@@ -277,6 +277,22 @@ class QuarantineTests(unittest.TestCase):
             with patch.object(VERIFY, "ROOT", root):
                 self.assertEqual(VERIFY.read_quarantine(), VERIFY.Quarantine(tests={f"{BUNDLE}/A/testOne"}, probes={"ui_contrast"}))
 
+    def test_ci_scoped_entry_applies_only_on_the_runner(self):
+        entries = {"entries": [{"test": "probe:ui_contrast", "scope": "ci"}, {"test": f"{BUNDLE}/A/testOne()"}]}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Tests").mkdir()
+            (root / "Tests/quarantine.json").write_text(json.dumps(entries))
+            with patch.object(VERIFY, "ROOT", root):
+                self.assertEqual(VERIFY.read_quarantine(ci=False), VERIFY.Quarantine(tests={f"{BUNDLE}/A/testOne"}, probes=set()))
+                self.assertEqual(VERIFY.read_quarantine(ci=True).probes, {"ui_contrast"})
+
+    def test_the_runner_is_recognized_by_github_actions(self):
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}):
+            self.assertTrue(VERIFY.on_ci())
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": ""}):
+            self.assertFalse(VERIFY.on_ci())
+
     def test_repository_quarantine_reads(self):
         self.assertIsInstance(VERIFY.read_quarantine(), VERIFY.Quarantine)
 

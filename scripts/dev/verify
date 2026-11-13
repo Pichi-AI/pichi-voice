@@ -387,9 +387,15 @@ def run_vendor(receipt, layer, paths):
             receipt.skip(f"vendor-{package}", "this package did not change")
 
 
-def read_quarantine():
+def on_ci():
+    return os.environ.get("GITHUB_ACTIONS") == "true"
+
+
+def read_quarantine(ci=None):
+    """An entry with "scope": "ci" applies only on the CI runner; developer Macs keep running that test."""
+    ci = on_ci() if ci is None else ci
     entries = json.loads((ROOT / "Tests/quarantine.json").read_text())["entries"]
-    tests = [entry["test"] for entry in entries]
+    tests = [entry["test"] for entry in entries if ci or entry.get("scope") != "ci"]
     return Quarantine(tests={plain(test) for test in tests if not test.startswith("probe:")},
                       probes={test.removeprefix("probe:") for test in tests if test.startswith("probe:")})
 

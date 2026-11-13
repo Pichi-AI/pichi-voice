@@ -43,6 +43,8 @@ def quarantine_problems(value, today):
         for field in ("owner", "reason"):
             if not isinstance(entry.get(field), str) or not entry[field].strip():
                 problems.append(f"{test}: missing {field}")
+        if entry.get("scope", "ci") != "ci":
+            problems.append(f"{test}: scope can only be \"ci\" (the CI runner); leave it out to quarantine everywhere")
         try:
             expires = date.fromisoformat(entry.get("expires", ""))
         except (TypeError, ValueError):
