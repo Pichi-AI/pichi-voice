@@ -49,6 +49,7 @@ extension SettingsStore {
             ?? ""
     }
 
+    @MainActor
     var commandModeReadinessIssue: String? {
         let sourceProviderID = self.commandModeLinkedToGlobal ? self.selectedProviderID : self.commandModeSelectedProviderID
         if self.isPrivateAIProviderID(sourceProviderID) {
@@ -71,7 +72,7 @@ extension SettingsStore {
 
         if providerID == AppleIntelligenceAvailability.providerID { return AppleIntelligenceAvailability.unavailableReason }
 
-        guard self.isCommandModeProviderVerified(providerID) else {
+        guard self.verifiedChatModelConfiguration(providerID: providerID, modelID: model) != nil else {
             if self.commandModeLinkedToGlobal {
                 return PichiLocalization.text("Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Settings.")
             }

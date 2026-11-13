@@ -68,7 +68,7 @@ final class SettingsStore: ObservableObject {
     }
 }
 
-@main enum CommandModelCatalogTests {
+@main @MainActor enum CommandModelCatalogTests {
     static var checks = 0
     static func check(_ condition: Bool, _ message: String) {
         precondition(condition, message)

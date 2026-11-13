@@ -53,7 +53,10 @@ import os
 import subprocess
 import sys
 out = Path(sys.argv[1])
-fixture = Path('Tests/CommandModelCatalogTests.swift').read_text().split('@main enum CommandModelCatalogTests {', 1)[0]
+fixture_source = Path('Tests/CommandModelCatalogTests.swift').read_text()
+fixture_marker = '@main @MainActor enum CommandModelCatalogTests {'
+assert fixture_source.count(fixture_marker) == 1
+fixture = fixture_source.split(fixture_marker, 1)[0]
 fixture = fixture.replace('final class UserDefaults {', 'class UserDefaults {')
 marker = '    var credentials: [String: String] = [:]'
 assert fixture.count(marker) == 1
@@ -197,7 +200,8 @@ command = command[command.index('    private struct LLMResponse {'):command.rind
 # Access is widened only inside the isolated owner so its actual admission,
 # configuration, transport and result handling can be exercised together.
 command = command.replace('private struct LLMResponse', 'struct LLMResponse', 1).replace('private func callLLM', 'func callLLM', 1)
-(out / 'AdmissionCommand.swift').write_text('import Foundation\n@MainActor extension CommandAdmissionOwner {\n' + message + '\n' + command + '\n}\n')
+composer = declaration(Path('Sources/Fluid/Views/CommandModeView.swift').read_text(), '    private var canSubmitCommand: Bool {').replace('private var', 'var', 1)
+(out / 'AdmissionCommand.swift').write_text('import Foundation\n@MainActor extension CommandAdmissionOwner {\n' + message + '\n' + command + '\n' + composer + '\n}\n')
 dictation = Path('Sources/Fluid/Services/DictationPostProcessingService.swift').read_text()
 normal_baseline = os.environ.get('PICHI_NORMAL_DICTATION_ADMISSION_BASELINE_REF')
 if normal_baseline:

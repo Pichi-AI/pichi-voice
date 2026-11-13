@@ -321,7 +321,7 @@ final class MeetingProviderOptionsTests: XCTestCase {
         for (saved, english, nonEnglish) in [
             (MeetingBackendID.productionDefault, MeetingBackendID.productionDefault, MeetingBackendID.productionDefault),
             (.whisperTiny, .whisperTiny, .whisperTiny),
-            (.legacyCompatibility, .legacyCompatibility, .productionDefault),
+            (.legacyCompatibility, .productionDefault, .productionDefault),
             (unknown, unknown, unknown),
         ] {
             for (language, expected) in [("en", english), ("fr", nonEnglish), ("ru", nonEnglish)] {

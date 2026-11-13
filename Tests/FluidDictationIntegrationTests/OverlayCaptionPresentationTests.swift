@@ -613,6 +613,10 @@ final class OverlayCaptionPresentationTests: XCTestCase {
 
     func testWindowAndControlsStayStillThroughWrappingAndCorrections() async throws {
         let hostASR = AppServices.shared.asr
+        // The test host does not run ContentView.onAppear, which owns this production binding.
+        let menu = MenuBarManager()
+        menu.configure(asrService: hostASR)
+        defer { withExtendedLifetime(menu) {} }
         let startupDeadline = ProcessInfo.processInfo.systemUptime + 10
         while !hostASR.initialMenuBarStateDeliveredForTests, ProcessInfo.processInfo.systemUptime < startupDeadline {
             try await Task.sleep(for: .milliseconds(20))

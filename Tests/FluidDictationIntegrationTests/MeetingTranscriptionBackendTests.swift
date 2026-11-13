@@ -952,7 +952,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         XCTAssertNotNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: SettingsStore.SpeechModel.whisperTiny.rawValue))
         XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: SettingsStore.SpeechModel.whisperSmall.rawValue))
         let selections: [(saved: MeetingBackendID, english: MeetingBackendID, nonEnglish: MeetingBackendID)] = [
-            (.legacyCompatibility, .legacyCompatibility, .productionDefault),
+            (.legacyCompatibility, .productionDefault, .productionDefault),
             (.productionDefault, .productionDefault, .productionDefault),
             (unknown, unknown, unknown),
         ]

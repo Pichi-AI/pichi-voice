@@ -3012,6 +3012,7 @@ final class MeetingRecoveryTests: XCTestCase {
         var session = self.makeSession(state: .interrupted, endedAt: Date(), audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
         let captureEvent = MeetingSessionEvent(id: UUID(), occurredAt: Date(), kind: .microphoneDisconnected, trackID: nil, detail: "capture interruption")
         session.events = [captureEvent, MeetingSessionEvent(id: UUID(), occurredAt: Date(), kind: .transcriptCoverageIncomplete, trackID: nil, detail: "previous attempt")]
+        try await store.create(session)
         let sessionDirectory = try await store.sessionDirectory(for: session.id)
         let audio = session.audioTracks[0].chunks[0].fileURL(relativeTo: sessionDirectory)
         try FileManager.default.createDirectory(at: audio.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -3019,7 +3020,7 @@ final class MeetingRecoveryTests: XCTestCase {
         session.audioTracks[0].chunks[0].byteCount = Int64(audioBytes.count)
         session.audioTracks[0].chunks[0].sha256 = try XCTUnwrap(MeetingChunkPathConfinement.sha256Hex(contentsOf: audio))
         XCTAssertEqual(try AVAudioFile(forReading: audio).length, 16_000)
-        try await store.create(session)
+        try await store.save(session)
         let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter())
         self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         await coordinator.ensureRestored()
@@ -5123,6 +5124,7 @@ final class MeetingRecoveryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
         var original = try self.completedEnglishRetranscriptionFixture()
+        try await store.create(original)
         let sessionDirectory = try await store.sessionDirectory(for: original.id)
         let audio = original.audioTracks[0].chunks[0].fileURL(relativeTo: sessionDirectory)
         try FileManager.default.createDirectory(at: audio.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -5130,7 +5132,7 @@ final class MeetingRecoveryTests: XCTestCase {
         original.audioTracks[0].chunks[0].byteCount = Int64(audioBytes.count)
         original.audioTracks[0].chunks[0].sha256 = try XCTUnwrap(MeetingChunkPathConfinement.sha256Hex(contentsOf: audio))
         XCTAssertEqual(try AVAudioFile(forReading: audio).length, 16_000)
-        try await store.create(original)
+        try await store.save(original)
         let arbiter = StubArbiter()
         let coordinator = MeetingSessionCoordinator(
             store: store,

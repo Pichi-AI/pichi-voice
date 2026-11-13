@@ -50,6 +50,11 @@ nonisolated final class DebugLogger: @unchecked Sendable {
 @MainActor final class CommandAdmissionOwner {
     let llmClient: LLMClient
     init(llmClient: LLMClient) { self.llmClient = llmClient }
+    struct ComposerText { var wrappedValue = "Synthetic command only." }
+    var inputText = ComposerText()
+    var compactHistoryPresented = false
+    var canChangeSession = true
+    var settings: SettingsStore { .shared }
     let conversationHistory: [Message] = [.init(role: .user, content: "Synthetic command only.", toolCall: nil)]
     let shouldSyncCommandNotchState = false
     var streamingText = "owned-before-request"
@@ -311,6 +316,7 @@ final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
         if settings.commandModeReadinessIssue != nil {
             fputs("Positive command fixture rejected: provider=\(settings.effectiveCommandModeProviderID) model=\(settings.effectiveCommandModeSelectedModel) linked=\(settings.commandModeLinkedToGlobal) loaded=\(settings.loadedProviderAPIKeys != nil) cached=\(settings.providerAPIKeys.count) catalog=\(settings.commandModeModelCatalog().count)\n", stderr)
         }
+        self.check(owner.canSubmitCommand, "The actual Command Mode composer gate permits the same verified route as inference")
         let command = try await owner.send()
         self.check(command == "Synthetic summary" && owner.responseHandlerCount == 1, "Actual Command Mode callLLM passes its intercepted result to the owned continuation")
         return owner
@@ -495,6 +501,8 @@ final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
         self.check(AdmissionURLProtocol.lastURL == "https://alias.example/v1/chat/completions", "Alias resolution freezes its verified registered endpoint")
         let reads = backend.readCount
         settings.providerConnectionOptions["alias"] = ["project": "changed-project"]
+        self.check(!CommandAdmissionOwner(llmClient: self.commandClient).canSubmitCommand,
+            "Stale registered connection options disable the actual composer gate")
         await self.rejects(selection, settings: settings, remote: remote, reason: "Stale connection options")
         settings.providerConnectionOptions["alias"] = options
         settings.savedProviders = [.init(id: "alias", name: "Synthetic provider", baseURL: "https://changed.example/v1", models: ["synthetic-model"])]
