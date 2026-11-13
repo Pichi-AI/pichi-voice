@@ -40,7 +40,7 @@ flowchart LR
 | Additional model using an existing backend | A model descriptor and small registry wiring |
 | New inference backend | Separate provider conforming to `TranscriptionProvider`, with a narrow factory registration |
 | Personal dictionaries | Separate import/schema adapter and local profiles; reuse compatible upstream vocabulary hooks |
-| Optional feature | Separate implementation with a small opt-in integration point |
+| Optional feature | Small opt-in extension to the existing upstream mechanism; a separate adapter only for a capability upstream lacks |
 
 The current [TranscriptionProvider](../../Sources/Fluid/Services/TranscriptionProvider.swift) already abstracts transcription, streaming, final results, and dictionary-training behavior. [ParakeetSpeechModelCatalog](../../Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift), [ExternalCoreMLModelRegistry](../../Sources/Fluid/Services/ExternalCoreMLModelRegistry.swift), [ParakeetVocabularyStore](../../Sources/Fluid/Services/ParakeetVocabularyStore.swift), and [DictionaryTransferService](../../Sources/Fluid/Services/DictionaryTransferService.swift) provide existing integration boundaries. Compatibility with a specific custom model or dictionary still needs to be tested.
 
