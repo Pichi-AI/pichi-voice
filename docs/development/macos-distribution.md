@@ -106,6 +106,10 @@ object and coordinate with its owner before removing a stale ref; age alone does
 not establish that it is safe to remove. Terminal cancellation is deferred during
 owned image detach, mount-state reconciliation and lock cleanup.
 
+### Release descriptions
+
+Use the bilingual [GitHub release-notes guide](release-notes.md) and its template. The helper's generic draft body is a placeholder; apply the reviewed English/Russian notes before publication. Description-only corrections preserve published assets, tags and Latest selection.
+
 ### Freeze the reviewed source and archive once
 
 Integrate the updater, signed distribution configuration and release tooling,
