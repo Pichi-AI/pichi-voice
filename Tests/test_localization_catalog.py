@@ -18,7 +18,8 @@ class LocalizationCatalogValidationTests(unittest.TestCase):
             (root / 'Native.swift').write_text('''
 alert.messageText = "No Updates"
 presentFloatingPrompt(
-    title: "No Updates", message: message, actions: actions)
+    title: "Standalone Result", message: message, actions: actions)
+presentFloatingPrompt(title: runtimeTitle, message: message, actions: actions)
 alert.informativeText = "Nothing to install."
 alert.addButton(withTitle: "OK")
 NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
@@ -29,7 +30,7 @@ NSMenuItem(
 alert.informativeText = error.localizedDescription
 NSMenuItem(title: device.name, action: nil, keyEquivalent: "")
 ''')
-            expected = {'No Updates', 'Nothing to install.', 'OK', 'Settings', 'Install Now'}
+            expected = {'No Updates', 'Standalone Result', 'Nothing to install.', 'OK', 'Settings', 'Install Now'}
             self.assertEqual(set(check.missing_literal_keys({}, source_root=root)), expected)
             self.assertEqual(check.missing_literal_keys(dict.fromkeys(expected, {}), source_root=root), {})
 
