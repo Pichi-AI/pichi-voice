@@ -54,6 +54,11 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
             }
             let retained = self.retainedCaptures(profile.enrollments)
             let captures = read.matchingEnrollments(for: profile)
+            // A profile awaiting its third sample is stable metadata, rather
+            // than a missing file that could recover without a metadata change.
+            guard captures.count >= 3 else {
+                diagnostics.append(.init(.insufficientReferences, profile.dictionaryEntryID)); continue
+            }
             guard (3...10).contains(captures.count), Array(captures.prefix(3)) == Array(retained.prefix(3)),
                   captures == retained.filter({ captures.contains($0) }),
                   captures.prefix(3).allSatisfy({ self.validCapture($0, modelKey: snapshot.modelKey) }) else {

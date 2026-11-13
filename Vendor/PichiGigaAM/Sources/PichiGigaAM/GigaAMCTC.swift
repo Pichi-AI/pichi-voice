@@ -43,14 +43,19 @@ public struct GigaAMTranscript: Sendable {
     public let endOfUtteranceProbability: Float?
     public let processingDuration: TimeInterval
     public let encoderWindows: [GigaAMEncoderWindow]
+    /// Work performed for this exact call, captured before another actor job
+    /// can replace the runtime's diagnostic lastTranscriptionWork property.
+    public let inferenceWork: GigaAMTranscriptionWork?
 
-    public init(text: String, confidence: Float, words: [GigaAMWordTiming], endOfUtteranceProbability: Float?, processingDuration: TimeInterval, encoderWindows: [GigaAMEncoderWindow] = []) {
+    public init(text: String, confidence: Float, words: [GigaAMWordTiming], endOfUtteranceProbability: Float?, processingDuration: TimeInterval,
+                encoderWindows: [GigaAMEncoderWindow] = [], inferenceWork: GigaAMTranscriptionWork? = nil) {
         self.text = text
         self.confidence = confidence
         self.words = words
         self.endOfUtteranceProbability = endOfUtteranceProbability
         self.processingDuration = processingDuration
         self.encoderWindows = encoderWindows
+        self.inferenceWork = inferenceWork
     }
 }
 

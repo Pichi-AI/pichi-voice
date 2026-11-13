@@ -4,6 +4,12 @@ import Foundation
 /// supplies bounded lexical evidence; the inference adapter still owns all sound
 /// thresholds, reference provenance, competition checks and the final decision.
 nonisolated enum GigaAMDictionaryLexicalEvidence {
+    // Foundation regex instances are immutable. Keep patterns, rather than user
+    // text or decisions, shared across the independent matching requests.
+    private static let tokenExpression = try? NSRegularExpression(pattern: #"[\p{L}\p{M}\p{N}]+(?:['’][\p{L}\p{M}\p{N}]+)*"#)
+    private static let camelBoundary = try? NSRegularExpression(pattern: #"([\p{Ll}\p{N}])(\p{Lu})"#)
+    private static let acronymBoundary = try? NSRegularExpression(pattern: #"(\p{Lu})(\p{Lu}\p{Ll})"#)
+
     enum Reason: String, Sendable {
         case invalidTerm, protectedContent, noObservedVariant, formattingOnly
         case unknownChangedComponents, knownChangedComponent, lexiconUnavailable
@@ -212,13 +218,16 @@ nonisolated enum GigaAMDictionaryLexicalEvidence {
 
     private static func tokens(_ text: String) -> [Token]? {
         guard !text.isEmpty, text.count <= 80, text.rangeOfCharacter(from: .newlines) == nil else { return nil }
-        guard let regex = try? NSRegularExpression(pattern: #"[\p{L}\p{M}\p{N}]+(?:['’][\p{L}\p{M}\p{N}]+)*"#) else { return nil }
+        guard let regex = self.tokenExpression, let camelBoundary = self.camelBoundary,
+              let acronymBoundary = self.acronymBoundary else { return nil }
         let value = text as NSString
         let parts = regex.matches(in: text, range: NSRange(location: 0, length: value.length)).map { value.substring(with: $0.range) }
         guard (1...4).contains(parts.count), parts.allSatisfy({ $0.count <= 80 }) else { return nil }
         let tokens = parts.enumerated().flatMap { index, original in
-            let split = original.replacingOccurrences(of: #"([\p{Ll}\p{N}])(\p{Lu})"#, with: "$1 $2", options: .regularExpression)
-                .replacingOccurrences(of: #"(\p{Lu})(\p{Lu}\p{Ll})"#, with: "$1 $2", options: .regularExpression)
+            let camelSplit = camelBoundary.stringByReplacingMatches(in: original,
+                range: NSRange(location: 0, length: (original as NSString).length), withTemplate: "$1 $2")
+            let split = acronymBoundary.stringByReplacingMatches(in: camelSplit,
+                range: NSRange(location: 0, length: (camelSplit as NSString).length), withTemplate: "$1 $2")
             return split.split(whereSeparator: \.isWhitespace).map {
                 Token(text: String($0), key: self.literalKey(String($0)), lexicalText: original, component: index)
             }

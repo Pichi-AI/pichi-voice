@@ -268,7 +268,10 @@ public actor GigaAMRuntime {
             try Task.checkCancellation()
             self.windowReuse.prepare(session: session, sampleCount: samples.count)
             return try await withTaskCancellationHandler {
-                try self.transcribeWithFallback(samples, cancellation: cancellation, captureEncoderFeatures: captureEncoderFeatures)
+                let result = try self.transcribeWithFallback(samples, cancellation: cancellation, captureEncoderFeatures: captureEncoderFeatures)
+                return GigaAMTranscript(text: result.text, confidence: result.confidence, words: result.words,
+                    endOfUtteranceProbability: result.endOfUtteranceProbability, processingDuration: result.processingDuration,
+                    encoderWindows: result.encoderWindows, inferenceWork: self.lastTranscriptionWork)
             } onCancel: { cancellation.cancel() }
         } catch {
             self.windowReuse.removeAll()
