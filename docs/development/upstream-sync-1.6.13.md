@@ -1,6 +1,6 @@
 # FluidVoice stable 1.6.13 integration
 
-Status: source integration resolved; combined verification and independent review in progress. This report does not authorize merging or publishing an application.
+Status: source integration and affected automated verification are complete for a qualified draft. A separate P2 limitation and manual acceptance remain open. This report does not authorize merging or publishing an application.
 
 ## Immutable inputs
 
@@ -24,7 +24,7 @@ The [official stable release](https://github.com/altic-dev/FluidVoice/releases/t
 - Keep exact focus checks, partial-insertion handling, private-profile retirement and joined readers. Adopt upstream focused-editor search, transient AX read handling and clipboard-consumption evidence. A recovery notice offers copying and must not post a second paste.
 - Preserve existing model selection. The new Qwen3 ASR 1.7B descriptor follows the existing universal inference provider; it does not revive the previously rejected 0.6B preview or silently select another model.
 
-Meeting/history/API source integration is resolved. Combined regression, final review and publication results are pending. The working application is not installed, replaced or re-signed by this task.
+Meeting/history/API source integration is resolved. Final source review and measured verification are recorded below. The working application was not installed, replaced or re-signed by this task.
 
 ### Additional semantic resolutions
 
@@ -57,7 +57,7 @@ These results bind to the described working source, not to a later final revisio
 | Initial compilation | Failed in bundled helper because upstream changed sharing permission to Bool?; caller corrected, combined build running |
 | Initial portable check | Failed on nine newly unregistered upstream probes; registry corrected, repeat running |
 
-Final portable/native/mobile results, exact reviewed revision, remaining limitations and draft PR will be appended after combined verification.
+These early checkpoints are superseded only in the scopes explicitly covered by the following final results.
 
 ## Initial conflict inventory
 
@@ -137,3 +137,60 @@ Every initial conflicted path is listed for traceability. Resolution and validat
 Independent review identified a P2 parity gap that remains open: PCM final normalization receives already-protected capture text, so a saved rule cannot match a trigger that privacy already masked. Retained canonical processing can apply that rule before final redaction. A second focused architecture review confirmed no existing complete raw transcript can supply that trigger: the bounded privacy tail and streaming state deliberately discard it. Retaining unprotected full text or replaying healthy ASR would change the accepted privacy/resource/Stop contracts. Neither workaround is introduced in this sync.
 
 The source keeps protected-text normalization and the final redaction pass, discloses the limitation with the dictionary controls, and adds a caller-level synthetic PCM finalization test with privacy-on/off controls and no-additional-ASR assertions. This records the limitation; it does not establish sensitive-trigger parity or close the review finding. The draft must not be described as fully accepted or merge-ready. A future fix needs a concrete, bounded existing-boundary design that preserves protected checkpoints, native evidence and joined healthy Stop. The user has not accepted this tradeoff as a permanent product decision.
+
+
+## Final source and regression results
+
+| Revision | Meaning |
+| --- | --- |
+| `f4163199aa8a5557ce923ea3cac5d06d56c18a1f` | Normal upstream merge, exact parents a866 and 9912 |
+| `243e810473c064e05f8e1a0a6455e8e990950804` | Full native/standalone and final mobile candidate |
+| `2f1ac1b6` | Composer readiness and remaining native fixture corrections |
+| `29f4daa324889c0c4b68eeff3b4eadad357e574f` | Final reviewed production source and final transport assertion |
+
+After the final reviewed production source, cebff2ab3 and 040f122c5 change only the VAD source-isolation fixture. The final publication adds this report; production inputs are identical to 29f4daa3. Every result retains its own revision; no new full native aggregate is inferred by adding successful reruns to an earlier run.
+
+| Check | Actual result and scope |
+| --- | --- |
+| Portable repository checks | PASS on final source. Configuration, syntax, catalogs, native SDK provenance, mobile membership, identity, policy and upstream-sync controls passed. |
+| Changed-line SwiftLint | PASS, zero blocking findings and zero notes in the final production delta. |
+| macOS Debug/test build | PASS on the immutable native candidates, unsigned and isolated as `ai.pichi.voice.regression.debug`. |
+| macOS Release | PASS on 29f4daa3, unsigned, separate DerivedData; stamped build verification records `AppSourceRevision=29f4daa324889c0c4b68eeff3b4eadad357e574f` in the built plist and the local receipt. No install, DMG or app release was performed. |
+| Distribution settings | Pichi display names and namespaces retained. Both configurations preserve downstream 0.2.0/build 73 rather than upstream 1.6.13/build 34. Ordinary local regression builds leave the optional source-stamp setting `unknown`; their immutable source and binary hashes are recorded externally, not represented as signed distribution proof. |
+| Initial full native at 1fa17560 | 4,066 total: 3,930 passed, 52 failed, 84 skipped. An inherited shared-termination leak accounts for the later admission failure group; other failures identified stale fixture contracts and integration defects. |
+| Full native at 243e8104 | 4,066 total: 3,976 passed, six failed, 84 skipped. Remaining failures were two saved-default expectations, two CAF fixture creation errors, missing test-host menu binding, and an asynchronous URLProtocol cancellation observation. |
+| Affected native at 2f1ac1b6 | 68 total: 66 passed, zero failed, two existing skips. Covers all six former failing cases: saved-default matrices, real synthetic retained CAF bytes, caption-window stability and transport cancellation. Composer/readiness is independently covered by the admission fixture. |
+| Final updater case at clean 29f4daa3 | One passed, zero failed. Keeps the stop-callback assertion and additionally observes that the injected URLSession has no active task after cancellation. No added sleep, changed deadline or downloader rewrite. |
+| Shared-state isolation control at e7e9c311 | 142 total: 138 passed, zero failed, four existing skips. The GigaAM fixture terminates only its injected owner, then ordinary shared admission succeeds; the later model/deletion/token-budget classes pass in the same test process. |
+| Standalone at 243e8104 | 123/123 selected leaf probes PASS. Final-source 29f4daa3 repeated 123 leaves: 122 passed and one asynchronous VAD fixture failed. The VAD completion predicate and acknowledgement now wait for the complete measured interval, preserving thresholds and existing bounded timeouts. Three isolated repeats passed, followed by a four-probe concurrent-load check at 040f122c5: four passed, zero failed. No new full aggregate is claimed after this test-only correction. The existing opt-in/quarantine selection remains explicit. |
+| Composer-to-service alias regression | 477 admission checks passed after the readiness correction, with actual composer predicate and service admission, cache-only production credential/storage operations and intercepted HTTP. No unexpected URL or interactive credential request is permitted. |
+| iOS simulator build/test build at 243e8104 | PASS on Xcode 27.2 with iOS 27.0 simulator runtime. Shared normalization/archive dependencies are in the versioned mobile manifest. |
+| Mobile hosted integration at 243e8104 | 449 total: 401 passed, zero failed, 48 existing skips. The installation-failure test explicitly selects strict memory-only admission; retained recording still preserves its existing speech-failure isolation. |
+| Native simulator UI at 243e8104 | iPhone 18 Pro and iPad Pro 13-inch M5 settings/model flow PASS in Russian light/dark themes. No model was installed or prepared, and no recording, sync publication or physical-device acceptance was attempted. |
+| Native simulator frames | Final iPhone: 48 saved frames, 24 unique states, one missed scheduled second. Final iPad: 33 frames, 25 unique states, two missed seconds. Zero capture errors. All unique states were inspected, with full-size model frames checked for copy/layout. This is incomplete one-second coverage and is not a latency/FPS measurement. Earlier frames and their distinct provenance remain preserved. |
+| Mobile evidence reuse | Every mobile production input, resource and project membership is unchanged from 243e8104 through the final source delta; the later production change is the macOS-only Command Mode settings extension. This equivalence is retained in the local receipt. |
+| Independent review | Initial combined f4163199 review found material issues. Corrected deltas were independently reviewed through 1fa17560, 243e8104 and exact 29f4daa3. Final review reports no new P1/P2 and closes the alias/UI and saved-default-matrix findings at source. It explicitly retains the separate masked-private-PCM P2 and does not declare merge readiness. |
+
+### Additional resolutions discovered by complete checking
+
+- The new universal Command Mode presentation preflight initially rejected a valid custom provider alias before authoritative configuration resolution. Apple availability admission remains in its own branch. Remote readiness and inference now share `verifiedChatModelConfiguration`, retaining exact registered-ID credential/options precedence, eligible model checks and stale/unknown rejection. The real composer predicate is exercised before the actual service call; a stale-options control disables the composer.
+- A saved legacy compatibility default migrates to the production backend for all tested languages. Registered model selection takes precedence. Explicit legacy and unknown request overrides remain pinned and reject unsupported execution; settings are not silently rewritten.
+- The default unselected composite model is upstream Pro. Explicit compatible English V2 selection and existing recording/model/artifact pins remain valid. Tests that mean V2 pin V2 rather than borrowing a mutable generic default.
+- The GigaAM reuse fixture used the real shared residency coordinator, then called termination cleanup. Its file, coordinator and causal shutdown method are identical in the starting baseline. The fix injects the existing owned coordinator and retains joined shutdown; no production reset or new quarantine is used.
+- Complete checks exposed obsolete standalone witnesses inherited from PR175: preview reuse, GigaAM execution-provider/work types and asynchronous admitted cleanup. Input-hash comparisons distinguish those unchanged baseline mismatches from new upstream contract additions. Probes now compile actual value/metadata declarations with inert runtime/IO boundaries.
+- The helper icon lookup failed inside a worker sandbox while Finder existed. The parent performed representative native preflights and the actual unrestricted picker passed 86 checks. No application lookup workaround was added.
+- Generic removal of the `Fluid-1 ` prefix corrupted genuine model attribution and user model labels. The model-name callback now remains verbatim, with short presentation labels kept separate. The iPad visual review also found the shared Pro card incorrectly saying Mac; shared copy now says device in English and Russian.
+- Two existing opt-in real-model/replay test identifiers were missing from the skip ledger. They are documented with their existing guards, layers and privacy prerequisites. No new `XCTSkip`, quarantine, timing relaxation, real-model permission or private input was added. `Tests/quarantine.json` is unchanged.
+- A late VAD source-isolation fixture equated the latest non-speech state with scored coverage of the complete requested interval. Under concurrent compilation, that could end its wait before coverage reached the required endpoint. Its existing bounded loop now checks that coverage and the existing bounded acknowledgement supplies the final proof. The production detector and silence thresholds are unchanged; repeated runs are one fixture finding, not new incidents.
+
+### Limits and next acceptance
+
+The masked-trigger PCM P2 described above remains open and has not been accepted as a permanent product decision. It must remain visible in the draft. Also outstanding are exact signed macOS microphone/system-audio/caption/hotkey/editor acceptance, actual model quality/download/runtime checks, Apple Intelligence runtime availability, and physical iPhone/iPad acceptance after the simulator images are reviewed. Earlier beta hardware proofs retain their original revisions and are not relabeled as stable 1.6.13 acceptance. The public upstream source does not supply the private Fluid Intelligence runtime.
+
+All application/source changes are in the task branch. No main merge, app installation, updater publication, credential change or upstream push was performed. Use a normal merge commit if this draft is later accepted; squashing or rebasing would discard upstream ancestry used by future release deduplication.
+
+## Knowledge and resource preservation
+
+The existing personal Spaces integration journal contains dated source-level findings, validation limits and the unresolved PCM issue. Repeated compilation/CI attempts are linked to their original cause rather than counted as new incidents. A successful fixture correction is not presented as a new production fix or as evidence of real-model quality.
+
+Workers used isolated branches/worktrees. Completed implementation/probe worktrees were removed after exact content integration and hash-verified copies of required ignored evidence. Both owned UI simulators were shut down and deleted after inspecting and independently preserving their small synthetic app containers; the runner-created hosted simulator was also deleted. All screenshots and xcresults remain in local private artifacts, outside version control. The user's installed application, original recordings, model caches, other sessions and physical devices were preserved.
