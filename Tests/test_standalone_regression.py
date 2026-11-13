@@ -783,7 +783,8 @@ sys.exit(status)
             RUNNER.stop_process_group(process)
         self.assertEqual(sent, [signal.SIGTERM, signal.SIGKILL])
         self.assertEqual(process.returncode, -signal.SIGKILL)
-        self.assertFalse(RUNNER.process_group_exists(process.pid))
+        # Cleanup promises no live member; an orphaned zombie may wait a moment for its reaper.
+        self.assertFalse(RUNNER.live_process_group(process.pid))
 
     def test_parallel_failure_does_not_stop_other_probes(self):
         status, report, directory = self.run_probes(
