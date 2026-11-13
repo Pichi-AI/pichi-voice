@@ -129,7 +129,7 @@ final class FluidServeTests: XCTestCase {
         XCTAssertTrue(object["access"] is NSNull)
         XCTAssertEqual(object["meetings"] as? Int, 0)
         XCTAssertEqual(FluidServeSelfCheck.outcome(fromStatusJSON: data), .failed(FluidServeMeetings.ReadError.accessUnavailable.localizedDescription))
-        let skill = FluidServeSkill.document(toolPath: "/fixture/fv-serve")
+        let skill = FluidServeSkill.document(toolPath: "/fixture/fv-serve", ownerBundleIdentifier: "synthetic.voice.fixture", appName: "Fixture Voice")
         XCTAssertTrue(skill.contains("normal permission-approval flow"))
         XCTAssertTrue(skill.contains("Do not disable the sandbox"))
     }
