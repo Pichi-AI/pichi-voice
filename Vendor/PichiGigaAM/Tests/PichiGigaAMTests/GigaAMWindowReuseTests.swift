@@ -216,4 +216,21 @@ final class GigaAMWindowReuseTests: XCTestCase {
         let reusedWork = await runtime.lastTranscriptionWork
         XCTAssertEqual(reusedWork.inferredWindows, 0)
     }
+
+    func testInferenceCountersRemainAttachedToTheirOwnConcurrentResults() async throws {
+        let runtime = try self.runtime()
+        try await withThrowingTaskGroup(of: (Int, GigaAMTranscriptionWork?).self) { group in
+            for seconds in [1, 21, 41, 62] {
+                group.addTask {
+                    let result = try await runtime.transcribe(Self.pcm(seconds))
+                    return (seconds, result.inferenceWork)
+                }
+            }
+            for try await (seconds, counters) in group {
+                let work = try XCTUnwrap(counters)
+                XCTAssertEqual(work.inferredWindows, (seconds + 19) / 20)
+                XCTAssertEqual(work.reusedWindows, 0)
+            }
+        }
+    }
 }

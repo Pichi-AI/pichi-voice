@@ -122,6 +122,11 @@ actor PronunciationDictionaryStore {
         private var selectedReferences: [String: [PronunciationEnrollmentCapture]]
         private var closed = false
 
+        var isOpen: Bool {
+            self.lock.lock(); defer { self.lock.unlock() }
+            return !self.closed
+        }
+
         fileprivate init(profile: PrivateProfileSnapshot, leaseID: UUID,
                          profiles: [PronunciationDictionaryProfile], omittedSharedProfileCount: Int = 0,
                          inspections: [UUID: DictionaryCaptureEvidenceFile],

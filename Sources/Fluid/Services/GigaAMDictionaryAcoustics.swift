@@ -56,10 +56,14 @@ nonisolated enum GigaAMDictionaryAcoustics {
         let evidence: [DictionaryAcousticEvidence]
     }
 
-    static func referenceCacheKey(_ snapshot: Snapshot) -> String {
+    static func referenceCacheKey(_ snapshot: Snapshot, stableNegativeEvidence: Bool = false) -> String {
+        // Only encoder preparation reports recoverable file failures. Keep the
+        // legacy cache's admission identity until it has the same contract.
+        let negativeIdentity = stableNegativeEvidence
+            ? snapshot.negatives?.contentFingerprint : snapshot.negatives?.revision.uuidString
         var parts = [snapshot.modelKey, snapshot.generation,
                      snapshot.pronunciation?.profile.id ?? "", snapshot.pronunciation?.profile.generation.uuidString ?? "",
-                     snapshot.negatives?.revision.uuidString ?? ""]
+                     negativeIdentity ?? ""]
         parts += snapshot.entries.map { $0.id.uuidString + ":" + $0.replacement }
         parts += snapshot.pronunciation?.profiles.map(DictionaryNegativeEvidenceResolver.profileKey) ?? []
         parts += snapshot.pronunciation?.profiles.flatMap { profile in

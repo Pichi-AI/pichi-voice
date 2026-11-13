@@ -5,6 +5,23 @@ import XCTest
 
 @MainActor
 final class GigaAMPreviewFinalizationXCTests: XCTestCase {
+    private actor PreparationGate {
+        private var suspended: CheckedContinuation<Void, Never>?
+        private var waiter: CheckedContinuation<Void, Never>?
+        func suspend() async {
+            await withCheckedContinuation {
+                self.suspended = $0
+                self.waiter?.resume()
+                self.waiter = nil
+            }
+        }
+        func waitUntilSuspended() async {
+            if self.suspended != nil { return }
+            await withCheckedContinuation { self.waiter = $0 }
+        }
+        func resume() { self.suspended?.resume(); self.suspended = nil }
+    }
+
     private actor NativeFixture: PichiGigaAMInferenceRuntime {
         struct Call: Sendable {
             let samples: Int
@@ -201,6 +218,85 @@ final class GigaAMPreviewFinalizationXCTests: XCTestCase {
             XCTAssertTrue(calls.isEmpty)
             let discarded = await native.discarded
             XCTAssertEqual(discarded, [lease])
+        }
+    }
+
+    func testUnchangedDictionaryReusesPreparationAcrossActualProviderAdmissions() async throws {
+        try await self.withProvider(output: self.transcript()) { provider, _, _ in
+            SettingsStore.shared.customDictionaryEntries = [.init(triggers: ["fixture"], replacement: "Fixture")]
+            for index in 0..<2 {
+                let lease = UUID()
+                try provider.beginAdmittedTranscription(leaseID: lease)
+                do {
+                    _ = try await provider.transcribeStreaming([Float](repeating: 0.1, count: 16_000))
+                    _ = try await provider.transcribeFinal([Float](repeating: 0.1, count: 16_000))
+                    let metrics = try XCTUnwrap(provider.lastFinalizationMetrics)
+                    XCTAssertTrue(metrics.succeeded)
+                    XCTAssertEqual(metrics.referenceCacheHit, index == 1)
+                    XCTAssertGreaterThanOrEqual(metrics.totalMilliseconds, metrics.nativeMilliseconds)
+                    await provider.endAdmittedTranscription(leaseID: lease)
+                } catch {
+                    await provider.endAdmittedTranscription(leaseID: lease)
+                    throw error
+                }
+            }
+        }
+    }
+
+    func testClosedAdmissionCannotPoisonTheNextRecordsPreparedReferenceCache() async throws {
+        for descriptor in [GigaAMModelCatalog.downloadableModel, GigaAMModelCatalog.compactONNXModel] {
+            try await self.withProvider(descriptor: descriptor, output: self.transcript()) { provider, _, _ in
+                SettingsStore.shared.customDictionaryEntries = [.init(triggers: ["fixture"], replacement: "Fixture")]
+                let gate = PreparationGate(), lease = UUID()
+                provider.beforeReferencePreparationForTesting = { await gate.suspend() }
+                try provider.beginAdmittedTranscription(leaseID: lease)
+                _ = try await provider.transcribeStreaming([Float](repeating: 0.1, count: 16_000))
+                let final = Task { try await provider.transcribeFinal([Float](repeating: 0.1, count: 16_000)) }
+                await gate.waitUntilSuspended()
+                await provider.endAdmittedTranscription(leaseID: lease)
+                await gate.resume()
+                do { _ = try await final.value; XCTFail("Closed admission must not cache or publish a partial preparation") }
+                catch { XCTAssertTrue(error is CancellationError) }
+                provider.beforeReferencePreparationForTesting = nil
+                let next = UUID()
+                try provider.beginAdmittedTranscription(leaseID: next)
+                do {
+                    _ = try await provider.transcribeFinal([Float](repeating: 0.1, count: 16_000))
+                    XCTAssertFalse(try XCTUnwrap(provider.lastFinalizationMetrics).referenceCacheHit)
+                    await provider.endAdmittedTranscription(leaseID: next)
+                } catch {
+                    await provider.endAdmittedTranscription(leaseID: next)
+                    throw error
+                }
+            }
+        }
+    }
+
+    func testIncompletePronunciationsDoNotPreventCachingOtherPreparedReferences() async throws {
+        try await self.withProvider(output: self.transcript()) { provider, _, store in
+            let entry = SettingsStore.CustomDictionaryEntry(triggers: ["fixture"], replacement: "Fixture")
+            SettingsStore.shared.customDictionaryEntries = [entry]
+            let modelKey = GigaAMEncoderDictionaryStorage.modelKey(fingerprint: GigaAMModelCatalog.downloadableModel.fingerprint)
+            var values = [Float](repeating: 0, count: GigaAMEncoderFeatures.dimension)
+            values[0] = 1
+            let capture = PronunciationEnrollmentCapture(values: values, sourceFrameCount: 10, modelKey: modelKey,
+                extractorVersion: GigaAMEncoderFeatures.extractorVersion)
+            try await store.upsert(dictionaryEntryID: entry.id, label: entry.replacement, modelKey: modelKey,
+                enrollments: [capture, capture], automaticMatchingEnabled: false)
+            for index in 0..<2 {
+                let lease = UUID()
+                try provider.beginAdmittedTranscription(leaseID: lease)
+                do {
+                    let output = try await provider.transcribeFinal([Float](repeating: 0.1, count: 16_000))
+                    XCTAssertEqual(output.text, "Ёжик здесь.", "An incomplete profile must not become eligible for acoustic replacement")
+                    let metrics = try XCTUnwrap(provider.lastFinalizationMetrics)
+                    XCTAssertEqual(metrics.referenceCacheHit, index == 1)
+                    await provider.endAdmittedTranscription(leaseID: lease)
+                } catch {
+                    await provider.endAdmittedTranscription(leaseID: lease)
+                    throw error
+                }
+            }
         }
     }
 
