@@ -48,7 +48,7 @@ final class MeetingProviderOptionsTests: XCTestCase {
         }
     }
 
-    func testDefaultMeetingConfigurationResolvesToPinnedParakeetTDTv2EnglishPolicy() throws {
+    func testDefaultMeetingConfigurationResolvesToPinnedProEnglishPolicy() throws {
         let options = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration())
         XCTAssertEqual(options.model, .fluidParakeetPro)
         XCTAssertFalse(options.vocabularyBoostingEnabled)
@@ -133,7 +133,7 @@ final class MeetingProviderOptionsTests: XCTestCase {
             (.fluidParakeetPro, "de", .fluidParakeetPro),
             (.parakeetTDT, "en", .parakeetTDT),
             (.parakeetTDT, "nl", .parakeetTDT),
-            (.parakeetTDTv2, "en", .fluidParakeetPro),
+            (.parakeetTDTv2, "en", .parakeetTDTv2),
             (.parakeetTDTv2, "fr", .fluidParakeetPro),
             (.whisperTiny, "en", .fluidParakeetPro),
             (.whisperTiny, "de", .fluidParakeetPro),

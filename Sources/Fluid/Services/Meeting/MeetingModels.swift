@@ -381,7 +381,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     }
 
     var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
-        self.applicationAudioScope ?? .selectedApplication
+        self.mode == .systemAudio ? .systemAudio : (self.applicationAudioScope ?? .selectedApplication)
     }
 
     var effectiveSpeakerProcessingMode: MeetingSpeakerProcessingMode {
@@ -1415,7 +1415,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     }
 
     var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
-        self.applicationAudioScope ?? .selectedApplication
+        self.mode == .systemAudio ? .systemAudio : (self.applicationAudioScope ?? .selectedApplication)
     }
 
     var displayTitle: String { self.displayTitle(language: PichiLocalization.language) }

@@ -2170,7 +2170,7 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
             var output = MeetingPCMTranscriptBatch(segments: [.init(id: sourceID,
                 start: .init(value: Int64((offset * 16_000).rounded()), timescale: 16_000),
                 end: .init(value: Int64((offset * 16_000).rounded()) + Int64(frames), timescale: 16_000),
-                sourceTrackID: track, speakerID: nil, text: text, originalText: text, revision: 0,
+                sourceTrackID: track, speakerID: nil, text: text, originalText: nil, revision: 0,
                 status: provisional ? .provisional : .final, overlap: .none, completeness: .complete)],
                 isComplete: !provisional)
             output.speechObservationIsFinal = !provisional
@@ -2391,7 +2391,7 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
                 if privacy {
                     XCTAssertFalse(text.contains("Synthetic participant"),
                         "Known limitation: final rules cannot match text already hidden during capture")
-                    XCTAssertTrue(text.contains("[PERSON]"))
+                    XCTAssertTrue(text.contains(PIIKind.person.placeholder))
                 } else {
                     XCTAssertTrue(text.contains("Synthetic participant"),
                         "Negative control: the same final rule matches when its trigger remains visible")

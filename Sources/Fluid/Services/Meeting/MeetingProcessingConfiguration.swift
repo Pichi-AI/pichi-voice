@@ -5,7 +5,7 @@ import Foundation
 /// once per attempt and the meeting preparation owner constructs a fixed provider from it, so an
 /// active run never follows later dictation-setting changes.
 nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Sendable {
-    static let defaultASRModel = "parakeet-tdt-v2"
+    static let defaultASRModel = "fluid-parakeet-pro"
     static let defaultLanguageCode = "en"
     /// One shared immutable version keeps frozen requests and saved attempts consistent.
     static let defaultPipelineVersion = MeetingProcessingPipeline.pipelineVersion

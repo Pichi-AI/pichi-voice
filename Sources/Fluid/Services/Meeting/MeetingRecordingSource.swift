@@ -9,7 +9,7 @@ nonisolated enum MeetingRecordingSource: Equatable, Sendable {
     case application(bundleIdentifier: String, processID: Int32?, displayName: String)
 
     init(defaults: MeetingRecordingDefaults) {
-        if defaults.mode == .onlineCall, defaults.effectiveApplicationAudioScope == .systemAudio {
+        if defaults.mode == .systemAudio || (defaults.mode == .onlineCall && defaults.effectiveApplicationAudioScope == .systemAudio) {
             self = .systemAudio
         } else if defaults.isConfigured, let bundleIdentifier = defaults.applicationBundleIdentifier {
             if defaults.applicationCapturesAllInstances == true {
@@ -104,4 +104,3 @@ nonisolated extension MeetingRecordingDefaults {
         return defaults
     }
 }
-
