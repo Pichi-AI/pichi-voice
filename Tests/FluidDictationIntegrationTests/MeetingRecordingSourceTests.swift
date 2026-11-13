@@ -328,7 +328,9 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertEqual(defaults.mode, .systemAudio)
         XCTAssertEqual(defaults.effectiveApplicationAudioScope, .systemAudio)
         XCTAssertEqual(MeetingRecordingSource(defaults: defaults), .systemAudio)
-        XCTAssertEqual(MeetingTranscriptionSetupDraft(defaults: defaults, autoDetectEnabled: true, browserDetectionEnabled: true, fallbackLanguageCode: "en").mode, .systemAudio)
+        let setup = MeetingTranscriptionSetupDraft(defaults: defaults, autoDetectEnabled: true, browserDetectionEnabled: true, fallbackLanguageCode: "en")
+        XCTAssertEqual(setup.mode, .onlineCall, "The existing setup UI keeps computer-audio scope separate from meeting kind")
+        XCTAssertEqual(setup.applicationAudioScope, .systemAudio)
         XCTAssertNil(try MeetingRecordingSourceResolver.resolve(
             mode: .onlineCall, source: .systemAudio, target: nil, applications: []
         ))

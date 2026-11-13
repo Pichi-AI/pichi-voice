@@ -352,3 +352,6 @@ builds/
 # Official service marks used only to identify conferencing applications
 !/website/dist/voice/assets/services/
 !/website/dist/voice/assets/services/*
+
+# Imported probe helpers create only reproducible Python bytecode here.
+/Tests/Standalone/__pycache__/
