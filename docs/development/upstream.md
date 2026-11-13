@@ -10,6 +10,15 @@ The repository preserves [GPL-3.0](../../LICENSE) and upstream copyright notices
 
 Pichi Voice extends the upstream contracts with its product identity, mobile and local meeting workflows, additional Russian speech models and custom dictionaries. Keep the downstream changes narrow so upstream fixes remain practical to merge.
 
+Apply the least-change principle to every change, including existing features and small fixes:
+
+1. Inspect the corresponding FluidVoice implementation, contracts and tests before choosing an approach. Record the upstream revision and the mechanism relevant to the task.
+2. Reuse the existing mechanism when it covers the capability. Preserve its control flow and extension points wherever the Pichi requirements allow.
+3. Add the smallest necessary adapter or extension on top of that mechanism. Do not invent a parallel subsystem or take a fundamentally different path for the same capability.
+4. Explain each necessary departure through a concrete product requirement and the existing mechanism's limitation. Review the resulting downstream delta and remove an adaptation when upstream provides an equivalent solution.
+
+Fix shared defects within the existing mechanism with regression coverage; keeping the upstream architecture does not require retaining a known bug. Consider a generally applicable fix for upstream contribution while preserving the repository's read-only upstream boundary.
+
 ```mermaid
 flowchart LR
     U[FluidVoice main] --> S[Upstream sync branch]
@@ -31,7 +40,7 @@ flowchart LR
 | Additional model using an existing backend | A model descriptor and small registry wiring |
 | New inference backend | Separate provider conforming to `TranscriptionProvider`, with a narrow factory registration |
 | Personal dictionaries | Separate import/schema adapter and local profiles; reuse compatible upstream vocabulary hooks |
-| Optional feature | Separate implementation with a small opt-in integration point |
+| Optional feature | Small opt-in extension to the existing upstream mechanism; a separate adapter only for a capability upstream lacks |
 
 The current [TranscriptionProvider](../../Sources/Fluid/Services/TranscriptionProvider.swift) already abstracts transcription, streaming, final results, and dictionary-training behavior. [ParakeetSpeechModelCatalog](../../Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift), [ExternalCoreMLModelRegistry](../../Sources/Fluid/Services/ExternalCoreMLModelRegistry.swift), [ParakeetVocabularyStore](../../Sources/Fluid/Services/ParakeetVocabularyStore.swift), and [DictionaryTransferService](../../Sources/Fluid/Services/DictionaryTransferService.swift) provide existing integration boundaries. Compatibility with a specific custom model or dictionary still needs to be tested.
 

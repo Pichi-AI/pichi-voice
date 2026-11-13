@@ -30,6 +30,8 @@ Test sources and approved fixtures belong in the versioned locations in [Testing
 
 ## Architecture requirements for every agent
 
+**MUST:** Minimize divergence from the original FluidVoice in every change. Before implementing or changing a capability, inspect the corresponding upstream implementation, contracts and tests. Reuse an existing FluidVoice mechanism whenever it covers the capability; add only the smallest necessary Pichi-specific extension on top of it. Do not replace it with a parallel subsystem or a fundamentally different path for the same capability. Explain any necessary departure with the concrete product requirement and the limitation of the existing mechanism. See [Upstream strategy](docs/development/upstream.md#small-downstream-changes).
+
 **MUST:** Inspect current implementation, neighboring implementations and upstream contracts before choosing an extension point. Extend existing provider and meeting backend registries, settings, storage and resource services. Common orchestration consumes contracts and capabilities; model identity, artifact validation and inference construction belong to the registered descriptor or adapter. Do not add a model-specific switch, factory or constructor parameter to the common pipeline for each provider.
 
 Prefer the smallest coherent change that preserves upstream integration. Justify a new abstraction with a concrete limitation. Avoid duplicated pipelines, parallel provider hierarchies, broad renaming and speculative frameworks. Onboarding, settings, files and API entry points share service operations for preparation, activation, cancellation and cleanup.
