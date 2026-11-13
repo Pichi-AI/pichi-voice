@@ -42,7 +42,7 @@ def step_limit(environment):
     value = environment.get(STEP_LIMIT_ENVIRONMENT, "").strip()
     if not value:
         return 1800
-    if not value.isdigit() or int(value) <= 0:
+    if not (value.isascii() and value.isdigit()) or int(value) <= 0:
         raise ValueError(f"{STEP_LIMIT_ENVIRONMENT} must be a positive number of seconds, not {value!r}")
     return int(value)
 

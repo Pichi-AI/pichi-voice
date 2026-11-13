@@ -61,7 +61,8 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.run_macos) ||
       (vars.PICHI_VOICE_MACOS_CI == 'true' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main'))
     runs-on: xcode-27
-    timeout-minutes: 180
+    # XCTest with probes, then iOS for a mobile change, each up to the step limit below.
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:

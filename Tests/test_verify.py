@@ -214,7 +214,20 @@ class SideBySideTests(unittest.TestCase):
     def test_l2_runs_the_soak_tests(self):
         receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None)], layer="L2")
         self.assertFalse(any(test in argument for test in VERIFY.L2_ONLY_TESTS for argument in receipt.calls[0][1]))
-        self.assertEqual(receipt.value["skipped"], [])
+        skipped = {item["name"] for item in receipt.value["skipped"]}
+        self.assertFalse(skipped & {test.split("/", 1)[1] for test in VERIFY.L2_ONLY_TESTS})
+
+    def test_every_soak_test_still_exists(self):
+        # xcodebuild ignores a -skip-testing that matches nothing, so a renamed soak test would quietly return to L1.
+        for test in VERIFY.L2_ONLY_TESTS:
+            bundle, test_class, name = test.split("/")
+            sources = list((ROOT / "Tests" / bundle).rglob(f"{test_class}*.swift"))
+            self.assertTrue(any(f"func {name}(" in source.read_text() for source in sources), test)
+
+    def test_the_receipt_records_the_step_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = VERIFY.Receipt(Path(temporary))
+        self.assertEqual(receipt.value["stepLimitSeconds"], VERIFY.STEP_LIMIT_SECONDS)
 
 
 class StepLimitTests(unittest.TestCase):
@@ -226,7 +239,7 @@ class StepLimitTests(unittest.TestCase):
         self.assertEqual(VERIFY.step_limit({VERIFY.STEP_LIMIT_ENVIRONMENT: "5400"}), 5400)
 
     def test_a_wrong_value_is_an_error_and_not_a_silent_default(self):
-        for value in ("0", "-5", "ninety", "1.5"):
+        for value in ("0", "-5", "ninety", "1.5", "\u00b2"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 VERIFY.step_limit({VERIFY.STEP_LIMIT_ENVIRONMENT: value})
 
