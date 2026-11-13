@@ -107,6 +107,6 @@ with tempfile.TemporaryDirectory(prefix="pichi-fluid-capture-options-") as direc
     source.write_text(template.replace("// ACTUAL_PROVIDER_CAPTURE_SOURCE", projection))
     for isolation in ([], ["-default-isolation", "MainActor"]):
         executable = directory / ("tests-actor" if isolation else "tests-default")
-        subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-strict-concurrency=targeted", "-D", "DEBUG", *isolation, "-module-cache-path", str(directory / "ModuleCache"), str(source), "-o", str(executable)], check=True, cwd=repo)
+        subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-strict-concurrency=targeted", "-D", "DEBUG", *isolation, "-module-cache-path", str(directory / "ModuleCache"), str(repo / "Sources/Fluid/Localization/PichiLocalization.swift"), str(source), "-o", str(executable)], check=True, cwd=repo)
         subprocess.run([str(executable)], check=True, cwd=repo)
 print("FluidAudio actual capture source paths passed with both compiler isolation modes; temporary files removed.")
