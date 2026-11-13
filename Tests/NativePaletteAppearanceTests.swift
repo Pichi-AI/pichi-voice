@@ -50,7 +50,18 @@ enum NativePaletteAppearanceTests {
         return view.subviews.flatMap(self.nativeControls)
     }
 
-    @MainActor private static func wait(in host: NSView, until predicate: () -> Bool) async {
+    /// An AppKit switch backs the SwiftUI switch on every supported system. macOS 27 draws the menu picker in
+    /// SwiftUI itself, without an AppKit pop-up button, so the pop-up is required only before macOS 27. A SwiftUI-drawn
+    /// picker takes the SwiftUI color scheme, which `VariantProbe` checks; its pixels are not checked here.
+    private static func hasExpectedNativeControls(_ controls: [NSView]) -> Bool {
+        let switches = controls.filter { $0 is NSSwitch }.count
+        let popUps = controls.filter { $0 is NSPopUpButton }.count
+        guard switches == 1, controls.count == switches + popUps else { return false }
+        if #available(macOS 27, *) { return popUps <= 1 }
+        return popUps == 1
+    }
+
+    @MainActor private static func wait(in host: NSView, expecting: NSAppearance.Name? = nil, until predicate: () -> Bool) async {
         // Three seconds: a slow or newer system can take longer to settle the appearance change.
         for _ in 0..<300 {
             host.layoutSubtreeIfNeeded()
@@ -58,7 +69,8 @@ enum NativePaletteAppearanceTests {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
         let found = self.nativeControls(in: host).map { "\(type(of: $0)):\($0.effectiveAppearance.name.rawValue)" }
-        preconditionFailure("Native picker and switch did not refresh; found \(found) among \(self.viewClasses(in: host))")
+        preconditionFailure("Native picker and switch did not refresh to \(expecting?.rawValue ?? "the expected appearance"); "
+                            + "found \(found) among \(self.viewClasses(in: host))")
     }
 
     private static func viewClasses(in view: NSView) -> [String] {
@@ -137,11 +149,12 @@ enum NativePaletteAppearanceTests {
                     // actual last observation and wait for both sides of the
                     // appearance boundary, not only already-settled controls.
                     window.appearance = NSAppearance(named: parent == .dark ? .darkAqua : .aqua)
-                    await self.wait(in: host) {
+                    let expected: NSAppearance.Name = native == .dark ? .darkAqua : .aqua
+                    await self.wait(in: host, expecting: expected) {
                         let controls = self.nativeControls(in: host)
                         return state.seenAmbientSchemes.last == parent
-                            && controls.count == 2 && controls.allSatisfy {
-                            $0.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == (native == .dark ? .darkAqua : .aqua)
+                            && self.hasExpectedNativeControls(controls) && controls.allSatisfy {
+                            $0.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == expected
                         }
                     }
                     let controls = self.nativeControls(in: host)
@@ -174,7 +187,8 @@ enum NativePaletteAppearanceTests {
                         } && state.seenNativeSchemes.last == updatedNative
                     }
                     let controls = self.nativeControls(in: host)
-                    precondition(controls.count == 2 && zip(originalControls!, controls).allSatisfy { $0 === $1 })
+                    precondition(self.hasExpectedNativeControls(controls) && controls.count == originalControls!.count
+                                 && zip(originalControls!, controls).allSatisfy { $0 === $1 })
                     precondition(state.seenVariants.allSatisfy { $0 == logical })
                     precondition(state.selection == 0 && !state.enabled)
                     for (index, control) in controls.enumerated() {

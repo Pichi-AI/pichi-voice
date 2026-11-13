@@ -48,6 +48,17 @@ nonisolated final class UserDefaults {
     }
 }
 
+/// Stands in for the sleep of the copy button's feedback timer. It records the
+/// requested duration and returns only after the probe sets `released`.
+@MainActor enum CommandCopyFeedbackClock {
+    static var requested: [Duration] = []
+    static var released = false
+    static func sleep(for duration: Duration) async throws {
+        self.requested.append(duration)
+        while !self.released { try await Task.sleep(for: .milliseconds(10)) }
+    }
+}
+
 @MainActor private final class FixtureState: ObservableObject {
     @Published var locale = Locale(identifier: "en_US")
 }
@@ -132,16 +143,19 @@ private final class FixtureHostingView<Content: View>: NSHostingView<Content> {
         }
         var bitmap = render()
         if verifyCopyGlyph {
-            // A newer system can animate the symbol swap. Measure the settled glyph, not a frame of the
-            // transition: render again for up to two seconds. The pixel requirement itself is unchanged.
+            // On macOS 27 the first frame after a click can still show the press or the symbol
+            // transition. Render again for up to two seconds; the pixel requirement is unchanged.
+            // The copied state stays held meanwhile, so a passing frame shows the checkmark itself.
+            let start = Date()
             var counts = [self.contrastingCopyGlyphPixels(in: bitmap)]
-            let deadline = Date().addingTimeInterval(2)
+            let deadline = start.addingTimeInterval(2)
             while counts.last! < 12, Date() < deadline {
                 self.pump(0.05)
                 bitmap = render()
                 counts.append(self.contrastingCopyGlyphPixels(in: bitmap))
             }
             self.lastCopyGlyphCounts = counts
+            print("Copy glyph \(step): contrasting pixels by render \(counts), \(Int(Date().timeIntervalSince(start) * 1000)) ms")
         }
         let data = bitmap.representation(using: .png, properties: [:])!
         try data.write(to: self.directory.appendingPathComponent("command-ui-\(step)-\(self.revision).png"))
@@ -223,6 +237,8 @@ private final class FixtureHostingView<Content: View>: NSHostingView<Content> {
         let state = FixtureState()
         state.locale = Locale(identifier: "ru_RU")
         CommandCopyLabelProbe.events = []
+        CommandCopyFeedbackClock.requested = []
+        CommandCopyFeedbackClock.released = false
         let (window, view) = self.host(SingleCopyFixture(state: state, scheme: scheme), width: 120, height: 80, scheme: scheme)
         defer { self.close(window) }
         try self.capture(view, "feedback-ru_RU-\(scheme)-01-ready", verifyCopyGlyph: true)
@@ -239,6 +255,9 @@ private final class FixtureHostingView<Content: View>: NSHostingView<Content> {
             CommandCopyLabelProbe.events.contains { $0.copied && $0.value == "Скопировано" }
         }
         self.check(ClipboardService.copiedPayload == "Copy response Ёжик", "The action must copy user text verbatim")
+        self.awaitCondition("Copied feedback must start one timer with the production duration") {
+            CommandCopyFeedbackClock.requested == [.seconds(1.5)]
+        }
         try self.capture(view, "feedback-ru_RU-\(scheme)-02-copied", verifyCopyGlyph: true)
         CommandCopyLabelProbe.events = []
         state.locale = Locale(identifier: "en_US")
@@ -246,10 +265,13 @@ private final class FixtureHostingView<Content: View>: NSHostingView<Content> {
             CommandCopyLabelProbe.events.contains { $0.copied && $0.value == "Copied" }
         }
         try self.capture(view, "feedback-en_US-\(scheme)-03-copied", verifyCopyGlyph: true)
+        self.check(CommandCopyLabelProbe.events.allSatisfy { $0.copied }, "Copied feedback must last until its timer fires")
         CommandCopyLabelProbe.events = []
+        CommandCopyFeedbackClock.released = true
         self.awaitCondition("Transient feedback must retire back to the localized copy label") {
             CommandCopyLabelProbe.events.contains { !$0.copied && $0.value == "Copy message" }
         }
+        self.check(CommandCopyFeedbackClock.requested == [.seconds(1.5)], "Changing locale must not restart the feedback timer")
         self.check(ClipboardService.copiedPayload == "Copy response Ёжик", "Changing interface language must not repeat or translate the clipboard action")
         try self.capture(view, "feedback-en_US-\(scheme)-04-reset", verifyCopyGlyph: true)
     }
