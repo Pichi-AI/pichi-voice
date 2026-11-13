@@ -16,7 +16,7 @@ GitHub's documented release model has one `body` string, not separate author-pro
 
 ## Template
 
-Replace `VERSION` in prose with the public version, such as `0.2.3`. Replace `VERSION-ANCHOR` with its hyphenated form, such as `0-2-3`. Remove all placeholders before publication.
+Replace `VERSION` in prose with the public version, such as `0.2.3`. Replace `VERSION-ANCHOR` with its hyphenated form, such as `0-2-3`. For historical tags sharing a public version, include the build or tag suffix in the anchor to keep it unique. Remove all placeholders before publication.
 
 ```markdown
 [English](#release-VERSION-ANCHOR-en) · [Русский](#release-VERSION-ANCHOR-ru)
