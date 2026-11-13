@@ -481,7 +481,7 @@ final class LocalAPIRequestLifetimeTests: XCTestCase {
 
         init(router: LocalAPIRouter, server: LocalAPIServer) {
             self.handler = LocalAPIConnectionHandler(
-                connection: NWConnection(host: "127.0.0.1", port: 9, using: .tcp), router: router
+                connection: NWConnection(host: "127.0.0.1", port: 9, using: .tcp), router: router, port: server.port
             )
             self.handler.receiveForTesting = { [weak self] completion in self?.receives.append(completion) }
             self.handler.sendForTesting = { [weak self] data, completion in

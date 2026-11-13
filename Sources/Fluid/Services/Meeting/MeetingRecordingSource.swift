@@ -105,6 +105,3 @@ nonisolated extension MeetingRecordingDefaults {
     }
 }
 
-extension Notification.Name {
-    static let meetingRecordingSourceChoiceDidChange = Notification.Name("MeetingRecordingSourceChoiceDidChange")
-}

@@ -247,3 +247,4 @@ Sources/Fluid/TextNormalization/FluidTextNormalizer.swift
 Sources/Fluid/TextNormalization/SpokenEmojiRules.swift
 Sources/Fluid/TextNormalization/DictationNumberParser.swift
 Sources/Fluid/TextNormalization/DictationQuantityFormatter.swift
+Sources/Fluid/Persistence/DictionaryCorrectionArchive.swift

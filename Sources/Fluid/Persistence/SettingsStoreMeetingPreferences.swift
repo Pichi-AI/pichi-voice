@@ -515,3 +515,7 @@ extension SettingsStore {
         set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingPIIRedactionEnabled) }
     }
 }
+
+extension Notification.Name {
+    static let meetingRecordingSourceChoiceDidChange = Notification.Name("MeetingRecordingSourceChoiceDidChange")
+}
