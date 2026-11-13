@@ -345,6 +345,10 @@
    "layer": "L4-signed-release",
    "reason": "A Developer ID or Apple Development signing identity is required for signed bundle fixtures; a machine without the team certificate, such as a CI runner, skips it."
   },
+  "FluidDictationIntegrationTests/UpdateBundleValidatorTests/testModernReleaseTagMustMatchTheSignedBundleIncludingPrerelease()": {
+   "layer": "L4-signed-release",
+   "reason": "A Developer ID or Apple Development signing identity is required for signed bundle fixtures; a machine without the team certificate, such as a CI runner, skips it."
+  },
   "FluidDictationIntegrationTests/UpdateBundleValidatorTests/testTamperedNestedExecutableIsRejected()": {
    "layer": "L4-signed-release",
    "reason": "A Developer ID or Apple Development signing identity is required for signed bundle fixtures; a machine without the team certificate, such as a CI runner, skips it."
@@ -384,6 +388,10 @@
   "FluidDictationIntegrationTests/UpdateInstallationPipelineTests/testPreexistingBackupDestinationIsPreservedAndOriginalIsUntouched()": {
    "layer": "disabled-downstream",
    "reason": "Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally disabled."
+  },
+  "FluidDictationIntegrationTests/UpdateInstallationPipelineTests/testPreparationRetainsTheModernReleaseTagExpectationBeforeReplacingAnything()": {
+   "layer": "L4-signed-release",
+   "reason": "A Developer ID or Apple Development signing identity is required for signed bundle fixtures; a machine without the team certificate, such as a CI runner, skips it."
   },
   "FluidDictationIntegrationTests/UpdateInstallationPipelineTests/testRegularFileAtBackupParentAbortsWithoutReplacingOriginal()": {
    "layer": "disabled-downstream",

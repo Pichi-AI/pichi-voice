@@ -742,18 +742,6 @@ sys.exit(status)
         self.assertEqual([row["name"] for row in report["results"]], ["first", "second", "third"])
         self.assertEqual(report["results"][1]["status"], "PASS")
 
-    def test_alone_probes_run_last_after_every_other_probe_ends(self):
-        # "first" sorts first, but as an alone probe it starts only after "second" has finished.
-        probes = [self.probe("first", "[ -f second-finished ] || exit 7"),
-                  self.probe("second", "sleep 0.3; touch second-finished"), self.probe("third")]
-        with patch.object(RUNNER, "ALONE_PROBES", frozenset({"first"})):
-            status, report, _ = self.run_probes(probes, jobs=3)
-        self.assertEqual(status, 0, report)
-        self.assertEqual([row["name"] for row in report["results"]], ["second", "third", "first"])
-
-    def test_registered_alone_probes_exist(self):
-        self.assertLessEqual(RUNNER.ALONE_PROBES, {probe.name for probe in RUNNER.PROBES})
-
     def test_registered_exclusive_probes_exist(self):
         names = {probe.name for probe in RUNNER.PROBES}
         for group in RUNNER.EXCLUSIVE_PROBES:

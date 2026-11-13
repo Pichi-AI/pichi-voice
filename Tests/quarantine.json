@@ -206,6 +206,13 @@
    "owner": "#176",
    "reason": "The CI runner draws at 1x: NativeSidebarContrastTests finds no icon ink in a selected sidebar row, and later checks have not run there yet. Developer Macs keep running it.",
    "expires": "2026-11-27"
+  },
+  {
+   "test": "probe:private_ai_idle_unloader",
+   "scope": "ci",
+   "owner": "#180",
+   "reason": "On the CI runner a 60 ms pause of this upstream test can outlast its 150 ms countdown, even when it runs alone after XCTest (run 43518105639). Developer Macs keep running it.",
+   "expires": "2026-11-27"
   }
  ]
 }
