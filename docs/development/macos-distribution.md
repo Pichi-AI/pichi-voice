@@ -48,6 +48,37 @@ Never publish an export merely because Xcode reports success.
 
 ## Manual public release runbook
 
+### Public versions and compatibility
+
+Show one public version such as `0.2.0` in Settings, update offers and release
+titles (`Pichi Voice 0.2.0`), following the original FluidVoice presentation.
+Use `MAJOR.MINOR.PATCH`: patch for compatible fixes, minor for new capabilities,
+and major for a deliberate stable compatibility milestone. Remain in `0.x`
+while the product is under initial development; a public download alone does
+not require calling it `1.0.0`. See [SemVer](https://semver.org/) and Apple's
+[user-visible version](https://developer.apple.com/help/glossary/version-number/).
+
+Retain a monotonically increasing `CFBundleVersion` internally for signing,
+diagnostics and historical rollback identity. Every changed public artifact
+gets a new public version; a build-only increment cannot replace a release.
+The installer remains `Pichi-Voice.dmg`.
+
+New releases normally use `vVERSION` tags, like FluidVoice. The `0.2.0`
+transition uses the explicit bridge tag `v0.2.0+73-public.1` because installed
+build 71 cannot discover normal tags. Publish only that one bridge release,
+with title `Pichi Voice 0.2.0`; do not duplicate it under a second release tag.
+Its client accepts both normal and historical tags, so subsequent releases can
+use `v0.2.1`. Historical assets and tags stay immutable. The build number may
+remain visible when distinguishing historical rollback copies that share a
+public version. Future preview tags use forms such as `v0.3.0-beta.1`.
+
+Pass the exact tag through `PICHI_RELEASE_TAG` into signed `AppReleaseTag`
+metadata, alongside the existing source revision. This preserves prerelease
+identity while Apple's public version stays numeric. Modern-tag downloads
+must match that signed tag during staging and replacement; installed metadata
+must agree with the public version and, for legacy tags, the numeric build.
+Old installed bundles without the field retain their existing comparison path.
+
 Release stages are deliberately initiated by an operator. No commit, CI run or
 app launch publishes a release. The release helper requires Python 3.11 or later.
 The macOS updater downloads `Pichi-Voice.dmg` from the exact selected
@@ -64,8 +95,7 @@ assets remain immutable; the updater can still read their versioned names. Keep 
 commit or artifact needs a new release tag, never replacement assets. This does
 not change iOS delivery. Publication must advance the latest stable version and
 numeric build, so the website alias cannot accidentally downgrade its download.
-The helper rechecks this immediately before publishing. Build 71 below is the planned example, not evidence of
-publication or acceptance.
+The helper rechecks this immediately before publishing. The 0.2.0 bridge below is an example, not evidence of publication or acceptance.
 
 All release owners publish through the helper. Its atomic GitHub ref
 `refs/tags/pichi-macos-publication-lock` serializes stable publication across
@@ -104,7 +134,8 @@ trust. Preserve the original archive and use it for subsequent exports.
 ```sh
 # Replace this with the full reviewed integrated source, then verify HEAD equals it.
 pichi_source='<full reviewed integrated source SHA>'
-pichi_release_root='/absolute/owned/release-71'
+pichi_tag='v0.2.0+73-public.1'
+pichi_release_root='/absolute/owned/release-0.2.0'
 mkdir "$pichi_release_root"
 xcodebuild -project Fluid.xcodeproj -scheme Fluid -configuration Release \
   -destination 'generic/platform=macOS' \
@@ -112,8 +143,8 @@ xcodebuild -project Fluid.xcodeproj -scheme Fluid -configuration Release \
   -derivedDataPath "$pichi_release_root/DerivedData" \
   -clonedSourcePackagesDirPath "$pichi_release_root/SourcePackages" \
   -jobs 2 ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
-  CURRENT_PROJECT_VERSION=71 MARKETING_VERSION=0.1.0 \
-  PICHI_SOURCE_REVISION="$pichi_source" DEVELOPMENT_TEAM=LU46F7HGJM \
+  CURRENT_PROJECT_VERSION=73 MARKETING_VERSION=0.2.0 \
+  PICHI_SOURCE_REVISION="$pichi_source" PICHI_RELEASE_TAG="$pichi_tag" DEVELOPMENT_TEAM=LU46F7HGJM \
   CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY='Apple Development' \
   -allowProvisioningUpdates archive
 ```
@@ -187,7 +218,7 @@ private files, archives and signing logs never enter this source archive.
 ```sh
 # Safe, read-only plan: no fetch, mounts, app checks or GitHub calls.
 python3 scripts/dev/macos-release.py plan --source "$pichi_source" \
-  --version 0.1.0 --build 71
+  --version 0.2.0 --build 73 --tag "$pichi_tag"
 
 # Package once using the existing owning packager. It never re-signs the app.
 .build/dmg-tool/bin/python scripts/dev/package-macos-dmg.py \
@@ -196,7 +227,7 @@ python3 scripts/dev/macos-release.py plan --source "$pichi_source" \
 
 # Reuse that exact image, validate its mounted payload, and prepare four public files.
 python3 scripts/dev/macos-release.py prepare --source "$pichi_source" \
-  --version 0.1.0 --build 71 --app "$pichi_app" \
+  --version 0.2.0 --build 73 --tag "$pichi_tag" --app "$pichi_app" \
   --dmg "$pichi_release_root/Pichi-Voice.dmg" \
   --output "$pichi_release_root/public"
 ```
@@ -235,7 +266,7 @@ four verified files, never signing logs or private evidence.
 
 ```sh
 python3 scripts/dev/macos-release.py draft --source "$pichi_source" \
-  --version 0.1.0 --build 71 --app "$pichi_app" \
+  --version 0.2.0 --build 73 --tag "$pichi_tag" --app "$pichi_app" \
   --artifacts "$pichi_release_root/public"
 ```
 
@@ -275,13 +306,13 @@ publish that draft and mark it latest.
 
 ```sh
 python3 scripts/dev/macos-release.py publish --source "$pichi_source" \
-  --version 0.1.0 --build 71 --app "$pichi_app" \
+  --version 0.2.0 --build 73 --tag "$pichi_tag" --app "$pichi_app" \
   --artifacts "$pichi_release_root/public" \
   --evidence "$pichi_release_root/private-release-evidence.json"
 
 # Also use after an uncertain publish response; this command performs no writes.
 python3 scripts/dev/macos-release.py verify --source "$pichi_source" \
-  --version 0.1.0 --build 71 --app "$pichi_app" \
+  --version 0.2.0 --build 73 --tag "$pichi_tag" --app "$pichi_app" \
   --artifacts "$pichi_release_root/public"
 ```
 

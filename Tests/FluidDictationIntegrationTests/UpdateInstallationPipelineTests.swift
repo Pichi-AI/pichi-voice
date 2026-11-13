@@ -143,6 +143,17 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
         try fixture.assertNoStage()
     }
 
+    func testPreparationRetainsTheModernReleaseTagExpectationBeforeReplacingAnything() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        XCTAssertThrowsError(try fixture.prepare(expectedReleaseTag: "v1.6.10-beta.8")) {
+            XCTAssertEqual($0 as? UpdateBundleValidator.ValidationError, .versionMismatch)
+        }
+        try fixture.assertOriginalUnchanged()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.backup.path))
+        try fixture.assertNoStage()
+    }
+
     func testInstalledVersionChangedSinceApprovalRejectsPreparation() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -324,6 +335,7 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
             installedBuild: String = Self.installedBuild,
             expectedVersion: String? = Self.incomingVersion,
             expectedBuild: String? = "27",
+            expectedReleaseTag: String? = nil,
             isRollback: Bool = false
         ) throws -> SimpleUpdater.PreparedInstallation {
             let assessments = PipelineValidationLog()
@@ -333,6 +345,7 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
                 installedExpectation: .init(bundleIdentifier: Self.identifier, version: installedVersion, build: installedBuild),
                 expectedVersion: expectedVersion,
                 expectedBuild: expectedBuild,
+                expectedReleaseTag: expectedReleaseTag,
                 backupURL: self.backup,
                 isRollback: isRollback,
                 validateBundle: { url, expectation, policy in

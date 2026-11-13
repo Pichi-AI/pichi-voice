@@ -20,6 +20,8 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>AppSourceRevision</key>
 	<string>$(PICHI_SOURCE_REVISION)</string>
+	<key>AppReleaseTag</key>
+	<string>$(PICHI_RELEASE_TAG)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>LSApplicationCategoryType</key>

@@ -210,7 +210,7 @@ class ReleaseTests(unittest.TestCase):
         (self.app / "Contents/MacOS/Pichi Voice").chmod(0o755)
         (self.app / "Contents/Resources/link").symlink_to("../MacOS/Pichi Voice")
         self.info = {"CFBundleIdentifier": m.BUNDLE, "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "71",
-                     "AppSourceRevision": self.revision, "CFBundleExecutable": "Pichi Voice"}
+                     "AppSourceRevision": self.revision, "AppReleaseTag": "v0.1.0", "CFBundleExecutable": "Pichi Voice"}
         self.config = {"formatVersion": 1, "updatesEnabled": True, "expectedSigningTeam": m.TEAM,
                        "repository": "https://github.com/" + m.REPO}
         self.save_info()
@@ -316,7 +316,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_wrong_frozen_identity_and_updater_policy_rejected(self):
-        for field in ("CFBundleIdentifier", "CFBundleVersion", "CFBundleShortVersionString", "AppSourceRevision"):
+        for field in ("CFBundleIdentifier", "CFBundleVersion", "CFBundleShortVersionString", "AppSourceRevision", "AppReleaseTag"):
             old = self.info[field]
             self.info[field] = "wrong"
             self.save_info()
@@ -577,8 +577,40 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue(self.boundaries.release["draft"])
 
     def test_publication_advances_an_existing_older_stable_release(self):
-        self.boundaries.latest_release = {"draft": False, "prerelease": False, "tag_name": "v0.1.0+69-public.1"}
+        self.boundaries.latest_release = {"draft": False, "prerelease": False, "tag_name": "v0.0.9+999-public.1"}
         self.github.require_newer_stable_release()
+
+    def test_public_version_tags_and_one_explicit_legacy_bridge(self):
+        self.assertEqual(self.release.tag, "v0.1.0")
+        args = copy.copy(self.args)
+        args.tag = "v0.1.0+71-public.1"
+        self.assertEqual(m.Release(args, self.boundaries).tag, args.tag)
+        for previous in ["v0.1.0", "v0.1.0+69-public.1", "v0.1.1", "v0.2.0"]:
+            self.boundaries.latest_release = {"draft": False, "prerelease": False, "tag_name": previous}
+            with self.subTest(previous=previous), self.assertRaises(m.ReleaseError):
+                self.github.require_newer_stable_release()
+        self.boundaries.latest_release = {"draft": False, "prerelease": False, "tag_name": "v0.0.9"}
+        self.github.require_newer_stable_release()
+
+    def test_release_title_uses_only_the_public_version(self):
+        expected = self.prepared()
+        self.github.draft(self.output, expected)
+        self.assertEqual(self.boundaries.release["name"], "Pichi Voice 0.1.0")
+
+    def test_normal_tags_require_signed_tag_metadata_and_legacy_bundles_remain_verifiable(self):
+        self.info.pop("AppReleaseTag")
+        self.save_info()
+        with self.assertRaises(m.ReleaseError): self.release.app(self.app)
+        args = copy.copy(self.args)
+        args.tag = "v0.1.0+71-public.1"
+        legacy = m.Release(args, self.boundaries)
+        legacy.app(self.app)
+        self.info["AppReleaseTag"] = args.tag
+        self.save_info()
+        legacy.app(self.app)
+        self.info["AppReleaseTag"] = "v0.1.1"
+        self.save_info()
+        with self.assertRaises(m.ReleaseError): legacy.app(self.app)
 
     def test_uncertain_failed_write_reread_without_blind_retry(self):
         expected = self.prepared()

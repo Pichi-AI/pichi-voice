@@ -10,11 +10,15 @@ nonisolated enum UpdateBundleValidator {
         let version: String?
         /// Pichi release tags pin the numeric build; upstream tags may omit it.
         let build: String?
+        /// A modern release's prerelease identity lives in signed metadata,
+        /// while CFBundleShortVersionString remains Apple's numeric version.
+        let releaseTag: String?
 
-        init(bundleIdentifier: String, version: String?, build: String? = nil) {
+        init(bundleIdentifier: String, version: String?, build: String? = nil, releaseTag: String? = nil) {
             self.bundleIdentifier = bundleIdentifier
             self.version = version
             self.build = build
+            self.releaseTag = releaseTag
         }
     }
 
@@ -89,7 +93,8 @@ nonisolated enum UpdateBundleValidator {
               !policy.allowedTeamIDs.isEmpty,
               policy.allowedTeamIDs.allSatisfy(self.validTeamIdentifier),
               expectation.version.map(self.validVersion) ?? true,
-              expectation.build.map(self.validBuild) ?? true
+              expectation.build.map(self.validBuild) ?? true,
+              expectation.releaseTag.map({ !$0.isEmpty && $0.utf8.count <= 256 }) ?? true
         else { throw ValidationError.invalidExpectation }
 
         guard bundleURL.isFileURL, bundleURL.pathExtension.lowercased() == "app",
@@ -154,6 +159,10 @@ nonisolated enum UpdateBundleValidator {
         }
         if let expectedBuild = expectation.build, build != expectedBuild {
             throw ValidationError.buildMismatch
+        }
+        if let tag = expectation.releaseTag,
+           (plist["AppReleaseTag"] as? String != tag || securedPlist["AppReleaseTag"] as? String != tag) {
+            throw ValidationError.versionMismatch
         }
         if case .developerID = policy {
             try self.validateReleaseTrust(
