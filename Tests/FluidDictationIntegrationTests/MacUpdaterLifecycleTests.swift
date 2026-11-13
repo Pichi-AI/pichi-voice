@@ -4,6 +4,41 @@ import XCTest
 
 @MainActor
 final class MacUpdaterLifecycleTests: XCTestCase {
+    func testModernPrereleaseRollbackUsesSignedOrderingAndCannotInstallANewerBeta() async throws {
+        let context = try Context()
+        defer { context.close() }
+        context.updater.currentVersionForTesting = nil
+        context.updater.currentBuildForTesting = nil
+        context.updater.currentBundleInformationForTesting = ["CFBundleShortVersionString": "0.3.0", "CFBundleVersion": "74",
+            "AppReleaseTag": "v0.3.0-beta.1"]
+        context.fixture.releases = [fixtureRelease(73, tag: "v0.2.0+73-public.1"),
+            fixtureRelease(74, tag: "v0.3.0-beta.1", beta: true), fixtureRelease(75, tag: "v0.3.0-beta.2", beta: true),
+            fixtureRelease(76, tag: "v0.3.0")]
+        var installedTags: [String] = []
+        context.updater.installStagedForTesting = { _, selection in installedTags.append(selection.tag) }
+        let before = try await context.updater.fetchRecentReleaseBuildOptions(owner: "Pichi-AI", repo: "pichi-voice",
+            includePrerelease: true, olderThanCurrent: true)
+        XCTAssertEqual(before.map(\.version), ["v0.2.0+73-public.1"])
+        do {
+            try await context.updater.installPreviousRelease(version: "v0.3.0-beta.2")
+            XCTFail("A newer beta cannot be installed through the rollback action")
+        } catch SimpleUpdateError.noSuitableRelease {}
+        XCTAssertTrue(installedTags.isEmpty)
+        context.updater.currentBundleInformationForTesting = ["CFBundleShortVersionString": "0.3.0", "CFBundleVersion": "75",
+            "AppReleaseTag": "v0.3.0-beta.2"]
+        let older = try await context.updater.fetchRecentReleaseBuildOptions(owner: "Pichi-AI", repo: "pichi-voice",
+            includePrerelease: true, olderThanCurrent: true)
+        XCTAssertEqual(older.map(\.version), ["v0.3.0-beta.1", "v0.2.0+73-public.1"])
+        try await context.updater.installPreviousRelease(version: "v0.3.0-beta.1")
+        XCTAssertEqual(installedTags, ["v0.3.0-beta.1"])
+        context.updater.currentBundleInformationForTesting = ["CFBundleShortVersionString": "0.3.0", "CFBundleVersion": "76",
+            "AppReleaseTag": "v0.3.0"]
+        let fromStable = try await context.updater.fetchRecentReleaseBuildOptions(owner: "Pichi-AI", repo: "pichi-voice",
+            includePrerelease: true, olderThanCurrent: true)
+        XCTAssertEqual(Array(fromStable.map(\.version).prefix(2)), ["v0.3.0-beta.2", "v0.3.0-beta.1"])
+        await context.cleanup()
+    }
+
     func testSignedInstalledPrereleaseIdentityCanAdvanceToBetaAndStable() async throws {
         let context = try Context()
         defer { context.close() }

@@ -95,8 +95,7 @@ assets remain immutable; the updater can still read their versioned names. Keep 
 commit or artifact needs a new release tag, never replacement assets. This does
 not change iOS delivery. Publication must advance the latest stable version and
 numeric build, so the website alias cannot accidentally downgrade its download.
-The helper rechecks this immediately before publishing. Build 71 below is the planned example, not evidence of
-publication or acceptance.
+The helper rechecks this immediately before publishing. The 0.2.0 bridge below is an example, not evidence of publication or acceptance.
 
 All release owners publish through the helper. Its atomic GitHub ref
 `refs/tags/pichi-macos-publication-lock` serializes stable publication across

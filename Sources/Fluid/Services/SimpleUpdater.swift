@@ -399,9 +399,9 @@ final class SimpleUpdater: ObservableObject {
             if !installed { self.resetUpdateOperation() }
         }
         let releases = try await self.fetchReleases(owner: AppBrand.repositoryOwner, repo: AppBrand.repositoryName)
+        let current = try self.installedSemanticVersion()
         guard let release = releases.first(where: { $0.tag_name == version }),
               let target = self.parseSemanticVersion(version),
-              let current = self.parseSemanticVersion(self.currentComparableVersion),
               target < current, self.releaseArchiveAsset(release, repo: AppBrand.repositoryName) != nil
         else { throw SimpleUpdateError.noSuitableRelease }
         guard approvedRevision == self.channelRevision else { throw SimpleUpdateError.releaseChanged }
@@ -433,11 +433,7 @@ final class SimpleUpdater: ObservableObject {
             includePrerelease: includePrerelease
         ).filter { entry in
             guard olderThanCurrent else { return true }
-            if self.isPichiDistribution, let selection = self.selection(for: entry.release, repo: repo) {
-                return UpdateReleaseSelection.isOlder(version: selection.version, build: selection.build,
-                    than: self.currentAppVersion, build: self.currentAppBuild)
-            }
-            guard let current = self.parseSemanticVersion(self.currentComparableVersion),
+            guard let current = try? self.installedSemanticVersion(),
                   let target = self.parseSemanticVersion(entry.release.tag_name)
             else { return false }
             return target < current && self.releaseArchiveAsset(entry.release, repo: repo) != nil
