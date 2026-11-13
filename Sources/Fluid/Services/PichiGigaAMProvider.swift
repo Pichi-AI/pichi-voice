@@ -382,6 +382,20 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
 
 /// Narrow adapter onto the upstream provider contract. All inference runs in the
 /// package actor, so dictation, file processing and the local API share one backend.
+/// Native inference is the substitution boundary for deterministic provider tests.
+/// Recording, dictionary correction and output still use the production provider.
+nonisolated protocol PichiGigaAMInferenceRuntime: AnyObject, Sendable {
+    var isReady: Bool { get async }
+    var executionStatus: GigaAMExecutionStatus? { get async }
+    func load(descriptor: GigaAMModelDescriptor, directory: URL, executionProvider: GigaAMExecutionProvider) async throws
+    func beginAttempt() async throws
+    func transcribe(_ samples: [Float], captureEncoderFeatures: Bool, reusingWindowsFor session: GigaAMWindowReuseSession?) async throws -> GigaAMTranscript
+    func discardWindowReuse(for sessionID: UUID) async
+    func unload() async
+}
+
+extension GigaAMRuntime: PichiGigaAMInferenceRuntime {}
+
 final class PichiGigaAMProvider: TranscriptionProvider {
     let name = "GigaAM v3"
     let isAvailable = true
@@ -393,7 +407,8 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     private let expectedModelFingerprint: String?
     private(set) var loadedModelFingerprint: String?
     private(set) var executionStatus: TranscriptionExecutionStatus?
-    private var runtime: GigaAMRuntime?
+    private var runtime: (any PichiGigaAMInferenceRuntime)?
+    private var previewReuseSession: GigaAMWindowReuseSession?
     private var preparationTask: Task<Void, Error>?
     private var lifecycleGeneration = 0
     private var executionAttemptPending = false
@@ -451,17 +466,23 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         self.dictionarySnapshot = .init(modelKey: modelKey, generation: DictionaryMatcherExperiment.generation,
             enabled: dictionaryEnabled, entries: entries, pronunciation: pronunciation, negatives: negatives)
         self.admittedSource = (leaseID, selection)
+        self.previewReuseSession = nil
         self.executionAttemptPending = true
     }
 
-    func endAdmittedTranscription(leaseID: UUID) {
+    func endAdmittedTranscription(leaseID: UUID) async {
         guard self.admittedSource?.leaseID == leaseID else { return }
+        let reuseSession = self.previewReuseSession
+        let runtime = self.runtime
+        reuseSession?.invalidate()
+        self.previewReuseSession = nil
         self.dictionarySnapshot?.pronunciation?.close(leaseID: leaseID)
         self.dictionarySnapshot?.negatives?.close(leaseID: leaseID)
         self.dictionarySnapshot = nil
         self.dictionaryUsesEncoderFeatures = false
         self.admittedSource = nil
         self.executionAttemptPending = false
+        if let reuseSession { await runtime?.discardWindowReuse(for: reuseSession.id) }
     }
 
     // MARK: - Provider lifecycle
@@ -472,6 +493,15 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         self.expectedModelFingerprint = expectedModelFingerprint
         self.pronunciationStore = pronunciationStore
     }
+
+    #if DEBUG
+    func usePreparedRuntimeForTesting(_ runtime: any PichiGigaAMInferenceRuntime, fingerprint: String) async {
+        precondition(self.runtime == nil && self.admittedSource == nil)
+        self.runtime = runtime
+        self.loadedModelFingerprint = fingerprint
+        self.isReady = await runtime.isReady
+    }
+    #endif
 
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
@@ -507,7 +537,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             }
             try Task.checkCancellation()
             progressHandler?(.loading)
-            try await runtime.load(descriptor: model.descriptor, directory: model.directory)
+            try await runtime.load(descriptor: model.descriptor, directory: model.directory, executionProvider: .automatic)
             try Task.checkCancellation()
             guard self.lifecycleGeneration == generation, self.runtime === runtime else {
                 throw CancellationError()
@@ -542,7 +572,8 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         }
     }
 
-    func transcribeDetailed(_ samples: [Float], captureEncoderFeatures: Bool = false) async throws -> GigaAMTranscript {
+    func transcribeDetailed(_ samples: [Float], captureEncoderFeatures: Bool = false,
+                            reusingWindowsFor session: GigaAMWindowReuseSession? = nil) async throws -> GigaAMTranscript {
         try Task.checkCancellation()
         guard self.isReady, let runtime = self.runtime else { throw GigaAMError.notPrepared }
         let generation = self.lifecycleGeneration
@@ -554,13 +585,26 @@ final class PichiGigaAMProvider: TranscriptionProvider {
                 try Task.checkCancellation()
                 guard self.runtime === runtime, self.isReady else { throw CancellationError() }
             }
-            let result = try await runtime.transcribe(samples, captureEncoderFeatures: captureEncoderFeatures)
+            if let session {
+                guard session.isOpen, self.previewReuseSession === session,
+                      self.admittedSource?.leaseID == session.id else { throw CancellationError() }
+            }
+            let result = try await runtime.transcribe(samples, captureEncoderFeatures: captureEncoderFeatures,
+                                                     reusingWindowsFor: session)
             try Task.checkCancellation()
+            if let session {
+                guard session.isOpen, self.previewReuseSession === session,
+                      self.admittedSource?.leaseID == session.id else { throw CancellationError() }
+            }
             guard self.lifecycleGeneration == generation, self.runtime === runtime,
                   self.loadedModelFingerprint == fingerprint, self.isReady else { throw CancellationError() }
             await self.refreshExecutionStatus(from: runtime)
             guard self.lifecycleGeneration == generation, self.runtime === runtime,
                   self.loadedModelFingerprint == fingerprint, self.isReady else { throw CancellationError() }
+            if let session {
+                guard session.isOpen, self.previewReuseSession === session,
+                      self.admittedSource?.leaseID == session.id else { throw CancellationError() }
+            }
             return result
         } catch {
             await self.refreshExecutionStatus(from: runtime)
@@ -568,7 +612,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         }
     }
 
-    private func refreshExecutionStatus(from runtime: GigaAMRuntime) async {
+    private func refreshExecutionStatus(from runtime: any PichiGigaAMInferenceRuntime) async {
         let value = await runtime.executionStatus
         let ready = await runtime.isReady
         guard self.runtime === runtime else { return }
@@ -612,7 +656,20 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     }
 
     func transcribeStreaming(_ samples: [Float]) async throws -> ASRTranscriptionResult {
-        try await self.transcribe(samples)
+        // Meeting captions have no admitted dictation lease and remain stateless.
+        // Retain native feature evidence during preview so final correction does
+        // not need to run recognition again just to acquire it.
+        let session: GigaAMWindowReuseSession?
+        if let leaseID = self.admittedSource?.leaseID {
+            session = self.previewReuseSession ?? GigaAMWindowReuseSession(id: leaseID)
+        } else { session = nil }
+        self.previewReuseSession = session
+        let captureFeatures = session != nil && self.dictionaryUsesEncoderFeatures
+            && DictionaryMatcherExperiment.sharedFeaturesEnabled
+        let result = try await self.transcribeDetailed(samples, captureEncoderFeatures: captureFeatures,
+                                                       reusingWindowsFor: session)
+        return ASRTranscriptionResult(text: result.text, confidence: result.confidence,
+                                      endOfUtteranceProbability: result.endOfUtteranceProbability)
     }
 
     func transcribeFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult {
@@ -620,12 +677,25 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         // Direct callers get the same frozen read scope as executor-admitted dictation.
         let ownedLease = self.admittedSource == nil ? UUID() : nil
         if let ownedLease { try self.beginAdmittedTranscription(leaseID: ownedLease) }
-        defer { if let ownedLease { self.endAdmittedTranscription(leaseID: ownedLease) } }
+        do {
+            let result = try await self.transcribeAdmittedFinal(samples)
+            if let ownedLease { await self.endAdmittedTranscription(leaseID: ownedLease) }
+            return result
+        } catch {
+            if let ownedLease { await self.endAdmittedTranscription(leaseID: ownedLease) }
+            throw error
+        }
+    }
+
+    private func transcribeAdmittedFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult {
         let generation = self.lifecycleGeneration
         guard let fingerprint = self.loadedModelFingerprint else { throw CancellationError() }
         let usesEncoder = self.dictionaryUsesEncoderFeatures
+        let reuseSession = self.previewReuseSession?.id == self.admittedSource?.leaseID
+            ? self.previewReuseSession : nil
         let result = try await self.transcribeDetailed(samples,
-            captureEncoderFeatures: usesEncoder && DictionaryMatcherExperiment.sharedFeaturesEnabled)
+            captureEncoderFeatures: usesEncoder && DictionaryMatcherExperiment.sharedFeaturesEnabled,
+            reusingWindowsFor: reuseSession)
         guard self.lifecycleGeneration == generation, self.loadedModelFingerprint == fingerprint, self.isReady else { throw CancellationError() }
         let key = usesEncoder ? GigaAMEncoderDictionaryStorage.modelKey(fingerprint: fingerprint)
             : GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint)
@@ -835,6 +905,8 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         // Invalidate ownership before suspending. An old prepare completion cannot
         // publish readiness or clear a newer session after this point.
         self.lifecycleGeneration += 1
+        self.previewReuseSession?.invalidate()
+        self.previewReuseSession = nil
         self.executionStatus = nil
         self.dictionaryReferenceCache = nil
         self.encoderReferenceCache = nil
