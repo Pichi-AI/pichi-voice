@@ -2769,7 +2769,7 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Update Check Helper
 
-    func shouldCheckForUpdates() -> Bool {
+    func shouldCheckForUpdates(now: Date = Date()) -> Bool {
         guard self.autoUpdateCheckEnabled else { return false }
 
         guard let lastCheck = lastUpdateCheckDate else {
@@ -2779,7 +2779,7 @@ final class SettingsStore: ObservableObject {
 
         // Check if more than 1 hour has passed
         let hourInSeconds: TimeInterval = 60 * 60
-        return Date().timeIntervalSince(lastCheck) >= hourInSeconds
+        return now.timeIntervalSince(lastCheck) >= hourInSeconds
     }
 
     func updateLastCheckDate() {
