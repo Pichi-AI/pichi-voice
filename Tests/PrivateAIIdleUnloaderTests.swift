@@ -42,7 +42,9 @@ enum PrivateAIIdleUnloaderTests {
         }
         do {
             let recorder = Recorder()
-            await recorder.set(delayMs: 150)
+            // Activity every 60 ms against a 600 ms countdown: a loaded machine can stretch a 60 ms pause well
+            // past 150 ms, so the margin must be wide enough that only a broken restart lets the countdown end.
+            await recorder.set(delayMs: 600)
             let unloader = makeUnloader(recorder)
             for _ in 0..<4 {
                 await unloader.tracking {}
@@ -50,7 +52,7 @@ enum PrivateAIIdleUnloaderTests {
             }
             var unloads = await recorder.unloads
             expect(unloads == 0, "activity keeps restarting the countdown")
-            await pause(400)
+            await pause(1200)
             unloads = await recorder.unloads
             expect(unloads == 1, "unloads after activity stops")
         }

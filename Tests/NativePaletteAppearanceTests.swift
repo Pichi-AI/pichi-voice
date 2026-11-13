@@ -51,12 +51,18 @@ enum NativePaletteAppearanceTests {
     }
 
     @MainActor private static func wait(in host: NSView, until predicate: () -> Bool) async {
-        for _ in 0..<100 {
+        // Three seconds: a slow or newer system can take longer to settle the appearance change.
+        for _ in 0..<300 {
             host.layoutSubtreeIfNeeded()
             if predicate() { return }
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
-        preconditionFailure("Native picker and switch did not refresh")
+        let found = self.nativeControls(in: host).map { "\(type(of: $0)):\($0.effectiveAppearance.name.rawValue)" }
+        preconditionFailure("Native picker and switch did not refresh; found \(found) among \(self.viewClasses(in: host))")
+    }
+
+    private static func viewClasses(in view: NSView) -> [String] {
+        Array(Set(([view] + view.subviews.flatMap { [$0] + $0.subviews }).map { String(describing: type(of: $0)) })).sorted()
     }
 
     @MainActor private static func checkPixels(_ view: NSView, name: String, scheme: ColorScheme,

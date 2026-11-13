@@ -123,10 +123,26 @@ private final class FixtureHostingView<Content: View>: NSHostingView<Content> {
     }
 
     static func capture(_ view: NSView, _ step: String, verifyCopyGlyph: Bool = false) throws {
-        view.layoutSubtreeIfNeeded()
-        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds),
-              bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0 else { preconditionFailure("Missing native bitmap") }
-        view.cacheDisplay(in: view.bounds, to: bitmap)
+        func render() -> NSBitmapImageRep {
+            view.layoutSubtreeIfNeeded()
+            guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds),
+                  bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0 else { preconditionFailure("Missing native bitmap") }
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            return bitmap
+        }
+        var bitmap = render()
+        if verifyCopyGlyph {
+            // A newer system can animate the symbol swap. Measure the settled glyph, not a frame of the
+            // transition: render again for up to two seconds. The pixel requirement itself is unchanged.
+            var counts = [self.contrastingCopyGlyphPixels(in: bitmap)]
+            let deadline = Date().addingTimeInterval(2)
+            while counts.last! < 12, Date() < deadline {
+                self.pump(0.05)
+                bitmap = render()
+                counts.append(self.contrastingCopyGlyphPixels(in: bitmap))
+            }
+            self.lastCopyGlyphCounts = counts
+        }
         let data = bitmap.representation(using: .png, properties: [:])!
         try data.write(to: self.directory.appendingPathComponent("command-ui-\(step)-\(self.revision).png"))
         if verifyCopyGlyph {
@@ -149,8 +165,31 @@ private final class FixtureHostingView<Content: View>: NSHostingView<Content> {
                 }
             }
             self.check(contrastingPixels >= 12,
-                       "Native copy/checkmark glyph needs 12 pixels at 3:1 contrast; got \(contrastingPixels): \(step)")
+                       "Native copy/checkmark glyph needs 12 pixels at 3:1 contrast; got \(contrastingPixels) "
+                       + "(renders over time: \(self.lastCopyGlyphCounts)): \(step)")
         }
+    }
+
+    static var lastCopyGlyphCounts: [Int] = []
+
+    /// The same measurement as the check below, used to wait until the glyph has settled.
+    static func contrastingCopyGlyphPixels(in bitmap: NSBitmapImageRep) -> Int {
+        func luminance(_ color: NSColor) -> Double {
+            let rgb = color.usingColorSpace(.deviceRGB)!
+            func channel(_ value: CGFloat) -> Double {
+                value <= 0.04045 ? Double(value / 12.92) : pow(Double((value + 0.055) / 1.055), 2.4)
+            }
+            return channel(rgb.redComponent) * 0.2126 + channel(rgb.greenComponent) * 0.7152 + channel(rgb.blueComponent) * 0.0722
+        }
+        let background = luminance(bitmap.colorAt(x: 0, y: 0)!)
+        var count = 0
+        for y in (bitmap.pixelsHigh / 4)..<(bitmap.pixelsHigh * 3 / 4) {
+            for x in (bitmap.pixelsWide / 3)..<(bitmap.pixelsWide * 2 / 3) {
+                let pixel = luminance(bitmap.colorAt(x: x, y: y)!)
+                if (max(background, pixel) + 0.05) / (min(background, pixel) + 0.05) >= 3 { count += 1 }
+            }
+        }
+        return count
     }
 
     static func close(_ window: NSWindow) {
