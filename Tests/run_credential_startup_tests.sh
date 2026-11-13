@@ -15,7 +15,7 @@ names = re.findall(r'^    func (test\w+)\(\)(?: throws)? \{', source, re.M)
 assert len(names) == 26, names
 (out / 'main.swift').write_text('import XCTest\nimport Foundation\nlet suite = KeychainServiceCacheTests.defaultTestSuite\nprecondition(suite.testCaseCount == 26, "Native XCTest discovery must include every synthetic regression")\nsuite.run()\nguard let run = suite.testRun, run.executionCount == 26, run.failureCount == 0 else { exit(1) }\nprint("PASS: 26 exact native Keychain cache/startup tests; injected backend only")\n')
 # Values are inert and the real singleton initializer is guarded at compile time.
-(out / 'Brand.swift').write_text('import Foundation; nonisolated enum PichiLocalization { static func text(_ key: String) -> String { key } }; nonisolated enum AppBrand { static let keychainService = "synthetic-unused-service"; static let keychainAccount = "synthetic-unused-account"; static let storageNamespace = "synthetic-credential-tests"; static let applicationSupportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(storageNamespace) }\n')
+(out / 'Brand.swift').write_text('import Foundation; nonisolated enum AppBrand { static let keychainService = "synthetic-unused-service"; static let keychainAccount = "synthetic-unused-account"; static let storageNamespace = "synthetic-credential-tests"; static let applicationSupportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(storageNamespace) }\n')
 (out / 'ProfileTypes.swift').write_text('import Foundation; nonisolated struct AccountIdentity: Equatable, Sendable { let issuer: String; let subject: String; let internalUserID: String; var storageComponents: [String] { [issuer, subject, internalUserID] } }; nonisolated struct AccountContext: Equatable, Sendable { let identity: AccountIdentity; let organizationID: String?; let workspaceID: String?; let generation: UUID }; nonisolated enum AccountError: Error { case invalidAccount, isolationRequired }')
 settings = Path('Sources/Fluid/Persistence/SettingsStore.swift').read_text()
 initializer = settings.split('    private func initializeDesktopPreferences(refreshDeviceState: Bool = true) {', 1)[1].split('\n    static func clampPrivateAI', 1)[0]
@@ -41,6 +41,7 @@ run_isolation_case() {
     mkdir -p "$task_isolation_dir"
     printf 'Credential test isolation: %s\n' "$task_isolation_name"
     xcrun swiftc -I "$task_libraries" -L "$task_libraries" -lXCTestSwiftSupport -Xlinker -rpath -Xlinker "$task_libraries" -F "$task_frameworks" -Xlinker -rpath -Xlinker "$task_frameworks" -swift-version 5 -D PICHI_CREDENTIAL_TEST_BACKEND_ONLY -module-cache-path "$task_isolation_dir/ModuleCache" "$@" \
+        Sources/Fluid/Localization/PichiLocalization.swift \
         Sources/Fluid/Persistence/KeychainService.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
         "$task_test_dir/ProfileTypes.swift" "$task_test_dir/Brand.swift" \
         "$task_test_dir/CacheTests.swift" "$task_test_dir/main.swift" -o "$task_isolation_dir/tests"

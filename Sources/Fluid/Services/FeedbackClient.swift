@@ -120,13 +120,13 @@ struct FeedbackClient {
 
         var errorDescription: String? {
             switch self {
-            case .notConfigured: "Use the support link for this distribution."
-            case .invalid: "Add a valid email and a message within the character limit."
-            case .rateLimited: "Too many messages at once. Please wait a minute, then try again. Your draft is still here."
-            case .rejected: "The server couldn’t accept this message. Check your email and message length. Your draft is still here."
-            case .server: "Feedback is temporarily unavailable. Please try again later. Your draft is still here."
-            case .connection: "Delivery couldn’t be confirmed. Check your connection before retrying; your message may already have arrived. Your draft is still here."
-            case .unconfirmed: "We couldn’t confirm delivery. Your draft is still here; please try again later."
+            case .notConfigured: PichiLocalization.text("Use the support link for this distribution.")
+            case .invalid: PichiLocalization.text("Add a valid email and a message within the character limit.")
+            case .rateLimited: PichiLocalization.text("Too many messages at once. Please wait a minute, then try again. Your draft is still here.")
+            case .rejected: PichiLocalization.text("The server couldn’t accept this message. Check your email and message length. Your draft is still here.")
+            case .server: PichiLocalization.text("Feedback is temporarily unavailable. Please try again later. Your draft is still here.")
+            case .connection: PichiLocalization.text("Delivery couldn’t be confirmed. Check your connection before retrying; your message may already have arrived. Your draft is still here.")
+            case .unconfirmed: PichiLocalization.text("We couldn’t confirm delivery. Your draft is still here; please try again later.")
             }
         }
     }

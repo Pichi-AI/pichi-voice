@@ -187,7 +187,8 @@ nonisolated enum PichiMeetingSummaryInput {
     }
 
     static func turns(for session: MeetingSession) -> [PichiMeetingSummaryTurn] {
-        let presentations = MeetingTranscriptExporter.speakerPresentations(in: session)
+        // Summary input is canonical data. UI language must not change its fingerprint.
+        let presentations = MeetingTranscriptExporter.speakerPresentations(in: session, language: .english)
         return session.transcriptSegments.filter { $0.status == .final && !$0.isEcho && !normalized($0.text).isEmpty }
             .sorted { $0.start < $1.start }
             .map { segment in

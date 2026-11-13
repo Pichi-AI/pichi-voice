@@ -26,6 +26,7 @@ PY
 # Actual generic lease and residency coordinator; fake native loaders hold no model/audio.
 xcrun swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
     -module-cache-path "$task_test_dir/ModuleCache" \
+    Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Services/ASRActivityLease.swift \
     Sources/Fluid/Services/Meeting/MeetingModelResidencyCoordinator.swift \
     "$task_test_dir/ActualIdleSpeechRetirement.swift" \
