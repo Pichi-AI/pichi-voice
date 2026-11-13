@@ -97,7 +97,8 @@ xcrun swiftc -default-isolation MainActor -parse-as-library -module-cache-path "
     Sources/Fluid/Theme/NativeButtonStyles.swift \
     Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift \
     Sources/Fluid/Theme/Components/FluidGlassControls.swift \
-    Sources/Fluid/Theme/Components/FluidDropdown.swift Sources/Fluid/Theme/Components/EditableTitle.swift \
+    Sources/Fluid/Theme/Components/FluidDropdown.swift Sources/Fluid/Theme/Components/FluidEditControls.swift \
+    Sources/Fluid/Theme/Components/EditableTitle.swift \
     "$task_test_dir/CommandMarkdownContent.swift" Sources/Fluid/Views/CommandMessageView.swift \
     Sources/Fluid/Views/CommandSessionSidebar.swift Tests/CommandUILocalizationTests.swift \
     -o "$task_bundle_dir/Contents/MacOS/tests"
