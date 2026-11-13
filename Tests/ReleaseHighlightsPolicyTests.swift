@@ -110,6 +110,8 @@ struct ReleaseHighlightsPolicyTests {
             precondition(manual?.version == version && manual?.manual == true, "Help must open the shipped release highlights after acknowledgment")
             precondition((1...3).contains(content.features.count))
             precondition(Set(content.features.map(\.id)).count == content.features.count)
+            precondition(content.features.filter { $0.destination == .voiceEngine }.count == 2)
+            precondition(content.features.allSatisfy { $0.destination != .aiProviders }, "Pichi release notes must not claim the upstream private cleanup runtime is bundled")
             for feature in content.features {
                 precondition(!feature.title.isEmpty && !feature.detail.isEmpty && !feature.action.isEmpty)
             }

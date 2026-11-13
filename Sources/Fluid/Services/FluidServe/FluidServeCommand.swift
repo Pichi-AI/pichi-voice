@@ -28,7 +28,7 @@ nonisolated enum FluidServeCommand {
     static func run(
         arguments: [String],
         root: URL,
-        accessEnabled: Bool,
+        accessEnabled: Bool?,
         toolPath: String = FluidServeMeetings.toolName,
         ownerBundleIdentifier: String = "local.voice.unbundled",
         appName: String = "Voice app",
@@ -47,6 +47,14 @@ nonisolated enum FluidServeCommand {
             // Instructions only, no meeting data, so it answers whatever the switch says.
             return Result(output: FluidServeSkill.document(toolPath: toolPath, ownerBundleIdentifier: ownerBundleIdentifier, appName: appName).trimmingCharacters(in: .newlines), exitCode: 0)
         case "status":
+            guard let accessEnabled else {
+                let message = FluidServeMeetings.ReadError.accessUnavailable.localizedDescription
+                if arguments == ["--json"] {
+                    let object: [String: Any] = ["access": NSNull(), "meetings": 0]
+                    return Result(output: (try? self.json(object)) ?? "{}", exitCode: 0)
+                }
+                return Result(output: "Meeting access: unknown\n\(message)", exitCode: 0)
+            }
             let count: Int
             do { count = accessEnabled ? try FluidServeMeetings.checkedEntries(root: root).count : 0 }
             catch { return .failure(error.localizedDescription) }
@@ -61,8 +69,9 @@ nonisolated enum FluidServeCommand {
                 exitCode: 0
             )
         case "meet":
-            guard accessEnabled else {
-                return .failure(FluidServeMeetings.ReadError.accessOff.localizedDescription, code: 2)
+            guard accessEnabled == true else {
+                let error: FluidServeMeetings.ReadError = accessEnabled == false ? .accessOff : .accessUnavailable
+                return .failure(error.localizedDescription, code: 2)
             }
             do {
                 return try self.meet(arguments, root: root, customPrompt: customPrompt, appName: appName, now: now, timeZone: timeZone, fileManager: fileManager)

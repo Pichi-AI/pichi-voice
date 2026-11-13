@@ -155,8 +155,10 @@ final class PrivateAIProviderPromptFormatTests: XCTestCase {
             name: "Default", builtInLabel: "Default", hasAppOverride: false, usesSelectedPrivateModel: false, modelID: ""
         )
         let choices = DictationOverlayPresentationInput.Choices(available: smart, unavailable: fallback)
-        XCTAssertEqual(choices.resolve(verifiedModelID: "mini", modelName: { $0.isEmpty ? "" : "Fluid-1 Mini" }).label, "Smart · Fluid-1 Mini")
+        XCTAssertEqual(choices.resolve(verifiedModelID: "mini", modelName: { $0.isEmpty ? "" : "Fluid-1 Mini" }).label, "Smart · Mini")
+        XCTAssertEqual(choices.resolve(verifiedModelID: "mini", modelName: { $0.isEmpty ? "" : "Fluid-1 Mini" }).shortLabel, "Smart")
         XCTAssertEqual(choices.resolve(verifiedModelID: nil, modelName: { $0 }).label, "Basic")
+        XCTAssertEqual(choices.resolve(verifiedModelID: nil, modelName: { $0 }).shortLabel, "Basic")
         XCTAssertEqual(smart.resolve(verifiedModelID: nil, modelName: { $0 }).label, "Basic")
 
         let custom = DictationOverlayPresentationInput.Candidate(
@@ -168,6 +170,16 @@ final class PrivateAIProviderPromptFormatTests: XCTestCase {
             "Мой Fluid-1 профиль · Fluid-1 Custom",
             "User labels and model attribution remain verbatim"
         )
+    }
+
+    func testStoppedOverlaySelectorKeepsCapturedChoiceUntilNextRecording() {
+        let captured = DictationOverlayPresentation(label: "Smart · Mini", builtInLabel: "Smart", hasAppOverride: false, shortLabel: "Smart")
+        let changed = DictationOverlayPresentation(label: "Work · Other model", builtInLabel: nil, hasAppOverride: true, shortLabel: "Work")
+        XCTAssertEqual(changed.selectorLabel(stoppedLabel: captured.label), "Smart · Mini")
+        XCTAssertEqual(changed.selectorLabel(stoppedLabel: nil), "Work", "Clearing the stopped snapshot must reveal the next recording's choice")
+        XCTAssertEqual(changed.label, "Work · Other model")
+        XCTAssertTrue(changed.hasAppOverride)
+        XCTAssertEqual(DictationOverlayPresentation.pending.selectorLabel(stoppedLabel: nil), "Dictation")
     }
 
     func testWarmupRequestRespectsOffExternalPrivateAndAppOverrides() {

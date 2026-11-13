@@ -51,6 +51,8 @@ Path(sys.argv[1]).write_text('import Foundation\n@MainActor extension VoiceComma
 PYCODE
 # The actual result value parser must also preserve provider/tool-owned metadata.
 { echo 'import Foundation'; sed -n '/^struct CommandToolOutput:/,$p' Sources/Fluid/Views/CommandMessageView.swift; } > "$task_test_dir/CommandToolOutput.swift"
+# The real pure core compiles; only the FoundationModels provider is a double (in the test file).
+awk '/MARK: - FoundationModels/{exit} 1' Sources/Fluid/Services/AppleIntelligenceCommandProvider.swift > "$task_test_dir/AppleIntelligenceCore.swift"
 # Compile the entire production agent, including streaming callbacks and recursive turns.
 # Only its model, terminal, UI, and UserDefaults dependencies are test doubles.
 python3 -S Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift" --operation-owner
@@ -65,6 +67,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Branding/BrandDistribution.swift \
     Sources/Fluid/Services/CommandModeService.swift \
     "$task_test_dir/ChatHistoryStore.swift" \
+    "$task_test_dir/AppleIntelligenceCore.swift" \
     Sources/Fluid/Persistence/PersistedHistory.swift \
     Tests/CommandCancellationTests.swift \
     "$task_test_dir/CommandUI.swift" \

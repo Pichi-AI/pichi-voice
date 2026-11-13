@@ -134,6 +134,31 @@ final class MeetingAnalysisManifestTests: XCTestCase {
         XCTAssertThrowsError(try store.write(value, session: session))
     }
 
+    func testCheckpointDoesNotPersistDictionaryAndRequiresExplicitRestart() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dictionary-checkpoint-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var session = self.plan(mode: .inRoom, tracks: [], recordingTimePolicy: .hostMonotonicV1).request.session
+        session.audioStorageMode = .retainedFiles
+        let config = MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true,
+            customDictionaryEntries: [.init(triggers: ["synthetic secret alias"], replacement: "Synthetic Secret Name")],
+            recordingTimePolicy: .hostMonotonicV1)
+        let pin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: session.id,
+            backendID: self.backendID, backendVersion: "fixture", configuration: config,
+            piiRedactionEnabled: false, privacyFingerprint: nil)
+        let store = MeetingRetainedProcessingCheckpoint(sessionDirectory: directory)
+        try store.write(.init(pin: pin, inputFingerprint: "fixture", ownerVoiceIdentity: nil,
+                              runtimeFingerprint: nil, payload: Data([1, 2, 3])), session: session)
+        let bytes = try Data(contentsOf: directory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.fileName))
+        XCTAssertNil(bytes.range(of: Data("synthetic secret alias".utf8)))
+        XCTAssertNil(bytes.range(of: Data("Synthetic Secret Name".utf8)))
+        XCTAssertThrowsError(try store.read(session: session)) { error in
+            guard case .changedConfiguration? = error as? MeetingRetainedProcessingCheckpoint.Failure else {
+                return XCTFail("Expected a safe restart, got \(error)")
+            }
+        }
+    }
+
     func testFullClockAnchorShapeParticipatesInFrozenSourceIdentity() throws {
         let audio = self.hostClockChunk()
         let mic = self.track(kind: .microphone, chunks: [audio], eras: [self.era(protection: .voiceProcessed, start: 0)])

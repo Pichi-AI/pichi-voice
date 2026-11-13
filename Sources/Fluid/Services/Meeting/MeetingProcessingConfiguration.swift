@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Immutable value snapshot of meeting post-processing ASR configuration. The pipeline builds it
@@ -16,6 +17,8 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
     let vocabularyBoostingEnabled: Bool
     let pronunciationMatchingEnabled: Bool
     let customDictionaryRewritingEnabled: Bool
+    let customDictionaryEntries: [SettingsStore.CustomDictionaryEntry]
+    private let dictionaryFingerprint: String?
     let experimentalUnifiedFinalEnabled: Bool
     let diarizationFingerprint: String
     let pipelineVersion: Int
@@ -35,6 +38,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
         vocabularyBoostingEnabled: Bool = false,
         pronunciationMatchingEnabled: Bool = false,
         customDictionaryRewritingEnabled: Bool = false,
+        customDictionaryEntries: [SettingsStore.CustomDictionaryEntry] = [],
         experimentalUnifiedFinalEnabled: Bool = false,
         diarizationFingerprint: String = MeetingProcessingCheckpoint.currentDiarizationFingerprint,
         pipelineVersion: Int = Self.defaultPipelineVersion,
@@ -50,6 +54,14 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
         self.vocabularyBoostingEnabled = vocabularyBoostingEnabled
         self.pronunciationMatchingEnabled = pronunciationMatchingEnabled
         self.customDictionaryRewritingEnabled = customDictionaryRewritingEnabled
+        self.customDictionaryEntries = customDictionaryRewritingEnabled ? customDictionaryEntries : []
+        // Resume identity must change with rule content without persisting private dictionary text.
+        let dictionaryIdentity = MeetingConfigFingerprintEncoding.encode(self.customDictionaryEntries.flatMap { entry in
+            [("id", entry.id.uuidString), ("replacement", entry.replacement)]
+                + entry.triggers.map { ("trigger", $0) }
+        })
+        self.dictionaryFingerprint = customDictionaryRewritingEnabled
+            ? SHA256.hash(data: Data(dictionaryIdentity.utf8)).map { String(format: "%02x", $0) }.joined() : nil
         self.experimentalUnifiedFinalEnabled = experimentalUnifiedFinalEnabled
         self.diarizationFingerprint = diarizationFingerprint
         self.pipelineVersion = pipelineVersion
@@ -57,6 +69,34 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
         self.speakerProcessingMode = speakerLabelsEnabled && speakerProcessingMode == .streaming ? .streaming : nil
         self.speakerAttributionPolicy = speakerAttributionPolicy
         self.recordingTimePolicy = recordingTimePolicy
+    }
+
+    // Rules are attempt-local only. Checkpoint headers are authenticated but not encrypted.
+    private enum CodingKeys: String, CodingKey {
+        case asrModel, asrArtifactFingerprint, asrArtifactDirectory, languageCode
+        case vocabularyBoostingEnabled, pronunciationMatchingEnabled, customDictionaryRewritingEnabled
+        case dictionaryFingerprint, experimentalUnifiedFinalEnabled, diarizationFingerprint
+        case pipelineVersion, recordingTimePolicy, speakerLabelsEnabled, speakerProcessingMode, speakerAttributionPolicy
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        asrModel = try c.decode(String.self, forKey: .asrModel)
+        asrArtifactFingerprint = try c.decodeIfPresent(String.self, forKey: .asrArtifactFingerprint)
+        asrArtifactDirectory = try c.decodeIfPresent(URL.self, forKey: .asrArtifactDirectory)
+        languageCode = try c.decode(String.self, forKey: .languageCode)
+        vocabularyBoostingEnabled = try c.decode(Bool.self, forKey: .vocabularyBoostingEnabled)
+        pronunciationMatchingEnabled = try c.decode(Bool.self, forKey: .pronunciationMatchingEnabled)
+        customDictionaryRewritingEnabled = try c.decode(Bool.self, forKey: .customDictionaryRewritingEnabled)
+        dictionaryFingerprint = try c.decodeIfPresent(String.self, forKey: .dictionaryFingerprint)
+        customDictionaryEntries = []
+        experimentalUnifiedFinalEnabled = try c.decode(Bool.self, forKey: .experimentalUnifiedFinalEnabled)
+        diarizationFingerprint = try c.decode(String.self, forKey: .diarizationFingerprint)
+        pipelineVersion = try c.decode(Int.self, forKey: .pipelineVersion)
+        recordingTimePolicy = try c.decodeIfPresent(MeetingRecordingTimePolicy.self, forKey: .recordingTimePolicy)
+        speakerLabelsEnabled = try c.decode(Bool.self, forKey: .speakerLabelsEnabled)
+        speakerProcessingMode = try c.decodeIfPresent(MeetingSpeakerProcessingMode.self, forKey: .speakerProcessingMode)
+        speakerAttributionPolicy = try c.decodeIfPresent(MeetingSpeakerAttributionPolicy.self, forKey: .speakerAttributionPolicy)
     }
 
     var effectiveSpeakerProcessingMode: MeetingSpeakerProcessingMode {
@@ -78,6 +118,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
             ("speakerLabels", String(self.speakerLabelsEnabled)),
             ("speakerAttribution", self.speakerAttributionPolicy?.fingerprint ?? "legacy-raw"),
         ]
+        if let dictionaryFingerprint { pairs.insert(("dictionaryRules", dictionaryFingerprint), at: 5) }
         if let recordingTimePolicy { pairs.append(("recordingTimePolicy", recordingTimePolicy.rawValue)) }
         if let asrArtifactFingerprint { pairs.append(("asrArtifact", asrArtifactFingerprint)) }
         if self.effectiveSpeakerProcessingMode == .streaming { pairs.append(("speakerProcessing", "streaming")) }
@@ -112,10 +153,11 @@ enum MeetingRetranscriptionLanguage {
         self.choices.first { $0.id == languageCode }?.displayName ?? languageCode
     }
 
-    /// A same-language run replaces nothing and, if it fails, hides the transcript that is already there.
-    nonisolated static func canRetranscribe(selection: String, currentLanguageCode: String) -> Bool {
+    /// Explicit redo can refresh saved replacements in the same language. Recovery suggestions
+    /// still distinguish a failed language change from an ordinary retry.
+    nonisolated static func canRetranscribe(selection: String, currentLanguageCode: String, allowsSameLanguage: Bool = false) -> Bool {
         guard let code = canonicalCode(selection) else { return false }
-        return code != currentLanguageCode
+        return allowsSameLanguage || code != currentLanguageCode
     }
 
     /// The language an empty meeting should try again. Use the latest attempt that recorded a

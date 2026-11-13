@@ -1370,11 +1370,11 @@ final class MeetingSessionModelTests: XCTestCase {
         XCTAssertEqual(decoded.microphoneCoreAudioUID, "core-audio-uid")
     }
 
-    func testUnconfiguredMeetingDefaultsRemainConservative() {
+    func testUnconfiguredMeetingDefaultsCaptureComputerAudio() {
         let defaults = MeetingRecordingDefaults.unconfigured
 
         XCTAssertFalse(defaults.isConfigured)
-        XCTAssertEqual(defaults.mode, .onlineCall)
+        XCTAssertEqual(defaults.mode, .systemAudio)
         XCTAssertEqual(defaults.microphoneRole, .unknown)
         XCTAssertNil(defaults.applicationBundleIdentifier)
         XCTAssertNil(defaults.microphoneCaptureDeviceID)

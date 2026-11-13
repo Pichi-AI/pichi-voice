@@ -214,6 +214,10 @@ final class DictionaryCorrectionOverlayController {
             outcome: { _ in })
     }
 
+    func setArchiveWarning(_ warning: String?, receiptID: UUID) {
+        self.state.sessions.first(where: { $0.savedCorrection?.id == receiptID })?.setArchiveWarning(warning)
+    }
+
     func withdrawSavedCorrection(_ id: UUID) {
         guard let session = self.state.sessions.first(where: { $0.savedCorrection?.id == id }) else { return }
         self.remove(id: session.candidate.id)
@@ -231,11 +235,17 @@ final class DictionaryCorrectionOverlayController {
         guard PrivateProfileStorage.isReadable(PrivateProfileStorage.current), PrivateProfileStorage.acceptsNewWork else { return }
         let retained = self.state.sessions.reduce(0) { total, session in
             total + (session.candidate.audioEvidence.map(DictionaryAudioLearningService.retainedBytes) ?? 0)
+                + (session.candidate.trainingExample?.recording.samples.count ?? 0) * MemoryLayout<Float>.stride
         }
         var bounded = candidate
         if let audio = bounded.audioEvidence,
            DictionaryAudioLearningService.retainedBytes(audio) > 128 * 1024 * 1024 - retained {
             bounded.audioEvidence = nil
+        }
+        let audioBytes = bounded.audioEvidence.map(DictionaryAudioLearningService.retainedBytes) ?? 0
+        if let example = bounded.trainingExample,
+           example.recording.samples.count * MemoryLayout<Float>.stride > 128 * 1024 * 1024 - retained - audioBytes {
+            bounded.trainingExample = nil
         }
         let next = AutomaticDictionaryTrainingSession(candidate: bounded, asr: AppServices.shared.asr, audioLearning: self.audioLearning)
         if let origin = candidate.observationID,
@@ -269,7 +279,7 @@ final class DictionaryCorrectionOverlayController {
         session.onSuccess = { [weak self, weak session] in
             guard let session else { return }
             self?.outcomes.removeValue(forKey: id)?(.accepted)
-            if session.screen == .success && (!session.isSavedCorrection || session.didUndoSavedCorrection) {
+            if session.screen == .success && session.archiveWarning == nil && (!session.isSavedCorrection || session.didUndoSavedCorrection) {
                 self?.remove(id: id)
             } else {
                 self?.rowDidChange()
@@ -303,7 +313,7 @@ final class DictionaryCorrectionOverlayController {
     func expireIfDue() {
         guard !self.isDragging, let deadline, self.now() >= deadline,
               !self.state.sessions.contains(where: {
-                  $0.isUndoingSavedCorrection || $0.capturePhase != .idle || $0.screen == .training || $0.hasError
+                  $0.isUndoingSavedCorrection || $0.capturePhase != .idle || $0.screen == .training || $0.hasError || $0.archiveWarning != nil
               }) else { return }
         for id in Array(self.outcomes.keys) { self.outcomes.removeValue(forKey: id)?(.timedOut) }
         self.hide()
@@ -1080,17 +1090,28 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                     .fluidButton(.accent, size: .small)
                     .disabled(!self.pronunciationEnabled || self.session.capturePhase != .idle)
             } else {
-                Text("Couldn't save this correction automatically.")
+                Text(PichiLocalization.text(self.session.candidate.trainingExample?.recording.archiveAdmission != nil
+                    ? "Saves this correction and its complete dictation audio on this Mac."
+                    : "Couldn't save this correction automatically."))
                     .font(self.theme.typography.captionSmall)
                     .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
                 Spacer()
-                Button("Undo save", action: self.onDismiss)
-                    .buttonStyle(FluidOutlinedButtonStyle(height: 28))
+                if self.session.candidate.negativeCorrection == nil {
+                    Button(PichiLocalization.text("Save correction"), action: self.session.addOnlyCorrection)
+                        .buttonStyle(FluidOutlinedButtonStyle(height: 28))
+                        .disabled(self.session.capturePhase != .idle)
+                }
                 Button("Done", action: self.onDismiss)
                     .buttonStyle(FluidOutlinedButtonStyle(height: 28, foreground: self.theme.palette.accentText))
+            }
+            if self.session.capturePhase == .processing || self.session.hasError {
+                Text(PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale))
+                    .font(self.theme.typography.captionSmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .transition(.opacity)
@@ -1324,6 +1345,12 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                     .disabled(self.session.isUndoingSavedCorrection)
                 }
             }
+            if let warning = self.session.archiveWarning {
+                Text(warning)
+                    .font(self.theme.typography.captionSmall)
+                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if self.session.hasError {
                 Text(PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale))
                     .font(self.theme.typography.captionSmall)
@@ -1359,6 +1386,12 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                     .font(.fluidSystem(size: 11))
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .lineLimit(1)
+                if let warning = self.session.archiveWarning {
+                    Text(warning)
+                        .font(.fluidSystem(size: 11))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Spacer(minLength: 8)

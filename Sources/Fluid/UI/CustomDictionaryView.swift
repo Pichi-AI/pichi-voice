@@ -591,6 +591,10 @@ struct CustomDictionaryView: View {
                     }
                 }
             }
+            Text("Saved replacements apply to dictation and finished meeting transcripts.")
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(self.theme.palette.secondaryText)
@@ -974,12 +978,25 @@ struct CustomDictionaryView: View {
     }
 
     private var voiceMatchingSettingsRow: some View {
-        Text(PichiLocalization.text(self.pronunciationEnabled
-            ? "Pronunciation dictionary is on. Voice training uses the fast sound-order matcher."
-            : "Voice training is off. Enable “Learn from your pronunciation” in Settings → Experimental."))
-            .font(self.theme.typography.caption)
-            .foregroundStyle(self.theme.palette.secondaryText)
-            .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            Text(PichiLocalization.text(self.pronunciationEnabled
+                ? "Pronunciation matching is on for dictation. Dictation and finished meetings use saved spelling corrections."
+                : "Voice training is off. Enable “Learn from your pronunciation” in Settings → Experimental."))
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle(PichiLocalization.text("Save complete dictation audio with accepted corrections"), isOn: Binding(
+                get: { self.settings.dictionaryCorrectionArchiveEnabled },
+                set: { enabled in
+                    guard self.isProfileVisible else { return }
+                    self.settings.dictionaryCorrectionArchiveEnabled = enabled
+                }))
+                .font(self.theme.typography.caption)
+            Text(PichiLocalization.text("Off by default. Applies only to new recordings. Stores the full dictated phrase and correction locally, separately from pronunciation clips and history. Nothing is uploaded."))
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private var pronunciationRevisionNoticeRequest: String {
@@ -1347,7 +1364,7 @@ struct CustomDictionaryView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Saved Replacements")
                         .font(self.theme.typography.captionStrong)
-                    Text("These run automatically after dictation.")
+                    Text("Applied to dictation and finished meeting transcripts.")
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }

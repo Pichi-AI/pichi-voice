@@ -184,6 +184,7 @@ final class AutomaticDictionaryCorrectionTracker {
         let pid: pid_t
         let expectedValue: String
         let insertedRange: NSRange
+        let selection: NSRange
     }
 
     private struct PendingCorrection {
@@ -218,10 +219,12 @@ final class AutomaticDictionaryCorrectionTracker {
         let observesSelectionChanges: Bool
         let observesFocusChanges: Bool
         let learningRecording: DictionaryLearningRecording?
+        let correctionRecording: DictionaryCorrectionRecording?
         let historyCorrection: DictationHistoryCorrectionSession?
         let dictionaryReplacements: [DictionaryHistoryReplacement]
         let knownCanonicalTerms: [String]
         var lastValue: String
+        var lastSelection: NSRange
         var insertedRange: NSRange
         var pendingCorrection: PendingCorrection?
         var textMap: DictionaryCorrectionTextMap
@@ -245,8 +248,13 @@ final class AutomaticDictionaryCorrectionTracker {
         return .seconds(min(DictionaryLearningRecording.lifetime, max(0, originalAudioExpiresAt.timeIntervalSince(now))))
     }
 
-    private static let completionSignalDelayNanoseconds: UInt64 = 1_000_000_000
-    private static let inactivityFallbackNanoseconds: UInt64 = 3_000_000_000
+    private static var completionSignalDelayNanoseconds: UInt64 {
+        SettingsStore.shared.automaticDictionaryPromptDelay.completionNanoseconds
+    }
+
+    private static var inactivityFallbackNanoseconds: UInt64 {
+        SettingsStore.shared.automaticDictionaryPromptDelay.inactivityNanoseconds
+    }
 
     private var observer: AXObserver?
     private var session: ObservationSession?
@@ -269,7 +277,8 @@ final class AutomaticDictionaryCorrectionTracker {
     func beginObservingInsertion(
         _ insertedText: String, targetPID: pid_t?, learningRecording: DictionaryLearningRecording? = nil,
         historyCorrection: DictationHistoryCorrectionSession? = nil,
-        dictionaryReplacements: [DictionaryHistoryReplacement] = []
+        dictionaryReplacements: [DictionaryHistoryReplacement] = [],
+        correctionRecording: DictionaryCorrectionRecording? = nil
     ) {
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
         self.cancel()
@@ -301,7 +310,8 @@ final class AutomaticDictionaryCorrectionTracker {
                         learningRecording: DictionaryMatcherExperiment.sharedFeaturesEnabled ? learningRecording : nil,
                         historyCorrection: historyCorrection,
                         dictionaryReplacements: dictionaryReplacements,
-                        knownCanonicalTerms: knownCanonicalTerms
+                        knownCanonicalTerms: knownCanonicalTerms,
+                        correctionRecording: correctionRecording
                     )
                     return
                 }
@@ -468,13 +478,18 @@ final class AutomaticDictionaryCorrectionTracker {
     }
 
     func handleObservedSelectionChange() {
-        guard let session = self.session,
-              let pending = session.pendingCorrection,
-              let correctedRange = pending.correctedRange,
-              let selection = Self.selectedRange(of: session.element)
+        guard var session = self.session,
+              let selection = Self.selectedRange(of: session.element),
+              selection != session.lastSelection
         else {
             return
         }
+        // Some editors repeat this notification while the caret has not moved.
+        // Keep the original deadline, but still track real moves before any edit.
+        session.lastSelection = selection
+        self.session = session
+        guard let pending = session.pendingCorrection,
+              let correctedRange = pending.correctedRange else { return }
 
         let delay = AutomaticDictionaryCorrectionDetector.selectionTouchesCandidate(
             selection,
@@ -544,7 +559,8 @@ final class AutomaticDictionaryCorrectionTracker {
             element: focus.element,
             pid: focus.pid,
             expectedValue: value,
-            insertedRange: insertedRange
+            insertedRange: insertedRange,
+            selection: selectedRange
         )
     }
 
@@ -553,7 +569,8 @@ final class AutomaticDictionaryCorrectionTracker {
         learningRecording: DictionaryLearningRecording?,
         historyCorrection: DictationHistoryCorrectionSession?,
         dictionaryReplacements: [DictionaryHistoryReplacement],
-        knownCanonicalTerms: [String]
+        knownCanonicalTerms: [String],
+        correctionRecording: DictionaryCorrectionRecording?
     ) {
         self.verificationTask = nil
         var createdObserver: AXObserver?
@@ -597,10 +614,12 @@ final class AutomaticDictionaryCorrectionTracker {
             observesSelectionChanges: selectionResult == .success,
             observesFocusChanges: focusResult == .success,
             learningRecording: learningRecording,
+            correctionRecording: correctionRecording,
             historyCorrection: historyCorrection,
             dictionaryReplacements: dictionaryReplacements,
             knownCanonicalTerms: knownCanonicalTerms,
             lastValue: seed.expectedValue,
+            lastSelection: seed.selection,
             insertedRange: seed.insertedRange,
             pendingCorrection: nil,
             textMap: DictionaryCorrectionTextMap(originalText: (seed.expectedValue as NSString).substring(with: seed.insertedRange))
@@ -727,6 +746,19 @@ final class AutomaticDictionaryCorrectionTracker {
         // never a positive pronunciation enrollment for the replacement text.
         if dictionaryRejection != nil { return }
 
+        if let detected = candidate, let recording = self.session?.correctionRecording {
+            let after = pending.afterValue as NSString
+            let newLength = pending.insertedRange.length + after.length - (pending.beforeValue as NSString).length
+            if pending.insertedRange.location >= 0, pending.insertedRange.location <= after.length,
+               newLength > 0, newLength <= after.length - pending.insertedRange.location {
+                let insertion = after.substring(with: NSRange(location: pending.insertedRange.location, length: newLength))
+                candidate?.trainingExample = DictionaryCorrectionExample.make(id: detected.id, recording: recording,
+                    before: pending.sourceMap.originalText, after: insertion,
+                    insertedRange: NSRange(location: 0, length: pending.sourceMap.originalText.utf16.count),
+                    heardWord: detected.heardText, correctedWord: detected.correctedText)
+            }
+        }
+
         if !SettingsStore.shared.automaticDictionaryLearningEnabled,
            let candidate, let context, DictionaryMatcherExperiment.collectNegatives,
            !SettingsStore.shared.shouldShowOnboarding, !AppServices.shared.asr.isRunning,
@@ -763,25 +795,35 @@ final class AutomaticDictionaryCorrectionTracker {
             text: candidate.correctedText)
         self.session?.approvals.removeAll { !$0.isValid }
         self.session?.approvals.append(approval)
+        let archiveWasRequested = candidate.trainingExample?.recording.archiveAdmission != nil
+        let pendingArchive = candidate.trainingExample.flatMap { DictionaryCorrectionArchiveSaveCoordinator.shared.holdForCommit($0) }
+        var wordCandidate = candidate
+        wordCandidate.trainingExample = nil
         let revocations = Array(self.correctionRevocations.values)
         self.evidencePreparationTasks[preparationID] = Task { @MainActor [weak self, approval] in
             defer { self?.evidencePreparationTasks.removeValue(forKey: preparationID) }
             for task in revocations { await task.value }
             guard !Task.isCancelled, approval.isValid, let self, self.suggestionGeneration == generation else { return }
-            self.saveWordWithoutAudio(candidate, approval: approval)
+            self.saveWordWithoutAudio(wordCandidate, approval: approval, pendingArchive: pendingArchive, archiveWasRequested: archiveWasRequested)
         }
     }
 
-    private func saveWordWithoutAudio(_ candidate: AutomaticDictionaryCorrectionCandidate, approval: CorrectionApproval) {
+    private func saveWordWithoutAudio(_ candidate: AutomaticDictionaryCorrectionCandidate, approval: CorrectionApproval,
+        pendingArchive: DictionaryCorrectionArchiveSaveCoordinator.PendingExample? = nil, archiveWasRequested: Bool = false) {
         guard approval.isValid, approval.saved == nil, SettingsStore.shared.automaticDictionaryLearningEnabled,
               PrivateProfileStorage.isReadable(self.profile), PrivateProfileStorage.acceptsNewWork else { return }
         if let receipt = DictionaryAudioLearningService.shared.saveCorrectionWithoutAudio(candidate: candidate,
             evidenceID: approval.id, isValid: { approval.isValid }) {
             approval.saved = receipt
             DictionaryCorrectionOverlayController.shared.showSavedCorrection(receipt)
+            Self.archiveCommittedCorrection(candidate, receipt: receipt, pendingArchive: pendingArchive, archiveWasRequested: archiveWasRequested) { warning in
+                DictionaryCorrectionOverlayController.shared.setArchiveWarning(warning, receiptID: receipt.id)
+            }
         } else {
             // A genuine save failure is visible, never converted into an Add request.
-            DictionaryCorrectionOverlayController.shared.show(candidate: candidate) { _ in }
+            var fallback = candidate
+            fallback.trainingExample = pendingArchive?.example ?? candidate.trainingExample
+            DictionaryCorrectionOverlayController.shared.show(candidate: fallback) { _ in }
         }
     }
 
@@ -805,8 +847,12 @@ final class AutomaticDictionaryCorrectionTracker {
         self.session?.approvals.removeAll { !$0.isValid }
         self.session?.approvals.append(approval)
         let profile = self.profile
+        let archiveWasRequested = candidate.trainingExample?.recording.archiveAdmission != nil
+        let pendingArchive = candidate.trainingExample.flatMap { DictionaryCorrectionArchiveSaveCoordinator.shared.holdForCommit($0) }
+        var wordCandidate = candidate
+        wordCandidate.trainingExample = nil
         let corrected = AutomaticDictionaryCorrectionCandidate(heardText: heard, correctedText: candidate.correctedText)
-        // Only the bounded resolved clip is retained by the queue, never the full recording.
+        // Pronunciation retains its bounded clip. The optional full phrase has a separate bounded archive lease.
         let revocations = Array(self.correctionRevocations.values)
         let admitted = DictionaryAudioLearningService.shared.learnCorrection(candidate: corrected, evidence: evidence, evidenceID: approval.id, isValid: {
             approval.isValid && PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork
@@ -814,13 +860,38 @@ final class AutomaticDictionaryCorrectionTracker {
             guard approval.isValid else { return }
             approval.saved = receipt
             DictionaryCorrectionOverlayController.shared.showSavedCorrection(receipt)
+            Self.archiveCommittedCorrection(wordCandidate, receipt: receipt, pendingArchive: pendingArchive, archiveWasRequested: archiveWasRequested) { warning in
+                DictionaryCorrectionOverlayController.shared.setArchiveWarning(warning, receiptID: receipt.id)
+            }
         }, didFail: { [weak self] in
-            self?.saveWordWithoutAudio(candidate, approval: approval)
+            self?.saveWordWithoutAudio(wordCandidate, approval: approval, pendingArchive: pendingArchive, archiveWasRequested: archiveWasRequested)
         }, beforePreparation: {
             for task in revocations { await task.value }
         })
-        if !admitted { self.saveWordWithoutAudio(candidate, approval: approval) }
+        if !admitted { self.saveWordWithoutAudio(wordCandidate, approval: approval, pendingArchive: pendingArchive, archiveWasRequested: archiveWasRequested) }
         return true
+    }
+
+    /// Called only from successful automatic commit receipts, after the rejection branch has exited.
+    @discardableResult static func archiveCommittedCorrection(_ candidate: AutomaticDictionaryCorrectionCandidate,
+        receipt: DictionaryAudioLearningService.SavedCorrection,
+        coordinator: DictionaryCorrectionArchiveSaveCoordinator? = nil,
+        pendingArchive: DictionaryCorrectionArchiveSaveCoordinator.PendingExample? = nil,
+        archiveWasRequested: Bool = false,
+        archive: (@Sendable (DictionaryCorrectionExample) async throws -> Void)? = nil,
+        completion: @escaping @MainActor (String?) -> Void = { _ in }) -> Bool {
+        guard candidate.negativeCorrection == nil, receipt.isCurrent,
+              receipt.correctedText == candidate.correctedText else { return false }
+        let owner = coordinator ?? .shared
+        let accepted: Bool
+        if let pendingArchive { accepted = owner.acceptHeld(pendingArchive, archive: archive, completion: completion) }
+        else if let example = candidate.trainingExample { accepted = owner.accept(example, archive: archive, completion: completion) }
+        else {
+            if archiveWasRequested { completion(PichiLocalization.text("The correction is saved, but its audio example could not be stored.")) }
+            return false
+        }
+        if !accepted { completion(PichiLocalization.text("The correction is saved, but its audio example could not be stored.")) }
+        return accepted
     }
 
     private func revoke(_ approval: CorrectionApproval) {

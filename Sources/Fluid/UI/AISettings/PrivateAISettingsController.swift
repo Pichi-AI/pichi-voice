@@ -268,6 +268,11 @@ final class PrivateAISettingsController: ObservableObject {
     }
 
     func updatePrivateAIModel(_ model: PrivateAIRegisteredModel) {
+        if model.id != self.privateAISelectedModelID {
+            guard self.privateAIModelUpdateStatusByID[model.id]?.state == .updateAvailable else { return }
+            self.maintainInactiveModel(model, update: true)
+            return
+        }
         guard self.privateAIModelUpdateStatusByID[model.id]?.state == .updateAvailable,
               let operation = self.beginOperation(for: model.id)
         else { return }
@@ -332,6 +337,10 @@ final class PrivateAISettingsController: ObservableObject {
 
     /// Explicit callers can request a result; nil means success, otherwise a user-facing failure.
     func verifyPrivateAIConnection(_ model: PrivateAIRegisteredModel, onReady: (() -> Void)? = nil, onCompletion: ((String?) -> Void)? = nil) {
+        if model.id != self.privateAISelectedModelID {
+            self.maintainInactiveModel(model, update: false, onCompletion: onCompletion)
+            return
+        }
         guard let operation = self.beginOperation(for: model.id) else { return }
         self.privateAILoadState = .loading(modelID: model.id)
         self.startProfileTask {
@@ -438,28 +447,106 @@ final class PrivateAISettingsController: ObservableObject {
     }
 
     func deletePrivateAIModel(_ model: PrivateAIRegisteredModel) {
-        guard let operation = self.beginOperation(for: model.id) else { return }
-        guard PrivateAIIntegrationService.canRemoveInstalledModel(model) else {
-            self.session.finish(operation)
-            return
-        }
+        guard self.viewModel.profileIsCurrent, !self.isBusy, PrivateAIModelRegistry.model(id: model.id) != nil,
+              let operation = self.session.begin() else { return }
         self.privateAILoadState = .loading(modelID: model.id)
         self.startProfileTask {
             defer { self.session.finish(operation) }
+            guard await Task.detached(priority: .utility, operation: {
+                PrivateAIIntegrationService.canRemoveInstalledModel(model)
+            }).value else {
+                guard self.viewModel.profileIsCurrent, !Task.isCancelled else { return }
+                self.privateAILoadState = .idle
+                return
+            }
+            guard self.viewModel.profileIsCurrent, !Task.isCancelled else { return }
             do {
-                try await PrivateAIIntegrationService.shared.unloadAndRemoveInstalledModel(
-                    model,
-                    reason: "settings-delete"
-                )
-                guard self.viewModel.profileIsCurrent else { return }
-                self.viewModel.resetVerification(for: PrivateAIProviderFeature.shared.providerID)
-                if self.privateAISelectedModelID == model.id {
-                    self.privateAILoadState = .idle
+                try await PrivateAIIntegrationService.shared.unloadAndRemoveInstalledModel(model, reason: "settings-delete")
+                guard self.viewModel.profileIsCurrent, !Task.isCancelled else { return }
+                let key = self.viewModel.providerKey(for: PrivateAIProviderFeature.shared.providerID)
+                let selected = self.settings.selectedModelByProvider[key] ?? PrivateAIIntegrationService.configuredModelID
+                if PrivateAIModelRegistry.canonicalModelID(for: selected) == model.id {
+                    self.viewModel.resetVerification(for: PrivateAIProviderFeature.shared.providerID)
                 }
+                self.privateAILoadState = .idle
                 self.viewModel.refreshProviderItems()
             } catch {
-                guard self.viewModel.profileIsCurrent, self.privateAISelectedModelID == model.id else { return }
+                guard self.viewModel.profileIsCurrent, !Task.isCancelled else { return }
                 self.privateAILoadState = .failed(modelID: model.id, message: Self.errorMessage(for: error))
+            }
+        }
+    }
+
+    private struct MaintenanceError: LocalizedError {
+        let message: String
+        var errorDescription: String? { self.message }
+    }
+
+    /// Inspect or update a downloaded model without publishing it as the active provider.
+    /// The regular verification path also changes selection, so it must not be used here.
+    private func maintainInactiveModel(_ model: PrivateAIRegisteredModel, update: Bool, onCompletion: ((String?) -> Void)? = nil) {
+        guard self.viewModel.profileIsCurrent, !self.isBusy, PrivateAIModelRegistry.model(id: model.id) != nil,
+              let operation = self.session.begin() else { return }
+        let configuredID = PrivateAIIntegrationService.configuredModelID
+        let backend = self.settings.privateAIBackendPreference
+        self.privateAILoadState = .loading(modelID: model.id)
+        self.startProfileTask {
+            defer {
+                self.session.finish(operation)
+                self.refreshPrivateAIModelUpdateStatus(model)
+            }
+            do {
+                guard await Task.detached(priority: .utility, operation: {
+                    PrivateAIIntegrationService.isModelInstalled(model)
+                }).value else {
+                    throw MaintenanceError(message: PrivateAIModelLoadState.missingModelMessage)
+                }
+                try Task.checkCancellation()
+                guard self.viewModel.profileIsCurrent else { throw CancellationError() }
+                let verify = {
+                    try Task.checkCancellation()
+                    guard self.viewModel.profileIsCurrent else { throw CancellationError() }
+                    self.privateAILoadState = .loading(modelID: model.id)
+                    let status = try await PrivateAIIntegrationService.shared.verifyModel(model)
+                    try Task.checkCancellation()
+                    guard self.viewModel.profileIsCurrent,
+                          PrivateAIIntegrationService.configuredModelID == configuredID,
+                          self.settings.privateAIBackendPreference == backend else { throw CancellationError() }
+                    guard status.state == .ready else {
+                        throw MaintenanceError(message: status.message ?? PichiLocalization.text("Model verification failed."))
+                    }
+                    return true
+                }
+                if update {
+                    _ = try await PrivateAISettingsUpdateTransaction.run(
+                        update: {
+                            try await PrivateAIIntegrationService.updateModel(model) { progress in
+                                await MainActor.run {
+                                    guard self.viewModel.profileIsCurrent, !Task.isCancelled,
+                                          self.session.operationID == operation else { return }
+                                    self.privateAILoadState = .downloading(modelID: model.id, progress: progress.withFallbackExpectedBytes(model.artifact.byteCount))
+                                }
+                            }
+                        },
+                        verify: verify,
+                        commit: { await PrivateAIIntegrationService.commitModelUpdate($0) },
+                        rollback: { await PrivateAIIntegrationService.rollbackModelUpdate($0) }
+                    )
+                } else {
+                    _ = try await verify()
+                }
+                guard self.viewModel.profileIsCurrent, !Task.isCancelled else { return }
+                self.privateAILoadState = .loaded(modelID: model.id, latencyMilliseconds: nil)
+                onCompletion?(nil)
+            } catch is CancellationError {
+                guard self.viewModel.profileIsCurrent, !Task.isCancelled else { return }
+                self.privateAILoadState = .idle
+                onCompletion?(PichiLocalization.text("Model settings changed. Please try again."))
+            } catch {
+                guard self.viewModel.profileIsCurrent, !Task.isCancelled else { return }
+                let message = Self.errorMessage(for: error)
+                self.privateAILoadState = .failure(modelID: model.id, message: message)
+                onCompletion?(message)
             }
         }
     }

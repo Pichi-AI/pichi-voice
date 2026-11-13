@@ -459,6 +459,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         title: String,
         preferredBundleIdentifier: String?,
         preferredWindowID: UInt32?,
+        preferredProcessID: Int32? = nil,
         requirePreferredApplication: Bool = false
     ) async throws -> MeetingCaptureConfiguration {
         if let defaultConfigurationResolver { return try await defaultConfigurationResolver(mode, title) }
@@ -481,6 +482,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             var resolved = try MeetingCaptureSourceCatalog.resolveApplication(
                 from: applications,
                 preferredBundleIdentifier: defaults.usesAutomaticApplication ? preferredBundleIdentifier : defaults.applicationBundleIdentifier,
+                preferredProcessID: defaults.usesAutomaticApplication ? preferredProcessID : nil,
                 requirePreferredApplication: requirePreferredApplication || !defaults.usesAutomaticApplication
             )
             if let preferredWindowID, resolved.bundleIdentifier == preferredBundleIdentifier {
@@ -1386,6 +1388,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         session.transcriptSegments = inputSession.transcriptSegments
         session.postProcessing = inputSession.postProcessing
         session.transcriptCoverageGaps = inputSession.transcriptCoverageGaps
+        session.events.removeAll { $0.kind == .transcriptCoverageIncomplete }
+        session.events.append(contentsOf: inputSession.events.filter { $0.kind == .transcriptCoverageIncomplete })
         session.resultSidecarReference = inputSession.resultSidecarReference
         session.transcriptIsComplete = inputSession.transcriptIsComplete
         session.transcriptTimeDomain = inputSession.transcriptTimeDomain
@@ -1872,6 +1876,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Not a transcript correction: does not push onto `correctionUndoStacks`.
     @discardableResult
     func renameSession(sessionID: MeetingSessionID, to title: String, expectedOwnership: MeetingProfileOwnership? = nil) async throws -> MeetingSession {
+        if self.activeSession?.id == sessionID, self.isRecording {
+            return try await self.renameRecordingSession(sessionID: sessionID, to: title, expectedOwnership: expectedOwnership)
+        }
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.activityInProgress }
         self.isMutatingSession = true
         defer { self.releaseMutationGate() }
@@ -2341,7 +2348,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 }
                 continue
             }
-            let expectedKinds: Set<MeetingAudioTrackKind> = session.mode == .onlineCall
+            let expectedKinds: Set<MeetingAudioTrackKind> = session.mode.capturesComputerAudio
                 ? [.applicationAudio, .microphone]
                 : [.microphone]
             let hasExpectedTracks = Set(session.audioTracks.map(\.kind)) == expectedKinds
@@ -2967,6 +2974,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                     }
                 }
             }
+            // This is the current transcript's status, not a permanent capture interruption.
+            session.events.removeAll { $0.kind == .transcriptCoverageIncomplete }
             if !result.coverageGaps.isEmpty {
                 let excludedSeconds = result.coverageGaps.reduce(0.0) { total, gap in
                     total + max(0, gap.end - gap.start)
@@ -3748,5 +3757,38 @@ enum MeetingCoordinatorError: LocalizedError {
         case .unsupportedRetranscriptionLanguage:
             return String(localized: "Choose a language the meeting transcription model supports.")
         }
+    }
+}
+
+extension MeetingSessionCoordinator {
+    /// Change only title metadata before suspending, so every subsequent capture/stop snapshot keeps it.
+    /// The serialized persistence queue prevents a slow rename save from overwriting newer audio or state.
+    private func renameRecordingSession(sessionID: MeetingSessionID, to title: String, expectedOwnership: MeetingProfileOwnership?) async throws -> MeetingSession {
+        guard !self.isMutatingSession, !self.hasBlockingActivityTask, !self.isDeleting,
+              var session = self.activeSession, session.id == sessionID, self.isRecording
+        else { throw MeetingCoordinatorError.activityInProgress }
+        try Self.validateCorrectionOwnership(session, expected: expectedOwnership)
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
+        self.isMutatingSession = true
+        defer { self.releaseMutationGate() }
+        session.title = trimmed
+        session.defaultTitleBase = nil
+        session.automaticTitle = nil
+        session.updatedAt = Date()
+        self.activeSession = session
+        do {
+            try await self.persistence.save(session)
+        } catch {
+            // Keep the edited title in the live snapshot so capture updates and stopping can retry it.
+            throw NSError(domain: "MeetingTitle", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The title could not be saved yet. Recording can continue; try renaming again to retry.",
+                NSUnderlyingErrorKey: error,
+            ])
+        }
+        // Capture or Stop may have advanced the session while its title was being saved.
+        if let current = self.activeSession, current.id == sessionID { return current }
+        if let completed = self.latestCompletedSession, completed.id == sessionID { return completed }
+        return session
     }
 }

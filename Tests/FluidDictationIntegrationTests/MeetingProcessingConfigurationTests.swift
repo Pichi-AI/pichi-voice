@@ -1,7 +1,27 @@
 @testable import FluidVoice_Debug
+import Foundation
 import XCTest
 
 final class MeetingProcessingConfigurationTests: XCTestCase {
+    func testDictionaryRulesAreEphemeralAndLegacyIdentitySurvivesDecoding() throws {
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["synthetic private alias"], replacement: "Synthetic Private Name")
+        let frozen = MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true, customDictionaryEntries: [entry])
+        let bytes = try JSONEncoder().encode(frozen)
+        let json = String(decoding: bytes, as: UTF8.self)
+        XCTAssertFalse(json.contains("synthetic private alias"))
+        XCTAssertFalse(json.contains("Synthetic Private Name"))
+        let restored = try JSONDecoder().decode(MeetingFinalProcessingConfiguration.self, from: bytes)
+        XCTAssertTrue(restored.customDictionaryEntries.isEmpty)
+        XCTAssertEqual(restored.identityFingerprint, frozen.identityFingerprint)
+
+        let original = MeetingFinalProcessingConfiguration()
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+        legacy.removeValue(forKey: "dictionaryFingerprint")
+        let decoded = try JSONDecoder().decode(MeetingFinalProcessingConfiguration.self,
+            from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertEqual(decoded.identityFingerprint, original.identityFingerprint)
+        XCTAssertFalse(decoded.identityFingerprint.contains("dictionaryRules"))
+    }
     func testRecordingClockPolicyPinsNewAttemptsWithoutChangingLegacyIdentity() throws {
         let legacy = MeetingFinalProcessingConfiguration()
         XCTAssertNil(legacy.recordingTimePolicy)
@@ -92,6 +112,21 @@ final class MeetingProcessingConfigurationTests: XCTestCase {
         let second = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", asrArtifactFingerprint: "v3:hash-b", languageCode: "ru")
         XCTAssertNotEqual(first.identityFingerprint, second.identityFingerprint)
         XCTAssertFalse(MeetingFinalProcessingConfiguration().identityFingerprint.contains("asrArtifact"))
+    }
+
+    func testDictionarySnapshotAndFingerprintTrackEditsWithoutExposingPrivateWords() {
+        var entries: [SettingsStore.CustomDictionaryEntry] = [.init(triggers: ["private alias"], replacement: "Private Name")]
+        let frozen = MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true, customDictionaryEntries: entries)
+        XCTAssertEqual(frozen.identityFingerprint, MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true, customDictionaryEntries: entries).identityFingerprint)
+        entries[0].replacement = "Changed Name"
+        let changed = MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true, customDictionaryEntries: entries)
+        XCTAssertEqual(frozen.customDictionaryEntries[0].replacement, "Private Name")
+        XCTAssertNotEqual(frozen.identityFingerprint, changed.identityFingerprint)
+        XCTAssertFalse(frozen.identityFingerprint.contains("private alias"))
+        XCTAssertFalse(frozen.identityFingerprint.contains("Private Name"))
+        entries[0].triggers.append("another alias")
+        XCTAssertNotEqual(changed.identityFingerprint, MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true, customDictionaryEntries: entries).identityFingerprint)
+        XCTAssertTrue(MeetingFinalProcessingConfiguration(customDictionaryEntries: entries).customDictionaryEntries.isEmpty)
     }
 
     func testFinalConfigurationDefaultsAreParakeetTDTv2EnglishWithoutPostProcessing() {

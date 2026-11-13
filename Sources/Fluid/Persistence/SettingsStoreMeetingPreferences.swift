@@ -64,6 +64,46 @@ extension SettingsStore {
         }
     }
 
+    enum AutomaticDictionaryPromptDelay: Int, Codable, CaseIterable, Identifiable {
+        case threeQuarters = 750
+        case one = 1000
+        case two = 2000
+        case three = 3000
+
+        var id: Int { self.rawValue }
+        var displayName: String {
+            switch self {
+            case .threeQuarters: PichiLocalization.text("0.75 seconds")
+            case .one: PichiLocalization.text("1 second")
+            case .two: PichiLocalization.text("2 seconds")
+            case .three: PichiLocalization.text("3 seconds")
+            }
+        }
+
+        var inactivityNanoseconds: UInt64 { UInt64(self.rawValue) * 1_000_000 }
+        // Leaving the corrected word should never wait longer than inactivity.
+        var completionNanoseconds: UInt64 { min(self.inactivityNanoseconds, 1_000_000_000) }
+    }
+
+    var automaticDictionaryPromptDelay: AutomaticDictionaryPromptDelay {
+        get {
+            AutomaticDictionaryPromptDelay(rawValue: self.defaults.integer(forKey: Keys.automaticDictionaryPromptDelay)) ?? .three
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.automaticDictionaryPromptDelay)
+        }
+    }
+
+    /// Full dictated phrases are a separate opt-in from bounded pronunciation clips.
+    var dictionaryCorrectionArchiveEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.dictionaryCorrectionArchiveEnabled) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.dictionaryCorrectionArchiveEnabled)
+        }
+    }
+
     var automaticDictionaryLearningEnabled: Bool {
         get { self.defaults.object(forKey: Keys.automaticDictionaryLearningEnabled) as? Bool ?? true }
         set {
@@ -137,11 +177,23 @@ extension SettingsStore {
         set {
             objectWillChange.send()
             self.defaults.set(newValue.rawValue, forKey: Keys.accentColorOption)
+            self.defaults.removeObject(forKey: Keys.customAccentColorHex)
+        }
+    }
+
+    /// An optional color override keeps the existing preset and portable brand identity intact.
+    var customAccentColorHex: String? {
+        get { self.defaults.string(forKey: Keys.customAccentColorHex) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.customAccentColorHex)
         }
     }
 
     var accentColor: Color {
-        Color(hex: self.accentColorOption.hex) ?? Color(red: 0.404, green: 0.286, blue: 0.757)
+        self.customAccentColorHex.flatMap(Color.init(hex:))
+            ?? Color(hex: self.accentColorOption.hex)
+            ?? Color(red: 0.404, green: 0.286, blue: 0.757)
     }
 
 
@@ -158,7 +210,41 @@ extension SettingsStore {
             guard let data = try? JSONEncoder().encode(newValue) else {
                 return
             }
+            let oldValue = self.meetingRecordingDefaults
             self.defaults.set(data, forKey: Keys.meetingRecordingDefaults)
+            if oldValue.mode != newValue.mode || oldValue.applicationBundleIdentifier != newValue.applicationBundleIdentifier {
+                NotificationCenter.default.post(name: .meetingRecordingSourceChoiceDidChange, object: nil)
+            }
+        }
+    }
+
+    /// Notify only after both source preferences agree, so a bound picker cannot overwrite recency.
+    func saveMeetingRecordingSource(_ configuration: MeetingRecordingDefaults, recentApplication: MeetingApplicationIdentity?) {
+        var application = recentApplication
+        application?.windowID = nil
+        application?.displayID = nil
+        guard let configurationData = try? JSONEncoder().encode(configuration) else { return }
+        let applicationData: Data?
+        if let application {
+            guard let data = try? JSONEncoder().encode(application) else { return }
+            applicationData = data
+        } else {
+            applicationData = nil
+        }
+        let previous = self.meetingRecordingDefaults
+        let sourceChanged = previous.mode != configuration.mode
+            || previous.applicationBundleIdentifier != configuration.applicationBundleIdentifier
+            || previous.applicationAudioScope != configuration.applicationAudioScope
+            || previous.applicationCapturesAllInstances != configuration.applicationCapturesAllInstances
+            || self.meetingRecentApplication != application
+        self.defaults.set(configurationData, forKey: Keys.meetingRecordingDefaults)
+        if let applicationData {
+            self.defaults.set(applicationData, forKey: Keys.meetingRecentApplication)
+        } else {
+            self.defaults.removeObject(forKey: Keys.meetingRecentApplication)
+        }
+        if sourceChanged {
+            NotificationCenter.default.post(name: .meetingRecordingSourceChoiceDidChange, object: nil)
         }
     }
 
@@ -170,13 +256,17 @@ extension SettingsStore {
         }
         set {
             guard var application = newValue else {
+                guard self.defaults.object(forKey: Keys.meetingRecentApplication) != nil else { return }
                 self.defaults.removeObject(forKey: Keys.meetingRecentApplication)
+                NotificationCenter.default.post(name: .meetingRecordingSourceChoiceDidChange, object: nil)
                 return
             }
             application.windowID = nil
             application.displayID = nil
-            guard let data = try? JSONEncoder().encode(application) else { return }
+            guard application != self.meetingRecentApplication,
+                  let data = try? JSONEncoder().encode(application) else { return }
             self.defaults.set(data, forKey: Keys.meetingRecentApplication)
+            NotificationCenter.default.post(name: .meetingRecordingSourceChoiceDidChange, object: nil)
         }
     }
 

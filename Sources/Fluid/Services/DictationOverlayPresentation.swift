@@ -6,8 +6,13 @@ nonisolated struct DictationOverlayPresentation: Equatable, Sendable {
     var label: String
     var builtInLabel: String?
     var hasAppOverride: Bool
+    var shortLabel: String? = nil
 
     static var pending: Self { Self(label: PichiLocalization.text("Dictation"), builtInLabel: nil, hasAppOverride: false) }
+
+    func selectorLabel(stoppedLabel: String?) -> String {
+        stoppedLabel ?? self.shortLabel ?? self.builtInLabel ?? self.label
+    }
 }
 
 nonisolated struct DictationOverlayPresentationInput: Equatable, Sendable {
@@ -20,12 +25,13 @@ nonisolated struct DictationOverlayPresentationInput: Equatable, Sendable {
 
         func resolve(verifiedModelID: String?, modelName: (String) -> String) -> DictationOverlayPresentation {
             let modelID = self.usesSelectedPrivateModel ? (verifiedModelID ?? "") : self.modelID
-            let model = modelName(modelID)
+            let model = modelName(modelID).replacingOccurrences(of: "Fluid-1 ", with: "")
             let displayName = self.builtInLabel.map { PichiLocalization.text($0) } ?? self.name
             return DictationOverlayPresentation(
                 label: model.isEmpty ? PichiLocalization.text("Basic") : "\(displayName) · \(model)",
                 builtInLabel: self.builtInLabel,
-                hasAppOverride: self.hasAppOverride
+                hasAppOverride: self.hasAppOverride,
+                shortLabel: model.isEmpty ? "Basic" : self.name
             )
         }
     }

@@ -13,6 +13,7 @@ nonisolated struct MeetingRecordingSourceSnapshot: Sendable {
     var sourceMessage: String?
     var recentApplication: MeetingApplicationIdentity?
     var installedApplications: [MeetingInstalledCallApplication] = []
+    var applicationIcons: [String: MeetingApplicationIcon] = [:]
     var hasMeetingAudioAccess = true
     var audioStorageMode: MeetingAudioStorageMode = .retainedFiles
     var speakerLabelsEnabled = true
@@ -36,15 +37,8 @@ nonisolated struct MeetingRecordingSourceSnapshot: Sendable {
 
     var availableRecentApplication: MeetingApplicationIdentity? {
         guard let recentApplication else { return nil }
-        if let exact = try? MeetingRecordingSourceResolver.resolve(
-            mode: .onlineCall, source: MeetingRecordingSource(application: recentApplication), target: nil, applications: self.applications
-        ) { return exact }
-        guard !recentApplication.bundleIdentifier.isEmpty else { return nil }
         return try? MeetingRecordingSourceResolver.resolve(
-            mode: .onlineCall,
-            source: .application(bundleIdentifier: recentApplication.bundleIdentifier, processID: nil, displayName: recentApplication.displayName),
-            target: nil,
-            applications: self.applications
+            mode: .onlineCall, source: MeetingRecordingSource(application: recentApplication), target: nil, applications: self.applications
         )
     }
 
@@ -53,7 +47,7 @@ nonisolated struct MeetingRecordingSourceSnapshot: Sendable {
         guard self.recentApplication?.bundleIdentifier == application.bundleIdentifier,
               let recent = self.availableRecentApplication,
               recent.bundleIdentifier == application.bundleIdentifier, recent.processID == application.processID else { return name }
-        return PichiLocalization.format("%@ (Recent)", name)
+        return PichiLocalization.format("%@ (Last picked)", name)
     }
 
     static func suggestedApplication(
@@ -68,7 +62,8 @@ nonisolated struct MeetingRecordingSourceSnapshot: Sendable {
             return application
         }
         // A missing saved choice must stay missing, rather than silently choosing a different app.
-        guard source == .automatic, let foreground else { return nil }
+        guard source == .automatic, let foreground,
+              MeetingAppRegistry.pickerRank(forBundleIdentifier: foreground.bundleIdentifier) != nil else { return nil }
         return try? MeetingRecordingSourceResolver.resolve(
             mode: .onlineCall, source: MeetingRecordingSource(application: foreground), target: nil, applications: applications
         )
@@ -213,17 +208,25 @@ final class MeetingRecordingSourcePromptController: ObservableObject, PrivatePro
                 guard PrivateProfileStorage.isReadable(snapshot.profile) else { return }
                 snapshot.defaults.languageCode = snapshot.defaults.languageCode ?? MeetingTranscriptionSetupDraft(settings: .shared).languageCode
                 snapshot.recentApplication = SettingsStore.shared.meetingRecentApplication
+                // Recency is written only by explicit picker choices, never by detection
+                // or foreground changes. A missing last pick requires a new choice.
+                if snapshot.defaults.mode == .onlineCall, snapshot.defaults.effectiveApplicationAudioScope == .selectedApplication, snapshot.recentApplication != nil {
+                    snapshot.selectedApplication = snapshot.availableRecentApplication
+                    if snapshot.selectedApplication == nil, snapshot.sourceMessage == nil, let recent = snapshot.recentApplication {
+                        snapshot.sourceMessage = PichiLocalization.format("%@, your last picked app, is unavailable. Choose an app or refresh sources.", recent.displayName)
+                    }
+                }
                 if let selection {
                     snapshot.defaults.mode = selection.defaults.mode
                     snapshot.defaults.applicationAudioScope = selection.defaults.applicationAudioScope
                     if let selected = selection.selectedApplication {
                         snapshot.selectedApplication = try? MeetingRecordingSourceResolver.resolve(
                             mode: selection.defaults.mode,
-                            source: .application(bundleIdentifier: selected.bundleIdentifier, processID: nil, displayName: selected.displayName),
+                            source: MeetingRecordingSource(application: selected),
                             target: nil,
                             applications: snapshot.applications
                         )
-                    } else if selection.defaults.mode == .inRoom {
+                    } else {
                         snapshot.selectedApplication = nil
                     }
                     // A refresh must not replace a disconnected or absent selection
@@ -255,10 +258,17 @@ final class MeetingRecordingSourcePromptController: ObservableObject, PrivatePro
         self.snapshot?.defaults.mode = application == nil ? .inRoom : .onlineCall
         if application != nil { self.snapshot?.defaults.applicationAudioScope = .selectedApplication }
         self.snapshot?.selectedApplication = application
+        var defaults = SettingsStore.shared.meetingRecordingDefaults
+        defaults.mode = application == nil ? .inRoom : .onlineCall
+        defaults.isConfigured = true
         if let application {
-            SettingsStore.shared.meetingRecentApplication = application
+            defaults.applicationAudioScope = .selectedApplication
+            defaults.applicationBundleIdentifier = application.bundleIdentifier
+            defaults.applicationDisplayName = application.displayName
+            defaults.applicationCapturesAllInstances = application.capturesAllInstances == true ? true : nil
             self.snapshot?.recentApplication = application
         }
+        SettingsStore.shared.saveMeetingRecordingSource(defaults, recentApplication: self.snapshot?.recentApplication)
         self.errorMessage = nil
     }
 
@@ -267,6 +277,15 @@ final class MeetingRecordingSourcePromptController: ObservableObject, PrivatePro
         self.snapshot?.defaults.mode = .onlineCall
         self.snapshot?.defaults.applicationAudioScope = .systemAudio
         self.snapshot?.selectedApplication = nil
+        var defaults = SettingsStore.shared.meetingRecordingDefaults
+        defaults.isConfigured = true
+        defaults.mode = .onlineCall
+        defaults.applicationAudioScope = .systemAudio
+        defaults.applicationBundleIdentifier = nil
+        defaults.applicationDisplayName = nil
+        defaults.applicationCapturesAllInstances = nil
+        self.snapshot?.recentApplication = nil
+        SettingsStore.shared.saveMeetingRecordingSource(defaults, recentApplication: nil)
         self.errorMessage = nil
     }
 
@@ -330,7 +349,7 @@ final class MeetingRecordingSourcePromptController: ObservableObject, PrivatePro
         guard PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
         let profile = PrivateProfileStorage.current
         async let installedApplications = MeetingInstalledCallApplications.snapshot()
-        var defaults = SettingsStore.shared.meetingRecordingDefaults
+        var defaults = SettingsStore.shared.meetingRecordingDefaults.preferringLastPickedApplication(SettingsStore.shared.meetingRecentApplication)
         defaults.languageCode = defaults.languageCode ?? MeetingTranscriptionSetupDraft(settings: .shared).languageCode
         let audioStorageMode: MeetingAudioStorageMode = SettingsStore.shared.meetingSaveAudio ? .retainedFiles : .memoryOnly
         let speakerLabelsEnabled = SettingsStore.shared.meetingSpeakerLabelsEnabled
@@ -364,6 +383,8 @@ final class MeetingRecordingSourcePromptController: ObservableObject, PrivatePro
             systemDefaultCaptureID: nil
         )
         let installed = await installedApplications
+        let icons = await MeetingApplicationIcon.snapshot(bundleIdentifiers: applications.map(\.bundleIdentifier) + installed.map(\.bundleIdentifier))
+        try Task.checkCancellation()
         guard PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(profile) else { throw CancellationError() }
         return MeetingRecordingSourceSnapshot(
             defaults: defaults,
@@ -375,6 +396,7 @@ final class MeetingRecordingSourcePromptController: ObservableObject, PrivatePro
             selectedMicrophoneID: selection.deviceID,
             sourceMessage: sourceMessage,
             installedApplications: installed,
+            applicationIcons: icons,
             hasMeetingAudioAccess: hasMeetingAudioAccess,
             audioStorageMode: audioStorageMode,
             speakerLabelsEnabled: speakerLabelsEnabled,
@@ -423,7 +445,7 @@ struct MeetingRecordingSourcePromptContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Record this meeting?").font(self.theme.typography.bodyStrong)
-            Text("Choose the app and microphone to record.")
+            Text("Choose what to record. Your source choice is saved.")
                 .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
             if self.controller.isLoading {
                 ProgressView("Finding audio sources…").controlSize(.small)
@@ -474,7 +496,7 @@ struct MeetingRecordingSourcePromptContent: View {
     private func sourceSelector(_ snapshot: MeetingRecordingSourceSnapshot) -> some View {
         let recent = snapshot.availableRecentApplication
         let sections = MeetingAppRegistry.pickerSections(
-            MeetingAppPickerEntry.entries(applications: snapshot.applications, installed: snapshot.installedApplications)
+            MeetingAppPickerEntry.entries(applications: MeetingRecordingSourceResolver.applicationChoices(from: snapshot.applications), installed: snapshot.installedApplications)
                 .filter { $0.application != recent || recent == nil },
             bundleIdentifier: { $0.bundleIdentifier },
             name: { $0.displayName },
@@ -521,19 +543,19 @@ struct MeetingRecordingSourcePromptContent: View {
         if let application = entry.application {
             self.applicationEntry(MeetingApplicationOption(identity: application), snapshot: snapshot)
         } else {
-            Button(entry.unavailableLabel) {}.disabled(true)
+            MeetingApplicationMenuEntry(title: entry.unavailableLabel, icon: snapshot.applicationIcons[entry.bundleIdentifier]) {}.disabled(true)
         }
     }
 
     private func applicationEntry(_ option: MeetingApplicationOption, snapshot: MeetingRecordingSourceSnapshot) -> some View {
         let name = snapshot.applicationLabel(option.identity)
-        return Button { self.controller.selectApplication(option.identity) } label: {
-            if snapshot.selectedApplication?.processID == option.identity.processID {
-                Label(name, systemImage: "checkmark")
-            } else {
-                Text(name)
-            }
-        }
+        return MeetingApplicationMenuEntry(
+            title: name,
+            icon: snapshot.applicationIcons[option.identity.bundleIdentifier],
+            selected: snapshot.selectedApplication?.bundleIdentifier == option.identity.bundleIdentifier
+                && snapshot.selectedApplication?.processID == option.identity.processID
+                && snapshot.selectedApplication?.capturesAllInstances == option.identity.capturesAllInstances
+        ) { self.controller.selectApplication(option.identity) }
     }
 
     private func microphoneSelector(_ snapshot: MeetingRecordingSourceSnapshot) -> some View {
@@ -549,5 +571,28 @@ struct MeetingRecordingSourcePromptContent: View {
         .accessibilityLabel("Microphone to record")
         .accessibilityValue(snapshot.microphoneSelectionLabel)
         .disabled(self.controller.isStarting)
+    }
+}
+
+/// Native menu state keeps the checkmark separate from the application's icon.
+struct MeetingApplicationMenuEntry: View {
+    let title: String
+    var icon: MeetingApplicationIcon?
+    var selected = false
+    var systemImage = "app"
+    let action: () -> Void
+
+    var body: some View {
+        Toggle(isOn: Binding(get: { self.selected }, set: { _ in self.action() })) {
+            Label {
+                Text(self.title)
+            } icon: {
+                if let icon {
+                    Image(nsImage: icon.image)
+                } else {
+                    Image(systemName: self.systemImage)
+                }
+            }
+        }
     }
 }

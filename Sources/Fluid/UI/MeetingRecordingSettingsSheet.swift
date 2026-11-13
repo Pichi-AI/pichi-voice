@@ -243,6 +243,9 @@ struct MeetingRecordingSettingsSheet: View {
                         .fluidDropdownStyle(fillsWidth: true)
                         .accessibilityLabel("Default meeting type")
                     }
+                    .onChange(of: self.draft.mode) { _, _ in
+                        self.draft.applicationSelectionWasEdited = true
+                    }
 
                     if self.draft.mode == .onlineCall {
                         Divider()
@@ -366,15 +369,12 @@ struct MeetingRecordingSettingsSheet: View {
     }
 
     private func applicationMenuEntry(title: String, id: String?) -> some View {
-        Button {
-            self.applicationSelection.wrappedValue = id
-        } label: {
-            if self.draft.applicationAudioScope == .selectedApplication && self.applicationSelection.wrappedValue == id {
-                Label(title, systemImage: "checkmark")
-            } else {
-                Text(title)
-            }
-        }
+        MeetingApplicationMenuEntry(
+            title: title,
+            icon: self.applications.first(where: { $0.id == id })?.icon,
+            selected: self.draft.applicationAudioScope == .selectedApplication && self.applicationSelection.wrappedValue == id,
+            systemImage: id == nil ? "wand.and.stars" : "app"
+        ) { self.applicationSelection.wrappedValue = id }
     }
 
     private var meetingApplications: [MeetingApplicationOption] {

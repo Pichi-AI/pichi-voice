@@ -38,6 +38,7 @@ xcrun swiftc -parse-as-library \
     Sources/Fluid/Services/LocalTextModelCatalog.swift \
     Sources/Fluid/UI/ModelDisplayName.swift \
     Sources/Fluid/Views/CommandModelCatalog.swift \
+    Tests/AppleIntelligenceAvailabilityDouble.swift \
     Sources/Fluid/Persistence/SettingsStore+CommandMode.swift \
     Tests/CommandModelCatalogTests.swift \
     -o "$task_catalog_bundle/Contents/MacOS/tests"

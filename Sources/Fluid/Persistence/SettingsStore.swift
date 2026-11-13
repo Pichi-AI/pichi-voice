@@ -1736,7 +1736,7 @@ final class SettingsStore: ObservableObject {
             self.selectedModel = nil
         }
 
-        if retiredProviderIDs.contains(self.commandModeSelectedProviderID) {
+        if self.commandModeSelectedProviderID == "apple-intelligence-disabled" {
             self.commandModeSelectedProviderID = ""
             self.commandModeSelectedModel = nil
         }
@@ -2591,6 +2591,7 @@ final class SettingsStore: ObservableObject {
         case fluidSfx2 = "fluid_sfx_2"
         case fluidSfx3 = "fluid_sfx_3"
         case fluidSfx4 = "fluid_sfx_4"
+        case cream, thock, petal
 
         var id: String {
             self.rawValue
@@ -2599,11 +2600,14 @@ final class SettingsStore: ObservableObject {
         var displayName: String {
             switch self {
             case .none: return "None"
-            case .fluidSfx0: return PichiLocalization.format("Sound %lld", 0)
-            case .fluidSfx1: return PichiLocalization.format("Sound %lld", 1)
-            case .fluidSfx2: return PichiLocalization.format("Sound %lld", 2)
-            case .fluidSfx3: return PichiLocalization.format("Sound %lld", 3)
-            case .fluidSfx4: return PichiLocalization.format("Sound %lld", 4)
+            case .fluidSfx0: return PichiLocalization.text("Original · SFX 0")
+            case .fluidSfx1: return PichiLocalization.text("Ember · SFX 1")
+            case .fluidSfx2: return PichiLocalization.text("Rise · SFX 2")
+            case .fluidSfx3: return PichiLocalization.text("Drift · SFX 3")
+            case .fluidSfx4: return PichiLocalization.text("Echo · SFX 4")
+            case .cream: return PichiLocalization.text("Cream")
+            case .thock: return PichiLocalization.text("Thock")
+            case .petal: return PichiLocalization.text("Petal")
             }
         }
 
@@ -2615,13 +2619,23 @@ final class SettingsStore: ObservableObject {
             case .fluidSfx2: return "FV_start_2"
             case .fluidSfx3: return "sfx_3"
             case .fluidSfx4: return "sfx_4"
+            case .cream: return "cue_cream_start"
+            case .thock: return "cue_thock_start"
+            case .petal: return "cue_petal_start"
             }
         }
 
         var stopSoundFileName: String? {
             switch self {
             case .fluidSfx0: return "FV_end_0"
-            case .none, .fluidSfx1, .fluidSfx2, .fluidSfx3, .fluidSfx4: return nil
+            case .cream: return "cue_cream_stop"
+            case .thock: return "cue_thock_stop"
+            case .petal: return "cue_petal_stop"
+            case .fluidSfx1: return "FV_stop_1"
+            case .fluidSfx2: return "FV_stop_2"
+            case .fluidSfx3: return "FV_stop_3"
+            case .fluidSfx4: return "FV_stop_4"
+            case .none: return nil
             }
         }
     }
@@ -3627,6 +3641,7 @@ final class SettingsStore: ObservableObject {
             hideFromDockAndAppSwitcher: self.hideFromDockAndAppSwitcher,
             showMainWindowAtLoginLaunch: self.showMainWindowAtLoginLaunch,
             accentColorOption: self.accentColorOption,
+            customAccentColorHex: self.customAccentColorHex,
             transcriptionStartSound: self.transcriptionStartSound,
             transcriptionSoundVolume: self.transcriptionSoundVolume,
             transcriptionSoundIndependentVolume: false,
@@ -3709,6 +3724,7 @@ final class SettingsStore: ObservableObject {
             meetingRecordingDefaults: self.meetingRecordingDefaults,
             privateAIIdleUnload: self.privateAIIdleUnload,
             dictationPromptConfigurations: self.dictationPromptConfigurations,
+            automaticDictionaryPromptDelay: self.automaticDictionaryPromptDelay,
             providerConnectionOptions: self.providerConnectionOptions
         )
     }
@@ -3759,7 +3775,9 @@ final class SettingsStore: ObservableObject {
             MeetingBackendID(rawValue: $0)
         } ?? .productionDefault
         if let meetingRecordingDefaults = payload.meetingRecordingDefaults {
-            self.meetingRecordingDefaults = meetingRecordingDefaults
+            // The restored source supersedes this Mac's previous pick. Backups do not contain
+            // process identities, so the restored app will be resolved afresh at recording start.
+            self.saveMeetingRecordingSource(meetingRecordingDefaults, recentApplication: nil)
         }
         self.primaryDictationShortcuts = payload.primaryDictationShortcuts ?? [payload.hotkeyShortcut]
         self.promptModeHotkeyShortcut = payload.promptModeHotkeyShortcut
@@ -3791,6 +3809,7 @@ final class SettingsStore: ObservableObject {
         self.hideFromDockAndAppSwitcher = payload.hideFromDockAndAppSwitcher
         self.showMainWindowAtLoginLaunch = payload.showMainWindowAtLoginLaunch ?? true
         self.accentColorOption = payload.accentColorOption
+        self.customAccentColorHex = payload.customAccentColorHex
         self.transcriptionStartSound = payload.transcriptionStartSound
         self.transcriptionSoundVolume = payload.transcriptionSoundVolume
         self.autoUpdateCheckEnabled = payload.autoUpdateCheckEnabled
@@ -3917,6 +3936,9 @@ final class SettingsStore: ObservableObject {
         self.continuousDictationSpacingEnabled = payload.continuousDictationSpacingEnabled ?? restoredContinuousDictationModeEnabled
         self.contextAwareCapitalizationEnabled = payload.contextAwareCapitalizationEnabled ?? restoredContinuousDictationModeEnabled
         self.pauseMediaDuringTranscription = payload.pauseMediaDuringTranscription
+        if let automaticDictionaryPromptDelay = payload.automaticDictionaryPromptDelay {
+            self.automaticDictionaryPromptDelay = automaticDictionaryPromptDelay
+        }
         if let automaticDictionaryLearningEnabled = payload.automaticDictionaryLearningEnabled {
             self.automaticDictionaryLearningEnabled = automaticDictionaryLearningEnabled
         }

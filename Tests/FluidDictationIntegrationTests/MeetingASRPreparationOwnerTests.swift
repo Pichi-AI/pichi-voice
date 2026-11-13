@@ -407,7 +407,7 @@ final class MeetingASRPreparationOwnerTests: XCTestCase {
             )
             XCTFail("Expected unsupported policy rejection")
         } catch let error as MeetingProviderOptionsError {
-            XCTAssertEqual(error, .unsupportedLanguageCode("de"))
+            XCTAssertEqual(error, .unsupportedASRModel("parakeet-tdt-v2"))
         } catch {
             XCTFail("Expected MeetingProviderOptionsError, got \(error)")
         }
@@ -1841,7 +1841,7 @@ final class ASRServiceMeetingASRScopeTests: XCTestCase {
         settings.vocabularyBoostingEnabled = true
 
         let provider = try FluidAudioProvider(meetingConfiguration: MeetingFinalProcessingConfiguration())
-        XCTAssertEqual(provider.modelOverride, .parakeetTDTv2)
+        XCTAssertEqual(provider.modelOverride, .fluidParakeetPro)
         #if DEBUG
         let options = provider.effectiveEnhancementOptionsForTesting
         XCTAssertFalse(options.experimentalUnifiedFinalEnabled)

@@ -9,7 +9,7 @@ extension AppServices {
         let discovery = PrivateProfileOperationOwner(registerForTransitions: true)
         let configuration = try await discovery.perform {
             guard SettingsStore.shared.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
-            let defaults = SettingsStore.shared.meetingRecordingDefaults
+            let defaults = SettingsStore.shared.meetingRecordingDefaults.preferringLastPickedApplication(SettingsStore.shared.meetingRecentApplication)
             let target = defaults.mode == .onlineCall && defaults.effectiveApplicationAudioScope == .selectedApplication && defaults.usesAutomaticApplication ? self.meetingAutomaticTarget : nil
             if defaults.mode == .onlineCall, defaults.effectiveApplicationAudioScope == .selectedApplication, defaults.usesAutomaticApplication, target == nil {
                 throw MeetingCaptureError.applicationNotSelected

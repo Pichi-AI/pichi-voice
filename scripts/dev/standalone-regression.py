@@ -261,6 +261,7 @@ OTHER_PROBES = (
 # This reviewed orchestrator invokes the complete CI sequence; it is not a leaf probe.
 ORCHESTRATOR_SCRIPTS = {"Tests/run_ci_checks.sh"}
 SHELL_PROBES = (
+    "apple_intelligence_command", "dictation_quantity", "dictionary_correction_archive", "private_ai_settings",
     "account_session", "mobile_account", "admitted_history_writes", "admitted_pronunciation_read", "analytics_config", "analytics_private_profile", "app_search_private_profile", "apple_speech_lifecycle", "brand_logo_rendering", "brand_owned_native_menu", "brand_profile",
     "command_archive_search", "command_cancellation", "command_markdown",
     "credential_startup", "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
@@ -275,6 +276,7 @@ SHELL_PROBES = (
     "stats_snapshot", "terminal_service_lifecycle", "voice_edit_cancellation",
 )
 PYTHON_PROBES = (
+    "dictionary_correction_timing", "meeting_computer_audio", "meeting_end_countdown", "meeting_model_policy", "meeting_picker",
     "delivery_failure_copy", "dictation_context_profile", "diarization_repeatability", "dictionary_training_save", "dictation_capture_admission", "fluid_audio_capture_options", "gigaam_artifact_ownership", "gigaam_encoder_dictionary_storage", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
     "meeting_speaker_attribution", "mobile_recording_activity_lifecycle",
     "private_capture_feedback", "private_profile_activation_summary", "private_panel_concealment", "settings_backup_concurrency",

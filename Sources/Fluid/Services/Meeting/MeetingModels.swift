@@ -15,7 +15,11 @@ nonisolated enum MeetingLanguageCode {
 
 nonisolated enum MeetingCaptureMode: String, Codable, CaseIterable, Sendable {
     case onlineCall
+    case systemAudio
+    /// Retained only to read and process older microphone-only recordings.
     case inRoom
+
+    var capturesComputerAudio: Bool { self != .inRoom }
 }
 
 /// Capture intent is independent of the process that triggered meeting detection.
@@ -172,6 +176,8 @@ nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
     var applicationBundleIdentifier: String?
     var applicationDisplayName: String? = nil
     var applicationAudioScope: MeetingApplicationAudioScope? = nil
+    /// Only a new explicit app-wide picker choice may widen saved process selection.
+    var applicationCapturesAllInstances: Bool? = nil
     var microphoneCaptureDeviceID: String?
     var microphoneCoreAudioUID: String?
     var microphoneRole: MeetingMicrophoneRole
@@ -179,7 +185,7 @@ nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
 
     static let unconfigured = Self(
         isConfigured: false,
-        mode: .onlineCall,
+        mode: .systemAudio,
         applicationBundleIdentifier: nil,
         microphoneCaptureDeviceID: nil,
         microphoneCoreAudioUID: nil,
@@ -222,6 +228,8 @@ nonisolated struct MeetingApplicationIdentity: Codable, Equatable, Sendable {
     /// Optional properties). This remains detection evidence; selected-application audio follows
     /// the resolved process across window changes instead of binding capture to this window.
     var windowID: UInt32?
+    /// Explicit app-wide choice; nil retains the exact-process meaning of older sessions.
+    var capturesAllInstances: Bool? = nil
 
     init(
         bundleIdentifier: String,
@@ -1457,8 +1465,15 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         return (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)
     }
 
+    /// Current coverage wins over historical diagnostic events after a successful retry.
+    var hasIncompleteTranscriptCoverage: Bool {
+        if let complete = self.transcriptIsComplete { return !complete }
+        return self.transcriptCoverageGaps?.isEmpty == false
+            || self.events.contains { $0.kind == .transcriptCoverageIncomplete }
+    }
+
     var microphoneEchoWarning: String? {
-        guard self.mode == .onlineCall else { return nil }
+        guard self.mode.capturesComputerAudio else { return nil }
         switch self.state {
         case .preparing, .recording, .recordingDegraded, .stopping:
             guard self.events.last(where: { $0.kind == .echoFilteringUnavailable || $0.kind == .echoFilteringRestored })?.kind == .echoFilteringUnavailable else { return nil }

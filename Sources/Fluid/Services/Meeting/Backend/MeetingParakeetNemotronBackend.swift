@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 
 // Stage E of `MEETING_TRANSCRIPTION_IMPLEMENTATION_PLAN.md`: the local composite backend.
-// Parakeet TDT v2/v3 produce word-timed ASR; Nemotron-3 produces per-epoch speaker activity. The
+// Fluid Speech Pro/Parakeet v3 produce word-timed ASR; Nemotron-3 produces per-epoch speaker activity. The
 // backend owns orchestration — per-epoch materialization, unit construction, slot assignment and
 // exactly-tiling coverage receipts — while the host-injected runtime owns the two model
 // capabilities. It never touches the filesystem outside the frozen request's session directory,
@@ -17,7 +17,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
     nonisolated static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
-        version: "10",
+        version: "12",
         execution: .local,
         supportedLanguageCodes: VoiceEngineLanguageCatalog.parakeetV3LanguageIDs,
         supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),

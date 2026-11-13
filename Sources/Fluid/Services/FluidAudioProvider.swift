@@ -142,6 +142,14 @@ nonisolated struct MeetingProviderOptions: Equatable, Sendable {
         .parakeetTDTv2, .parakeetTDT, .fluidParakeetPro,
     ]
 
+    /// Choose once before freezing the processing request. An empty installation starts
+    /// Pro's normal download; an existing v3 installation can transcribe offline.
+    static func defaultModel(installedModelIDs: Set<String>) -> SettingsStore.SpeechModel {
+        if installedModelIDs.contains(SettingsStore.SpeechModel.fluidParakeetPro.rawValue) { return .fluidParakeetPro }
+        if installedModelIDs.contains(SettingsStore.SpeechModel.parakeetTDT.rawValue) { return .parakeetTDT }
+        return .fluidParakeetPro
+    }
+
     static func preferredModel(
         for languageCode: String,
         selected: SettingsStore.SpeechModel?
@@ -149,7 +157,7 @@ nonisolated struct MeetingProviderOptions: Equatable, Sendable {
         if let selected, self.supportedModels.contains(selected),
            ParakeetSpeechModelCatalog.descriptor(forModelID: selected.rawValue)?.supportedLanguageCodes.contains(languageCode) == true
         { return selected }
-        return languageCode == "en" ? .parakeetTDTv2 : .parakeetTDT
+        return .fluidParakeetPro
     }
 
     let model: SettingsStore.SpeechModel
@@ -181,9 +189,8 @@ nonisolated struct MeetingProviderOptions: Equatable, Sendable {
         guard !configuration.pronunciationMatchingEnabled else {
             throw MeetingProviderOptionsError.unsupportedFeature("pronunciationMatching")
         }
-        guard !configuration.customDictionaryRewritingEnabled else {
-            throw MeetingProviderOptionsError.unsupportedFeature("customDictionaryRewriting")
-        }
+        // Saved replacements run on final speaker turns in the meeting pipeline, never inside
+        // ASR where they would disagree with raw word timings or read live dictation settings.
         guard !configuration.experimentalUnifiedFinalEnabled else {
             throw MeetingProviderOptionsError.unsupportedFeature("experimentalUnifiedFinal")
         }

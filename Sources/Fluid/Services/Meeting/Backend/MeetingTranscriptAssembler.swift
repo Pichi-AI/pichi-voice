@@ -344,7 +344,7 @@ nonisolated struct MeetingTranscriptAssembler {
                 continue
             }
 
-            if manifest.captureMode == .onlineCall,
+            if manifest.captureMode.capturesComputerAudio,
                manifest.track(unit.trackID)?.kind == .microphone
             {
                 guard let verdict = input.echoVerdicts[unit.id] else {

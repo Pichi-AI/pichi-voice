@@ -70,6 +70,9 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     /// When recording stops, ASRService flips `isRunning` to false, which would normally hide the
     /// overlay. During post-processing we want the overlay to stay visible until processing ends.
     private var isProcessingActive: Bool = false
+    private let pasteRecoveryInbox = PasteRecoveryInbox()
+    private var pasteRecoveryProfile: PrivateProfileSnapshot?
+    private var pasteRecoveryExpiryTask: Task<Void, Never>?
 
     @Published var isRecording: Bool = false
 
@@ -207,15 +210,14 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             }
             .store(in: &self.cancellables)
 
-        NotificationCenter.default.publisher(for: .fluidPasteNotLanded)
+        NotificationCenter.default.publisher(for: .fluidPasteRecoveryAvailable)
             .sink { [weak self] note in
                 guard let transcript = note.userInfo?["transcript"] as? String,
                       let profile = note.userInfo?["privateProfile"] as? PrivateProfileSnapshot,
-                      let verificationID = note.userInfo?["verificationID"] as? UInt64,
-                      let postedAt = note.userInfo?["postedAt"] as? TimeInterval else { return }
+                      let verificationID = note.userInfo?["verificationID"] as? UInt64 else { return }
+                let unverified = note.userInfo?["unverified"] as? Bool ?? false
                 Task { @MainActor [weak self] in
-                    guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
-                    self?.showPasteNotLandedFailure(transcript: transcript, profile: profile, verificationID: verificationID, postedAt: postedAt)
+                    self?.queuePasteRecovery(transcript: transcript, profile: profile, verificationID: verificationID, unverified: unverified)
                 }
             }
             .store(in: &self.cancellables)
@@ -273,6 +275,13 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
                 }
             }
             .store(in: &self.cancellables)
+        #if DEBUG
+        // Queue behind the initial Combine values so app-hosted layout tests do
+        // not race startup's empty transcript or stopped-recording notification.
+        DispatchQueue.main.async { [weak asrService] in
+            asrService?.initialMenuBarStateDeliveredForTests = true
+        }
+        #endif
     }
 
     func configure(meetingCoordinator: MeetingSessionCoordinator) {
@@ -404,6 +413,10 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func concealPrivatePresentation() {
+        self.pasteRecoveryExpiryTask?.cancel()
+        self.pasteRecoveryExpiryTask = nil
+        self.pasteRecoveryInbox.expire(now: .infinity)
+        self.pasteRecoveryProfile = nil
         self.dictionaryWordTrainingExpiry?.cancel()
         self.dictionaryWordTrainingExpiry = nil
         self.pendingDictionaryWordTrainingRequest = nil
@@ -483,6 +496,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func handleOverlayState(isRunning: Bool, asrService: ASRService) {
+        defer { if !isRunning { self.presentPendingPasteRecovery() } }
         self.overlayBench("handle_state isRunning=\(isRunning) overlayVisible=\(self.overlayVisible) processing=\(self.isProcessingActive) mode=\(self.currentOverlayMode.rawValue)")
 
         // Dictionary training owns its recording controls, so showing the
@@ -607,17 +621,67 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         }
     }
 
-    /// A verified non-landing paste re-presents the overlay in its failure
-    /// state so the transcript can be copied.
+    /// Compatibility entry point for verified misses; recovery still uses the upstream inbox.
     func showPasteNotLandedFailure(transcript: String, profile: PrivateProfileSnapshot, verificationID: UInt64, postedAt: TimeInterval) {
-        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
-        guard PasteRecoveryPresentationPolicy.shared.claim(
-            verificationID,
-            alertsEnabled: SettingsStore.shared.showPasteCheckAlerts,
-            isBusy: self.overlayVisible || self.isProcessingActive || self.asrService?.isRunning == true,
-            userActed: PasteVerifier.userActedAfterPaste(secondsSinceLastInput: PasteVerifier.secondsSinceLastUserInput(), secondsSincePaste: ProcessInfo.processInfo.systemUptime - postedAt)
+        guard !PasteVerifier.userActedAfterPaste(
+            secondsSinceLastInput: PasteVerifier.secondsSinceLastUserInput(),
+            secondsSincePaste: ProcessInfo.processInfo.systemUptime - postedAt
         ) else { return }
-        DeliveryFailureOverlayController.shared.show(kind: .pasteNotLanded, transcript: transcript)
+        self.queuePasteRecovery(transcript: transcript, profile: profile, verificationID: verificationID, unverified: false)
+    }
+
+    private func queuePasteRecovery(transcript: String, profile: PrivateProfileSnapshot, verificationID: UInt64, unverified: Bool) {
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
+        let accepted = self.pasteRecoveryInbox.submit(
+            id: verificationID,
+            transcript: transcript,
+            unverified: unverified,
+            now: ProcessInfo.processInfo.systemUptime,
+            alertsEnabled: SettingsStore.shared.showPasteCheckAlerts
+        )
+        DebugLogger.shared.info("PASTE_RECOVERY queued id=\(verificationID) accepted=\(accepted) unverified=\(unverified)", source: "MenuBarManager")
+        guard accepted else { return }
+        self.pasteRecoveryProfile = profile
+        self.pasteRecoveryExpiryTask?.cancel()
+        self.pasteRecoveryExpiryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(PasteRecoveryInbox.lifetime * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            if let id = self?.pasteRecoveryInbox.pendingID {
+                DebugLogger.shared.info("PASTE_RECOVERY expired id=\(id)", source: "MenuBarManager")
+            }
+            self?.pasteRecoveryInbox.expire(now: ProcessInfo.processInfo.systemUptime)
+            self?.pasteRecoveryProfile = nil
+            self?.pasteRecoveryExpiryTask = nil
+        }
+        self.presentPendingPasteRecovery()
+    }
+
+    private func presentPendingPasteRecovery() {
+        guard let profile = self.pasteRecoveryProfile else { return }
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else {
+            self.pasteRecoveryExpiryTask?.cancel()
+            self.pasteRecoveryExpiryTask = nil
+            self.pasteRecoveryInbox.expire(now: .infinity)
+            self.pasteRecoveryProfile = nil
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        let isBusy = self.overlayVisible || self.isProcessingActive || self.asrService?.isRunning == true
+        let alerts = SettingsStore.shared.showPasteCheckAlerts
+        if let id = self.pasteRecoveryInbox.pendingID {
+            let decision = self.pasteRecoveryInbox.disposition(now: now, isBusy: isBusy, alertsEnabled: alerts)
+            DebugLogger.shared.info("PASTE_RECOVERY decision id=\(id) state=\(decision.rawValue)", source: "MenuBarManager")
+        }
+        guard let entry = self.pasteRecoveryInbox.take(
+            now: now,
+            isBusy: isBusy,
+            alertsEnabled: alerts
+        ) else { return }
+        self.pasteRecoveryExpiryTask?.cancel()
+        self.pasteRecoveryExpiryTask = nil
+        self.pasteRecoveryProfile = nil
+        DeliveryFailureOverlayController.shared.show(kind: entry.unverified ? .pasteUnverified : .pasteNotLanded, transcript: entry.transcript)
+        DebugLogger.shared.info("PASTE_RECOVERY shown id=\(entry.id) unverified=\(entry.unverified)", source: "MenuBarManager")
     }
 
     func showRecordingOverlayImmediately() {
@@ -628,8 +692,6 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             self.overlayBench("instant_show_return reason=no_asr_service")
             return
         }
-
-        PasteRecoveryPresentationPolicy.shared.beginDelivery()
 
         self.pendingHideOperation?.cancel()
         self.pendingHideOperation = nil
@@ -738,6 +800,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     func setProcessing(_ processing: Bool) {
+        defer { if !processing { self.presentPendingPasteRecovery() } }
         self.overlayBench("set_processing_request processing=\(processing) overlayVisible=\(self.overlayVisible) active=\(self.isProcessingActive)")
 
         if processing {
@@ -877,6 +940,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         NotchOverlayManager.shared.setProcessing(false)
         self.flushDeferredStoppedRecordingState()
         self.overlayBench("finish_keep_visible")
+        self.presentPendingPasteRecovery()
     }
 
     nonisolated static func usesTransientFailureCard(kind: DeliveryFailureOverlayController.Kind, overlayVisible: Bool) -> Bool {
@@ -909,6 +973,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func prepareForProcessingCompletion() {
+        defer { self.presentPendingPasteRecovery() }
         self.cancelPendingProcessingCompletionOperations()
         self.isProcessingActive = false
         self.overlayVisible = false

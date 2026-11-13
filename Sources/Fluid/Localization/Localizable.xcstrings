@@ -68224,6 +68224,1043 @@
           }
         }
       }
+    },
+    "Original · SFX 0": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Original · SFX 0"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оригинал · SFX 0"
+          }
+        }
+      }
+    },
+    "Ember · SFX 1": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ember · SFX 1"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Уголёк · SFX 1"
+          }
+        }
+      }
+    },
+    "Rise · SFX 2": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rise · SFX 2"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подъём · SFX 2"
+          }
+        }
+      }
+    },
+    "Drift · SFX 3": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drift · SFX 3"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дрейф · SFX 3"
+          }
+        }
+      }
+    },
+    "Echo · SFX 4": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Echo · SFX 4"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эхо · SFX 4"
+          }
+        }
+      }
+    },
+    "Cream": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cream"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Крем"
+          }
+        }
+      }
+    },
+    "Thock": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thock"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стук"
+          }
+        }
+      }
+    },
+    "Petal": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Petal"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Лепесток"
+          }
+        }
+      }
+    },
+    "0.75 seconds": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "0.75 seconds"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "0,75 секунды"
+          }
+        }
+      }
+    },
+    "1 second": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 second"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 секунда"
+          }
+        }
+      }
+    },
+    "2 seconds": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2 seconds"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2 секунды"
+          }
+        }
+      }
+    },
+    "3 seconds": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "3 seconds"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "3 секунды"
+          }
+        }
+      }
+    },
+    "Off by default. Supported models: %@. Everything is processed on your device. Research preview: review your text before sending; context may cause inaccurate changes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. Supported models: %@. Everything is processed on your device. Research preview: review your text before sending; context may cause inaccurate changes."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "По умолчанию выключено. Поддерживаемые модели: %@. Обработка выполняется на вашем устройстве. Экспериментальная функция: проверяйте текст перед отправкой, контекст может привести к неточным изменениям."
+          }
+        }
+      }
+    },
+    "Saved replacements apply to dictation and finished meeting transcripts.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved replacements apply to dictation and finished meeting transcripts."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранённые замены применяются к диктовке и готовым расшифровкам встреч."
+          }
+        }
+      }
+    },
+    "Applied to dictation and finished meeting transcripts.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applied to dictation and finished meeting transcripts."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Применяется к диктовке и готовым расшифровкам встреч."
+          }
+        }
+      }
+    },
+    "Recommendations for your Mac": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recommendations for your Mac"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рекомендации для вашего Mac"
+          }
+        }
+      }
+    },
+    "Research preview · Review your text before sending. Cleanup may make inaccurate changes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Research preview · Review your text before sending. Cleanup may make inaccurate changes."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспериментальная функция · Проверяйте текст перед отправкой. При обработке возможны неточные изменения."
+          }
+        }
+      }
+    },
+    "Meeting ended": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting ended"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встреча завершилась"
+          }
+        }
+      }
+    },
+    "Stop now": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop now"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Остановить сейчас"
+          }
+        }
+      }
+    },
+    "Choose what to record. Your source choice is saved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose what to record. Your source choice is saved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите источник записи. Ваш выбор будет сохранён."
+          }
+        }
+      }
+    },
+    "Automatic · all computer audio + mic": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic · all computer audio + mic"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматически · все звуки компьютера и микрофон"
+          }
+        }
+      }
+    },
+    "Redo transcript…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redo transcript…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторить расшифровку…"
+          }
+        }
+      }
+    },
+    "Redo transcript": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redo transcript"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторить расшифровку"
+          }
+        }
+      }
+    },
+    "Transcribe saved audio again with your latest saved replacements. Keep the current language or choose another. This replaces the transcript.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcribe saved audio again with your latest saved replacements. Keep the current language or choose another. This replaces the transcript."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторно расшифруйте сохранённое аудио с актуальными заменами из словаря. Оставьте текущий язык или выберите другой. Текущая расшифровка будет заменена."
+          }
+        }
+      }
+    },
+    "Pick a preset or a custom color.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pick a preset or a custom color."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите готовую палитру или свой цвет."
+          }
+        }
+      }
+    },
+    "Choose a recording sound. Paired sounds preview start and stop.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a recording sound. Paired sounds preview start and stop."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите звук записи. Для парных звуков воспроизводятся начало и остановка."
+          }
+        }
+      }
+    },
+    "Prompt delay": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prompt delay"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Задержка предложения"
+          }
+        }
+      }
+    },
+    "Wait this long after you stop editing. Shorter delays may ask while you're still correcting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wait this long after you stop editing. Shorter delays may ask while you're still correcting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Время ожидания после окончания редактирования. При короткой задержке предложение может появиться до завершения исправлений."
+          }
+        }
+      }
+    },
+    "Audio cleanup is paused": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio cleanup is paused"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очистка аудио приостановлена"
+          }
+        }
+      }
+    },
+    "Older history needs recovery. Your recordings are being kept, even above the storage budget.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Older history needs recovery. Your recordings are being kept, even above the storage budget."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Старую историю нужно восстановить. Записи сохраняются, даже если превышен лимит хранилища."
+          }
+        }
+      }
+    },
+    "Show dictation modes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show dictation modes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Показать режимы диктовки"
+          }
+        }
+      }
+    },
+    "Click to rename. Enter saves; Escape cancels.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Click to rename. Enter saves; Escape cancels."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нажмите, чтобы переименовать. Enter сохраняет, Escape отменяет."
+          }
+        }
+      }
+    },
+    "Model verification failed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model verification failed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось проверить модель."
+          }
+        }
+      }
+    },
+    "Model settings changed. Please try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model settings changed. Please try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки модели изменились. Повторите попытку."
+          }
+        }
+      }
+    },
+    "Custom": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custom"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Свой цвет"
+          }
+        }
+      }
+    },
+    "Resume audio cleanup?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resume audio cleanup?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Возобновить очистку аудио?"
+          }
+        }
+      }
+    },
+    "Save Recovery Copy and Resume": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save Recovery Copy and Resume"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранить копию для восстановления и продолжить"
+          }
+        }
+      }
+    },
+    "Audio cleanup remains paused": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio cleanup remains paused"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очистка аудио остаётся приостановленной"
+          }
+        }
+      }
+    },
+    "Saving recovery copy…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saving recovery copy…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранение копии для восстановления…"
+          }
+        }
+      }
+    },
+    "Review recovery options…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review recovery options…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Варианты восстановления…"
+          }
+        }
+      }
+    },
+    "Fast & capable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fast & capable"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Быстро и эффективно"
+          }
+        }
+      }
+    },
+    "Higher quality": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Higher quality"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выше качество"
+          }
+        }
+      }
+    },
+    "Review text": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review text"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка текста"
+          }
+        }
+      }
+    },
+    "Restart FluidVoice first to import any readable older history. If this warning remains, save the unreadable history and all saved audio to a recovery folder and resume cleanup.\n\nSaved transcripts stay intact. Cleanup may remove older audio from the app, but the recovery copy keeps every saved recording and stays outside your audio budget.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restart FluidVoice first to import any readable older history. If this warning remains, save the unreadable history and all saved audio to a recovery folder and resume cleanup.\n\nSaved transcripts stay intact. Cleanup may remove older audio from the app, but the recovery copy keeps every saved recording and stays outside your audio budget."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала перезапустите FluidVoice, чтобы импортировать доступную старую историю. Если предупреждение остаётся, сохраните нечитаемую историю и все аудиозаписи в папку восстановления и возобновите очистку.\n\nСохранённые расшифровки останутся нетронутыми. Очистка может удалить старое аудио из приложения, но копия для восстановления сохраняет все записи и не учитывается в лимите аудио."
+          }
+        }
+      }
+    },
+    "Stopping in %llds": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopping in %llds"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Остановка через %lld сек."
+          }
+        }
+      }
+    },
+    "Meeting ended. Stopping and transcribing in %lld seconds.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting ended. Stopping and transcribing in %lld seconds."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встреча завершилась. До остановки и расшифровки: %lld сек."
+          }
+        }
+      }
+    },
+    "%@ (Last picked)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (Last picked)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (последний выбор)"
+          }
+        }
+      }
+    },
+    "%@, your last picked app, is unavailable. Choose an app or refresh sources.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, your last picked app, is unavailable. Choose an app or refresh sources."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приложение %@, выбранное в прошлый раз, недоступно. Выберите приложение или обновите список источников."
+          }
+        }
+      }
+    },
+    "Source saved for future recordings. Use headphones for clearer speaker separation.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source saved for future recordings. Use headphones for clearer speaker separation."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Источник сохранён для следующих записей. Используйте наушники для более точного разделения собеседников."
+          }
+        }
+      }
+    },
+    "Stop recording and transcribe this meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop recording and transcribe this meeting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Остановить запись и расшифровать встречу"
+          }
+        }
+      }
+    },
+    "Audio collection is paused: the local archive is full.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio collection is paused: the local archive is full."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сбор аудио приостановлен: локальный архив заполнен."
+          }
+        }
+      }
+    },
+    "The correction is saved, but its audio example could not be stored.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The correction is saved, but its audio example could not be stored."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исправление сохранено, но сохранить его аудиопример не удалось."
+          }
+        }
+      }
+    },
+    "Finish pending recordings before saving a recovery copy.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish pending recordings before saving a recovery copy."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завершите текущие записи перед сохранением копии для восстановления."
+          }
+        }
+      }
+    },
+    "Older history can be imported. Restart the app before resuming audio cleanup.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Older history can be imported. Restart the app before resuming audio cleanup."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Старую историю можно импортировать. Перезапустите приложение перед возобновлением очистки аудио."
+          }
+        }
+      }
+    },
+    "Older history changed while saving its recovery copy. Close other running builds of this app and try again. No history was removed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Older history changed while saving its recovery copy. Close other running builds of this app and try again. No history was removed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Старая история изменилась во время сохранения копии для восстановления. Закройте другие запущенные сборки этого приложения и повторите попытку. История не удалена."
+          }
+        }
+      }
+    },
+    "Saving audio locally...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saving audio locally..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальное сохранение аудио…"
+          }
+        }
+      }
+    },
+    "Save complete dictation audio with accepted corrections": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save complete dictation audio with accepted corrections"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранять полное аудио диктовки с принятыми исправлениями"
+          }
+        }
+      }
+    },
+    "Off by default. Applies only to new recordings. Stores the full dictated phrase and correction locally, separately from pronunciation clips and history. Nothing is uploaded.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. Applies only to new recordings. Stores the full dictated phrase and correction locally, separately from pronunciation clips and history. Nothing is uploaded."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "По умолчанию выключено. Применяется только к новым записям. Полная продиктованная фраза и исправление сохраняются локально, отдельно от произносительных клипов и истории. Ничего не отправляется в сеть."
+          }
+        }
+      }
+    },
+    "Pronunciation matching is on for dictation. Dictation and finished meetings use saved spelling corrections.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pronunciation matching is on for dictation. Dictation and finished meetings use saved spelling corrections."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Произносительные исправления включены для диктовки. Диктовка и готовые расшифровки встреч используют сохранённые текстовые замены."
+          }
+        }
+      }
+    },
+    "Saves this correction and its complete dictation audio on this Mac.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saves this correction and its complete dictation audio on this Mac."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохраняет это исправление и полное аудио диктовки на этом Mac."
+          }
+        }
+      }
+    },
+    "Restart the app first to import any readable older history. If this warning remains, save the unresolved older history and all saved audio to a recovery folder and resume cleanup.\n\nSaved transcripts stay intact. Cleanup may remove older audio from the app, but the recovery copy keeps every saved recording and stays outside your audio budget.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restart the app first to import any readable older history. If this warning remains, save the unresolved older history and all saved audio to a recovery folder and resume cleanup.\n\nSaved transcripts stay intact. Cleanup may remove older audio from the app, but the recovery copy keeps every saved recording and stays outside your audio budget."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала перезапустите приложение, чтобы импортировать доступную старую историю. Если предупреждение остаётся, сохраните старую историю, требующую восстановления, и все аудиозаписи в папку восстановления и возобновите очистку.\n\nСохранённые расшифровки останутся нетронутыми. Очистка может удалить старое аудио из приложения, но копия для восстановления сохраняет все записи и не учитывается в лимите аудио."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

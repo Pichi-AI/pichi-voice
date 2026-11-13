@@ -3,7 +3,7 @@ import Foundation
 /// Edit this definition for each release. The renderer and acknowledgement logic stay unchanged.
 struct ReleaseHighlightsContent {
     enum Destination { case meetings, dashboard, aiProviders, voiceEngine }
-    enum Preview { case meeting, dashboard, models, speech }
+    enum Preview { case meeting, dashboard, ripple, splash, speech }
 
     struct Feature: Identifiable {
         let id: String
@@ -23,7 +23,7 @@ struct ReleaseHighlightsContent {
 
     static func current(hasPrivateAI _: Bool) -> Self {
         Self(
-            release: "1.6.13-beta.2",
+            release: "1.6.13",
             title: "More flexible meetings and reliable delivery",
             subtitle: "Choose your meeting source, redo saved audio in another language, and recover unread dictation.",
             features: [

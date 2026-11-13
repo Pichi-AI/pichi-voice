@@ -31,6 +31,8 @@ struct PrivateAIModelPresentation: Codable, Hashable, Sendable {
     var speed: Int?
     /// A small label above the name, such as "Research preview".
     var badge: String?
+    var shortName: String?
+    var analyticsLabel: String?
 
     static func forModel(id: String) -> Self {
         switch id {
