@@ -552,9 +552,26 @@ verify.run_guarded(receipt, work)
         with tempfile.TemporaryDirectory() as temporary:
             receipt = FakeReceipt(Path(temporary), [(0, None)])
             receipt.step("check", ["true"])
-            with patch.object(VERIFY, "tree_fingerprint", return_value="after"):
+            with patch.object(VERIFY, "tree_fingerprint", return_value="after"), \
+                    patch.object(VERIFY, "dirty_paths", return_value=[f"Tests/Out{index}.png" for index in range(7)]):
                 VERIFY.finish(receipt, None, "before")
             self.assertEqual(receipt.value["result"], "incomplete")
+            reason = {item["name"]: item["reason"] for item in receipt.value["skipped"]}["freeze"]
+            self.assertIn("Tests/Out0.png", reason)
+            self.assertIn("and 2 more", reason)
+            self.assertEqual(len(receipt.value["treeChanges"]), 7)
+
+    def test_dirty_paths_name_changed_and_untracked_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / "kept.txt").write_text("one")
+            subprocess.run(["git", "add", "kept.txt"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "c"], cwd=root, check=True)
+            self.assertEqual(VERIFY.dirty_paths(root), [])
+            (root / "kept.txt").write_text("two")
+            (root / "new.txt").write_text("new")
+            self.assertEqual(sorted(VERIFY.dirty_paths(root)), ["kept.txt", "new.txt"])
 
     def test_a_still_tree_finishes_on_the_step_results(self):
         with tempfile.TemporaryDirectory() as temporary:

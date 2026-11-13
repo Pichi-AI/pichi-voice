@@ -127,6 +127,8 @@ jobs:
                       print("".join(log.readlines()[-60:]))
           PY
           done
+          echo "--- files git reports as changed or untracked in the gate worktree"
+          git status --porcelain=v1 --untracked-files=all | head -40
 
   ios:
     name: iOS simulator build
