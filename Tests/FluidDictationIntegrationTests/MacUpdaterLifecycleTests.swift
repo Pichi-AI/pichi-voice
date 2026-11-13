@@ -4,6 +4,71 @@ import XCTest
 
 @MainActor
 final class MacUpdaterLifecycleTests: XCTestCase {
+    func testSignedInstalledPrereleaseIdentityCanAdvanceToBetaAndStable() async throws {
+        let context = try Context()
+        defer { context.close() }
+        context.updater.currentVersionForTesting = nil
+        context.updater.currentBuildForTesting = nil
+        context.updater.currentBundleInformationForTesting = ["CFBundleShortVersionString": "0.3.0", "CFBundleVersion": "74",
+            "AppReleaseTag": "v0.3.0-beta.1"]
+        context.fixture.releases = [fixtureRelease(74, tag: "v0.3.0-beta.1", beta: true),
+            fixtureRelease(75, tag: "v0.3.0-beta.2", beta: true)]
+        let beta = try await context.updater.checkForUpdate(owner: "Pichi-AI", repo: "pichi-voice", includePrerelease: true)
+        XCTAssertTrue(beta.hasUpdate)
+        XCTAssertEqual(beta.latestVersion, "0.3.0-beta.2")
+        context.fixture.releases = [fixtureRelease(76, tag: "v0.3.0")]
+        let stable = try await context.updater.checkForUpdate(owner: "Pichi-AI", repo: "pichi-voice")
+        XCTAssertTrue(stable.hasUpdate)
+        XCTAssertEqual(stable.latestVersion, "0.3.0")
+        for tag: Any in [7, "v0.4.0", "v0.3.0+75-public.1", "invalid"] {
+            context.updater.currentBundleInformationForTesting = ["CFBundleShortVersionString": "0.3.0", "CFBundleVersion": "74", "AppReleaseTag": tag]
+            do {
+                _ = try await context.updater.checkForUpdate(owner: "Pichi-AI", repo: "pichi-voice")
+                XCTFail("Inconsistent signed version metadata must fail closed")
+            } catch {}
+        }
+        XCTAssertEqual(context.fixture.downloadCount, 0)
+        await context.cleanup()
+    }
+
+    func testBridgeClientDiscoversNormalPatchTagsAndRespectsTheBetaChannel() async throws {
+        let context = try Context()
+        defer { context.close() }
+        context.updater.currentVersionForTesting = "0.2.0"
+        context.updater.currentBuildForTesting = "73"
+        context.fixture.releases = [fixtureRelease(73, tag: "v0.2.0+73-public.1"),
+            fixtureRelease(74, tag: "v0.2.1"), fixtureRelease(75, tag: "v0.3.0-beta.1", beta: true)]
+        let stable = try await context.updater.checkForUpdate(owner: "Pichi-AI", repo: "pichi-voice")
+        XCTAssertTrue(stable.hasUpdate)
+        XCTAssertEqual(stable.latestVersion, "0.2.1")
+        let beta = try await context.updater.checkForUpdate(owner: "Pichi-AI", repo: "pichi-voice", includePrerelease: true)
+        XCTAssertEqual(beta.latestVersion, "0.3.0-beta.1")
+        context.fixture.releases = [fixtureRelease(73, tag: "v0.2.0")]
+        let same = try await context.updater.checkForUpdate(owner: "Pichi-AI", repo: "pichi-voice")
+        XCTAssertFalse(same.hasUpdate, "A public version is immutable even if a normal tag carries no build")
+        await context.cleanup()
+    }
+
+    func testSameFriendlyLabelStillRequiresNewApprovalWhenTheSelectedBuildChanges() async throws {
+        let context = try Context()
+        defer { context.close() }
+        context.fixture.releases = [fixtureRelease(73, tag: "v0.2.0+73-public.1")]
+        context.updater.checkForUpdatesAutomatically()
+        try await wait { context.updater.downloadState == .ready("0.2.0") }
+        context.fixture.releases = [fixtureRelease(74, tag: "v0.2.0+74-public.1")]
+        var installedBuilds: [String?] = []
+        context.updater.installStagedForTesting = { _, selection in installedBuilds.append(selection.build) }
+        do {
+            try await context.updater.checkAndUpdate(owner: "Pichi-AI", repo: "pichi-voice", expectedVersion: "0.2.0")
+            XCTFail("Matching labels do not approve a changed immutable selection")
+        } catch SimpleUpdateError.releaseChanged {}
+        XCTAssertTrue(installedBuilds.isEmpty)
+        XCTAssertEqual(context.updater.availableUpdateVersion, "0.2.0")
+        try await context.updater.checkAndUpdate(owner: "Pichi-AI", repo: "pichi-voice", expectedVersion: "0.2.0")
+        XCTAssertEqual(installedBuilds, ["74"])
+        await context.cleanup()
+    }
+
     func testAbsentAndNonStringInstalledBuildMetadataCannotBecomeBuildZero() async throws {
         let context = try Context()
         defer { context.close() }
@@ -115,9 +180,9 @@ final class MacUpdaterLifecycleTests: XCTestCase {
         ]
         let result = try await context.updater.checkForUpdate(owner: "Pichi-AI", repo: "pichi-voice")
         XCTAssertTrue(result.hasUpdate)
-        XCTAssertEqual(result.latestVersion, "0.1.0 (71)")
+        XCTAssertEqual(result.latestVersion, "0.1.0")
         let beta = try await context.updater.checkForUpdate(owner: "Pichi-AI", repo: "pichi-voice", includePrerelease: true)
-        XCTAssertEqual(beta.latestVersion, "0.1.0 (140)")
+        XCTAssertEqual(beta.latestVersion, "0.1.0")
         context.updater.currentBuildForTesting = "151"
         let older = try await context.updater.fetchRecentReleaseBuildOptions(owner: "Pichi-AI", repo: "pichi-voice", olderThanCurrent: true)
         XCTAssertEqual(older.map(\.displayVersion), ["0.1.0 (71)", "0.1.0 (69)"])
@@ -139,7 +204,7 @@ final class MacUpdaterLifecycleTests: XCTestCase {
             installs += 1
         }
         context.updater.checkForUpdatesAutomatically()
-        try await wait { context.updater.downloadState == .ready("0.1.0 (71)") }
+        try await wait { context.updater.downloadState == .ready("0.1.0") }
         context.updater.checkForUpdatesAutomatically()
         try await wait { !context.updater.isCheckingForUpdates }
         XCTAssertEqual(context.fixture.downloadCount, 1)
@@ -164,7 +229,7 @@ final class MacUpdaterLifecycleTests: XCTestCase {
         context.defaults.set(false, forKey: SettingsStore.UpdateKeys.automaticUpdateDownloads)
         context.updater.checkForUpdatesAutomatically()
         try await wait { !context.updater.isCheckingForUpdates }
-        XCTAssertEqual(context.updater.availableUpdateVersion, "0.1.0 (71)")
+        XCTAssertEqual(context.updater.availableUpdateVersion, "0.1.0")
         XCTAssertEqual(context.fixture.downloadCount, 0)
         context.fixture.holdDownloads = true
         context.defaults.set(true, forKey: SettingsStore.UpdateKeys.automaticUpdateDownloads)
@@ -192,7 +257,7 @@ final class MacUpdaterLifecycleTests: XCTestCase {
         XCTAssertFalse(try contents.contains { try $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true })
         context.fixture.holdDownloads = false
         context.updater.checkForUpdatesAutomatically()
-        try await wait { context.updater.downloadState == .ready("0.1.0 (71)") }
+        try await wait { context.updater.downloadState == .ready("0.1.0") }
         await context.updater.shutdownForTermination()
         XCTAssertEqual(context.fixture.downloadCount, 2)
         await context.cleanup()
@@ -219,8 +284,8 @@ final class MacUpdaterLifecycleTests: XCTestCase {
         context.fixture.holdDownloads = false
         context.fixture.releases = [fixtureRelease(72, beta: true)]
         context.updater.checkForUpdatesAutomatically()
-        try await wait { context.updater.downloadState == .ready("0.1.0 (72)") }
-        XCTAssertEqual(context.updater.availableUpdateVersion, "0.1.0 (72)")
+        try await wait { context.updater.downloadState == .ready("0.1.0") }
+        XCTAssertEqual(context.updater.availableUpdateVersion, "0.1.0")
         await context.cleanup()
     }
 
@@ -249,14 +314,14 @@ final class MacUpdaterLifecycleTests: XCTestCase {
         let context = try Context()
         defer { context.close() }
         context.updater.checkForUpdatesAutomatically()
-        try await wait { context.updater.downloadState == .ready("0.1.0 (71)") }
+        try await wait { context.updater.downloadState == .ready("0.1.0") }
         var installs = 0
         context.updater.installStagedForTesting = { _, _ in installs += 1 }
         for activity: ASRExclusiveActivity in [.meeting, .dictation, .fileTranscription, .localAPI, .modelMaintenance] {
             let lease = try context.asr.acquireExclusiveActivity(activity)
             context.asr.isAsrReady = false // Losing ASR readiness never frees a live capture's lease.
             do {
-                try await context.updater.checkAndUpdate(owner: "Pichi-AI", repo: "pichi-voice", expectedVersion: "0.1.0 (71)")
+                try await context.updater.checkAndUpdate(owner: "Pichi-AI", repo: "pichi-voice", expectedVersion: "0.1.0")
                 XCTFail("An active consumer must veto replacement")
             } catch {}
             XCTAssertEqual(context.asr.activeExclusiveActivity, activity)
@@ -276,7 +341,7 @@ final class MacUpdaterLifecycleTests: XCTestCase {
         let context = try Context(useDefaultAdmission: true)
         defer { context.close() }
         context.updater.checkForUpdatesAutomatically()
-        try await wait { context.updater.downloadState == .ready("0.1.0 (71)") }
+        try await wait { context.updater.downloadState == .ready("0.1.0") }
         var installs = 0
         context.updater.installStagedForTesting = { _, _ in installs += 1 }
         let lease = try context.asr.acquireExclusiveActivity(.meeting)
@@ -320,7 +385,7 @@ final class MacUpdaterLifecycleTests: XCTestCase {
         changed["assets"] = assets
         context.fixture.releases = [changed]
         do {
-            try await context.updater.checkAndUpdate(owner: "Pichi-AI", repo: "pichi-voice", expectedVersion: "0.1.0 (71)")
+            try await context.updater.checkAndUpdate(owner: "Pichi-AI", repo: "pichi-voice", expectedVersion: "0.1.0")
             XCTFail("Same tag with a changed asset is a new selection")
         } catch { XCTAssertEqual(error.localizedDescription, SimpleUpdateError.releaseChanged.localizedDescription) }
         XCTAssertEqual(context.fixture.downloadCount, 0)

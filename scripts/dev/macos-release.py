@@ -245,8 +245,9 @@ class Release:
         require(SHA.fullmatch(args.source), "Source must be a full lowercase SHA")
         require(re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", args.version), "Invalid version")
         require(re.fullmatch(r"[1-9][0-9]*", args.build), "Invalid build")
-        self.tag = args.tag or f"v{args.version}+{args.build}-public.1"
-        require(re.fullmatch(re.escape(f"v{args.version}+{args.build}-public.") + r"[1-9][0-9]*", self.tag), "Tag identity mismatch")
+        self.tag = args.tag or f"v{args.version}"
+        require(self.tag == f"v{args.version}" or
+                re.fullmatch(re.escape(f"v{args.version}+{args.build}-public.") + r"[1-9][0-9]*", self.tag), "Tag identity mismatch")
         self.source = Source(args.repo, args.source, self.commands)
         self.prefix = f"Pichi-Voice-{args.version}-{args.build}-source"
         self.dmg_name = ALIAS
@@ -265,6 +266,9 @@ class Release:
                 info.get("CFBundleShortVersionString") == self.args.version and
                 info.get("CFBundleVersion") == self.args.build and
                 info.get("AppSourceRevision") == self.args.source, "Frozen app identity/version/build/source mismatch")
+        release_tag = info.get("AppReleaseTag")
+        require(release_tag == self.tag or ("+" in self.tag and release_tag is None),
+                "Frozen app release tag mismatch")
         signature = self.commands.run(["codesign", "-dvvv", str(app)], text=True).stderr
         require(f"Identifier={BUNDLE}\n" in signature, "Code signing identifier mismatch")
         config = parse_json((app / "Contents/Resources/brand-distribution.json").read_bytes())
@@ -501,7 +505,7 @@ class GitHub:
         if value is None:
             value = self.reconcile(lambda: self.api("releases", method="POST", body={
                 "tag_name": self.release.tag, "target_commitish": self.release.args.source, "draft": True,
-                "prerelease": False, "name": f"Pichi Voice {self.release.args.version} ({self.release.args.build})",
+                "prerelease": False, "name": f"Pichi Voice {self.release.args.version}",
                 "body": "Developer ID signed, notarized macOS app in a drag-install DMG. "
                         "Corresponding source and license notices are included. See SHA256SUMS and release-manifest.json."}),
                 self.find, lambda result: result is not None and result["draft"] is True)
@@ -584,11 +588,12 @@ class GitHub:
         require(isinstance(latest, dict) and latest.get("draft") is False and latest.get("prerelease") is False,
                 "Invalid latest stable release")
         tag = latest.get("tag_name")
-        match = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)\+([0-9]+)-public\.[0-9]+", tag) if isinstance(tag, str) else None
+        match = re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\+([0-9]+)-public\.[0-9]+)?", tag) if isinstance(tag, str) else None
         require(match is not None, "Latest stable release identity is not recognized")
-        previous = tuple(int(value) for value in match.groups())
-        candidate = tuple(int(value) for value in self.release.args.version.split(".")) + (int(self.release.args.build),)
-        require(candidate > previous, "A public release must advance the latest version/build; the website must not downgrade")
+        previous = tuple(int(value) for value in match.groups()[:3])
+        candidate = tuple(int(value) for value in self.release.args.version.split("."))
+        require(candidate > previous,
+                "A public release must advance the latest version; the website must not downgrade")
 
     def verify(self, expected):
         self.repository()
@@ -656,7 +661,7 @@ def main(argv=None):
     parser.add_argument("--source", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--build", required=True)
-    parser.add_argument("--tag", help="Defaults to vVERSION+BUILD-public.1")
+    parser.add_argument("--tag", help="Defaults to vVERSION; explicit legacy bridge tags remain supported")
     parser.add_argument("--app", help="Exact frozen Developer ID signed, notarized, stapled app")
     parser.add_argument("--dmg", help="Reuse an existing image instead of packaging (prepare only)")
     parser.add_argument("--output", help="New artifact directory (prepare only)")

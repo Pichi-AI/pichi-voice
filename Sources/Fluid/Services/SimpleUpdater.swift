@@ -166,7 +166,11 @@ final class SimpleUpdater: ObservableObject {
         let version: String
         let url: URL
         var displayVersion: String {
-            UpdateReleaseSelection.pichiVersion(version).map { "\($0.version) (\($0.build))" } ?? version
+            guard let identity = UpdateReleaseSelection.pichiVersion(version) else { return version }
+            // Historical releases share a marketing version; keep their build
+            // visible only in this diagnostic rollback picker.
+            if let build = identity.build { return "\(identity.version) (\(build))" }
+            return String(version.dropFirst())
         }
     }
 
@@ -305,10 +309,20 @@ final class SimpleUpdater: ObservableObject {
 
     private var currentComparableVersion: String { "v\(self.currentAppVersion)+\(self.currentAppBuild)-public.1" }
     private func installedSemanticVersion() throws -> SemanticVersion {
-        let value = self.isPichiDistribution ? self.currentComparableVersion : self.currentAppVersion
+        var value = self.isPichiDistribution ? self.currentComparableVersion : self.currentAppVersion
         // Unknown installed build metadata must fail closed, never compare as build zero.
-        guard !self.isPichiDistribution || UpdateReleaseSelection.pichiVersion(value) != nil,
-              let version = self.parseSemanticVersion(value) else { throw SimpleUpdateError.noSuitableRelease }
+        if self.isPichiDistribution {
+            guard UpdateReleaseSelection.pichiVersion(value) != nil else { throw SimpleUpdateError.noSuitableRelease }
+            if let rawTag = self.currentBundleInformation["AppReleaseTag"] {
+                guard let tag = rawTag as? String else { throw SimpleUpdateError.noSuitableRelease }
+                if !tag.isEmpty {
+                    guard let identity = UpdateReleaseSelection.pichiVersion(tag), identity.version == self.currentAppVersion,
+                          identity.build.map({ $0 == self.currentAppBuild }) ?? true else { throw SimpleUpdateError.noSuitableRelease }
+                    value = tag
+                }
+            }
+        }
+        guard let version = self.parseSemanticVersion(value) else { throw SimpleUpdateError.noSuitableRelease }
         return version
     }
 
@@ -880,7 +894,8 @@ final class SimpleUpdater: ObservableObject {
         #endif
         try await self.performSwapAndRelaunch(
             installedAppURL: Bundle.main.bundleURL, downloadedAppURL: staged.app,
-            expectedVersion: selection.version, expectedBuild: selection.build, isRollback: false
+            expectedVersion: selection.version, expectedBuild: selection.build,
+            expectedReleaseTag: selection.expectedBundleReleaseTag, isRollback: false
         )
     }
 
@@ -1178,7 +1193,7 @@ final class SimpleUpdater: ObservableObject {
             trimmed.removeFirst()
         }
 
-        let pichiBuild = UpdateReleaseSelection.pichiVersion(version).flatMap { Int($0.build) } ?? 0
+        let pichiBuild = UpdateReleaseSelection.pichiVersion(version).flatMap { $0.build }.flatMap(Int.init) ?? 0
         // Upstream semantic metadata has no precedence; Pichi numeric builds do.
         if let plusIndex = trimmed.firstIndex(of: "+") {
             trimmed = String(trimmed[..<plusIndex])
@@ -1233,6 +1248,7 @@ final class SimpleUpdater: ObservableObject {
         installedExpectation: UpdateBundleValidator.Expectation,
         expectedVersion: String?,
         expectedBuild: String? = nil,
+        expectedReleaseTag: String? = nil,
         backupURL: URL,
         isRollback: Bool,
         commit: Bool = true,
@@ -1261,7 +1277,8 @@ final class SimpleUpdater: ObservableObject {
         do {
             try Task.checkCancellation()
             _ = try validateBundle(replacement.stagedAppURL,
-                .init(bundleIdentifier: installedExpectation.bundleIdentifier, version: expectedVersion, build: expectedBuild),
+                .init(bundleIdentifier: installedExpectation.bundleIdentifier, version: expectedVersion, build: expectedBuild,
+                      releaseTag: expectedReleaseTag),
                 isRollback ? .installedApp(allowedTeamIDs: teams) : .developerID(allowedTeamIDs: teams))
             do {
                 try UpdateRollbackBackup.create(installedAppURL: installedAppURL, backupURL: backupURL) { url in
@@ -1320,6 +1337,7 @@ final class SimpleUpdater: ObservableObject {
         downloadedAppURL: URL,
         expectedVersion: String?,
         expectedBuild: String? = nil,
+        expectedReleaseTag: String? = nil,
         isRollback: Bool
     ) async throws {
         guard let identifier = Bundle.main.bundleIdentifier,
@@ -1341,6 +1359,7 @@ final class SimpleUpdater: ObservableObject {
                 installedExpectation: .init(bundleIdentifier: identifier, version: version, build: build),
                 expectedVersion: expectedVersion,
                 expectedBuild: expectedBuild,
+                expectedReleaseTag: expectedReleaseTag,
                 backupURL: backupURL,
                 isRollback: isRollback,
                 commit: false
@@ -1643,7 +1662,8 @@ extension SimpleUpdater {
             app = only
         }
         _ = try UpdateBundleValidator.validate(at: app,
-            expectation: .init(bundleIdentifier: identifier, version: selection.version, build: selection.build),
+            expectation: .init(bundleIdentifier: identifier, version: selection.version, build: selection.build,
+                               releaseTag: selection.expectedBundleReleaseTag),
             policy: .developerID(allowedTeamIDs: teams))
         return app
     }

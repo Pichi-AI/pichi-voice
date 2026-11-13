@@ -132,8 +132,8 @@ struct SettingsView: View {
 
     private var currentAppVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
-        return "\(version) (\(build))"
+        return UpdateReleaseSelection.displayVersion(version: version,
+            tag: Bundle.main.object(forInfoDictionaryKey: "AppReleaseTag") as? String)
     }
 
     private var appDisplayName: String {

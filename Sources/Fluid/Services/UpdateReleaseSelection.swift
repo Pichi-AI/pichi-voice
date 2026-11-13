@@ -11,9 +11,27 @@ nonisolated struct UpdateReleaseSelection: Equatable, Sendable {
     let assetURL: URL
     let digest: String?
 
-    var displayVersion: String { build.map { "\(version) (\($0))" } ?? version }
+    var displayVersion: String {
+        Self.displayVersion(version: version, tag: tag)
+    }
 
-    static func pichiVersion(_ tag: String) -> (version: String, build: String)? {
+    static func displayVersion(version: String, tag: String?) -> String {
+        guard let tag, Self.pichiVersion(tag)?.version == version,
+              tag.hasPrefix("v\(version)-"), !tag.contains("+") else { return version }
+        return String(tag.dropFirst())
+    }
+
+    var expectedBundleReleaseTag: String? {
+        guard let identity = Self.pichiVersion(tag), identity.build == nil else { return nil }
+        return tag
+    }
+
+    static func pichiVersion(_ tag: String) -> (version: String, build: String?)? {
+        if tag.range(of: #"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:alpha|beta|rc)\.(0|[1-9][0-9]*))?$"#, options: .regularExpression) != nil {
+            let version = String(tag.dropFirst().split(separator: "-")[0])
+            guard version.split(separator: ".").allSatisfy({ Int($0) != nil }) else { return nil }
+            return (version, nil)
+        }
         guard tag.range(of: #"^v[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+-(public|beta)\.[0-9]+$"#, options: .regularExpression) != nil else { return nil }
         let parts = tag.dropFirst().split(separator: "+")
         let build = String(parts[1].split(separator: "-")[0])
@@ -25,8 +43,14 @@ nonisolated struct UpdateReleaseSelection: Equatable, Sendable {
         guard !release.draft, let identity = pichiVersion(release.tag_name) else { return nil }
         // New releases use the product name only. The immutable tag and sealed
         // bundle metadata bind version/build; old published assets stay compatible.
-        let legacyName = "Pichi-Voice-\(identity.version)-\(identity.build)-macos-arm64.dmg"
-        let name = release.assets.contains { $0.name == self.diskImageName } ? self.diskImageName : legacyName
+        let name: String
+        if release.assets.contains(where: { $0.name == self.diskImageName }) {
+            name = self.diskImageName
+        } else if let build = identity.build {
+            name = "Pichi-Voice-\(identity.version)-\(build)-macos-arm64.dmg"
+        } else {
+            return nil
+        }
         let expected = URL(string: "https://github.com/\(owner)/\(repo)/releases/download/\(release.tag_name)/\(name)")
         let matches = release.assets.filter { asset in
             guard let expected else { return false }
