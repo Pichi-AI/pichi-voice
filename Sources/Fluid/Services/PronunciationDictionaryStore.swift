@@ -77,11 +77,11 @@ nonisolated enum PronunciationDictionaryStoreError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .staleEvidence:
-            "The dictionary entry changed before audio learning finished."
+            PichiLocalization.text("The dictionary entry changed before audio learning finished.")
         case .inconsistentEnrollment:
-            "Pronunciation samples must use the same model and embedding size."
+            PichiLocalization.text("Pronunciation samples must use the same model and embedding size.")
         case .outdatedModelRevision:
-            "These pronunciation recordings use an older voice model. Retrain this word by voice. Your custom words and text corrections remain saved."
+            PichiLocalization.text("These pronunciation recordings use an older voice model. Retrain this word by voice. Your custom words and text corrections remain saved.")
         }
     }
 }

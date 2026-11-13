@@ -30,13 +30,13 @@ enum DictationAudioHistoryError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .applicationSupportUnavailable:
-            return "Could not access Application Support."
+            return PichiLocalization.text("Could not access Application Support.")
         case .audioMissing:
-            return "Saved audio is missing."
+            return PichiLocalization.text("Saved audio is missing.")
         case .noAudioEntries:
-            return "No saved dictation audio is available to export."
+            return PichiLocalization.text("No saved dictation audio is available to export.")
         case let .zipFailed(message):
-            return "Could not create export zip. \(message)"
+            return PichiLocalization.format("Could not create export zip. %@", String(describing: message))
         }
     }
 }

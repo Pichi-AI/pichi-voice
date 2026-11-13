@@ -32,21 +32,21 @@ nonisolated enum ParakeetArchiveDownloader {
 
         var errorDescription: String? {
             switch self {
-            case .invalidDescriptor: return "This voice model has no valid pinned download."
-            case .invalidResponse: return "The model server did not return the expected archive. Please try again."
-            case .checksumMismatch: return "The downloaded voice model failed verification. Please try again."
-            case .invalidArchive: return "The voice model archive contains invalid or unsafe files."
-            case .incompleteModel: return "The voice model archive is incomplete."
-            case .targetExists: return "A different or incomplete voice model is already cached. Delete this model in Voice Engine settings, then download it again."
-            case let .cleanupFailed(url): return "Voice model temporary files could not be removed: \(url.path)"
-            case .capacityUnavailable: return "Available disk space could not be checked. Your installed model was kept. Please try again."
-            case .insufficientSpace: return "There is not enough free disk space to safely update this voice model. Free some space and try again. Your installed model was kept."
-            case .targetChanged: return "The installed voice model changed during this update. Its files were preserved. Please try again."
-            case let .replacementCleanupFailed(installed, retainedOld): return "The updated voice model is installed at \(installed.path), but its old files could not be removed: \(retainedOld.path)"
+            case .invalidDescriptor: return PichiLocalization.text("This voice model has no valid pinned download.")
+            case .invalidResponse: return PichiLocalization.text("The model server did not return the expected archive. Please try again.")
+            case .checksumMismatch: return PichiLocalization.text("The downloaded voice model failed verification. Please try again.")
+            case .invalidArchive: return PichiLocalization.text("The voice model archive contains invalid or unsafe files.")
+            case .incompleteModel: return PichiLocalization.text("The voice model archive is incomplete.")
+            case .targetExists: return PichiLocalization.text("A different or incomplete voice model is already cached. Delete this model in Voice Engine settings, then download it again.")
+            case let .cleanupFailed(url): return PichiLocalization.format("Voice model temporary files could not be removed: %@", String(describing: url.path))
+            case .capacityUnavailable: return PichiLocalization.text("Available disk space could not be checked. Your installed model was kept. Please try again.")
+            case .insufficientSpace: return PichiLocalization.text("There is not enough free disk space to safely update this voice model. Free some space and try again. Your installed model was kept.")
+            case .targetChanged: return PichiLocalization.text("The installed voice model changed during this update. Its files were preserved. Please try again.")
+            case let .replacementCleanupFailed(installed, retainedOld): return PichiLocalization.format("The updated voice model is installed at %@, but its old files could not be removed: %@", String(describing: installed.path), String(describing: retainedOld.path))
             case let .updateFailedWithCleanup(reason, installed, temporaryFiles):
-                return "The voice model update failed: \(reason). "
-                    + "This update did not replace the installed model at \(installed.path). "
-                    + "Temporary files could not be removed: \(temporaryFiles.path)"
+                return PichiLocalization.format("The voice model update failed: %@. ", String(describing: reason))
+                    + PichiLocalization.format("This update did not replace the installed model at %@. ", installed.path)
+                    + PichiLocalization.format("Temporary files could not be removed: %@", temporaryFiles.path)
             }
         }
     }

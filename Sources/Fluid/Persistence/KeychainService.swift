@@ -12,7 +12,7 @@ enum KeychainServiceError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidData:
-            return "Failed to convert key data."
+            return PichiLocalization.text("Failed to convert key data.")
         case .unavailable:
             return PichiLocalization.text("Provider credentials are unavailable. Open API key settings to retry.")
         case .readbackMismatch:
@@ -21,9 +21,9 @@ enum KeychainServiceError: Error, LocalizedError {
             return PichiLocalization.text("Legacy credentials could not be safely cleared. No credential edit was applied.")
         case let .unhandled(status):
             if let message = SecCopyErrorMessageString(status, nil) as String? {
-                return "\(message) (OSStatus: \(status))"
+                return PichiLocalization.format("%@ (OSStatus: %@)", String(describing: message), String(describing: status))
             }
-            return "Unhandled Keychain error (OSStatus: \(status))"
+            return PichiLocalization.format("Unhandled Keychain error (OSStatus: %@)", String(describing: status))
         }
     }
 }

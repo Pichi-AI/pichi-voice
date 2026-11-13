@@ -44,6 +44,15 @@ final nonisolated class UpdateAppReplacement: @unchecked Sendable {
 
     nonisolated enum Operation: String, Sendable {
         case preparation, commit, recovery, cleanup
+
+        var localizedTitle: String {
+            switch self {
+            case .preparation: return PichiLocalization.text("Preparing app replacement")
+            case .commit: return PichiLocalization.text("Replacing app")
+            case .recovery: return PichiLocalization.text("Restoring previous app")
+            case .cleanup: return PichiLocalization.text("Removing temporary update files")
+            }
+        }
     }
 
     nonisolated struct Failure: LocalizedError {
@@ -52,8 +61,8 @@ final nonisolated class UpdateAppReplacement: @unchecked Sendable {
         let underlyingError: Error
 
         var errorDescription: String? {
-            let recovery = self.recoveryDirectoryURL.map { " Recovery files: \($0.path)." } ?? ""
-            return "App replacement \(self.operation.rawValue) failed: \(self.underlyingError.localizedDescription).\(recovery)"
+            let recovery = self.recoveryDirectoryURL.map { PichiLocalization.format(" Recovery files: %@.", $0.path) } ?? ""
+            return PichiLocalization.format("App replacement failed (%@): %@.%@", self.operation.localizedTitle, self.underlyingError.localizedDescription, recovery)
         }
     }
 

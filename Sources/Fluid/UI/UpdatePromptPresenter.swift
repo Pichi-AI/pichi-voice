@@ -7,21 +7,46 @@ final class UpdatePromptPresenter {
     private var floatingPromptWindow: FloatingPromptPanel?
     private var floatingPromptQueue: [FloatingPrompt] = []
     private static let maxQueuedFloatingPrompts = 4
+    private let language: () -> PichiInterfaceLanguage
+    private var languageObserver: NSObjectProtocol?
+
+    init(language: @escaping () -> PichiInterfaceLanguage = { PichiLocalization.language }) {
+        self.language = language
+        self.languageObserver = NotificationCenter.default.addObserver(forName: PichiLocalization.languageChanged,
+                                                                       object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshVisiblePrompt() }
+        }
+    }
+
+    deinit {
+        if let languageObserver { NotificationCenter.default.removeObserver(languageObserver) }
+    }
+
+    private func refreshVisiblePrompt() {
+        guard self.floatingPromptWindow != nil else { return }
+        let wasKey = self.floatingPromptWindow?.isKeyWindow == true
+        self.floatingPromptWindow?.close()
+        self.floatingPromptWindow = nil
+        self.showNextFloatingPromptIfIdle()
+        if wasKey { self.floatingPromptWindow?.makeKey() }
+    }
 
     func presentFloatingPrompt(
         title: String,
-        message: String,
+        message: @autoclosure @escaping () -> String,
         actions: [FloatingPromptAction],
         isAutomaticUpdateOffer: Bool = false
     ) {
         guard !actions.isEmpty else { return }
+        let messageSnapshot = message()
         if let index = self.floatingPromptQueue.firstIndex(where: { $0.title == title }) {
             let existing = self.floatingPromptQueue[index]
             let promotesToManual = existing.isAutomaticUpdateOffer && !isAutomaticUpdateOffer
-            guard existing.message != message || promotesToManual else { return }
+            guard existing.messageSnapshot != messageSnapshot || promotesToManual else { return }
             self.floatingPromptQueue[index] = FloatingPrompt(
                 title: title,
                 message: message,
+                messageSnapshot: messageSnapshot,
                 actions: actions,
                 isAutomaticUpdateOffer: existing.isAutomaticUpdateOffer && isAutomaticUpdateOffer
             )
@@ -41,6 +66,7 @@ final class UpdatePromptPresenter {
         self.floatingPromptQueue.append(FloatingPrompt(
             title: title,
             message: message,
+            messageSnapshot: messageSnapshot,
             actions: actions,
             isAutomaticUpdateOffer: isAutomaticUpdateOffer
         ))
@@ -50,8 +76,11 @@ final class UpdatePromptPresenter {
     private func showNextFloatingPromptIfIdle() {
         guard self.floatingPromptWindow == nil, let prompt = self.floatingPromptQueue.first else { return }
 
-        let title = prompt.title
-        let message = prompt.message
+        // Retain source keys in the queue for deduplication and dismissal.
+        // Only trusted display copy crosses the localization boundary here.
+        let language = self.language()
+        let title = PichiLocalization.text(prompt.title, language: language, bundle: .main)
+        let message = prompt.message()
         let actions = prompt.actions
         let margin: CGFloat = 22
         let textLeading: CGFloat = 92
@@ -59,7 +88,7 @@ final class UpdatePromptPresenter {
         let buttonSpacing: CGFloat = 10
 
         let buttons = actions.enumerated().map { index, action in
-            let button = FloatingPromptButton(title: action.title) { [weak self] in
+            let button = FloatingPromptButton(title: PichiLocalization.text(action.title, language: language, bundle: .main)) { [weak self] in
                 guard let self, self.floatingPromptQueue.first?.id == prompt.id else { return }
                 self.finishVisibleFloatingPrompt()
                 action.handler()
@@ -193,7 +222,8 @@ struct FloatingPromptAction {
 private struct FloatingPrompt {
     let id = UUID()
     let title: String
-    let message: String
+    let message: () -> String
+    let messageSnapshot: String
     let actions: [FloatingPromptAction]
     let isAutomaticUpdateOffer: Bool
 }

@@ -3,6 +3,111 @@ import Foundation
 import XCTest
 
 final class PichiLocalizationTests: XCTestCase {
+    @MainActor
+    func testShortcutPresentationLocalizesNamedKeysWithoutChangingMatchingOrCoding() throws {
+        let shortcut = HotkeyShortcut(keyCode: 61, modifierFlags: [])
+        let encoded = try JSONEncoder().encode(shortcut)
+        XCTAssertEqual(shortcut.displayString, PichiLocalization.language == .russian ? "Правая ⌥" : "Right ⌥")
+        XCTAssertEqual(shortcut.keyCode, 61)
+        XCTAssertEqual(try JSONDecoder().decode(HotkeyShortcut.self, from: encoded), shortcut)
+        XCTAssertTrue(shortcut.modifierFlags.isEmpty)
+        XCTAssertEqual(HotkeyShortcut.mouseButtonToString(4),
+                       PichiLocalization.language == .russian ? "Кнопка мыши 5" : "Mouse 5")
+        XCTAssertEqual(HotkeyShortcut.mouseButtonToString(0),
+                       PichiLocalization.language == .russian ? "Левая кнопка мыши" : "Left Click")
+        XCTAssertEqual(HotkeyShortcut.keyCodeToString(49), PichiLocalization.language == .russian ? "Пробел" : "Space")
+    }
+
+    @MainActor
+    func testUserFacingFailureFamiliesUseCompiledCatalogAndKeepArgumentsVerbatim() {
+        let data = "fixture/Settings %@"
+        let path = URL(fileURLWithPath: "/tmp/\(data)")
+        let cases: [(Error, String, String)] = [
+            (AIProcessingError.missingAPIKey(provider: data), "API key not set for \(data)", "Не задан ключ API для \(data)"),
+            (CompactSpeechModelArchiveTransport.Failure.unsafePartial(path),
+             "Voice model download files are unsafe at \(path.path). Remove that file or folder and try again.",
+             "Файлы загрузки модели по адресу \(path.path) небезопасны. Удалите этот файл или папку и попробуйте снова."),
+            (ParakeetArchiveInstaller.InstallError.fileMismatch(data), "The downloaded model failed verification (\(data)).", "Загруженная модель не прошла проверку (\(data))."),
+            (ParakeetArchiveDownloader.DownloadError.cleanupFailed(path), "Voice model temporary files could not be removed: \(path.path)", "Не удалось удалить временные файлы модели речи: \(path.path)"),
+            (BackupServiceError.operationInProgress, "A backup import or export is already running. Wait for it to finish, then try again.", "Импорт или экспорт резервной копии уже выполняется. Дождитесь завершения и попробуйте снова."),
+            (DictationAudioHistoryError.zipFailed(data), "Could not create export zip. \(data)", "Не удалось создать архив экспорта. \(data)"),
+            (KeychainServiceError.invalidData, "Failed to convert key data.", "Не удалось преобразовать данные ключа."),
+            (ExternalCoreMLArtifactsValidationError.unexpectedSampleRate(expected: 16_000, actual: 8_000), "Unexpected sample rate 8000. Expected 16000.", "Неожиданная частота дискретизации 8000. Ожидалась 16000."),
+            (LLMError.timeout(30), "Request timed out after 30 seconds", "Время ожидания запроса истекло через 30 с"),
+            (FeedbackClient.Failure.notConfigured, "Use the support link for this distribution.", "Воспользуйтесь ссылкой поддержки для этой сборки."),
+            (ASRActivityError.settingsRestoreUnavailable, "Finish the current recording, transcription, microphone preview, or voice model operation, then import the backup again.", "Завершите запись, распознавание, проверку микрофона или операцию с моделью речи, затем повторите импорт резервной копии."),
+            (MeetingProviderOptionsError.unsupportedASRModel(data), "The meeting backend cannot use the requested speech model (\(data)).", "Механизм распознавания встреч не может использовать выбранную модель речи (\(data))."),
+            (ModelRepository.FetchError.networkError(details: data), "Network error: \(data)", "Ошибка сети: \(data)"),
+            (MeetingProcessingError.providerDoesNotSupportLanguage(data), "The selected speech model cannot transcribe meeting language \(data).", "Выбранная модель речи не поддерживает язык встречи \(data)."),
+            (MeetingPostProcessingError.notReady, "The meeting summary model is not installed or ready.", "Модель итогов встречи не установлена или не готова."),
+            (MeetingModelResidencyError.busy, "Models are busy. Wait for the current model operation to finish.", "Модели заняты. Дождитесь завершения текущей операции с моделью."),
+            (MeetingASRPreparationError.preparationInProgress, "Meeting transcription preparation is already in progress.", "Подготовка к распознаванию встречи уже выполняется."),
+            (MeetingDomainError.emptySpeakerName, "Speaker name cannot be empty.", "Имя участника не может быть пустым."),
+            (MeetingModelValidationError.unsupportedSchema(999), "Unsupported meeting schema version 999.", "Неподдерживаемая версия формата встречи: 999."),
+            (MeetingCoordinatorError.noActiveMeeting, "There is no active meeting.", "Нет текущей встречи."),
+            (MeetingSessionStoreError.unsupportedSchema(999), "This meeting was created with unsupported schema version 999.", "Эта встреча создана в неподдерживаемой версии формата: 999."),
+        ]
+        for (error, english, russian) in cases {
+            XCTAssertEqual(error.localizedDescription, PichiLocalization.language == .russian ? russian : english)
+        }
+        XCTAssertEqual(LLMError.networkError(URLError(.notConnectedToInternet)).localizedDescription,
+                       PichiLocalization.language == .russian ? "Ошибка сети: нет подключения к интернету." : "Network error: no internet connection.")
+        XCTAssertEqual(PronunciationDictionaryStoreError.outdatedModelRevision.localizedDescription,
+                       PichiLocalization.language == .russian
+                       ? "Эти записи произношения используют устаревшую модель речи. Заново обучите это слово голосом. Ваши слова и текстовые исправления сохранены."
+                       : "These pronunciation recordings use an older voice model. Retrain this word by voice. Your custom words and text corrections remain saved.")
+        XCTAssertEqual(MeetingDiarizationModelStore.userMessage(for: URLError(.notConnectedToInternet)),
+                       PichiLocalization.language == .russian
+                       ? "Не удалось загрузить модель определения участников. Проверьте соединение с интернетом и попробуйте снова."
+                       : "Couldn't download the speaker model. Check your internet connection and try again.")
+    }
+
+    func testUpdateFailuresRenderSelectedLanguageAndRetainRecoveryPaths() {
+        let russian = PichiLocalization.language == .russian
+        XCTAssertEqual(SimpleUpdateError.downloadFailed.errorDescription,
+                       russian ? "Не удалось загрузить обновление." : "Failed to download update.")
+        XCTAssertEqual(UpdateBundleValidator.ValidationError.identityMismatch.errorDescription,
+                       russian ? "Обновление предназначено для другого приложения." : "The update belongs to a different application.")
+        let root = URL(fileURLWithPath: "/tmp/fixture/No Updates %@")
+        let error = SimpleUpdateError.downloadFailed
+        let backup = UpdateRollbackBackup.Failure(retainedDirectoryURL: root, underlyingError: error)
+        XCTAssertEqual(backup.errorDescription, russian
+            ? "Не удалось создать резервную копию приложения. Установленная версия сохранена. Резервные файлы сохранены в папке: \(root.path). Не удалось загрузить обновление."
+            : "The current app could not be backed up. Nothing was replaced. Retained backup files: \(root.path). Failed to download update.")
+        let replacement = UpdateAppReplacement.Failure(operation: .recovery, recoveryDirectoryURL: root, underlyingError: error)
+        XCTAssertTrue(replacement.errorDescription!.contains(root.path))
+        XCTAssertTrue(replacement.errorDescription!.contains(russian ? "Восстановление предыдущей версии" : "Restoring previous app"))
+        XCTAssertEqual(SimpleUpdateError.stagingCleanupFailed(root.path).errorDescription, russian
+            ? "Не удалось удалить временные файлы предыдущего обновления. Они сохранены в папке: \(root.path)."
+            : "The previous update could not be cleaned up. Retained staging: \(root.path).")
+    }
+
+    func testCompiledUpdateCopyUsesRussianWhilePreservingVersionAndDiagnosticArguments() {
+        let copy = [
+            "No Updates": "Обновлений нет", "No Beta Updates": "Новых бета-версий нет",
+            "Update Available": "Доступно обновление", "Update Check Failed": "Не удалось проверить обновления",
+            "Update Failed": "Не удалось установить обновление", "Install Now": "Установить",
+            "Later": "Позже", "OK": "Понятно", "History could not be saved": "Не удалось сохранить историю",
+            "Keep Open": "Не закрывать", "Quit Anyway": "Всё равно завершить",
+            "Failed to download update.": "Не удалось загрузить обновление.",
+            "No rollback backup is available.": "Резервной копии для отката нет.",
+        ]
+        for (key, russian) in copy {
+            XCTAssertEqual(PichiLocalization.text(key, language: .russian, bundle: .main), russian)
+            XCTAssertEqual(PichiLocalization.text(key, language: .english, bundle: .main), key)
+        }
+        let version = "0.2.3-beta.1"
+        XCTAssertEqual(AppBrand.format("Installing FluidVoice %@", profile: AppBrand.profile, language: .russian,
+                                       arguments: [version]), "Установка \(AppBrand.appName) \(version)")
+        XCTAssertEqual(AppBrand.format("FluidVoice %@ is now available. The app will restart automatically after installation.",
+                                       profile: AppBrand.profile, language: .russian, arguments: [version]),
+                       "Доступна версия \(AppBrand.appName) \(version). После установки приложение автоматически перезапустится.")
+        let path = "/Users/fixture/No Updates %@/Pichi Voice.app"
+        XCTAssertEqual(PichiLocalization.format("The app could not restart. Your previous version is saved at %@.",
+                                                language: .russian, bundle: .main, arguments: [path]),
+                       "Не удалось перезапустить приложение. Предыдущая версия сохранена по адресу: \(path).")
+    }
+
     func testHoldSpaceMuteCopyUsesCompiledEnglishAndRussianResources() {
         let copy = [
             "Hold Space to Mute": "Отключать микрофон при удержании пробела",

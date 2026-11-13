@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory(prefix="encoder-storage-", dir=root / ".build")
     package = root / "Vendor/PichiGigaAM/Sources/PichiGigaAM"
     subprocess.run(["xcrun", "swiftc", "-O", "-parse-as-library", "-emit-library", "-emit-module", "-module-name", "PichiGigaAM",
                     "-module-cache-path", str(cache), "-emit-module-path", str(temporary / "PichiGigaAM.swiftmodule"),
-                    *[str(package / name) for name in ["GigaAMFrontend.swift", "GigaAMAcousticFeatures.swift", "GigaAMEncoderFeatures.swift", "GigaAMAcousticMatcher.swift", "GigaAMCTC.swift"]],
+                    *[str(package / name) for name in ["GigaAMFrontend.swift", "GigaAMAcousticFeatures.swift", "GigaAMEncoderFeatures.swift", "GigaAMAcousticMatcher.swift", "GigaAMCTC.swift", "GigaAMWindowReuse.swift"]],
                     "-o", str(temporary / "libPichiGigaAM.dylib")], check=True, cwd=root)
     projected = temporary / "Policies.swift"; projected.write_text(projection)
     tests = temporary / "StorageTests.swift"; tests.write_text(test)
@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix="encoder-storage-", dir=root / ".build")
         executable = temporary / ("tests-main-actor" if isolation else "tests-default")
         subprocess.run(["xcrun", "swiftc", "-O", "-swift-version", "5", "-parse-as-library", "-D", "GIGAAM_ENCODER_STORAGE_STANDALONE",
                         *isolation, "-module-cache-path", str(cache), "-I", str(temporary), "-L", str(temporary), "-lPichiGigaAM",
-                        "-Xlinker", "-rpath", "-Xlinker", str(temporary), str(projected), str(tests),
+                        "-Xlinker", "-rpath", "-Xlinker", str(temporary), str(root / "Sources/Fluid/Localization/PichiLocalization.swift"), str(projected), str(tests),
                         *[str(root / "Sources/Fluid/Services" / name) for name in sources], "-o", str(executable)], check=True, cwd=root)
         subprocess.run([str(executable)], check=True, cwd=root, timeout=30)
 print("Encoder storage bridge temporary build resources removed.")

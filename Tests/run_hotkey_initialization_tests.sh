@@ -119,6 +119,7 @@ xcrun swiftc -swift-version 6 -strict-concurrency=complete \
     -Xlinker -rpath -Xlinker "$hotkey_libraries" \
     -F "$hotkey_frameworks" -Xlinker -rpath -Xlinker "$hotkey_frameworks" \
     -module-cache-path "$hotkey_test_dir/ModuleCache" \
+    Sources/Fluid/Localization/PichiLocalization.swift \
     "$hotkey_test_dir/HotkeyShortcut.swift" "$hotkey_test_dir/main.swift" \
     -o "$hotkey_test_dir/display-tests"
 "$hotkey_test_dir/display-tests"

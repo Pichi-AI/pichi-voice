@@ -1405,7 +1405,7 @@ final class TranscriptionHistoryStore: ObservableObject {
                 self.pendingDeletes.removeAll()
                 self.pendingReplacement = false
             } catch {
-                self.persistenceError = "History could not be loaded. New dictations are kept in memory until you retry. \(error.localizedDescription)"
+                self.persistenceError = PichiLocalization.format("History could not be loaded. New dictations are kept in memory until you retry. %@", error.localizedDescription)
             }
             self.isLoading = false
         }
@@ -1457,7 +1457,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         }
         self.writer.write(upserts: self.entries, replacing: true) { error in
             Task { @MainActor in
-                self.persistenceError = error.map { "History could not be saved. \($0.localizedDescription)" }
+                self.persistenceError = error.map { PichiLocalization.format("History could not be saved. %@", $0.localizedDescription) }
             }
         }
     }

@@ -36,23 +36,23 @@ nonisolated enum ExternalCoreMLArtifactsValidationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .missingEntries(entries):
-            return "Missing required files: \(entries.joined(separator: ", "))"
+            return PichiLocalization.format("Missing required files: %@", String(describing: entries.joined(separator: ", ")))
         case let .manifestMissing(url):
-            return "Manifest file not found at \(url.path)"
+            return PichiLocalization.format("Manifest file not found at %@", String(describing: url.path))
         case let .manifestUnreadable(url, error):
-            return "Failed to read manifest at \(url.path): \(error.localizedDescription)"
+            return PichiLocalization.format("Failed to read manifest at %@: %@", String(describing: url.path), String(describing: error.localizedDescription))
         case let .unexpectedModelID(expected, actual):
-            return "Unexpected model_id '\(actual)'. Expected '\(expected)'."
+            return PichiLocalization.format("Unexpected model_id '%@'. Expected '%@'.", String(describing: actual), String(describing: expected))
         case let .unexpectedSampleRate(expected, actual):
-            return "Unexpected sample rate \(actual). Expected \(expected)."
+            return PichiLocalization.format("Unexpected sample rate %@. Expected %@.", String(describing: actual), String(describing: expected))
         case let .invalidMaxAudioSeconds(seconds):
-            return "Invalid max_audio_seconds \(seconds)."
+            return PichiLocalization.format("Invalid max_audio_seconds %@.", String(describing: seconds))
         case let .invalidMaxAudioSamples(samples):
-            return "Invalid max_audio_samples \(samples)."
+            return PichiLocalization.format("Invalid max_audio_samples %@.", String(describing: samples))
         case let .inconsistentAudioWindow(samples, seconds, sampleRate):
-            return "Manifest audio window is inconsistent: \(samples) samples vs \(seconds)s at \(sampleRate) Hz."
+            return PichiLocalization.format("Manifest audio window is inconsistent: %@ samples vs %@s at %@ Hz.", String(describing: samples), String(describing: seconds), String(describing: sampleRate))
         case let .invalidOverlapSamples(overlapSamples, maxAudioSamples):
-            return "Invalid overlap_samples \(overlapSamples) for max_audio_samples \(maxAudioSamples)."
+            return PichiLocalization.format("Invalid overlap_samples %@ for max_audio_samples %@.", String(describing: overlapSamples), String(describing: maxAudioSamples))
         }
     }
 }
