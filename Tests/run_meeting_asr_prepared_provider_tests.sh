@@ -18,6 +18,14 @@ marker = 'nonisolated enum MeetingRecordingTimePolicy: String, Codable, Sendable
 assert models.count(marker) == 1, 'Expected one production recording time policy declaration'
 start = models.index(marker)
 (Path(sys.argv[1]) / 'RecordingTimePolicy.swift').write_text('import Foundation\n' + models[start:models.index('\n}\n', start) + 3])
+sys.path.insert(0, 'Tests')
+from Standalone.ProbeContractDependencies import declaration
+settings = Path('Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift').read_text()
+support = Path('Tests/Support/StandaloneMeetingProcessingDependencies.swift').read_text()
+support = support.replace('enum SettingsStore {', 'enum SettingsStore {\n' + declaration(settings, '    nonisolated struct CustomDictionaryEntry:') , 1)
+(Path(sys.argv[1]) / 'ProcessingDependencies.swift').write_text(support)
+fingerprints = Path('Sources/Fluid/Services/Meeting/Backend/MeetingCanonicalEvidenceTypes.swift').read_text()
+(Path(sys.argv[1]) / 'Fingerprint.swift').write_text('import Foundation\n' + declaration(fingerprints, 'nonisolated enum MeetingConfigFingerprintEncoding {'))
 PYCODE
 # Compile the actual owner, scope, immutable configuration and additive service contract.
 # The portable harness supplies inert neighboring contracts. No weights, network, capture,
@@ -26,7 +34,7 @@ if ! xcrun swiftc -parse-as-library -swift-version 5 -strict-concurrency=targete
     -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/PipelineVersion.swift" "$task_test_dir/RecordingTimePolicy.swift" \
     Sources/Fluid/Services/ASRActivityLease.swift \
-    Tests/Support/StandaloneMeetingProcessingDependencies.swift \
+    "$task_test_dir/ProcessingDependencies.swift" "$task_test_dir/Fingerprint.swift" \
     Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift \
     Sources/Fluid/Services/Meeting/MeetingASRPreparationOwner.swift \

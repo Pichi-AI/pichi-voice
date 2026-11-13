@@ -5,7 +5,7 @@ task_test_dir="$PWD/.build/meeting-session-store-tests"
 mkdir -p "$task_test_dir"
 # The raw executable has no compiled app catalog. Supply this real catalog entry
 # at Bundle.main's resource root so the persisted Russian snapshot is tested too.
-python3 -B Tests/Support/write_localized_title_resources.py "$task_test_dir" "Discussion of questions" "Audio recording"
+python3 -S -B Tests/Support/write_localized_title_resources.py "$task_test_dir" "Discussion of questions" "Audio recording"
 # The complete store and production persisted codecs compile unchanged. This bounded test
 # never supplies a canonical sidecar, so make accidental migration reads fail loudly instead
 # of linking inference/runtime orchestration or launching the application.
@@ -43,9 +43,15 @@ source = Path('Sources/Fluid/Services/Meeting/MeetingProcessingPipeline.swift').
 versions = [line.strip() for line in source.splitlines() if line.strip().startswith('nonisolated static let pipelineVersion =')]
 assert len(versions) == 1, 'The pipeline owns one authoritative version'
 Path(sys.argv[1]).write_text('nonisolated enum MeetingProcessingPipeline {\n    ' + versions[0] + '\n}\n')
+sys.path.insert(0, 'Tests')
+from Standalone.ProbeContractDependencies import declaration
+settings = Path('Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift').read_text()
+support = Path('Tests/Support/StandaloneMeetingProcessingDependencies.swift').read_text()
+support = support.replace('enum SettingsStore {', 'enum SettingsStore {\n' + declaration(settings, '    nonisolated struct CustomDictionaryEntry:'), 1)
+Path(sys.argv[1]).with_name('ProcessingDependencies.swift').write_text(support)
 PYCODE
-python3 Tests/Support/write_attribution_standalone_types.py "$task_test_dir/AttributionTypes.swift"
-python3 - "$task_test_dir/ContentCaptureCaller.swift" <<'PY_CALLER'
+python3 -S Tests/Support/write_attribution_standalone_types.py "$task_test_dir/AttributionTypes.swift"
+python3 -S - "$task_test_dir/ContentCaptureCaller.swift" <<'PY_CALLER'
 from pathlib import Path
 import sys
 source = Path("Sources/Fluid/ContentView.swift").read_text()
@@ -105,7 +111,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Account/PrivateProfileMeetingStore.swift \
     Sources/Fluid/Account/PrivateProfileService.swift \
     Sources/Fluid/Account/PrivateProfileOperationOwner.swift \
-    Tests/Support/StandaloneMeetingProcessingDependencies.swift \
+    "$task_test_dir/ProcessingDependencies.swift" \
     Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift \
     Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \

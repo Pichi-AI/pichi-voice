@@ -62,6 +62,8 @@ def main():
         service_start = service_start.replace("PrivateProfileOperationOwner(registerForTransitions: true)", "PrivateProfileOperationOwner(registerForTransitions: false)")
     coordinator = (ROOT / "Sources/Fluid/Services/Meeting/MeetingSessionCoordinator.swift").read_text()
     meeting_models = (ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text()
+    recent_application = declaration((ROOT / "Sources/Fluid/Services/Meeting/MeetingRecordingSource.swift").read_text(),
+                                     "    func preferringLastPickedApplication(")
     partial_start = menu.index("        asrService.$partialTranscription")
     partial_end = menu.index("            .store(in: &self.cancellables)", partial_start) + len("            .store(in: &self.cancellables)")
     partial = menu[partial_start:partial_end]
@@ -76,16 +78,18 @@ def main():
     assert spoken_send.index("self.privateOutputOperations.isCurrent") < spoken_send.index("self.spokenSendArming.update")
     typing = (ROOT / "Sources/Fluid/Services/TypingService.swift").read_text()
     verifier = declaration(typing, "    private func verifyPasteLanded(").replace("private func", "func", 1)
-    paste_observer_start = menu.index("        NotificationCenter.default.publisher(for: .fluidPasteNotLanded)")
+    paste_observer_start = menu.index("        NotificationCenter.default.publisher(for: .fluidPasteRecoveryAvailable)")
     paste_observer_end = menu.index("        // Subscribe to recording state changes", paste_observer_start)
     paste_observer = menu[paste_observer_start:paste_observer_end]
-    paste_presentation = declaration(menu, "    func showPasteNotLandedFailure(")
+    paste_presentation = "\n".join(declaration(menu, marker).replace("private func", "func", 1) for marker in (
+        "    func showPasteNotLandedFailure(", "    private func queuePasteRecovery(", "    private func presentPendingPasteRecovery()"))
     delivery_start = typing.index("    func typeOutputPlanInstantly(")
     delivery = typing[delivery_start:typing.index("    func typeOutputPlanInstantly(", delivery_start + 1)]
     assert delivery.index("let profile = PrivateProfileStorage.current") < delivery.index("await ")
     assert "callerIsOutputValid() && PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork" in delivery
     assert "self.verifyPasteLanded(text, before: verificationBefore, profile: profile," in delivery
-    assert "verificationID: verificationID, postedAt: completedAt, isOutputValid: isOutputValid)" in delivery
+    assert "verificationID: verificationID, postedAt: completedAt, isOutputValid: isOutputValid, evidence: evidence)" in delivery
+    evidence_closure = declaration(delivery, "        let evidence = PasteRecoveryEvidence { recovery in")
     if args.unguarded_verifier == "post":
         fence = "guard !Task.isCancelled, owner.isCurrent, isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }"
         assert verifier.count(fence) == 1
@@ -94,6 +98,9 @@ def main():
         fence = "guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }"
         assert paste_presentation.count(fence) == 1
         paste_presentation = paste_presentation.replace(fence, "", 1)
+        pending_fence = declaration(paste_presentation, "        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else {")
+        assert "self.pasteRecoveryInbox.expire(now: .infinity)" in pending_fence
+        paste_presentation = paste_presentation.replace(pending_fence, "", 1)
     if args.unjoined_verifier:
         assert verifier.count("PrivateProfileOperationOwner(registerForTransitions: true)") == 1
         verifier = verifier.replace("PrivateProfileOperationOwner(registerForTransitions: true)", "PrivateProfileOperationOwner(registerForTransitions: false)")
@@ -103,25 +110,27 @@ def main():
     real_verifier = (ROOT / "Sources/Fluid/Services/PasteVerifier.swift").read_text()
     real_verify_start = real_verifier.index("    nonisolated static func verify(")
     real_verify_body = real_verifier[real_verify_start:real_verifier.index("\n    }\n", real_verify_start) + len("\n    }")]
-    recovery_policy = declaration(real_verifier, "final class PasteRecoveryPresentationPolicy {")
+    recovery_policy = "\n".join("@MainActor\n" + declaration(real_verifier, marker) for marker in (
+        "final class PasteRecoveryEvidence {", "final class PasteRecoveryInbox {", "final class PasteRecoverySequence {"))
     real_timing = "\n".join(line for line in real_verifier.splitlines() if line.startswith((
-        "    static let firstCheckDelay:", "    static let secondCheckDelay:", "    static let finalCheckDelay:"
+        "    nonisolated static let firstCheckDelay:", "    nonisolated static let secondCheckDelay:", "    nonisolated static let finalCheckDelay:"
     )))
     assert len(real_timing.splitlines()) == 3
     if args.unchecked_readback:
         real_verify_body = real_verify_body.replace('return !Task.isCancelled', 'return true')
         real_verify_body = real_verify_body.replace('return false', 'return true')
         real_verify_body = real_verify_body.replace('        guard !Task.isCancelled else { return .unknown(reason: "cancelled") }', '')
-        for delay in ('firstCheckDelay', 'secondCheckDelay', 'finalCheckDelay'):
-            real_verify_body = real_verify_body.replace(
-                f'guard await wait(self.{delay}), !Task.isCancelled else {{ return .unknown(reason: "cancelled") }}',
-                f'_ = await wait(self.{delay})')
+        real_verify_body = real_verify_body.replace(
+            'guard await wait(delay), !Task.isCancelled else { return .unknown(reason: "cancelled") }',
+            '_ = await wait(delay)')
     real_readback = "\n".join(declaration(real_verifier, marker) for marker in [
-        "    struct Snapshot {", "    enum Verdict: Equatable {", "    private nonisolated static func unchangedVerdict(",
+        "    nonisolated struct Snapshot:", "    enum Verdict: Equatable {", "    private nonisolated static func unchangedVerdict(",
         "    private nonisolated static func confirmation(", "    private nonisolated static func normalize(",
-        "    private nonisolated static func occurrences("])
+        "    private nonisolated static func occurrences(", "    nonisolated static func isTextRole("])
     real_readback = real_readback.replace("let element: AXUIElement", "let element: NSObject")
-    for marker in ["    nonisolated static func capture()", "    private nonisolated static func string(",
+    capture = declaration(real_verifier, "    nonisolated static func capture()")
+    assert capture.index("!Task.isCancelled") < capture.index("AXIsProcessTrusted()")
+    for marker in ["    private nonisolated static func string(",
                    "    private nonisolated static func number(", "    private nonisolated static func range("]:
         body = declaration(real_verifier, marker)
         assert body.index("!Task.isCancelled") < body.index("AXUIElementCopyAttributeValue(")
@@ -247,13 +256,18 @@ struct MeetingRecordingDefaults {
     var effectiveApplicationAudioScope: MeetingApplicationAudioScope = .selectedApplication
     var usesAutomaticApplication = false
     var owner = "synthetic"
+    var isConfigured = false
+    var applicationBundleIdentifier: String?
+    var applicationDisplayName: String?
+    var applicationCapturesAllInstances: Bool?
+''' + recent_application + r'''
 }
 struct MeetingCaptureConfiguration: Sendable { let owner: String }
 @MainActor final class UnownedDiscoveryDouble {
     func perform<Value: Sendable>(_ operation: @escaping @MainActor () async throws -> Value) async throws -> Value { try await operation() }
 }
 struct MeetingMicrophoneCatalogSnapshot {}
-struct MeetingApplicationIdentity {}
+struct MeetingApplicationIdentity { var bundleIdentifier: String; var displayName: String; var capturesAllInstances: Bool? }
 enum MeetingAutoDetector { struct ResolvedTarget: Equatable { let bundleIdentifier: String } }
 enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String) }
 enum MeetingCoordinatorError: Error { case featureDisabled }
@@ -262,6 +276,7 @@ enum MeetingCoordinatorError: Error { case featureDisabled }
     var fluidMeetEnabled = true
     var showPasteCheckAlerts = true
     var meetingRecordingDefaults = MeetingRecordingDefaults()
+    var meetingRecentApplication: MeetingApplicationIdentity?
     var preferredInputDeviceUID: String?
     // The production method (112) freezes storage and speaker policy into the configuration; this feedback
     // probe only needs the menu-start path to hand the resolved configuration through unchanged.
@@ -312,6 +327,9 @@ enum MeetingCoordinatorError: Error { case featureDisabled }
     var meetingStartError: String?
     var stopMeetingRecordingHandler: (() -> Void)?
     var isProcessingActive = false, overlayVisible = false
+    let pasteRecoveryInbox = PasteRecoveryInbox()
+    var pasteRecoveryProfile: PrivateProfileSnapshot?
+    var pasteRecoveryExpiryTask: Task<Void, Never>?
     var hasDeferredStopMenuRefresh = false, hasDeferredStoppedRecordingState = false
     // Only ownership clearing is observed here; dictionary request validity has its own probe.
     var pendingDictionaryWordTrainingRequest: UUID?
@@ -336,7 +354,7 @@ enum MeetingCoordinatorError: Error { case featureDisabled }
     static func failureStatus(for session: MeetingSession?, failure: MeetingSessionFailure) -> String { failure.message }
 }
 @MainActor final class DeliveryFailureOverlayController {
-    enum Kind { case pasteNotLanded }
+    enum Kind { case pasteNotLanded, pasteUnverified }
     struct Card { let profile: PrivateProfileSnapshot; let text: String }
     static let shared = DeliveryFailureOverlayController()
     var cards: [Card] = []
@@ -348,7 +366,8 @@ nonisolated final class NSRunningApplication: @unchecked Sendable {
 }
 nonisolated enum PasteVerifier {
     struct Snapshot: Sendable { let pid: Int32; let summary: String }
-    enum Verdict: Sendable { case notLanded, unknown(reason: String); var logDescription: String { "synthetic verdict" } }
+    enum Verdict: Sendable { case confirmed, notLanded, unknown(reason: String); var logDescription: String { "synthetic verdict" } }
+    static let totalDecisionDelay: TimeInterval = 0
     nonisolated(unsafe) static var gate: PasteVerificationGate?
     static func verify(before: Snapshot, pastedText: String) async -> Verdict {
         guard !Task.isCancelled else { return .unknown(reason: "cancelled") }
@@ -360,11 +379,17 @@ nonisolated enum PasteVerifier {
     static func userActedAfterPaste(secondsSinceLastInput: Double, secondsSincePaste: Double) -> Bool { false }
     static func secondsSinceLastUserInput() -> Double { 10 }
 }
-extension Notification.Name { static let fluidPasteNotLanded = Notification.Name("SyntheticPasteNotLanded") }
-@MainActor
+extension Notification.Name { static let fluidPasteRecoveryAvailable = Notification.Name("SyntheticPasteRecovery") }
 ''' + recovery_policy + r'''
 @MainActor final class TypingService {
 ''' + verifier + r'''
+    func verifyPasteForTest(_ text: String, before: PasteVerifier.Snapshot, profile: PrivateProfileSnapshot,
+        verificationID: UInt64, postedAt: TimeInterval, isOutputValid: @escaping @MainActor () -> Bool) -> Task<Void, Never>? {
+        let verifiesLanding = true
+''' + evidence_closure + r'''
+        return self.verifyPasteLanded(text, before: before, profile: profile, verificationID: verificationID,
+                                      postedAt: postedAt, isOutputValid: isOutputValid, evidence: evidence)
+    }
 }
 ''' + "\nnonisolated enum ActualPasteVerifierProbe {\n" + real_readback + "\n" + real_verify_body + r'''
 ''' + real_timing + r'''

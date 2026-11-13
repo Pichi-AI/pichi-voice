@@ -57,6 +57,9 @@ def main() -> None:
         tests = tests.replace(declaration(tests, "struct MeetingApplicationIdentity {"), declaration(models, "nonisolated struct MeetingApplicationIdentity:"))
         tests = tests.replace(declaration(tests, "    enum Mode {"), "    typealias Mode = MeetingCaptureMode")
         tests += "\n" + declaration(models, "nonisolated enum MeetingCaptureMode:") + "\n"
+        tests += "\n" + declaration(models, "nonisolated enum MeetingApplicationAudioScope:") + "\n"
+        session = declaration(models, "nonisolated struct MeetingSession:")
+        tests += "\nextension MeetingSession {\n" + declaration(session, "    var effectiveApplicationAudioScope:") + "\n}\n"
         # Fixture convenience initializes the actual production optional consent field.
         tests += "\nextension MeetingApplicationIdentity {\ninit(bundleIdentifier: String, processID: Int32?, displayName: String, capturesAllInstances: Bool) {\nself.init(bundleIdentifier: bundleIdentifier, processID: processID, displayName: displayName)\nself.capturesAllInstances = capturesAllInstances\n}\n}\n"
         tests = tests.replace("@MainActor final class MeetingFloatingCaptionsPanel {", "@MainActor final class MeetingFloatingCaptionsPanel {\n    var contentView: NSView?")

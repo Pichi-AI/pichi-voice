@@ -9,6 +9,7 @@ import SwiftUI
     struct ThemePreference { var preferredColorScheme: ColorScheme? }
     @Published var themePreference = ThemePreference(preferredColorScheme: nil)
     let accentColorOption = AccentColorOption.brand
+    var customAccentColorHex: String? = nil
     var accentColor: Color { Color(hex: AppBrand.profile.accentLight)! }
 }
 @MainActor enum PichiBrandMark {

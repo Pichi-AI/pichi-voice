@@ -9,6 +9,7 @@ final class SettingsStore: ObservableObject {
     struct ThemePreference { let preferredColorScheme: ColorScheme? = nil }
     let themePreference = ThemePreference()
     let accentColorOption = AccentColorOption.brand
+    var customAccentColorHex: String? = nil
     let accentColor = Color.purple
     var userTypingWPM = 55 // Inert target for the exact WPM editor presentation.
 }

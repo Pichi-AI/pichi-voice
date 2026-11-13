@@ -39,7 +39,7 @@ def main():
                                    (2, "MeetingDetectionPromptController:"), (2, "MeetingStillRecordingNudgeController:"),
                                    (3, "DeliveryFailureOverlayController {")]]
     entries = ["private func show(coordinator:", "func show(from sourceFrame:", "func present(_ request:",
-               "func present()", "func show(kind:"]
+               "func present(sessionID:", "func show(kind:"]
     checks = 0
 
     def require(value, label):
@@ -48,7 +48,12 @@ def main():
         checks += 1
 
     output = ["import Foundation\nimport Combine\n"]
-    output.append('''enum PrivateProfileService { static let willConceal = Notification.Name("SyntheticConceal") }
+    output.append('''@MainActor final class PrivateProfileService {
+    static let shared = PrivateProfileService()
+    static let willConceal = Notification.Name("SyntheticConceal")
+    var isPrivateDataVisible = true
+    func register(_ participant: AnyObject) {}
+}
 struct PromptRequest { let episodeID = UUID(); let cta = "record" }
 struct DebugLogger { static let shared = Self(); func log(_ value: String, source: String) {} }
 @MainActor final class PanelDouble {
@@ -57,7 +62,8 @@ struct DebugLogger { static let shared = Self(); func log(_ value: String, sourc
 }
 ''')
     for index, (source, entry) in enumerate(zip(classes, entries)):
-        init = declaration(source, "private init()")
+        init = (source[source.index("    init(now:"):source.index("\n    private var canPresentCurrentProfile:", source.index("    init(now:"))]
+                if index == 3 else declaration(source, "private init()"))
         conceal = declaration(source, "private func concealPrivatePresentation()")
         require("publisher(for: PrivateProfileService.willConceal)" in init and "MainActor.assumeIsolated" in init,
                 f"{index}: observer executes synchronously on the common lifecycle actor")
@@ -85,6 +91,14 @@ var startErrorMessage: String? = "private failure"; var isStarting = true; var h
 var presentationProfile: PrivateProfileSnapshot?; var visibleAnchor: Int? = 1; var windowMoveObserver: NSObjectProtocol?
 var isPresented = true; var reopens = 0
 ''')
+        if index == 3:
+            output.append('''var countdown = MeetingEndCountdown()
+var countdownTask: Task<Void, Never>?
+var countdownTasks: [UUID: Task<Void, Never>] = [:]
+let now: () -> TimeInterval
+''')
+            output.append(declaration(source, "private var canPresentCurrentProfile:").replace("private ", "", 1))
+            output.append(declaration(source, "func prepareForPrivateProfileTransition()"))
         output.append(init.replace("private ", "", 1))
         output.append(conceal.replace("private ", "", 1))
         if index == 2:
@@ -133,7 +147,8 @@ func resumeAutoDismiss() {}
         generated.write_text("\n".join(output))
         subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-default-isolation", "MainActor",
                         "-module-cache-path", str(temporary / "ModuleCache"), str(temporary / "ProfileTypes.swift"),
-                        "Sources/Fluid/Account/PrivateProfileStorage.swift", str(generated), "-o", str(temporary / "tests")],
+                        "Sources/Fluid/Account/PrivateProfileStorage.swift", "Sources/Fluid/Services/Meeting/MeetingEndCountdown.swift",
+                        str(generated), "-o", str(temporary / "tests")],
                        cwd=ROOT, check=True)
         subprocess.run([str(temporary / "tests")], cwd=ROOT, check=True)
     if not args.baseline_ref:

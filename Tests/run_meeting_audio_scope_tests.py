@@ -131,7 +131,8 @@ check(defaults.applicationAudioScope == nil && defaults.effectiveApplicationAudi
 let microphones = MeetingMicrophoneCatalogSnapshot(identities: [microphone], defaultCoreAudioUID: nil)
 let menuWide = try AppServices.menuBarMeetingConfiguration(defaults: defaults, target: nil, microphones: microphones, applications: [], preferredInputUID: nil)
 try menuWide.validate()
-check(menuWide.applicationAudioScope == .systemAudio && menuWide.application == nil, "Menu can start all-source capture before any app opens")
+check(menuWide.mode == .systemAudio && menuWide.effectiveApplicationAudioScope == .systemAudio && menuWide.application == nil, "Menu can start all-source capture before any app opens")
+defaults.mode = .onlineCall
 defaults.applicationAudioScope = .selectedApplication
 rejects { _ = try AppServices.menuBarMeetingConfiguration(defaults: defaults, target: nil, microphones: microphones, applications: [application], preferredInputUID: nil) }
 defaults.isConfigured = true

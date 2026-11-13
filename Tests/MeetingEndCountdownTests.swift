@@ -21,6 +21,7 @@ struct MeetingSession {
     let id: UUID
     let mode: Mode
     var capturedApplication: MeetingApplicationIdentity? = nil
+    var applicationAudioScope: MeetingApplicationAudioScope? = nil
 }
 
 enum MeetingCoordinatorState: Equatable {
