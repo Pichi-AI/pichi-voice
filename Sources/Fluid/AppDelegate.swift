@@ -503,7 +503,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Applying them to this hourly timer can skip a tick after a delayed reply.
         let timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
             DebugLogger.shared.debug("Periodic update check timer fired", source: "AppDelegate")
-            updater.checkForUpdatesAutomatically()
+            MainActor.assumeIsolated { updater.checkForUpdatesAutomatically() }
         }
         self.updateCheckTimer = timer
         return timer
