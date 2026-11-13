@@ -94,11 +94,24 @@ jobs:
             cat "$receipt"
             python3 -S - "$receipt" <<'PY'
           import json, sys
-          for step in json.load(open(sys.argv[1]))["steps"]:
+          import glob, os
+          receipt = json.load(open(sys.argv[1]))
+          for step in receipt["steps"]:
               if step["status"] != "passed" and step.get("log"):
-                  print(f"--- last lines of {step['name']}")
                   with open(step["log"], errors="replace") as log:
-                      print("".join(log.readlines()[-80:]))
+                      lines = log.readlines()
+                  if step["name"] == "xctest":
+                      print("--- failures in xctest")
+                      print("".join([line for line in lines if "error: -[" in line][:200]))
+                  print(f"--- last lines of {step['name']}")
+                  print("".join(lines[-80:]))
+          runs = sorted(glob.glob(".build/standalone-regression/*/"), key=os.path.getmtime)
+          for name in receipt.get("probesFailed", []):
+              path = os.path.join(runs[-1], f"{name}.log") if runs else ""
+              if os.path.exists(path):
+                  print(f"--- last lines of probe {name}")
+                  with open(path, errors="replace") as log:
+                      print("".join(log.readlines()[-60:]))
           PY
           done
 
