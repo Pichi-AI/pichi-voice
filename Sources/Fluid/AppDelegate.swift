@@ -496,7 +496,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     // MARK: - Periodic Update Checks
 
     @discardableResult
-    func schedulePeriodicUpdateChecks(updater: SimpleUpdater = .shared) -> Timer {
+    @MainActor
+    func schedulePeriodicUpdateChecks(updater: SimpleUpdater? = nil) -> Timer {
+        let updater = updater ?? .shared
         // Only launch checks need the last-check throttle and startup delay.
         // Applying them to this hourly timer can skip a tick after a delayed reply.
         let timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
