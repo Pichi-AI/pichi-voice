@@ -174,6 +174,29 @@ final class SettingsBackupRoundTripTests: XCTestCase {
         }
     }
 
+    func testCustomAccentRendersWithDefaultBrandPresetInBothThemes() throws {
+        try self.withSavedDefaults {
+            let settings = SettingsStore.shared
+            settings.accentColorOption = .brand
+            settings.customAccentColorHex = "#FF2D55"
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                let host = NSHostingView(rootView: AdaptiveAppTheme(accent: settings.accentColor) {
+                    ThemeAccentFixture().frame(width: 32, height: 32)
+                })
+                host.frame = NSRect(x: 0, y: 0, width: 32, height: 32)
+                host.appearance = NSAppearance(named: appearance)
+                host.layoutSubtreeIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+                let image = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: image)
+                let pixel = try XCTUnwrap(image.colorAt(x: image.pixelsWide / 2, y: image.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+                XCTAssertEqual(pixel.redComponent, 1, accuracy: 0.015)
+                XCTAssertEqual(pixel.greenComponent, 45.0 / 255, accuracy: 0.015)
+                XCTAssertEqual(pixel.blueComponent, 85.0 / 255, accuracy: 0.015)
+            }
+        }
+    }
+
     func testCustomAccentColorRoundTripsAndPresetClearsIt() throws {
         try self.withSavedDefaults {
             let settings = SettingsStore.shared
@@ -396,4 +419,9 @@ extension SettingsBackupRoundTripTests {
             XCTAssertEqual(settings.meetingRecordingDefaults, meetingDefaults)
         }
     }
+}
+
+private struct ThemeAccentFixture: View {
+    @Environment(\.theme) private var theme
+    var body: some View { self.theme.palette.accent }
 }
