@@ -164,16 +164,42 @@ actor DictionaryNegativeExampleStore {
 
     nonisolated final class CaptureRead: @unchecked Sendable {
         let profile: PrivateProfileSnapshot
+        /// Admission identity is distinct from the immutable evidence content.
         let revision = UUID()
+        let contentFingerprint: String
         private let leaseID: UUID
         private let lock = NSLock()
         private var examples: [Example]
         private var closed = false
 
+        var isOpen: Bool {
+            self.lock.lock(); defer { self.lock.unlock() }
+            return !self.closed
+        }
+
         fileprivate init(profile: PrivateProfileSnapshot, leaseID: UUID, examples: [Example]) {
             self.profile = profile
             self.leaseID = leaseID
             self.examples = examples
+            var digest = SHA256()
+            func append(_ value: String) {
+                let bytes = Data(value.utf8)
+                var count = UInt64(bytes.count).littleEndian
+                withUnsafeBytes(of: &count) { digest.update(bufferPointer: $0) }
+                digest.update(data: bytes)
+            }
+            append(profile.id)
+            append(profile.generation.uuidString)
+            for example in examples {
+                append(example.id.uuidString)
+                append(example.entryID.uuidString)
+                append(example.profileKey)
+                append(example.modelKey)
+                append(String(example.frames.hiddenSize))
+                append(String(example.frames.values.count))
+                example.frames.values.withUnsafeBytes { digest.update(bufferPointer: $0) }
+            }
+            self.contentFingerprint = digest.finalize().map { String(format: "%02x", $0) }.joined()
         }
 
         func frames(entryID: UUID, profileKey: String, modelKey: String) -> [DictionaryMatchFrames] {

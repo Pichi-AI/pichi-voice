@@ -9,6 +9,22 @@ final nonisolated class UpdateBundleValidatorTests: XCTestCase {
     private let identifier = "com.fluidvoice.update-validator.fixture"
     private let version = "1.6.10-beta.8"
 
+    func testModernReleaseTagMustMatchTheSignedBundleIncludingPrerelease() throws {
+        for actual in [nil, "v0.3.0-beta.1", "v0.3.0-beta.2"] as [String?] {
+            try self.withFixture(version: "0.3.0", releaseTag: actual) { fixture in
+                let operation = {
+                    try UpdateBundleValidator.validate(at: fixture.bundle,
+                        expectation: .init(bundleIdentifier: self.identifier, version: "0.3.0", releaseTag: "v0.3.0-beta.1"),
+                        policy: .appleDevelopment(allowedTeamIDs: [fixture.team]))
+                }
+                if actual == "v0.3.0-beta.1" { XCTAssertNoThrow(try operation()) }
+                else {
+                    XCTAssertThrowsError(try operation()) { XCTAssertEqual($0 as? UpdateBundleValidator.ValidationError, .versionMismatch) }
+                }
+            }
+        }
+    }
+
     func testMissingBundleIsRejected() {
         let missing = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".app")
         XCTAssertThrowsError(try UpdateBundleValidator.validate(
@@ -225,6 +241,7 @@ final nonisolated class UpdateBundleValidatorTests: XCTestCase {
         identifier: String? = nil,
         version: String? = nil,
         build: String = "27",
+        releaseTag: String? = nil,
         sign: Bool = true,
         nested: Bool = false,
         developerID: Bool = false,
@@ -234,7 +251,7 @@ final nonisolated class UpdateBundleValidatorTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let bundle = root.appendingPathComponent("Fixture.app", isDirectory: true)
-        try self.makeBundle(at: bundle, identifier: identifier ?? self.identifier, version: version ?? self.version, build: build)
+        try self.makeBundle(at: bundle, identifier: identifier ?? self.identifier, version: version ?? self.version, build: build, releaseTag: releaseTag)
         if !sign {
             // The copied executable retains Apple's signature, but the enclosing
             // application has never been signed and has no sealed resource envelope.
@@ -251,20 +268,21 @@ final nonisolated class UpdateBundleValidatorTests: XCTestCase {
         try body(Fixture(bundle: bundle, team: self.signingTeam(at: bundle)))
     }
 
-    private func makeBundle(at bundle: URL, identifier: String, version: String, build: String) throws {
+    private func makeBundle(at bundle: URL, identifier: String, version: String, build: String, releaseTag: String? = nil) throws {
         let executableDirectory = bundle.appendingPathComponent("Contents/MacOS", isDirectory: true)
         let resources = bundle.appendingPathComponent("Contents/Resources", isDirectory: true)
         try FileManager.default.createDirectory(at: executableDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: executableDirectory.appendingPathComponent("Fixture"))
         try Data("original resource".utf8).write(to: resources.appendingPathComponent("payload.txt"))
-        let plist = [
+        var plist = [
             "CFBundleIdentifier": identifier,
             "CFBundleShortVersionString": version,
             "CFBundleVersion": build,
             "CFBundleExecutable": "Fixture",
             "CFBundlePackageType": "APPL",
         ]
+        if let releaseTag { plist["AppReleaseTag"] = releaseTag }
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             .write(to: bundle.appendingPathComponent("Contents/Info.plist"))
     }

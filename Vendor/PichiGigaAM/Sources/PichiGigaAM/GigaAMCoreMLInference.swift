@@ -10,6 +10,11 @@ public struct GigaAMExecutionStatus: Sendable, Equatable {
     }
     public let backend: Backend
     public let fallbackReason: FallbackReason?
+
+    public init(backend: Backend, fallbackReason: FallbackReason? = nil) {
+        self.backend = backend
+        self.fallbackReason = fallbackReason
+    }
 }
 
 /// The shipped Core ML graph is consumed unchanged. This object owns only its

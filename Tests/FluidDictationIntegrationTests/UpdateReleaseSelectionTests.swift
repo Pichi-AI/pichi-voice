@@ -9,8 +9,36 @@ final nonisolated class UpdateReleaseSelectionTests: XCTestCase {
         XCTAssertEqual(selection.tag, "v0.1.0+71-public.1")
         XCTAssertEqual(selection.version, "0.1.0")
         XCTAssertEqual(selection.build, "71")
-        XCTAssertEqual(selection.displayVersion, "0.1.0 (71)")
+        XCTAssertEqual(selection.displayVersion, "0.1.0")
         XCTAssertEqual(selection.assetName, "Pichi-Voice.dmg")
+    }
+
+    func testNormalVersionTagsAndPrereleasesUseTheCanonicalProductAsset() throws {
+        for tag in ["v0.2.0", "v0.2.1", "v0.3.0-beta.2", "v1.0.0-rc.1"] {
+            let selection = try XCTUnwrap(UpdateReleaseSelection.pichi(try decode(["tag_name": tag]), owner: "Pichi-AI", repo: "pichi-voice"))
+            XCTAssertNil(selection.build)
+            XCTAssertEqual(selection.expectedBundleReleaseTag, tag)
+            XCTAssertEqual(selection.displayVersion, String(tag.dropFirst()))
+            XCTAssertEqual(selection.version, String(tag.dropFirst().split(separator: "-")[0]))
+            let oldName = "Pichi-Voice-0.2.0-73-macos-arm64.dmg"
+            XCTAssertNil(UpdateReleaseSelection.pichi(try decode(["tag_name": tag, "assetName": oldName,
+                "downloadURL": "https://github.com/Pichi-AI/pichi-voice/releases/download/\(tag)/\(oldName)"]), owner: "Pichi-AI", repo: "pichi-voice"))
+        }
+        for tag in ["v00.2.0", "v0.02.0", "v0.2", "v0.2.0-beta.01", "v0.2.0+unbound", "v0.2.0/other"] {
+            XCTAssertNil(UpdateReleaseSelection.pichiVersion(tag), tag)
+        }
+    }
+
+    func testFriendlyLabelsKeepDifferentApprovedBuildSelectionsDistinct() throws {
+        let first = try XCTUnwrap(UpdateReleaseSelection.pichi(try decode(["tag_name": "v0.2.0+73-public.1"]), owner: "Pichi-AI", repo: "pichi-voice"))
+        let changed = try XCTUnwrap(UpdateReleaseSelection.pichi(try decode(["tag_name": "v0.2.0+74-public.1"]), owner: "Pichi-AI", repo: "pichi-voice"))
+        XCTAssertEqual(first.displayVersion, "0.2.0")
+        XCTAssertEqual(first.displayVersion, changed.displayVersion)
+        XCTAssertNotEqual(first, changed)
+        XCTAssertNotEqual(first.build, changed.build)
+        XCTAssertNil(first.expectedBundleReleaseTag, "Historical bundles have no signed release-tag field")
+        XCTAssertEqual(UpdateReleaseSelection.displayVersion(version: "0.3.0", tag: "v0.3.0-beta.2"), "0.3.0-beta.2")
+        XCTAssertEqual(UpdateReleaseSelection.displayVersion(version: "0.2.0", tag: "v0.3.0-beta.2"), "0.2.0")
     }
 
     func testDraftRuntimeWrongNameWrongRepositoryWrongTagAndDuplicateAssetAreRejected() throws {
@@ -60,10 +88,11 @@ final nonisolated class UpdateReleaseSelectionTests: XCTestCase {
     }
 
     private func decode(_ overrides: [String: Any] = [:]) throws -> GHRelease {
+        let tag = overrides["tag_name"] as? String ?? "v0.1.0+71-public.1"
         var asset: [String: Any] = [
             "name": overrides["assetName"] ?? "Pichi-Voice.dmg",
             "content_type": "application/x-apple-diskimage",
-            "browser_download_url": overrides["downloadURL"] ?? "https://github.com/Pichi-AI/pichi-voice/releases/download/v0.1.0+71-public.1/Pichi-Voice.dmg",
+            "browser_download_url": overrides["downloadURL"] ?? "https://github.com/Pichi-AI/pichi-voice/releases/download/\(tag)/Pichi-Voice.dmg",
         ]
         if let size = overrides["size"] { asset["size"] = size }
         let release: [String: Any] = [

@@ -4,6 +4,110 @@ import XCTest
 
 @MainActor
 final class UpdatePromptIntegrationTests: XCTestCase {
+    func testPublicVersionOnlyOfferStillRequiresExplicitInstallation() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        context.fixture.setReply(version: "v0.2.0+73-public.1")
+        context.updater.currentVersionForTesting = "0.1.0"
+        context.updater.currentBuildForTesting = "71"
+        var installs = 0
+        context.updater.simulationInstallHandler = { installs += 1 }
+        context.updater.checkForUpdatesManually()
+        try await self.finishCheck(context)
+        XCTAssertEqual(context.updater.availableUpdateVersion, "0.2.0")
+        let window = try self.visibleWindow("Update Available")
+        let labels = window.contentView?.subviews.compactMap { $0 as? NSTextField }.map(\.stringValue) ?? []
+        XCTAssertTrue(labels.contains { $0.contains("0.2.0") })
+        XCTAssertFalse(labels.contains { $0.contains("(73)") || $0.contains("public.1") })
+        XCTAssertEqual(installs, 0)
+        try self.button("Install Now", in: window).performClick(nil)
+        try await self.waitFor { installs == 1 && !context.updater.isUpdateInProgress }
+    }
+
+    func testLaunchUpdateThrottleUsesTheExactHourBoundary() throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        let settings = SettingsStore(defaults: context.defaults, initializeDesktop: false)
+        let completed = Date(timeIntervalSince1970: 10_000)
+        XCTAssertTrue(settings.shouldCheckForUpdates(now: completed))
+        context.defaults.set(completed, forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate)
+        for elapsed in [-1.0, 0, 3_597, 3_599.999] {
+            XCTAssertFalse(settings.shouldCheckForUpdates(now: completed.addingTimeInterval(elapsed)))
+        }
+        XCTAssertTrue(settings.shouldCheckForUpdates(now: completed.addingTimeInterval(3_600)))
+        context.defaults.set(false, forKey: SettingsStore.UpdateKeys.autoUpdateCheckEnabled)
+        XCTAssertFalse(settings.shouldCheckForUpdates(now: completed.addingTimeInterval(7_200)))
+    }
+
+    func testEveryHourlyTimerFireChecksDespiteThePreviousCompletionDelay() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        context.defaults.set(false, forKey: SettingsStore.UpdateKeys.showUpdatePopups)
+        context.fixture.setReply(version: nil)
+        let settings = SettingsStore(defaults: context.defaults, initializeDesktop: false)
+        let delegate = AppDelegate()
+        let timer = delegate.schedulePeriodicUpdateChecks(updater: context.updater)
+        defer { timer.invalidate() }
+        XCTAssertEqual(timer.timeInterval, 3_600)
+        let launch = Date(timeIntervalSince1970: 10_000)
+        // Each preceding request finished three seconds after its scheduled tick.
+        // The launch throttle would reject the next tick; periodic work must run.
+        for hour in 1 ... 3 {
+            let previousCompletion = launch.addingTimeInterval(Double(hour - 1) * 3_600 + 3)
+            let tick = launch.addingTimeInterval(Double(hour) * 3_600)
+            context.defaults.set(previousCompletion, forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate)
+            XCTAssertFalse(settings.shouldCheckForUpdates(now: tick))
+            timer.fire()
+            try await self.finishCheck(context, requests: hour)
+            XCTAssertEqual(context.fixture.requestCount, hour)
+        }
+        XCTAssertFalse(context.updater.isUpdateInProgress)
+        XCTAssertFalse(self.isVisible("Update Available"))
+    }
+
+    func testHourlyTimerHonorsCurrentAutomaticCheckPreferenceAndDistribution() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        context.fixture.setReply(version: nil)
+        let delegate = AppDelegate()
+        let timer = delegate.schedulePeriodicUpdateChecks(updater: context.updater)
+        defer { timer.invalidate() }
+        context.defaults.set(false, forKey: SettingsStore.UpdateKeys.autoUpdateCheckEnabled)
+        timer.fire()
+        XCTAssertFalse(context.updater.isCheckingForUpdates)
+        XCTAssertEqual(context.fixture.requestCount, 0)
+        context.defaults.set(true, forKey: SettingsStore.UpdateKeys.autoUpdateCheckEnabled)
+        timer.fire()
+        try await self.finishCheck(context)
+        context.updater.updatesEnabledForTesting = false
+        timer.fire()
+        XCTAssertFalse(context.updater.isCheckingForUpdates)
+        XCTAssertEqual(context.fixture.requestCount, 1)
+        context.updater.updatesEnabledForTesting = true
+        timer.fire()
+        try await self.finishCheck(context, requests: 2)
+    }
+
+    func testHourlyTimerReusesPendingCheckAndRetriesAtNextFireAfterFailure() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        context.fixture.setReply(version: nil, held: true)
+        let delegate = AppDelegate()
+        let timer = delegate.schedulePeriodicUpdateChecks(updater: context.updater)
+        defer { timer.invalidate() }
+        timer.fire()
+        timer.fire()
+        try await self.waitFor { context.fixture.requestCount == 1 }
+        context.fixture.release()
+        try await self.finishCheck(context)
+        context.fixture.setReply(version: nil, status: 503)
+        timer.fire()
+        try await self.finishCheck(context, requests: 2)
+        context.fixture.setReply(version: nil)
+        timer.fire()
+        try await self.finishCheck(context, requests: 3)
+    }
+
     func testUnconfiguredDistributionRejectsUpdateOperations() async {
         let updater = SimpleUpdater()
         updater.updatesEnabledForTesting = false
@@ -367,7 +471,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         XCTAssertNil(context.defaults.object(forKey: SettingsStore.UpdateKeys.showUpdatePopups))
         context.updater.checkForUpdatesAutomatically()
         try await self.finishCheck(context)
-        XCTAssertEqual(context.updater.availableUpdateVersion, "99.0.0 (1)")
+        XCTAssertEqual(context.updater.availableUpdateVersion, "99.0.0")
         XCTAssertTrue(self.isVisible("Update Available"))
         XCTAssertNotNil(context.defaults.object(forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate))
         XCTAssertFalse(context.updater.isUpdateInProgress)
@@ -379,7 +483,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         context.fixture.setReply(version: "v100.0.0+1-public.1")
         context.updater.checkForUpdatesAutomatically()
         try await self.finishCheck(context, requests: 2)
-        XCTAssertEqual(context.updater.availableUpdateVersion, "100.0.0 (1)")
+        XCTAssertEqual(context.updater.availableUpdateVersion, "100.0.0")
         XCTAssertFalse(self.isVisible("Update Available"))
         XCTAssertNotNil(context.defaults.object(forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate))
         XCTAssertNil(context.defaults.object(forKey: SettingsStore.UpdateKeys.updatePromptSnoozedUntil))
@@ -405,7 +509,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         try self.button("Later", in: offer).performClick(nil)
         install.performClick(nil)
         XCTAssertEqual(installs, 0)
-        XCTAssertEqual(context.updater.availableUpdateVersion, "99.0.0 (1)")
+        XCTAssertEqual(context.updater.availableUpdateVersion, "99.0.0")
         context.updater.showAvailableUpdate()
         let cachedOffer = try self.visibleWindow("Update Available")
         try self.button("Install Now", in: cachedOffer).performClick(nil)
@@ -429,7 +533,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         }
         context.fixture.release()
         try await self.finishCheck(context)
-        XCTAssertEqual(context.updater.availableUpdateVersion, "99.0.0 (1)")
+        XCTAssertEqual(context.updater.availableUpdateVersion, "99.0.0")
         XCTAssertFalse(self.isVisible("Update Available"))
         context.defaults.set(true, forKey: SettingsStore.UpdateKeys.showUpdatePopups)
         context.updater.automaticUpdatePopupPreferenceDidChange(isEnabled: true)
@@ -502,9 +606,9 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         try await self.finishCheck(context, requests: 2)
         context.fixture.release()
         try await Task.sleep(nanoseconds: 30_000_000)
-        XCTAssertEqual(context.updater.availableUpdateVersion, "100.0.0 (1)")
+        XCTAssertEqual(context.updater.availableUpdateVersion, "100.0.0")
         let offer = try self.visibleWindow("Update Available")
-        XCTAssertTrue(offer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("100.0.0 (1)") } == true)
+        XCTAssertTrue(offer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("100.0.0") } == true)
         XCTAssertFalse(context.updater.isUpdateInProgress)
     }
 
@@ -523,7 +627,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         try await self.waitFor { context.fixture.requestCount == 2 && !context.updater.isUpdateInProgress }
         XCTAssertEqual(installs, 0, "A release discovered after approval must not install silently")
         let freshOffer = try self.visibleWindow("Update Available")
-        XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("100.0.0 (1)") } == true)
+        XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("100.0.0") } == true)
         oldInstall.performClick(nil)
         XCTAssertEqual(installs, 0)
         try self.button("Install Now", in: freshOffer).performClick(nil)
@@ -558,7 +662,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
             XCTAssertEqual(installs, 0)
             if let currentChannelVersion {
                 let freshOffer = try self.visibleWindow("Update Available")
-                XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains(UpdateReleaseSelection.pichiVersion(currentChannelVersion).map { "\($0.version) (\($0.build))" } ?? currentChannelVersion) } == true)
+                XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains(UpdateReleaseSelection.pichiVersion(currentChannelVersion).map { $0.version } ?? currentChannelVersion) } == true)
                 try self.button("Install Now", in: freshOffer).performClick(nil)
                 try await self.waitFor { installs == 1 && !context.updater.isUpdateInProgress }
                 XCTAssertEqual(context.fixture.requestCount, 4)
@@ -591,7 +695,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         XCTAssertFalse(context.updater.isUpdateInProgress)
         let freshOffer = try self.visibleWindow("Update Available")
         XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains {
-            $0.stringValue.contains("100.0.0 (1)")
+            $0.stringValue.contains("100.0.0")
         } == true)
         XCTAssertFalse(self.isVisible("Update Failed"))
     }
@@ -668,7 +772,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         try await self.finishCheck(context, requests: 2)
         XCTAssertFalse(noUpdates.isVisible)
         let offer = try self.visibleWindow("Update Available")
-        XCTAssertTrue(offer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("99.0.0 (1)") } == true)
+        XCTAssertTrue(offer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("99.0.0") } == true)
         offer.cancelOperation(nil)
 
         context.fixture.setReply(version: nil)
@@ -686,7 +790,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         XCTAssertTrue(installFailure.isVisible, "Check-result cleanup and popup preference changes must preserve unrelated installation errors")
         installFailure.cancelOperation(nil)
         let freshOffer = try self.visibleWindow("Update Available")
-        XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("100.0.0 (1)") } == true)
+        XCTAssertTrue(freshOffer.contentView?.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("100.0.0") } == true)
         XCTAssertFalse(context.updater.isUpdateInProgress)
     }
 
@@ -722,7 +826,6 @@ private final nonisolated class UpdateFixture: @unchecked Sendable {
             self.status = status
             self.held = held
             self.body = version.map {
-                let identity = UpdateReleaseSelection.pichiVersion($0)!
                 let assetName = "Pichi-Voice.dmg"
                 let assets = downloadable
                     ? """

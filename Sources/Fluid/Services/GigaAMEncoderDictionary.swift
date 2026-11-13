@@ -31,7 +31,7 @@ nonisolated enum GigaAMEncoderDictionary {
 
     enum Reason: String, Sendable {
         case capacityExceeded, duplicateEntryID, wrongModel, wrongRecipe, invalidTerm
-        case invalidReferences, uncalibrated, contrastBudget, invalidTranscript
+        case invalidReferences, insufficientReferences, uncalibrated, contrastBudget, invalidTranscript
         case noSearchHits, invalidWordSpan, protectedTextRule, confidentSource
         case protectedContent, acousticRejected, recordedVariantCorroborated, ambiguous, compoundPreferred
         case overlapping, replacementFailed, accepted, invalidWindows, outsideOwnership, unconfirmedCompound
@@ -341,6 +341,14 @@ nonisolated enum GigaAMEncoderDictionary {
                     (cutRange.lowerBound * GigaAMEncoderFeatures.dimension)..<(cutRange.upperBound * GigaAMEncoderFeatures.dimension)
                 ]))
                 var best: (match: GigaAMAcousticMatcher.Match, limit: Float, corroborated: Bool)?
+                var observedStemSupport: Bool?
+                func supportsObservedStem() -> Bool {
+                    if let observedStemSupport { return observedStemSupport }
+                    let result = GigaAMDictionaryLexicalEvidence.observedStemSupport(
+                        heard: heard, canonical: term.label, observedVariants: term.observedVariants)
+                    observedStemSupport = result
+                    return result
+                }
                 for cohort in prepared.cohorts {
                     try Task.checkCancellation()
                     if let ordinary = try GigaAMAcousticMatcher.matchEncoder(query: cut, references: cohort.references,
@@ -348,9 +356,8 @@ nonisolated enum GigaAMEncoderDictionary {
                         if best == nil || ordinary.distance / cohort.calibration.acceptanceDistance < best!.match.distance / best!.limit {
                             best = (ordinary, cohort.calibration.acceptanceDistance, false)
                         }
-                    } else if !terminalLetter && GigaAMDictionaryLexicalEvidence.observedStemSupport(
-                        heard: heard, canonical: term.label, observedVariants: term.observedVariants
-                    ), let limit = cohort.calibration.corroboratedAcceptanceDistance,
+                    } else if !terminalLetter, let limit = cohort.calibration.corroboratedAcceptanceDistance,
+                       supportsObservedStem(),
                        let corroborated = try GigaAMAcousticMatcher.matchEncoderCorroborated(
                         query: cut, references: cohort.references, calibration: cohort.calibration,
                         negativeReferences: term.negatives), corroborated.accepted {
