@@ -61,7 +61,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.run_macos) ||
       (vars.PICHI_VOICE_MACOS_CI == 'true' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main'))
     runs-on: xcode-27
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -80,6 +80,9 @@ jobs:
           df -h "$GITHUB_WORKSPACE"
       - name: Run the L1 gate
         working-directory: ../pichi-voice-ci
+        env:
+          # The three-core runner needs longer than the 30 minutes a heavy step gets on a developer Mac.
+          PICHI_VERIFY_STEP_LIMIT_SECONDS: "5400"
         run: python3 -S scripts/dev/verify --layer L1
       - name: Show the receipt and the logs of failed steps
         if: always()

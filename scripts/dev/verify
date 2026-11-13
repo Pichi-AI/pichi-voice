@@ -34,7 +34,25 @@ MOBILE = re.compile(r"(?:Sources/Mobile[^/]*/|Tests/Mobile|Vendor/|Fluid\.xcodep
 # A step can be the probe runner, which needs time to stop its own probes. The wait ends once the group is gone.
 STEP_STOP_GRACE_SECONDS = 30
 MINIMUM_FREE_GB = 10
-STEP_LIMIT_SECONDS = 1800
+STEP_LIMIT_ENVIRONMENT = "PICHI_VERIFY_STEP_LIMIT_SECONDS"
+
+
+def step_limit(environment):
+    """A slower machine, such as a CI runner, can give each heavy step more time than the default 30 minutes."""
+    value = environment.get(STEP_LIMIT_ENVIRONMENT, "").strip()
+    if not value:
+        return 1800
+    if not value.isdigit() or int(value) <= 0:
+        raise ValueError(f"{STEP_LIMIT_ENVIRONMENT} must be a positive number of seconds, not {value!r}")
+    return int(value)
+
+
+STEP_LIMIT_SECONDS = step_limit(os.environ)
+# Soak tests replay hours of capture and take about half of the XCTest time. L1 leaves them to L2.
+L2_ONLY_TESTS = (
+    "FluidDictationIntegrationTests/MeetingAudioChunkSinkTests/testTwoHourMicrophoneAndApplicationCaptureKeepEveryFrameAndBoundedManifests",
+    "FluidDictationIntegrationTests/MeetingMicrophoneCaptureTests/testNativeMasterTapKeepsNinetyMinuteDriftOnMeasuredHostClockWithoutPeriodicDiscard",
+)
 HEAVY_STEPS = ("xctest", "skip-policy", "probes", "ios", "vendor")
 MOBILE_BUNDLE = "PichiVoiceMobileIntegrationTests"
 REGRESSION_PRODUCTS = str(ROOT / ".build/XcodeRegression") + "/"
@@ -114,7 +132,7 @@ class Receipt:
         self.protect_creation = None
         self.running = []
         self.value = {"version": 1, **facts, "startedAt": timestamp(), "result": "running", "seconds": None,
-                      "steps": [], "skipped": [], "unavailable": [], "quarantined": []}
+                      "stepLimitSeconds": STEP_LIMIT_SECONDS, "steps": [], "skipped": [], "unavailable": [], "quarantined": []}
         self.save()
 
     def save(self):
@@ -303,9 +321,13 @@ def name_failed_probes(receipt, row):
             pass
 
 
-def run_xctest_and_probes(receipt, quarantine, jobs):
+def run_xctest_and_probes(receipt, quarantine, jobs, layer="L1"):
     """Return the result of every XCTest. Probes compile too, so they wait until the build has finished."""
     skipped = [f"-skip-testing:{test}" for test in sorted(quarantine.tests) if not test.startswith(MOBILE_BUNDLE + "/")]
+    if layer != "L2":
+        for test in L2_ONLY_TESTS:
+            skipped.append(f"-skip-testing:{test}")
+            receipt.skip(test.split("/", 1)[1], "a long soak test that runs in L2")
     xctest = receipt.begin("xctest", ["bash", "scripts/dev/macos.sh", "regression", *skipped], hosts=REGRESSION_PRODUCTS)
     receipt.wait_for_text(xctest, BUILD_FINISHED)
     probes = receipt.begin("probes", probe_command(quarantine, jobs))
@@ -399,7 +421,7 @@ def execute(receipt, layer, paths, base, jobs):
         return "incomplete"
     quarantine = read_quarantine()
     receipt.value["quarantined"] = sorted(quarantine.tests) + sorted(f"probe:{name}" for name in quarantine.probes)
-    results = run_xctest_and_probes(receipt, quarantine, jobs)
+    results = run_xctest_and_probes(receipt, quarantine, jobs, layer)
     if layer == "L2" or touches_mobile(paths, shared_sources()):
         results = {**results, **run_ios(receipt, quarantine)}
     else:

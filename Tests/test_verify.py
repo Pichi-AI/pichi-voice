@@ -157,13 +157,13 @@ class ReportTests(unittest.TestCase):
 
 
 class SideBySideTests(unittest.TestCase):
-    def run_script(self, script, quarantine=NOTHING):
+    def run_script(self, script, quarantine=NOTHING, layer="L1"):
         with tempfile.TemporaryDirectory() as temporary:
             receipt = FakeReceipt(Path(temporary), script)
             with patch.object(VERIFY, "xctest_results", side_effect=lambda row: VERIFY.report_results(row, "x" if receipt.reports[row["name"]] else None)), \
                     patch.object(VERIFY, "bundle_results", side_effect=lambda _: receipt.reports["xctest"]), \
                     patch.object(VERIFY, "artifact_directory", return_value=None):
-                found = VERIFY.run_xctest_and_probes(receipt, quarantine, 8)
+                found = VERIFY.run_xctest_and_probes(receipt, quarantine, 8, layer)
             receipt.finish()
             return receipt, found
 
@@ -202,6 +202,33 @@ class SideBySideTests(unittest.TestCase):
         receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None)], VERIFY.Quarantine(tests={name, mobile}, probes=set()))
         self.assertIn(f"-skip-testing:{name}", receipt.calls[0][1])
         self.assertNotIn(f"-skip-testing:{mobile}", receipt.calls[0][1])
+
+
+    def test_l1_leaves_the_soak_tests_to_l2_and_says_so(self):
+        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None)])
+        for test in VERIFY.L2_ONLY_TESTS:
+            self.assertIn(f"-skip-testing:{test}", receipt.calls[0][1])
+        self.assertEqual([item["name"] for item in receipt.value["skipped"]], [test.split("/", 1)[1] for test in VERIFY.L2_ONLY_TESTS])
+        self.assertEqual(receipt.value["result"], "passed")
+
+    def test_l2_runs_the_soak_tests(self):
+        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None)], layer="L2")
+        self.assertFalse(any(test in argument for test in VERIFY.L2_ONLY_TESTS for argument in receipt.calls[0][1]))
+        self.assertEqual(receipt.value["skipped"], [])
+
+
+class StepLimitTests(unittest.TestCase):
+    def test_the_default_is_thirty_minutes(self):
+        self.assertEqual(VERIFY.step_limit({}), 1800)
+        self.assertEqual(VERIFY.step_limit({VERIFY.STEP_LIMIT_ENVIRONMENT: " "}), 1800)
+
+    def test_a_slower_machine_can_ask_for_more_time(self):
+        self.assertEqual(VERIFY.step_limit({VERIFY.STEP_LIMIT_ENVIRONMENT: "5400"}), 5400)
+
+    def test_a_wrong_value_is_an_error_and_not_a_silent_default(self):
+        for value in ("0", "-5", "ninety", "1.5"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                VERIFY.step_limit({VERIFY.STEP_LIMIT_ENVIRONMENT: value})
 
 
 class ProbeTests(unittest.TestCase):
@@ -572,10 +599,17 @@ class ExecuteTests(unittest.TestCase):
 
         with patch.object(VERIFY.shutil, "which", return_value="/usr/bin/tool"), patch.object(VERIFY.shutil, "disk_usage", return_value=Usage), \
                 patch.object(VERIFY, "read_quarantine", return_value=quarantine), patch.object(VERIFY, "run_ios", side_effect=ios), \
-                patch.object(VERIFY, "run_xctest_and_probes", return_value={PASSING: "Passed", BROKEN: "Failed"}), \
+                patch.object(VERIFY, "run_xctest_and_probes", return_value={PASSING: "Passed", BROKEN: "Failed"}) as xctest, \
                 patch.object(VERIFY, "run_vendor") as vendor:
             outcome = VERIFY.execute(receipt, layer, paths, "origin/main", 4)
+        self.xctest_layers = [call.args[3] for call in xctest.call_args_list]
         return receipt, outcome, ran, vendor
+
+    def test_the_layer_reaches_the_test_selection(self):
+        for layer in ("L1", "L2"):
+            with self.subTest(layer=layer):
+                self.run_layer(layer, ["Sources/Fluid/App.swift"])
+                self.assertEqual(self.xctest_layers, [layer])
 
     def test_a_mobile_change_runs_ios_and_all_results_reach_the_policy_check(self):
         receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"])
