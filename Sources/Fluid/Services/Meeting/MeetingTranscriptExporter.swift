@@ -173,7 +173,8 @@ nonisolated enum MeetingTranscriptExporter {
     /// One contextual reading pass per session or bounded live batch. Original members remain
     /// untouched; every consumer uses the same projected owner without a per-word full scan.
     static func speakerPresentations(in session: MeetingSession,
-                                     segments: [MeetingTranscriptSegment]? = nil)
+                                     segments: [MeetingTranscriptSegment]? = nil,
+                                     language: PichiInterfaceLanguage = PichiLocalization.language)
         -> [MeetingTranscriptSegmentID: MeetingSpeakerPresentation] {
         var context = session
         if let segments { context.transcriptSegments = segments }
@@ -182,7 +183,7 @@ nonisolated enum MeetingTranscriptExporter {
         }.map(\.element)
         let names = Dictionary(context.activeSpeakers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
         var result: [MeetingTranscriptSegmentID: MeetingSpeakerPresentation] = [:]
-        for paragraph in self.displayParagraphs(for: ordered, in: context) {
+        for paragraph in self.displayParagraphs(for: ordered, in: context, language: language) {
             let presentation = self.speakerPresentation(for: paragraph, in: context, speakerNames: names)
             for member in paragraph.segments { result[member.id] = presentation }
         }
@@ -918,7 +919,8 @@ nonisolated enum MeetingTranscriptExporter {
     /// Buffer size,
     /// elapsed time, pauses and line breaks are not evidence of a new speaker turn. Explicit line
     /// breaks remain in the text inside a turn without creating a second speaker header.
-    static func displayParagraphs(for segments: [MeetingTranscriptSegment], in session: MeetingSession) -> [DisplayParagraph] {
+    static func displayParagraphs(for segments: [MeetingTranscriptSegment], in session: MeetingSession,
+                                  language: PichiInterfaceLanguage = PichiLocalization.language) -> [DisplayParagraph] {
         let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
         let legacyBridges = self.legacyReadingBridges(for: segments, in: session)
         let canonicalMappings = self.unmappedCanonicalReadingOwners(for: segments, in: session)
@@ -941,7 +943,7 @@ nonisolated enum MeetingTranscriptExporter {
             for gap in session.transcriptCoverageGaps ?? [] where gap.start.isFinite && gap.end.isFinite && gap.end > gap.start {
                 barriers[gap.trackID, default: []].append(.init(start: gap.start, end: gap.end))
             }
-            let format = PichiLocalization.text("Speaker %lld")
+            let format = PichiLocalization.text("Speaker %lld", language: language, bundle: .main)
             let scopes = MeetingReadingSpeakerResolver.readingScopes(for: source)
             if let reading = try? MeetingReadingSpeakerResolver.resolve(segments: projected, speakers: session.speakers,
                 barriersByTrack: barriers, scopeForSegment: { scopes[$0.id] },
