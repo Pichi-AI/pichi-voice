@@ -407,7 +407,7 @@ final class MeetingASRPreparationOwnerTests: XCTestCase {
             )
             XCTFail("Expected unsupported policy rejection")
         } catch let error as MeetingProviderOptionsError {
-            XCTAssertEqual(error, .unsupportedASRModel("parakeet-tdt-v2"))
+            XCTAssertEqual(error, .unsupportedLanguageCode("de"))
         } catch {
             XCTFail("Expected MeetingProviderOptionsError, got \(error)")
         }

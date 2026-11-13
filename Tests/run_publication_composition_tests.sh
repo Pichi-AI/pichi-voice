@@ -25,9 +25,13 @@ nonisolated struct MeetingResultSidecarStore {
     }
 }
 SWIFT
-python3 - "$task_test_dir/ApplicationSupport.swift" <<'PY_SUPPORT'
+python3 -S -B - "$task_test_dir/ApplicationSupport.swift" <<'PY_SUPPORT'
 from pathlib import Path
 import sys
+sys.path.insert(0, str(Path.cwd()))
+from Tests.Standalone.ProbeContractDependencies import declaration
+entry = declaration(Path('Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift').read_text(), '    nonisolated struct CustomDictionaryEntry:')
+Path(sys.argv[1]).with_name('DictionaryEntry.swift').write_text('import Foundation\nextension SettingsStore {\n' + entry + '\n}\n')
 source = Path('Sources/Fluid/Services/Meeting/MeetingProcessingPipeline.swift').read_text()
 versions = [line.strip() for line in source.splitlines() if line.strip().startswith('nonisolated static let pipelineVersion =')]
 if len(versions) != 1:
@@ -35,7 +39,7 @@ if len(versions) != 1:
 with Path(sys.argv[1]).open('a') as target:
     target.write('\nnonisolated enum MeetingProcessingPipeline { ' + versions[0] + ' }\n')
 PY_SUPPORT
-python3 Tests/Support/write_attribution_standalone_types.py "$task_test_dir/AttributionTypes.swift"
+python3 -S -B Tests/Support/write_attribution_standalone_types.py "$task_test_dir/AttributionTypes.swift"
 xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
@@ -61,7 +65,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift \
     Sources/Fluid/Services/Meeting/MeetingRecordingCipher.swift \
     Sources/Fluid/Services/Meeting/MeetingRecordingKeychainStore.swift \
-    Tests/Support/StandaloneMeetingProcessingDependencies.swift \
+    "$task_test_dir/DictionaryEntry.swift" Tests/Support/StandaloneMeetingProcessingDependencies.swift \
     Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \

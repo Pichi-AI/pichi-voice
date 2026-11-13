@@ -53,6 +53,8 @@ nonisolated struct PronunciationDictionaryProfile: Sendable {
 actor PronunciationDictionaryStore {
     static let shared = PronunciationDictionaryStore()
     nonisolated final class CaptureRead: @unchecked Sendable {
+        var isOpen: Bool { preconditionFailure("This probe never admits dictionary evidence") }
+        var profile: PrivateProfileSnapshot { preconditionFailure("This probe never admits dictionary evidence") }
         var profiles: [PronunciationDictionaryProfile] {
             preconditionFailure("Artifact ownership tests must never read private profile metadata")
         }
@@ -73,6 +75,8 @@ actor PronunciationDictionaryStore {
 actor DictionaryNegativeExampleStore {
     static let shared = DictionaryNegativeExampleStore()
     nonisolated final class CaptureRead: @unchecked Sendable {
+        var isOpen: Bool { preconditionFailure("This probe never admits dictionary evidence") }
+        var profile: PrivateProfileSnapshot { preconditionFailure("This probe never admits dictionary evidence") }
         func close(leaseID: UUID) { preconditionFailure("This probe never admits negative evidence") }
     }
     nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>) throws -> CaptureRead {
@@ -95,7 +99,7 @@ nonisolated enum GigaAMDictionaryAcoustics {
         preconditionFailure("Artifact ownership tests must never select pronunciation references")
     }
     // ACTUAL_LEGACY_MODEL_KEY
-    static func referenceCacheKey(_ snapshot: Snapshot) -> String {
+    static func referenceCacheKey(_ snapshot: Snapshot, stableNegativeEvidence: Bool = false) -> String {
         preconditionFailure("Artifact ownership tests must never prepare dictionary references")
     }
     static func preparedWords(_ snapshot: Snapshot) async throws -> [Word] {
@@ -133,7 +137,7 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
 }
 nonisolated enum GigaAMEncoderDictionary {
     struct PreparedTerm: Sendable {}
-    struct Preparation: Sendable { let words: [PreparedTerm] }
+    // ACTUAL_ENCODER_PREPARATION
     struct AcceptedSpan: Sendable {
         let entryID: UUID; let label: String; let wordRange: ClosedRange<Int>; let frameRange: Range<Int>; let frameOffset: Int
         var absoluteFrameRange: Range<Int> { (frameOffset + frameRange.lowerBound)..<(frameOffset + frameRange.upperBound) }

@@ -437,10 +437,22 @@ final class MeetingMenuBarStartTests: XCTestCase {
 
     func testFreshMenuBarDefaultsCaptureSystemAudioWithoutDetectedCall() throws {
         let configuration = try self.configuration(defaults: .unconfigured, target: nil, applications: [])
-        XCTAssertEqual(configuration.applicationAudioScope, .systemAudio)
+        XCTAssertEqual(configuration.mode, .systemAudio)
+        XCTAssertEqual(configuration.effectiveApplicationAudioScope, .systemAudio)
         XCTAssertNil(configuration.application)
         XCTAssertNil(configuration.platform)
         XCTAssertNoThrow(try configuration.validate())
+
+        var scopedDefaults = MeetingRecordingDefaults.unconfigured
+        scopedDefaults.mode = .onlineCall
+        scopedDefaults.applicationAudioScope = .systemAudio
+        let scopedConfiguration = try self.configuration(defaults: scopedDefaults, target: nil, applications: [])
+        XCTAssertEqual(scopedConfiguration.mode, .onlineCall)
+        XCTAssertEqual(scopedConfiguration.applicationAudioScope, .systemAudio)
+        XCTAssertEqual(scopedConfiguration.effectiveApplicationAudioScope, configuration.effectiveApplicationAudioScope)
+        XCTAssertNil(scopedConfiguration.application)
+        XCTAssertNil(scopedConfiguration.platform)
+        XCTAssertNoThrow(try scopedConfiguration.validate())
     }
 
     func testAutomaticSourceUsesExactProcessAndWindow() throws {
@@ -468,6 +480,7 @@ final class MeetingMenuBarStartTests: XCTestCase {
 
     func testSavedManualApplicationWorksWithoutAutomaticDetection() throws {
         var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
         defaults.isConfigured = true
         defaults.applicationAudioScope = .selectedApplication
         defaults.applicationBundleIdentifier = "manual.app"
@@ -480,6 +493,7 @@ final class MeetingMenuBarStartTests: XCTestCase {
 
     func testUnavailableSavedManualApplicationNeverUsesDetectedAlternative() {
         var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
         defaults.isConfigured = true
         defaults.applicationAudioScope = .selectedApplication
         defaults.applicationBundleIdentifier = "manual.app"

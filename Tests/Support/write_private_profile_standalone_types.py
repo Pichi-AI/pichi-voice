@@ -10,6 +10,14 @@ source = Path('Sources/Fluid/Account/AccountDomain.swift').read_text()
 types = '\n'.join(declaration(source, marker) for marker in [
     'nonisolated struct AccountIdentity:', 'nonisolated struct AccountContext:',
     'nonisolated enum AccountError:'])
+if '--archive-carriers' in sys.argv:
+    if '--archive-only' in sys.argv:
+        types = ''
+    archive = Path('Sources/Fluid/Persistence/DictionaryCorrectionArchive.swift').read_text()
+    types += '\n' + '\n'.join(declaration(archive, marker) for marker in [
+        'nonisolated struct DictionaryCorrectionArchiveAdmission:',
+        'nonisolated struct DictionaryCorrectionRecording:',
+        'nonisolated struct DictionaryCorrectionExample:'])
 if '--operation-owner' in sys.argv:
     service = Path('Sources/Fluid/Account/PrivateProfileService.swift').read_text()
     types += '\n' + declaration(service, '@MainActor protocol PrivateProfileTransitionParticipant:')

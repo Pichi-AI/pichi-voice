@@ -2399,7 +2399,7 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
         SettingsStore.shared.meetingTranscriptionBackendID = .gigaam
 
         let harness = self.makeHarness()
-        XCTAssertEqual(defaults.string(forKey: keys[0]), MeetingFinalProcessingConfiguration.defaultASRModel)
+        XCTAssertEqual(defaults.string(forKey: keys[0]), SettingsStore.SpeechModel.parakeetTDTv2.rawValue)
         XCTAssertEqual(SettingsStore.shared.meetingTranscriptionBackendID, .productionDefault)
         let session = try await harness.coordinator.startRecording(
             configuration: MeetingModelFixture.makeOnlineConfiguration()

@@ -3012,8 +3012,16 @@ final class MeetingRecoveryTests: XCTestCase {
         var session = self.makeSession(state: .interrupted, endedAt: Date(), audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
         let captureEvent = MeetingSessionEvent(id: UUID(), occurredAt: Date(), kind: .microphoneDisconnected, trackID: nil, detail: "capture interruption")
         session.events = [captureEvent, MeetingSessionEvent(id: UUID(), occurredAt: Date(), kind: .transcriptCoverageIncomplete, trackID: nil, detail: "previous attempt")]
+        let sessionDirectory = try await store.sessionDirectory(for: session.id)
+        let audio = session.audioTracks[0].chunks[0].fileURL(relativeTo: sessionDirectory)
+        try FileManager.default.createDirectory(at: audio.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let audioBytes = try self.writeExportTone(to: audio)
+        session.audioTracks[0].chunks[0].byteCount = Int64(audioBytes.count)
+        session.audioTracks[0].chunks[0].sha256 = try XCTUnwrap(MeetingChunkPathConfinement.sha256Hex(contentsOf: audio))
+        XCTAssertEqual(try AVAudioFile(forReading: audio).length, 16_000)
         try await store.create(session)
         let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter())
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         await coordinator.ensureRestored()
         let result = try await coordinator.retryProcessing()
         XCTAssertFalse(result.hasIncompleteTranscriptCoverage)
@@ -3021,6 +3029,9 @@ final class MeetingRecoveryTests: XCTestCase {
         let saved = try await store.load(id: session.id)
         XCTAssertEqual(saved?.hasIncompleteTranscriptCoverage, false)
         XCTAssertEqual(saved?.events.map(\.id), [captureEvent.id])
+        XCTAssertEqual(saved?.audioTracks, session.audioTracks)
+        XCTAssertEqual(try Data(contentsOf: audio), audioBytes)
+        await coordinator.shutdownForTermination()
     }
 
     func testFailedRetryRetainsCoverageWarning() async throws {
@@ -5111,7 +5122,14 @@ final class MeetingRecoveryTests: XCTestCase {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
-        let original = try self.completedEnglishRetranscriptionFixture()
+        var original = try self.completedEnglishRetranscriptionFixture()
+        let sessionDirectory = try await store.sessionDirectory(for: original.id)
+        let audio = original.audioTracks[0].chunks[0].fileURL(relativeTo: sessionDirectory)
+        try FileManager.default.createDirectory(at: audio.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let audioBytes = try self.writeExportTone(to: audio)
+        original.audioTracks[0].chunks[0].byteCount = Int64(audioBytes.count)
+        original.audioTracks[0].chunks[0].sha256 = try XCTUnwrap(MeetingChunkPathConfinement.sha256Hex(contentsOf: audio))
+        XCTAssertEqual(try AVAudioFile(forReading: audio).length, 16_000)
         try await store.create(original)
         let arbiter = StubArbiter()
         let coordinator = MeetingSessionCoordinator(
@@ -5120,6 +5138,7 @@ final class MeetingRecoveryTests: XCTestCase {
             processing: DiagnosticFailingProcessingController(error: ProcessingFailure()),
             audioArbiter: arbiter
         )
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         await coordinator.ensureRestored()
         do {
             _ = try await coordinator.retryProcessing(sessionID: original.id, languageCode: "en")
@@ -5133,6 +5152,8 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(restored.speakers, original.speakers)
         XCTAssertEqual(restored.audioTracks, original.audioTracks)
         XCTAssertEqual(restored.postProcessing, original.postProcessing)
+        XCTAssertEqual(try Data(contentsOf: audio), audioBytes)
+        XCTAssertGreaterThan(arbiter.acquireCount, 0)
         XCTAssertEqual(arbiter.acquireCount, arbiter.releaseCount)
         XCTAssertNil(MeetingRetranscriptionLanguage.failedAttemptLanguage(for: restored))
         await coordinator.shutdownForTermination()

@@ -533,7 +533,10 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         XCTAssertEqual(retry.isComplete, first.isComplete)
     }
 
-    private func orderedWordResult(attemptID: UUID, words: [(text: String, start: Double, end: Double)]) async throws -> MeetingProcessingResult {
+    private func orderedWordResult(
+        attemptID: UUID, words: [(text: String, start: Double, end: Double)],
+        sessionDirectory: URL? = nil, onRawAssembly: ((MeetingAssemblyResult) -> Void)? = nil
+    ) async throws -> MeetingProcessingResult {
         let fixture = self.makeInRoomFixture()
         var session = fixture.session
         session.processingAttempts[session.processingAttempts.count - 1].id = attemptID
@@ -553,10 +556,19 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
                     analysisSpanIDs: [span.id]
                 )
             }
-            return MeetingCanonicalResultBundle(
+            let bundle = MeetingCanonicalResultBundle(
                 evidence: .init(backendID: plan.backendID, attemptID: plan.attemptID, units: units),
                 coverageReceipts: standard.coverageReceipts
             )
+            if let onRawAssembly {
+                onRawAssembly(try MeetingTranscriptAssembler(speakerNameFormat: PichiLocalization.text("Speaker %lld")).assemble(
+                    MeetingAssemblyInput(plan: plan, manifest: manifest, evidence: bundle.evidence,
+                        coverageReceipts: bundle.coverageReceipts,
+                        confirmedLocalUserTokens: bundle.confirmedLocalUserTokens,
+                        speakerAttributionPolicy: plan.request.configuration.speakerAttributionPolicy)
+                ))
+            }
+            return bundle
         }
         let pipeline = self.makeCanonicalPipeline(
             backend: backend,
@@ -565,7 +577,7 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
                     self.makeObserved(fixture.chunk, duration: 10),
             ])
         )
-        return try await pipeline.process(session: session, sessionDirectory: self.makeTempSessionDirectory(), progress: { _ in })
+        return try await pipeline.process(session: session, sessionDirectory: sessionDirectory ?? self.makeTempSessionDirectory(), progress: { _ in })
     }
 
     func testEqualTimestampWordsPreserveSourceOrderAcrossAttemptIDs() async throws {
@@ -634,14 +646,48 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
     }
 
     func testQuantityFormattingRunsAfterWordUnitsBecomeASpeakerTurn() async throws {
-        let result = try await self.orderedWordResult(attemptID: UUID(), words: [
+        let attemptID = UUID()
+        let directory = try self.makeTempSessionDirectory()
+        let words = [
             (text: "twenty", start: 0.0, end: 0.2),
             (text: "dollars", start: 0.2, end: 0.4),
-        ])
-        XCTAssertEqual(result.segments.count, 1)
-        XCTAssertEqual(result.segments.first?.text, "$20")
+        ]
+        var rawAssembly: MeetingAssemblyResult?
+        let result = try await self.orderedWordResult(attemptID: attemptID, words: words,
+            sessionDirectory: directory, onRawAssembly: { rawAssembly = $0 })
+        let raw = try XCTUnwrap(rawAssembly)
+        XCTAssertEqual(result.segments.count, words.count)
         XCTAssertEqual(result.segments.first?.start.seconds, 0)
-        XCTAssertEqual(result.segments.first?.end.seconds ?? -1, 0.4, accuracy: 0.001)
+        XCTAssertEqual(result.segments.last?.end.seconds ?? -1, 0.4, accuracy: 0.001)
+        XCTAssertEqual(result.speakers, raw.speakers)
+        for (segment, native) in zip(result.segments, raw.segments) {
+            var withoutFormatting = segment
+            withoutFormatting.text = native.text
+            XCTAssertEqual(withoutFormatting, native,
+                "Formatting preserves every native ID, timestamp, attribution and source field")
+        }
+        XCTAssertEqual(result.segments.map(\.nativeUnitID), words.indices.map { "unit:\(attemptID.uuidString):\($0)" })
+        for (segment, word) in zip(result.segments, words) {
+            XCTAssertEqual(segment.nativePrecision, .word)
+            XCTAssertEqual(segment.start.seconds, word.start, accuracy: 1e-9)
+            XCTAssertEqual(segment.end.seconds, word.end, accuracy: 1e-9)
+            let timing = try XCTUnwrap(segment.nativeTiming)
+            XCTAssertEqual(timing.start, word.start, accuracy: 1e-9)
+            XCTAssertEqual(timing.end, word.end, accuracy: 1e-9)
+        }
+        var session = self.makeSession(mode: .inRoom, tracks: [])
+        session.speakers = result.speakers
+        session.transcriptSegments = result.segments
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: result.segments, in: session)
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertEqual(paragraphs.first?.text, "$20")
+        XCTAssertEqual(paragraphs.flatMap(\.segments), result.segments)
+        let reference = try XCTUnwrap(result.resultSidecarReference)
+        let sidecar = try MeetingResultSidecarStore(sessionDirectory: directory).read(
+            expectedAttemptID: attemptID, expectedBackendID: Self.canonicalBackendID, reference: reference
+        )
+        XCTAssertEqual(sidecar, raw.sidecar, "Readable quantities never replace raw sidecar evidence")
+        XCTAssertEqual(sidecar.units.map(\.text), words.map(\.text))
     }
 
     private actor CheckpointFailureSummaryProvider: MeetingPostProcessingProviding {

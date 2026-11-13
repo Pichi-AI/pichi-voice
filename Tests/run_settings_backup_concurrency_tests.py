@@ -233,6 +233,11 @@ MEMBERS
             exportedAt: Date(timeIntervalSince1970: 1_700_000_000), settings: .init(savedProviders: providers),
             promptProfiles: ["Keep user prompt: ёж"], appPromptBindings: ["fixture.app"],
             transcriptionHistory: ["User transcript: Do not translate 42"], pronunciationProfiles: ["synthetic voice metadata"])
+        let originalProfile = PrivateProfileStorage.current
+        let syntheticRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("SyntheticBackup-" + UUID().uuidString)
+        let profile = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: syntheticRoot)
+        PrivateProfileStorage.select(profile)
+        defer { PrivateProfileStorage.select(originalProfile) }
         let service = BackupService()
         let sanitizedProvider = providers[0].redactingAPIKey()
         expect(sanitizedProvider.apiKey.isEmpty && providers[0].apiKey == "synthetic-key-leak-marker", "provider helper redacts a copy")
@@ -457,6 +462,7 @@ struct Payload: Codable {
     var privateAIIdleUnload: Int?
     var meetingLanguage: String? = nil
     var promptConfigurations: [String: String]? = nil
+    var dictionaryCorrectionArchiveEnabled: Bool? = nil
 }
 struct AppBackupDocument {
     var schemaVersion: BackupFileVersion = .current
@@ -470,6 +476,9 @@ struct AppBackupDocument {
 }
 @MainActor final class SettingsStore {
     static let shared = SettingsStore()
+    var dictionaryCorrectionArchiveEnabled = false
+    // Injected ordinary settings have no profile defaults facade; production returns self here.
+    func boundToCurrentPrivateProfile() -> SettingsStore { self }
     var owner = "original"
     var privateAIIdleUnload = 30
     var meetingLanguage = "en"
@@ -631,6 +640,7 @@ MEMBERS
 @MainActor func reset(idleGate: Gate? = nil, exportGate: Gate? = nil, restoreGate: Gate? = nil) async {
     AppServices.shared.asr = ASRService()
     DictionaryAudioLearningService.shared.activityEnds = 0
+    SettingsStore.shared.dictionaryCorrectionArchiveEnabled = false
     SettingsStore.shared.owner = "original"
     SettingsStore.shared.privateAIIdleUnload = 30
     SettingsStore.shared.meetingLanguage = "en"
@@ -890,6 +900,45 @@ func awaitGate(_ gate: Gate) async {
         try await service.restore(document("retry", idle: nil))
         expect(SettingsStore.shared.owner == "retry", "load failure clears gate")
 
+        // Freeze archive consent before the actor hop; UI changes cannot retarget a backup.
+        let consentGate = Gate()
+        await reset(exportGate: consentGate)
+        SettingsStore.shared.dictionaryCorrectionArchiveEnabled = true
+        let consentExport = Task { try await service.makeBackupDocument() }
+        await awaitGate(consentGate)
+        SettingsStore.shared.dictionaryCorrectionArchiveEnabled = false
+        await consentGate.release()
+        let consentSnapshot = try await consentExport.value
+        expect(consentSnapshot.settings.dictionaryCorrectionArchiveEnabled == true,
+               "Export keeps admission-time archive consent across actor suspension")
+        var consentImport = document("consent", idle: nil)
+        consentImport.settings.dictionaryCorrectionArchiveEnabled = true
+        try await service.restore(consentImport)
+        expect(SettingsStore.shared.dictionaryCorrectionArchiveEnabled,
+               "A present archived consent preference restores through the captured settings facade")
+        try await service.restore(document("legacy-consent", idle: nil))
+        expect(SettingsStore.shared.dictionaryCorrectionArchiveEnabled,
+               "An absent legacy consent preference preserves the current value")
+        for changeGeneration in [false, true] {
+            let profileGate = Gate()
+            await reset(exportGate: profileGate)
+            let selected = PrivateProfileStorage.current
+            let exporting = Task { try await service.makeBackupDocument() }
+            await awaitGate(profileGate)
+            if changeGeneration {
+                PrivateProfileStorage.select(try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: selected.legacyRootDirectory))
+            } else {
+                PrivateProfileStorage.conceal(generation: UUID())
+            }
+            await profileGate.release()
+            do { _ = try await exporting.value; fatalError("Stale or concealed profile export must fail") }
+            catch is CancellationError {}
+            expect(TranscriptionHistoryStore.shared.writes == 0,
+                   "Profile invalidation cannot mutate history during export")
+            PrivateProfileStorage.select(selected)
+            _ = try await service.makeBackupDocument()
+        }
+
         // Export retains admission even before history has loaded; cancellation
         // is checked after the pre-existing non-cancellable load reply returns.
         let loadGate = Gate()
@@ -946,6 +995,8 @@ func awaitGate(_ gate: Gate) async {
     with tempfile.TemporaryDirectory(prefix="probe-", dir=build_root) as directory:
         swift_path = Path(directory) / "Probe.swift"
         binary = Path(directory) / "probe"
+        profile_path = Path(directory) / "ProfileTypes.swift"
+        subprocess.run(["python3", "-S", "Tests/Support/write_private_profile_standalone_types.py", str(profile_path)], cwd=repo, env=environment, check=True)
         swift_path.write_text(swift)
         package_source = (repo / "Sources/Fluid/Branding/BrandPackage.swift").read_text()
         package_path = Path(directory) / "BrandPackageMetadata.swift"
@@ -956,7 +1007,7 @@ func awaitGate(_ gate: Gate) async {
                         str(repo / "Sources/Fluid/Branding/BrandDistribution.swift"),
                         str(repo / "Tests/Support/StandaloneBrandPackageStore.swift"),
                         str(package_path)]
-        subprocess.run(compile_prefix + [str(swift_path), "-o", str(binary)],
+        subprocess.run(compile_prefix + [str(profile_path), str(repo / "Sources/Fluid/Account/PrivateProfileStorage.swift"), str(swift_path), "-o", str(binary)],
                        cwd=repo, env=environment, check=True, timeout=60)
         subprocess.run([str(binary)], env=environment, check=True, timeout=20)
         if not args.expect_overlap_gap and not args.expect_active_work_gap:

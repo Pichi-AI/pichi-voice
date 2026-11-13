@@ -50,13 +50,6 @@ nonisolated final class DebugLogger: @unchecked Sendable {
 @MainActor final class CommandAdmissionOwner {
     let llmClient: LLMClient
     init(llmClient: LLMClient) { self.llmClient = llmClient }
-    struct Message {
-        enum Role { case user, assistant, tool }
-        struct ToolCall { let id: String; let command: String; let workingDirectory: String? }
-        let role: Role
-        let content: String
-        let toolCall: ToolCall?
-    }
     let conversationHistory: [Message] = [.init(role: .user, content: "Synthetic command only.", toolCall: nil)]
     let shouldSyncCommandNotchState = false
     var streamingText = "owned-before-request"
@@ -315,6 +308,9 @@ final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
     private static func sendCommand(settings: SettingsStore) async throws -> CommandAdmissionOwner {
         SettingsStore.shared = settings
         let owner = CommandAdmissionOwner(llmClient: self.commandClient)
+        if settings.commandModeReadinessIssue != nil {
+            fputs("Positive command fixture rejected: provider=\(settings.effectiveCommandModeProviderID) model=\(settings.effectiveCommandModeSelectedModel) linked=\(settings.commandModeLinkedToGlobal) loaded=\(settings.loadedProviderAPIKeys != nil) cached=\(settings.providerAPIKeys.count) catalog=\(settings.commandModeModelCatalog().count)\n", stderr)
+        }
         let command = try await owner.send()
         self.check(command == "Synthetic summary" && owner.responseHandlerCount == 1, "Actual Command Mode callLLM passes its intercepted result to the owned continuation")
         return owner
@@ -359,16 +355,23 @@ final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
             return
         }
         if ProcessInfo.processInfo.environment["PICHI_TEMPLATE_UI_ADMISSION_PENDING_ONLY"] == "1" {
+            fputs("Admission phase: templatePendingProbe()\n", stderr)
             try await self.templatePendingProbe()
             self.check(AdmissionURLProtocol.requestCount == 0, "Pending click probe must post no HTTP request")
             print("PASS: actual Template Generate pending-credential probe; no controller dispatch or HTTP")
             return
         }
+        fputs("Admission phase: templatePendingProbe()\n", stderr)
         try await self.templatePendingProbe()
+        fputs("Admission phase: refreshAdmission(remote)\n", stderr)
         try await self.refreshAdmission(remote)
+        fputs("Admission phase: keylessAdmission(remote)\n", stderr)
         try await self.keylessAdmission(remote)
+        fputs("Admission phase: aliasAndStaleConfiguration(remote)\n", stderr)
         try await self.aliasAndStaleConfiguration(remote)
+        fputs("Admission phase: localAPIAdmission()\n", stderr)
         try await self.localAPIAdmission()
+        fputs("Admission phase: normalDictationAdmission()\n", stderr)
         try await self.normalDictationAdmission()
         self.check(AdmissionURLProtocol.requestCount == 52 && AdmissionURLProtocol.unexpectedURLCount == 0,
             "All 52 expected positive requests are intercepted; unknown URLs fail closed")

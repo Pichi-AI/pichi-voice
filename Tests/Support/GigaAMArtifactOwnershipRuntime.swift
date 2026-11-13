@@ -69,20 +69,12 @@ public actor GigaAMRuntime {
     public var executionStatus: GigaAMExecutionStatus? { nil }
     public var isReady: Bool { false }
     public func beginAttempt() throws {}
-    public func load(descriptor: GigaAMModelDescriptor, directory: URL) async throws {
+    public func load(descriptor: GigaAMModelDescriptor, directory: URL, executionProvider: GigaAMExecutionProvider) async throws {
         try await GigaAMArtifactTestGate.shared.load(descriptor: descriptor, directory: directory)
     }
+    public func discardWindowReuse(for sessionID: UUID) async {}
     public func unload() async {}
-    public func transcribe(_ samples: [Float], captureEncoderFeatures: Bool = false) async throws -> GigaAMTranscript {
+    public func transcribe(_ samples: [Float], captureEncoderFeatures: Bool = false, reusingWindowsFor session: GigaAMWindowReuseSession? = nil) async throws -> GigaAMTranscript {
         preconditionFailure("Artifact ownership tests must never perform inference")
     }
-}
-
-public struct GigaAMTranscript: Sendable {
-    public let text: String
-    public let confidence: Float
-    public let endOfUtteranceProbability: Float?
-    // GigaAMWordTiming is the real declaration; the runner appends it from GigaAMCTC.swift.
-    public let words: [GigaAMWordTiming]
-    public let encoderWindows: [GigaAMEncoderWindow] = []
 }

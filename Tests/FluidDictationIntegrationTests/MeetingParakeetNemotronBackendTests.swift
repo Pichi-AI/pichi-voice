@@ -1197,7 +1197,9 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         let backend = MeetingProviderBackedBackend(
             descriptor: try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "gigaam-v3-eou")),
             providerModelID: "gigaam-v3-eou",runtimeFactory: { _ in FakeRuntime() })
-        XCTAssertThrowsError(try backend.plan(self.makeRequest(session: fixture.session, directory: self.makeTempSessionDirectory()))) { error in
+        let englishV2Configuration = MeetingFinalProcessingConfiguration(asrModel: "parakeet-tdt-v2", languageCode: "en")
+        XCTAssertThrowsError(try backend.plan(self.makeRequest(session: fixture.session,
+            directory: self.makeTempSessionDirectory(), configuration: englishV2Configuration))) { error in
             XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedASRModel("parakeet-tdt-v2"))
         }
         let englishConfiguration = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", languageCode: "en")
@@ -1858,7 +1860,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
                 spy.requests.append(request)
                 return runtime
             },
-            preferredASRModelProvider: { .fluidParakeetPro }
+            preferredASRModelProvider: { .parakeetTDTv2 }
         )
         runtime.asrSession.responses = [
             .init(text: "", words: []), .init(text: "", words: []), .init(text: "", words: []),

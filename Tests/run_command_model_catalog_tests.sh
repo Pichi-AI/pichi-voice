@@ -166,6 +166,16 @@ resolve = declaration(ui, 'private func resolveRoute()').replace('private ', '',
 (out / 'AdmissionTemplateUI.swift').write_text('import Combine\nimport Foundation\n@MainActor\n' + preferences
     + '\n@MainActor extension TemplateSummaryAdmissionOwner {\n' + generate + '\n' + resolve + '\n}\n')
 command = Path('Sources/Fluid/Services/CommandModeService.swift').read_text()
+message = declaration(command, '    struct Message:')
+apple = Path('Sources/Fluid/Services/AppleIntelligenceCommandProvider.swift').read_text()
+pure_apple = apple[apple.index('struct AppleIntelligenceCall:'):apple.index('// MARK: - FoundationModels')]
+(out / 'AdmissionAppleCore.swift').write_text('import Foundation\n' + pure_apple + '''
+enum AppleIntelligenceCommandProvider {
+    static func respond(to turns: [AppleIntelligenceTurn]) async throws -> (content: String, call: AppleIntelligenceCall?) {
+        preconditionFailure("Credential admission must never invoke on-device inference")
+    }
+}
+''')
 assert 'init(llmClient: LLMClient = .shared)' in command and 'self.llmClient = llmClient' in command
 command_baseline = os.environ.get('PICHI_COMMAND_ADMISSION_BASELINE_REF')
 if command_baseline:
@@ -187,7 +197,7 @@ command = command[command.index('    private struct LLMResponse {'):command.rind
 # Access is widened only inside the isolated owner so its actual admission,
 # configuration, transport and result handling can be exercised together.
 command = command.replace('private struct LLMResponse', 'struct LLMResponse', 1).replace('private func callLLM', 'func callLLM', 1)
-(out / 'AdmissionCommand.swift').write_text('import Foundation\n@MainActor extension CommandAdmissionOwner {\n' + command + '\n}\n')
+(out / 'AdmissionCommand.swift').write_text('import Foundation\n@MainActor extension CommandAdmissionOwner {\n' + message + '\n' + command + '\n}\n')
 dictation = Path('Sources/Fluid/Services/DictationPostProcessingService.swift').read_text()
 normal_baseline = os.environ.get('PICHI_NORMAL_DICTATION_ADMISSION_BASELINE_REF')
 if normal_baseline:
@@ -239,6 +249,7 @@ reprocess_wrapper = '''
     func finishReprocess(_ normalizedTranscribedText: String) async -> String {
         let isOutputValid: @MainActor () -> Bool = { self.privateOutputOperations.isCurrent && !Task.isCancelled }
         let appInfo = self.getCurrentAppInfo()
+        let textNormalizer = await DictationTextNormalizationService.shared.formatter(for: normalizedTranscribedText)
         var finalText = normalizedTranscribedText
         var aiFallbackReason: String?
         var postProcessingModel: String?
@@ -263,6 +274,7 @@ wrapper = '''
         let pipelineID = "synthetic-normal-dictation"
         let promptOverride: String? = nil
         func preserveConcealedCapture() -> Bool { !self.privateOutputOperations.isCurrent }
+        let textNormalizer = await DictationTextNormalizationService.shared.formatter(for: normalizedTranscribedText)
         var finalText = normalizedTranscribedText
         var postProcessingModel: String?
         var aiTokensPerSecond: Double?
@@ -308,7 +320,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -D PICHI_CREDENTIAL_TEST_BACKEND
     -module-cache-path "$task_test_dir/AdmissionModuleCache" \
     "$task_test_dir/ModelRepository.swift" "$task_test_dir/AdmissionMetadata.swift" \
     "$task_test_dir/AdmissionProfileSupport.swift" "$task_test_dir/AdmissionProfileTypes.swift" \
-    "$task_test_dir/AdmissionSettingsKeyDependencies.swift" \
+    "$task_test_dir/AdmissionSettingsKeyDependencies.swift" "$task_test_dir/AdmissionAppleCore.swift" Tests/AppleIntelligenceAvailabilityDouble.swift \
     Sources/Fluid/Account/PrivateProfileStorage.swift \
     Sources/Fluid/Account/PrivateProfileOperationOwner.swift \
     "$task_test_dir/AdmissionCredentials.swift" "$task_test_dir/AdmissionRoute.swift" "$task_test_dir/AdmissionCommand.swift" \
@@ -316,6 +328,9 @@ xcrun swiftc -parse-as-library -swift-version 5 -D PICHI_CREDENTIAL_TEST_BACKEND
     "$task_test_dir/AdmissionDictation.swift" "$task_test_dir/AdmissionErrors.swift" \
     "$task_test_dir/AdmissionStopSnapshot.swift" "$task_test_dir/AdmissionNormalProcessor.swift" \
     "$task_test_dir/AdmissionWarmSelection.swift" "$task_test_dir/AdmissionResidency.swift" Tests/NormalDictationAdmissionSupport.swift \
+    Sources/Fluid/TextNormalization/FluidTextNormalizer.swift Sources/Fluid/TextNormalization/SpokenEmojiRules.swift \
+    Sources/Fluid/TextNormalization/DictationNumberParser.swift Sources/Fluid/TextNormalization/DictationQuantityFormatter.swift \
+    Sources/Fluid/Services/DictationTextNormalizationService.swift \
     Sources/Fluid/Services/DictationPromptRequest.swift Sources/Fluid/Services/DictationAIPostProcessingGate.swift \
     Sources/Fluid/Services/LocalAPI/LocalAPIModels.swift Sources/Fluid/Services/LocalAPI/InferenceAPIController.swift \
     Tests/LocalAPICredentialAdmissionSupport.swift \

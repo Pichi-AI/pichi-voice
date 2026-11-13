@@ -475,11 +475,13 @@ final class LocalAPIRequestLifetimeTests: XCTestCase {
 
     @MainActor private final class Transport {
         let handler: LocalAPIConnectionHandler
+        let port: UInt16
         var receives: [LocalAPIConnectionHandler.ReceiveCompletion] = []
         var responses: [Data] = []
         var cancellationCount = 0
 
         init(router: LocalAPIRouter, server: LocalAPIServer) {
+            self.port = server.port
             self.handler = LocalAPIConnectionHandler(
                 connection: NWConnection(host: "127.0.0.1", port: 9, using: .tcp), router: router, port: server.port
             )
@@ -500,7 +502,7 @@ final class LocalAPIRequestLifetimeTests: XCTestCase {
         }
 
         func request(_ path: String, method: String = "GET", body: Data = Data(), complete: Bool = false) throws {
-            var bytes = Data("\(method) \(path) HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\n\r\n".utf8)
+            var bytes = Data("\(method) \(path) HTTP/1.1\r\nHost: 127.0.0.1:\(self.port)\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\n\r\n".utf8)
             bytes.append(body)
             try self.deliver(bytes, complete: complete)
         }
