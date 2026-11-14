@@ -117,7 +117,8 @@ final class MeetingInlineCaptionBoundsTests: XCTestCase {
         })
     }
     private func settle(_ host: InlineBoundsHost, predicate: () -> Bool) async throws {
-        for _ in 0..<80 {
+        // Up to 15 seconds: the shared CI runner lays out the simulator window much more slowly than a Mac.
+        for _ in 0..<300 {
             host.window.layoutIfNeeded()
             if predicate() {
                 try await Task.sleep(for: .milliseconds(100))

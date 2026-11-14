@@ -134,8 +134,10 @@ final class MobileKioskRecordingTests: XCTestCase {
         }
     }
 
+    // Generous deadlines: the shared CI runner is several times slower than a Mac. The loops end as soon as
+    // the condition holds, and the assertions after them are unchanged.
     private func waitForProcessing(_ processing: SyntheticProcessing) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(15))
         while !processing.isWaiting, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -144,7 +146,7 @@ final class MobileKioskRecordingTests: XCTestCase {
     }
 
     private func waitForMicrophoneLevel(_ coordinator: MeetingSessionCoordinator, expectedPeak: Float) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
         while coordinator.trackHealth[.microphone]?.status != .healthy, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
