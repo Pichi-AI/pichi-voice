@@ -157,15 +157,30 @@ class ReportTests(unittest.TestCase):
 
 
 class SideBySideTests(unittest.TestCase):
-    def run_script(self, script, quarantine=NOTHING, layer="L1"):
+    def run_script(self, script, quarantine=NOTHING, layer="L1", part="all"):
         with tempfile.TemporaryDirectory() as temporary:
             receipt = FakeReceipt(Path(temporary), script)
             with patch.object(VERIFY, "xctest_results", side_effect=lambda row: VERIFY.report_results(row, "x" if receipt.reports[row["name"]] else None)), \
                     patch.object(VERIFY, "bundle_results", side_effect=lambda _: receipt.reports["xctest"]), \
                     patch.object(VERIFY, "artifact_directory", return_value=None):
-                found = VERIFY.run_xctest_and_probes(receipt, quarantine, 8, layer)
+                found = VERIFY.run_xctest_and_probes(receipt, quarantine, 8, layer, part)
             receipt.finish()
             return receipt, found
+
+    def test_the_probes_part_starts_probes_without_waiting_for_a_build(self):
+        receipt, found = self.run_script([(0, None)], part="probes")
+        self.assertEqual([call[0] for call in receipt.calls], ["probes"])
+        self.assertEqual(found, {})
+        self.assertEqual(receipt.value["result"], "passed")
+
+    def test_the_xctest_part_runs_no_probes(self):
+        receipt, found = self.run_script([(0, {PASSING: "Passed"})], part="xctest")
+        self.assertEqual([call[0] for call in receipt.calls], ["xctest"])
+        self.assertEqual(found, {PASSING: "Passed"})
+
+    def test_a_red_probe_part_stays_red(self):
+        receipt, _ = self.run_script([(1, None)], part="probes")
+        self.assertEqual(receipt.value["result"], "failed")
 
     def test_probes_start_after_the_build_and_both_are_joined(self):
         receipt, found = self.run_script([(0, {PASSING: "Passed"}), (0, None)])
@@ -732,7 +747,7 @@ verify.run_guarded(receipt, work)
 
 
 class ExecuteTests(unittest.TestCase):
-    def run_layer(self, layer, paths, quarantine=NOTHING):
+    def run_layer(self, layer, paths, quarantine=NOTHING, part="all"):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         receipt = FakeReceipt(Path(temporary.name), [(0, None), (0, None), (0, None)])
@@ -749,9 +764,46 @@ class ExecuteTests(unittest.TestCase):
                 patch.object(VERIFY, "read_quarantine", return_value=quarantine), patch.object(VERIFY, "run_ios", side_effect=ios), \
                 patch.object(VERIFY, "run_xctest_and_probes", return_value={PASSING: "Passed", BROKEN: "Failed"}) as xctest, \
                 patch.object(VERIFY, "run_vendor") as vendor:
-            outcome = VERIFY.execute(receipt, layer, paths, "origin/main", 4)
+            outcome = VERIFY.execute(receipt, layer, paths, "origin/main", 4, part)
         self.xctest_layers = [call.args[3] for call in xctest.call_args_list]
+        self.xctest_parts = [call.args[4] for call in xctest.call_args_list]
         return receipt, outcome, ran, vendor
+
+    def skipped(self, receipt):
+        return {item["name"]: item["reason"] for item in receipt.value["skipped"]}
+
+    def test_the_ios_part_runs_only_ios_and_checks_its_results(self):
+        receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"], part="ios")
+        self.assertIsNone(outcome)
+        self.assertEqual(ran, [NOTHING])
+        self.assertEqual(self.xctest_parts, [])
+        vendor.assert_not_called()
+        self.assertEqual([call[0] for call in receipt.calls], ["skip-policy"])
+        record = receipt.directory / "results.json"
+        self.assertEqual(set(json.loads(record.read_text())), {f"{VERIFY.MOBILE_BUNDLE}/AClass/testOne()"})
+        for name in ("check", "lint", "xctest", "vendor"):
+            self.assertEqual(self.skipped(receipt)[name], "runs in the xctest part of the gate")
+        self.assertEqual(self.skipped(receipt)["probes"], "runs in the probes part of the gate")
+
+    def test_the_xctest_part_leaves_probes_and_ios_to_their_own_jobs(self):
+        receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"], part="xctest")
+        self.assertIsNone(outcome)
+        self.assertEqual(ran, [])
+        self.assertEqual(self.xctest_parts, ["xctest"])
+        vendor.assert_called_once()
+        self.assertEqual([call[0] for call in receipt.calls], ["check", "lint", "skip-policy"])
+        self.assertEqual(self.skipped(receipt)["ios"], "runs in the ios part of the gate")
+        self.assertEqual(self.skipped(receipt)["probes"], "runs in the probes part of the gate")
+
+    def test_the_probes_part_runs_no_policy_step_of_its_own(self):
+        receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"], part="probes")
+        self.assertIsNone(outcome)
+        self.assertEqual(ran, [])
+        self.assertEqual(self.xctest_parts, ["probes"])
+        vendor.assert_not_called()
+        self.assertEqual(receipt.calls, [])
+        self.assertIn("skip-policy", self.skipped(receipt))
+        self.assertEqual(self.skipped(receipt)["xctest"], "runs in the xctest part of the gate")
 
     def test_the_layer_reaches_the_test_selection(self):
         for layer in ("L1", "L2"):

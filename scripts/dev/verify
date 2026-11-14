@@ -9,6 +9,9 @@ XCTest stays serial: its classes change shared settings, and parallel workers sh
 domain, so a parallel run fails at random. XCTest is never retried. When a probe run completes with up to
 three probe failures, those probes run once more, alone: one that passes then is named as flaky and does
 not fail the gate, one that fails again stays red. A probe run that did not complete is never retried.
+
+--part runs one part of the gate on a machine of its own, as CI does: xctest (with the repository checks,
+the vendored packages and the policy check of its results), probes, or ios. Every part must pass.
 """
 
 import argparse
@@ -55,6 +58,9 @@ L2_ONLY_TESTS = (
     "FluidDictationIntegrationTests/MeetingMicrophoneCaptureTests/testNativeMasterTapKeepsNinetyMinuteDriftOnMeasuredHostClockWithoutPeriodicDiscard",
 )
 HEAVY_STEPS = ("xctest", "skip-policy", "probes", "ios", "vendor")
+# CI runs the parts of one gate side by side on separate machines; "all" runs every step on this one.
+PARTS = ("all", "xctest", "probes", "ios")
+PART_OF = {"check": "xctest", "lint": "xctest", "xctest": "xctest", "vendor": "xctest", "probes": "probes", "ios": "ios"}
 MOBILE_BUNDLE = "PichiVoiceMobileIntegrationTests"
 REGRESSION_PRODUCTS = str(ROOT / ".build/XcodeRegression") + "/"
 BUILD_FINISHED = b"** TEST BUILD SUCCEEDED **"
@@ -370,20 +376,28 @@ def retry_failed_probes(receipt, probes_row):
     receipt.save()
 
 
-def run_xctest_and_probes(receipt, quarantine, jobs, layer="L1"):
-    """Return the result of every XCTest. Probes compile too, so they wait until the build has finished."""
-    skipped = [f"-skip-testing:{test}" for test in sorted(quarantine.tests) if not test.startswith(MOBILE_BUNDLE + "/")]
-    if layer != "L2":
-        for test in L2_ONLY_TESTS:
-            skipped.append(f"-skip-testing:{test}")
-            receipt.skip(test.split("/", 1)[1], "a long soak test that runs in L2")
-    xctest = receipt.begin("xctest", ["bash", "scripts/dev/macos.sh", "regression", *skipped], hosts=REGRESSION_PRODUCTS)
-    receipt.wait_for_text(xctest, BUILD_FINISHED)
-    probes = receipt.begin("probes", probe_command(quarantine, jobs))
-    xctest_row, probes_row = receipt.join(xctest, probes)
-    name_failed_probes(receipt, probes_row)
-    retry_failed_probes(receipt, probes_row)
-    return xctest_results(xctest_row)
+def run_xctest_and_probes(receipt, quarantine, jobs, layer="L1", part="all"):
+    """Return the result of every XCTest. Probes compile too, so beside XCTest they wait until the build has
+    finished. A part of the gate on a machine of its own runs only its side."""
+    xctest = probes = None
+    if part in ("all", "xctest"):
+        skipped = [f"-skip-testing:{test}" for test in sorted(quarantine.tests) if not test.startswith(MOBILE_BUNDLE + "/")]
+        if layer != "L2":
+            for test in L2_ONLY_TESTS:
+                skipped.append(f"-skip-testing:{test}")
+                receipt.skip(test.split("/", 1)[1], "a long soak test that runs in L2")
+        xctest = receipt.begin("xctest", ["bash", "scripts/dev/macos.sh", "regression", *skipped], hosts=REGRESSION_PRODUCTS)
+    if part in ("all", "probes"):
+        if xctest is not None:
+            receipt.wait_for_text(xctest, BUILD_FINISHED)
+        probes = receipt.begin("probes", probe_command(quarantine, jobs))
+    rows = receipt.join(*(entry for entry in (xctest, probes) if entry is not None))
+    xctest_row = rows[0] if xctest is not None else None
+    probes_row = rows[-1] if probes is not None else None
+    if probes_row is not None:
+        name_failed_probes(receipt, probes_row)
+        retry_failed_probes(receipt, probes_row)
+    return xctest_results(xctest_row) if xctest_row is not None else {}
 
 
 def disposable_simulator(name):
@@ -450,14 +464,24 @@ def read_quarantine(ci=None):
                       probes={test.removeprefix("probe:") for test in tests if test.startswith("probe:")})
 
 
-def execute(receipt, layer, paths, base, jobs):
-    receipt.step("check", ["bash", "scripts/dev/check.sh"])
-    if shutil.which("swiftlint"):
-        receipt.step("lint", ["python3", "-S", "scripts/dev/lint-changed.py", "--base", base])
-    elif any(path.endswith(".swift") for path in paths):
-        receipt.unavailable("lint", "swiftlint is not installed here, and Swift files changed")
+def execute(receipt, layer, paths, base, jobs, part="all"):
+    def mine(name):
+        return part == "all" or PART_OF[name] == part
+
+    def elsewhere(name):
+        receipt.skip(name, f"runs in the {PART_OF[name]} part of the gate")
+
+    if mine("check"):
+        receipt.step("check", ["bash", "scripts/dev/check.sh"])
+        if shutil.which("swiftlint"):
+            receipt.step("lint", ["python3", "-S", "scripts/dev/lint-changed.py", "--base", base])
+        elif any(path.endswith(".swift") for path in paths):
+            receipt.unavailable("lint", "swiftlint is not installed here, and Swift files changed")
+        else:
+            receipt.skip("lint", "swiftlint is not installed here, and no Swift file changed")
     else:
-        receipt.skip("lint", "swiftlint is not installed here, and no Swift file changed")
+        elsewhere("check")
+        elsewhere("lint")
     if layer == "L0":
         for name in HEAVY_STEPS:
             receipt.skip(name, "L0 stops at the repository check")
@@ -477,13 +501,24 @@ def execute(receipt, layer, paths, base, jobs):
         return "incomplete"
     quarantine = read_quarantine()
     receipt.value["quarantined"] = sorted(quarantine.tests) + sorted(f"probe:{name}" for name in quarantine.probes)
-    results = run_xctest_and_probes(receipt, quarantine, jobs, layer)
-    if layer == "L2" or touches_mobile(paths, shared_sources()):
+    results = run_xctest_and_probes(receipt, quarantine, jobs, layer, part) if mine("xctest") or mine("probes") else {}
+    for name in ("xctest", "probes"):
+        if not mine(name):
+            elsewhere(name)
+    if not mine("ios"):
+        elsewhere("ios")
+    elif layer == "L2" or touches_mobile(paths, shared_sources()):
         results = {**results, **run_ios(receipt, quarantine)}
     else:
         receipt.skip("ios", "no mobile or shared source changed")
     receipt.value["testsFailed"] = sorted(test for test, result in results.items() if result == "Failed")
-    run_vendor(receipt, layer, paths)
+    if mine("vendor"):
+        run_vendor(receipt, layer, paths)
+    else:
+        elsewhere("vendor")
+    if part == "probes":
+        receipt.skip("skip-policy", "runs in the xctest and ios parts of the gate, beside their results")
+        return None
     record = receipt.directory / "results.json"
     record.write_text(json.dumps(results, indent=0, sort_keys=True))
     receipt.step("skip-policy", ["python3", "-S", "scripts/dev/check-test-policy.py", "--results", str(record), "--complete"])
@@ -491,7 +526,8 @@ def execute(receipt, layer, paths, base, jobs):
 
 
 def summary_lines(value, directory):
-    lines = [f"Verify {value['layer']}: {value['result']} in {value['seconds']:.0f} s",
+    part = f" ({value['part']} part)" if value.get("part", "all") != "all" else ""
+    lines = [f"Verify {value['layer']}{part}: {value['result']} in {value['seconds']:.0f} s",
              f"Revision {value['revision'][:8]} ({value['workingTree']}), base {value['base'][:8]}",
              f"Why {value['layer']}: {value['reason']}"]
     lines += [f"  {row['status']} {row['name']}: {row['seconds']:.0f} s" + (f" ({row['note']})" if row.get("note") else "")
@@ -586,6 +622,9 @@ def main():
     choice.add_argument("--layer", choices=("L0", "L1", "L2"), help="Run this layer. Without either option: L1")
     parser.add_argument("--base", default="origin/main", help="The diff starts at the merge base with this ref")
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 3) * 2 // 3), help="Standalone probes at once")
+    parser.add_argument("--part", choices=PARTS, default="all",
+                        help="Run one part of the gate, for CI jobs on separate machines: xctest (with the repository "
+                             "checks, Vendor packages and the policy check of its results), probes, or ios")
     arguments = parser.parse_args()
     try:
         merge_base, paths = changed_paths(arguments.base)
@@ -604,10 +643,10 @@ def main():
     directory = ROOT / ".build/verify" / f"{moment}-{revision[:8]}-{os.getpid()}"
     directory.mkdir(parents=True)
     receipt = Receipt(directory, layer=layer, reason=reason, revision=revision, workingTree="dirty" if status.strip() else "clean",
-                      tree=tree, base=merge_base, changedFiles=len(paths))
-    print(f"Verify {layer}: {reason}", flush=True)
-    run_guarded(receipt, lambda: finish(receipt, execute(receipt, layer, paths, arguments.base, arguments.jobs), tree,
-                                        dirty_before))
+                      tree=tree, base=merge_base, changedFiles=len(paths), part=arguments.part)
+    print(f"Verify {layer}" + (f" ({arguments.part} part)" if arguments.part != "all" else "") + f": {reason}", flush=True)
+    run_guarded(receipt, lambda: finish(receipt, execute(receipt, layer, paths, arguments.base, arguments.jobs, arguments.part),
+                                        tree, dirty_before))
     print("\n".join(summary_lines(receipt.value, directory)))
     return {"passed": 0, "failed": 1, "incomplete": 2, "interrupted": 130}[receipt.value["result"]]
 

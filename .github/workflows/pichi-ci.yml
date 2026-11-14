@@ -56,7 +56,7 @@ jobs:
             --swiftlint "docker run --rm --volume $PWD:$PWD --workdir $PWD ghcr.io/realm/swiftlint:0.65.1@sha256:f47e083201e47a136cda5ae847595bfe00226c444ca226fa74fa5dc648a9b057"
 
   macos:
-    name: macOS gate L1
+    name: macOS gate L1 (${{ matrix.part }})
     # Pull requests into main and pushes to main. A push to a codex/** branch is checked through its pull
     # request into main; a pull request into another branch gets no macOS gate.
     if: >-
@@ -64,7 +64,13 @@ jobs:
       (vars.PICHI_VOICE_MACOS_CI == 'true' &&
        (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')))
     runs-on: xcode-27
-    # XCTest with probes, then iOS for a mobile change, each up to the step limit below.
+    # The three parts of one gate run side by side on separate runners, so the slowest part sets the
+    # time instead of their sum: XCTest with the repository checks and Vendor packages, the standalone
+    # probes, and iOS for a mobile change. Each part has its own receipt and must pass.
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [xctest, probes, ios]
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -75,12 +81,13 @@ jobs:
       - name: Create isolated build worktree
         run: git worktree add --detach ../pichi-voice-ci HEAD
       - name: Install SwiftLint when the image has none
+        if: matrix.part == 'xctest'
         run: command -v swiftlint >/dev/null || brew install swiftlint
       - name: Show the tools the gate uses
         run: |
           python3 --version
           xcodebuild -version
-          swiftlint version
+          if command -v swiftlint >/dev/null; then swiftlint version; fi
           df -h "$GITHUB_WORKSPACE"
       - name: Run the L1 gate
         working-directory: ../pichi-voice-ci
@@ -88,6 +95,7 @@ jobs:
           # The three-core runner needs longer than the 30 minutes a heavy step gets on a developer Mac.
           PICHI_VERIFY_STEP_LIMIT_SECONDS: "5400"
           PUSH_BEFORE: ${{ github.event_name == 'push' && github.event.before || '' }}
+          PART: ${{ matrix.part }}
         run: |
           # On a push to main, origin/main is the pushed commit itself: compare with the previous tip
           # instead, so the pushed commits decide whether the iOS step and Vendor packages run.
@@ -105,7 +113,7 @@ jobs:
               ;;
           esac
           # exec: a cancelled or timed-out job signals verify itself, which then stops its steps.
-          exec python3 -S scripts/dev/verify --layer L1 --base "$base"
+          exec python3 -S scripts/dev/verify --layer L1 --base "$base" --part "$PART"
       - name: Show the receipt and the logs of failed steps
         if: always()
         working-directory: ../pichi-voice-ci
@@ -160,7 +168,7 @@ jobs:
         if: failure() || cancelled()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: gate-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: gate-evidence-${{ matrix.part }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/gate-evidence
           if-no-files-found: ignore
           retention-days: 7
