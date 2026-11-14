@@ -4,9 +4,6 @@ import PichiGigaAM
 // Application neighbors are inert; the whole actual provider and model store,
 // catalog descriptor/filesExist and progress relay compile without projection.
 nonisolated enum AppBrand {
-    static let storageNamespace = "synthetic.gigaam-artifact-ownership"
-    static let keychainService = "synthetic.gigaam-artifact-ownership"
-    static var applicationSupportDirectory: URL { modelsDirectory.appendingPathComponent("SyntheticProfile") }
     static var modelsDirectory: URL { URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true) }
 }
 nonisolated enum PrivateProfileDefaults {
