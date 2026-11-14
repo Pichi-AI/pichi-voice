@@ -268,7 +268,14 @@ class ProbeTests(unittest.TestCase):
 
 
 class ProbeRetryTests(unittest.TestCase):
-    def retry(self, names, status="failed", script=((0, None),)):
+    def summary(self, rows, interrupted=False):
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory)
+        results = [{"name": name, "status": status, **({"reason": reason} if reason else {})} for name, status, reason in rows]
+        (directory / "summary.json").write_text(json.dumps({"interrupted": interrupted, "results": results}))
+        return directory
+
+    def retry(self, names, first, again=None, status="failed", script=((0, None),)):
         directory = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, directory)
         receipt = FakeReceipt(directory, list(script))
@@ -276,11 +283,14 @@ class ProbeRetryTests(unittest.TestCase):
         receipt.value["steps"].append(row)
         if names:
             receipt.value["probesFailed"] = names
-        VERIFY.retry_failed_probes(receipt, row)
+        folders = {"probes": first, "probes-retry": again}
+        with patch.object(VERIFY, "artifact_directory", side_effect=lambda step, label: folders.get(step["name"])):
+            VERIFY.retry_failed_probes(receipt, row)
         return receipt, row
 
     def test_a_probe_that_passes_alone_on_retry_is_flaky_not_failed(self):
-        receipt, row = self.retry(["a", "b"])
+        first = self.summary([("a", "FAIL", None), ("b", "FAIL", None), ("c", "PASS", None), ("ui", "SKIP", VERIFY.UI_OPT_IN)])
+        receipt, row = self.retry(["a", "b"], first)
         self.assertEqual(receipt.calls[0][1][-6:], ["--jobs", "1", "--only", "a", "--only", "b"])
         self.assertEqual(row["status"], "passed")
         self.assertIn("flaky: a, b", row["note"])
@@ -289,17 +299,31 @@ class ProbeRetryTests(unittest.TestCase):
         receipt.finish()
         self.assertEqual(receipt.value["result"], "passed")
 
-    def test_a_probe_that_fails_again_keeps_the_gate_red(self):
-        receipt, row = self.retry(["a"], script=((1, None),))
+    def test_a_probe_that_fails_again_keeps_the_gate_red_and_a_mixed_retry_names_both(self):
+        first = self.summary([("a", "FAIL", None), ("b", "FAIL", None)])
+        again = self.summary([("a", "PASS", None), ("b", "FAIL", None)])
+        receipt, row = self.retry(["a", "b"], first, again, script=((1, None),))
         self.assertEqual(row["status"], "failed")
-        self.assertEqual(receipt.value["probesFailed"], ["a"])
+        self.assertEqual(receipt.value["probesFlaky"], ["a"])
+        self.assertEqual(receipt.value["probesFailed"], ["b"])
         receipt.finish()
         self.assertEqual(receipt.value["result"], "failed")
 
+    def test_a_probe_run_that_did_not_complete_is_never_retried(self):
+        aborted = self.summary([("a", "FAIL", None), ("b", "SKIP", "not run while previous process cleanup is incomplete")])
+        runner_error = self.summary([("a", "FAIL", "cleanup failed")])
+        interrupted = self.summary([("a", "FAIL", None)], interrupted=True)
+        for first in (aborted, runner_error, interrupted, None):
+            with self.subTest(first=first):
+                receipt, row = self.retry(["a"], first, script=())
+                self.assertEqual(receipt.calls, [])
+                self.assertEqual(row["status"], "failed")
+
     def test_many_failures_a_timeout_or_no_names_are_not_retried(self):
+        first = self.summary([(name, "FAIL", None) for name in "abcd"])
         for names, status in ((["a", "b", "c", "d"], "failed"), (["a"], "timed out"), ([], "failed")):
             with self.subTest(names=names, status=status):
-                receipt, row = self.retry(names, status=status, script=())
+                receipt, row = self.retry(names, first, status=status, script=())
                 self.assertEqual(receipt.calls, [])
                 self.assertEqual(row["status"], status)
 

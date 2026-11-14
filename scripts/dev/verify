@@ -6,8 +6,9 @@ once the build has finished. L2 always includes iOS and the vendored packages to
 diff picks the layer. A path without a rule takes L1, so a new kind of file cannot skip the app.
 
 XCTest stays serial: its classes change shared settings, and parallel workers share one preferences
-domain, so a parallel run fails at random. A red step stays red. Nothing here retries a test or
-rewrites a result.
+domain, so a parallel run fails at random. XCTest is never retried. When a probe run completes with up to
+three probe failures, those probes run once more, alone: one that passes then is named as flaky and does
+not fail the gate, one that fails again stays red. A probe run that did not complete is never retried.
 """
 
 import argparse
@@ -323,20 +324,50 @@ def name_failed_probes(receipt, row):
 
 # A few probes failing at once on a loaded machine is usually timing; more than this is a real break.
 PROBE_RETRY_LIMIT = 3
+PROBE_RETRY_SECONDS = 1200
+UI_OPT_IN = "UI probe requires --include-ui"
+
+
+def probe_outcomes(directory):
+    """Probe name to PASS or FAIL for a probe run that completed. None when the run itself did not complete:
+    an interruption, a runner error, or probes it never started (other than the opt-in UI probe)."""
+    try:
+        report = json.loads((directory / "summary.json").read_text())
+    except (OSError, ValueError, TypeError):
+        return None
+    if report.get("interrupted"):
+        return None
+    outcomes = {}
+    for row in report.get("results", []):
+        if row.get("status") in ("PASS", "FAIL") and not row.get("reason"):
+            outcomes[row["name"]] = row["status"]
+        elif not (row.get("status") == "SKIP" and row.get("reason") == UI_OPT_IN):
+            return None
+    return outcomes
 
 
 def retry_failed_probes(receipt, probes_row):
-    """Run each failed probe once more, alone. One that passes then is flaky, not broken: the receipt names it
-    and the probes step counts as passed. One that fails again keeps the gate red."""
+    """Run each failed probe once more, alone. One that passes then is flaky, not broken: the receipt names it,
+    and when all pass the probes step counts as passed. One that fails again keeps the gate red."""
     names = receipt.value.get("probesFailed") or []
     if probes_row["status"] != "failed" or not names or len(names) > PROBE_RETRY_LIMIT:
         return
+    first = probe_outcomes(artifact_directory(probes_row, "Standalone artifacts") or Path("/nonexistent"))
+    if first is None or sorted(name for name, status in first.items() if status == "FAIL") != sorted(names):
+        return  # A run that stopped early leaves probes unrun, and a retry cannot vouch for them.
     command = ["bash", "scripts/dev/standalone-regression.sh", "--jobs", "1", *[part for name in names for part in ("--only", name)]]
-    if receipt.step("probes-retry", command)["status"] == "passed":
+    retry_row = receipt.step("probes-retry", command, limit=min(STEP_LIMIT_SECONDS, PROBE_RETRY_SECONDS))
+    if retry_row["status"] == "passed":
         probes_row["status"] = "passed"
         probes_row["note"] = f"flaky: {', '.join(names)} failed beside other work and passed alone on retry"
         receipt.value["probesFlaky"] = receipt.value.pop("probesFailed")
-        receipt.save()
+    else:
+        again = probe_outcomes(artifact_directory(retry_row, "Standalone artifacts") or Path("/nonexistent")) or {}
+        flaky = sorted(name for name in names if again.get(name) == "PASS")
+        if flaky:
+            receipt.value["probesFlaky"] = flaky
+            receipt.value["probesFailed"] = sorted(name for name in names if name not in flaky)
+    receipt.save()
 
 
 def run_xctest_and_probes(receipt, quarantine, jobs, layer="L1"):

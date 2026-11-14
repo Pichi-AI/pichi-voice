@@ -25,6 +25,13 @@ def quarantine(*entries):
     return {"version": 1, "entries": list(entries)}
 
 
+class StrictJsonTests(unittest.TestCase):
+    def test_duplicate_keys_are_refused(self):
+        self.assertEqual(POLICY.strict_json('{"a": 1, "b": {"c": 2}}'), {"a": 1, "b": {"c": 2}})
+        with self.assertRaisesRegex(ValueError, "duplicate keys: x"):
+            POLICY.strict_json('{"tests": {"x": 1, "y": 2, "x": 3}}')
+
+
 class QuarantineTests(unittest.TestCase):
     def test_entry_is_valid_through_its_last_day(self):
         self.assertEqual(POLICY.quarantine_problems(quarantine(entry()), TODAY), [])

@@ -92,6 +92,19 @@ def result_problems(results, registry, complete=False):
     return problems
 
 
+def strict_json(text):
+    """Parse JSON and refuse duplicate keys: a clean merge can add the same entry twice, and the last copy
+    would silently win."""
+    def unique(pairs):
+        seen, duplicates = set(), set()
+        for key, _ in pairs:
+            (duplicates if key in seen else seen).add(key)
+        if duplicates:
+            raise ValueError(f"duplicate keys: {', '.join(sorted(duplicates))}")
+        return dict(pairs)
+    return json.loads(text, object_pairs_hook=unique)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", type=Path, help="JSON map of test id to result from a finished run")
@@ -100,8 +113,13 @@ def main():
     arguments = parser.parse_args()
     if arguments.complete and not arguments.results:
         parser.error("--complete needs --results")
-    registry = json.loads(SKIPS.read_text())
-    problems = quarantine_problems(json.loads(QUARANTINE.read_text()), date.today()) + registry_problems(registry)
+    try:
+        registry = strict_json(SKIPS.read_text())
+        quarantine = strict_json(QUARANTINE.read_text())
+    except ValueError as error:
+        print(f"Test policy files are not valid: {error}", file=sys.stderr)
+        return 1
+    problems = quarantine_problems(quarantine, date.today()) + registry_problems(registry)
     if arguments.results:
         problems += result_problems(json.loads(arguments.results.read_text()), registry, arguments.complete)
     for problem in problems:
