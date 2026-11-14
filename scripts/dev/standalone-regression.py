@@ -160,22 +160,28 @@ def live_process_group(group):
     return False
 
 
+def signal_process_group(group, number):
+    try:
+        os.killpg(group, number)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # Observed on Darwin for an owned group that was still starting or exiting members; the cause is
+        # not confirmed and delivery is not assumed. The wait and the inspection after escalation decide
+        # what survived, and a group that stays live keeps its ownership marker.
+        pass
+
+
 def stop_process_group(process):
     with defer_interrupts():
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        signal_process_group(process.pid, signal.SIGTERM)
         deadline = time.monotonic() + CANCEL_GRACE_SECONDS
         # No external inspection can delay escalation. In particular, a stalled
         # ps must never leave a TERM-ignoring descendant runnable during cleanup.
         while process_group_exists(process.pid) and time.monotonic() < deadline:
             process.poll()
             time.sleep(min(0.02, max(0, deadline - time.monotonic())))
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        signal_process_group(process.pid, signal.SIGKILL)
         # Reap the direct child even if the subsequent descendant inspection
         # fails. An unobservable group keeps its ownership marker and fails.
         process.wait(timeout=KILL_WAIT_SECONDS)

@@ -157,13 +157,13 @@ class ReportTests(unittest.TestCase):
 
 
 class SideBySideTests(unittest.TestCase):
-    def run_script(self, script, quarantine=NOTHING):
+    def run_script(self, script, quarantine=NOTHING, layer="L1"):
         with tempfile.TemporaryDirectory() as temporary:
             receipt = FakeReceipt(Path(temporary), script)
             with patch.object(VERIFY, "xctest_results", side_effect=lambda row: VERIFY.report_results(row, "x" if receipt.reports[row["name"]] else None)), \
                     patch.object(VERIFY, "bundle_results", side_effect=lambda _: receipt.reports["xctest"]), \
                     patch.object(VERIFY, "artifact_directory", return_value=None):
-                found = VERIFY.run_xctest_and_probes(receipt, quarantine, 8)
+                found = VERIFY.run_xctest_and_probes(receipt, quarantine, 8, layer)
             receipt.finish()
             return receipt, found
 
@@ -204,6 +204,46 @@ class SideBySideTests(unittest.TestCase):
         self.assertNotIn(f"-skip-testing:{mobile}", receipt.calls[0][1])
 
 
+    def test_l1_leaves_the_soak_tests_to_l2_and_says_so(self):
+        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None)])
+        for test in VERIFY.L2_ONLY_TESTS:
+            self.assertIn(f"-skip-testing:{test}", receipt.calls[0][1])
+        self.assertEqual([item["name"] for item in receipt.value["skipped"]], [test.split("/", 1)[1] for test in VERIFY.L2_ONLY_TESTS])
+        self.assertEqual(receipt.value["result"], "passed")
+
+    def test_l2_runs_the_soak_tests(self):
+        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None)], layer="L2")
+        self.assertFalse(any(test in argument for test in VERIFY.L2_ONLY_TESTS for argument in receipt.calls[0][1]))
+        skipped = {item["name"] for item in receipt.value["skipped"]}
+        self.assertFalse(skipped & {test.split("/", 1)[1] for test in VERIFY.L2_ONLY_TESTS})
+
+    def test_every_soak_test_still_exists(self):
+        # xcodebuild ignores a -skip-testing that matches nothing, so a renamed soak test would quietly return to L1.
+        for test in VERIFY.L2_ONLY_TESTS:
+            bundle, test_class, name = test.split("/")
+            sources = list((ROOT / "Tests" / bundle).rglob(f"{test_class}*.swift"))
+            self.assertTrue(any(f"func {name}(" in source.read_text() for source in sources), test)
+
+    def test_the_receipt_records_the_step_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = VERIFY.Receipt(Path(temporary))
+        self.assertEqual(receipt.value["stepLimitSeconds"], VERIFY.STEP_LIMIT_SECONDS)
+
+
+class StepLimitTests(unittest.TestCase):
+    def test_the_default_is_thirty_minutes(self):
+        self.assertEqual(VERIFY.step_limit({}), 1800)
+        self.assertEqual(VERIFY.step_limit({VERIFY.STEP_LIMIT_ENVIRONMENT: " "}), 1800)
+
+    def test_a_slower_machine_can_ask_for_more_time(self):
+        self.assertEqual(VERIFY.step_limit({VERIFY.STEP_LIMIT_ENVIRONMENT: "5400"}), 5400)
+
+    def test_a_wrong_value_is_an_error_and_not_a_silent_default(self):
+        for value in ("0", "-5", "ninety", "1.5", "\u00b2"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                VERIFY.step_limit({VERIFY.STEP_LIMIT_ENVIRONMENT: value})
+
+
 class ProbeTests(unittest.TestCase):
     def test_no_quarantine_runs_the_whole_registry(self):
         command = VERIFY.probe_command(NOTHING, 8)
@@ -227,6 +267,73 @@ class ProbeTests(unittest.TestCase):
             self.assertEqual(receipt.value["probesFailed"], ["a"])
 
 
+class ProbeRetryTests(unittest.TestCase):
+    def summary(self, rows, interrupted=False):
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory)
+        results = [{"name": name, "status": status, **({"reason": reason} if reason else {})} for name, status, reason in rows]
+        (directory / "summary.json").write_text(json.dumps({"interrupted": interrupted, "results": results}))
+        return directory
+
+    def retry(self, names, first, again=None, status="failed", script=((0, None),)):
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory)
+        receipt = FakeReceipt(directory, list(script))
+        row = {"name": "probes", "status": status, "exitCode": 1, "seconds": 0, "log": "probes"}
+        receipt.value["steps"].append(row)
+        if names:
+            receipt.value["probesFailed"] = names
+        folders = {"probes": first, "probes-retry": again}
+        with patch.object(VERIFY, "artifact_directory", side_effect=lambda step, label: folders.get(step["name"])):
+            VERIFY.retry_failed_probes(receipt, row)
+        return receipt, row
+
+    def test_a_probe_that_passes_alone_on_retry_is_flaky_not_failed(self):
+        first = self.summary([("a", "FAIL", None), ("b", "FAIL", None), ("c", "PASS", None), ("ui", "SKIP", VERIFY.UI_OPT_IN)])
+        receipt, row = self.retry(["a", "b"], first)
+        self.assertEqual(receipt.calls[0][1][-6:], ["--jobs", "1", "--only", "a", "--only", "b"])
+        self.assertEqual(row["status"], "passed")
+        self.assertIn("flaky: a, b", row["note"])
+        self.assertEqual(receipt.value["probesFlaky"], ["a", "b"])
+        self.assertNotIn("probesFailed", receipt.value)
+        receipt.finish()
+        self.assertEqual(receipt.value["result"], "passed")
+
+    def test_a_probe_that_fails_again_keeps_the_gate_red_and_a_mixed_retry_names_both(self):
+        first = self.summary([("a", "FAIL", None), ("b", "FAIL", None)])
+        again = self.summary([("a", "PASS", None), ("b", "FAIL", None)])
+        receipt, row = self.retry(["a", "b"], first, again, script=((1, None),))
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(receipt.value["probesFlaky"], ["a"])
+        self.assertEqual(receipt.value["probesFailed"], ["b"])
+        receipt.finish()
+        self.assertEqual(receipt.value["result"], "failed")
+
+    def test_a_probe_run_that_did_not_complete_is_never_retried(self):
+        aborted = self.summary([("a", "FAIL", None), ("b", "SKIP", "not run while previous process cleanup is incomplete")])
+        runner_error = self.summary([("a", "FAIL", "cleanup failed")])
+        interrupted = self.summary([("a", "FAIL", None)], interrupted=True)
+        for first in (aborted, runner_error, interrupted, None):
+            with self.subTest(first=first):
+                receipt, row = self.retry(["a"], first, script=())
+                self.assertEqual(receipt.calls, [])
+                self.assertEqual(row["status"], "failed")
+
+    def test_many_failures_a_timeout_or_no_names_are_not_retried(self):
+        first = self.summary([(name, "FAIL", None) for name in "abcd"])
+        for names, status in ((["a", "b", "c", "d"], "failed"), (["a"], "timed out"), ([], "failed")):
+            with self.subTest(names=names, status=status):
+                receipt, row = self.retry(names, first, status=status, script=())
+                self.assertEqual(receipt.calls, [])
+                self.assertEqual(row["status"], status)
+
+    def test_the_gate_writes_no_python_bytecode(self):
+        with patch.dict(os.environ, {"PYTHONDONTWRITEBYTECODE": ""}), patch.object(VERIFY.sys, "dont_write_bytecode", False):
+            VERIFY.hermetic_environment()
+            self.assertEqual(os.environ["PYTHONDONTWRITEBYTECODE"], "1")
+            self.assertTrue(VERIFY.sys.dont_write_bytecode)
+
+
 class QuarantineTests(unittest.TestCase):
     def test_entries_split_by_kind(self):
         entries = {"entries": [{"test": f"{BUNDLE}/A/testOne()"}, {"test": "probe:ui_contrast"}]}
@@ -236,6 +343,22 @@ class QuarantineTests(unittest.TestCase):
             (root / "Tests/quarantine.json").write_text(json.dumps(entries))
             with patch.object(VERIFY, "ROOT", root):
                 self.assertEqual(VERIFY.read_quarantine(), VERIFY.Quarantine(tests={f"{BUNDLE}/A/testOne"}, probes={"ui_contrast"}))
+
+    def test_ci_scoped_entry_applies_only_on_the_runner(self):
+        entries = {"entries": [{"test": "probe:ui_contrast", "scope": "ci"}, {"test": f"{BUNDLE}/A/testOne()"}]}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Tests").mkdir()
+            (root / "Tests/quarantine.json").write_text(json.dumps(entries))
+            with patch.object(VERIFY, "ROOT", root):
+                self.assertEqual(VERIFY.read_quarantine(ci=False), VERIFY.Quarantine(tests={f"{BUNDLE}/A/testOne"}, probes=set()))
+                self.assertEqual(VERIFY.read_quarantine(ci=True).probes, {"ui_contrast"})
+
+    def test_the_runner_is_recognized_by_github_actions(self):
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}):
+            self.assertTrue(VERIFY.on_ci())
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": ""}):
+            self.assertFalse(VERIFY.on_ci())
 
     def test_repository_quarantine_reads(self):
         self.assertIsInstance(VERIFY.read_quarantine(), VERIFY.Quarantine)
@@ -318,10 +441,11 @@ class ReceiptTests(unittest.TestCase):
             receipt = VERIFY.Receipt(directory)
             started = time.monotonic()
             with contextlib.redirect_stdout(io.StringIO()):
-                slow = receipt.begin("slow", ["sh", "-c", "sleep 0.4; exit 3"])
-                quick = receipt.begin("quick", ["sh", "-c", "sleep 0.4"])
+                slow = receipt.begin("slow", ["sh", "-c", "sleep 1; exit 3"])
+                quick = receipt.begin("quick", ["sh", "-c", "sleep 1"])
                 rows = receipt.join(slow, quick)
-            self.assertLess(time.monotonic() - started, 0.75)
+            # One after the other would take at least 2 seconds; the margin absorbs a slow machine's process start.
+            self.assertLess(time.monotonic() - started, 1.8)
             self.assertEqual([(row["name"], row["status"]) for row in rows], [("slow", "failed"), ("quick", "passed")])
             self.assertEqual(receipt.running, [])
 
@@ -495,9 +619,26 @@ verify.run_guarded(receipt, work)
         with tempfile.TemporaryDirectory() as temporary:
             receipt = FakeReceipt(Path(temporary), [(0, None)])
             receipt.step("check", ["true"])
-            with patch.object(VERIFY, "tree_fingerprint", return_value="after"):
+            with patch.object(VERIFY, "tree_fingerprint", return_value="after"), \
+                    patch.object(VERIFY, "dirty_paths", return_value=[f"Tests/Out{index}.png" for index in range(7)]):
                 VERIFY.finish(receipt, None, "before")
             self.assertEqual(receipt.value["result"], "incomplete")
+            reason = {item["name"]: item["reason"] for item in receipt.value["skipped"]}["freeze"]
+            self.assertIn("Tests/Out0.png", reason)
+            self.assertIn("and 2 more", reason)
+            self.assertEqual(len(receipt.value["treeChanges"]), 7)
+
+    def test_dirty_paths_name_changed_and_untracked_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / "kept.txt").write_text("one")
+            subprocess.run(["git", "add", "kept.txt"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "c"], cwd=root, check=True)
+            self.assertEqual(VERIFY.dirty_paths(root), [])
+            (root / "kept.txt").write_text("two")
+            (root / "new.txt").write_text("new")
+            self.assertEqual(sorted(VERIFY.dirty_paths(root)), ["kept.txt", "new.txt"])
 
     def test_a_still_tree_finishes_on_the_step_results(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -572,10 +713,17 @@ class ExecuteTests(unittest.TestCase):
 
         with patch.object(VERIFY.shutil, "which", return_value="/usr/bin/tool"), patch.object(VERIFY.shutil, "disk_usage", return_value=Usage), \
                 patch.object(VERIFY, "read_quarantine", return_value=quarantine), patch.object(VERIFY, "run_ios", side_effect=ios), \
-                patch.object(VERIFY, "run_xctest_and_probes", return_value={PASSING: "Passed", BROKEN: "Failed"}), \
+                patch.object(VERIFY, "run_xctest_and_probes", return_value={PASSING: "Passed", BROKEN: "Failed"}) as xctest, \
                 patch.object(VERIFY, "run_vendor") as vendor:
             outcome = VERIFY.execute(receipt, layer, paths, "origin/main", 4)
+        self.xctest_layers = [call.args[3] for call in xctest.call_args_list]
         return receipt, outcome, ran, vendor
+
+    def test_the_layer_reaches_the_test_selection(self):
+        for layer in ("L1", "L2"):
+            with self.subTest(layer=layer):
+                self.run_layer(layer, ["Sources/Fluid/App.swift"])
+                self.assertEqual(self.xctest_layers, [layer])
 
     def test_a_mobile_change_runs_ios_and_all_results_reach_the_policy_check(self):
         receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"])

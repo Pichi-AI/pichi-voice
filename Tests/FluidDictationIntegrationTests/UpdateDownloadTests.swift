@@ -85,6 +85,11 @@ final nonisolated class UpdateDownloadTests: XCTestCase {
         task.cancel()
         do { try await task.value; XCTFail("Cancelled download must fail") }
         catch { XCTAssertTrue(error is CancellationError || (error as? URLError)?.code == .cancelled) }
+        // URLSession stops the protocol on its own queue, so the stop can land just after fetch returns.
+        // It must still arrive promptly, long before the 60 second request deadline.
+        for _ in 0..<400 where fixture.cancellations == 0 {
+            try await Task.sleep(for: .milliseconds(5))
+        }
         XCTAssertGreaterThanOrEqual(fixture.cancellations, 1)
     }
 }

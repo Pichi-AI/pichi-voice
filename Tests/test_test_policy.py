@@ -25,6 +25,13 @@ def quarantine(*entries):
     return {"version": 1, "entries": list(entries)}
 
 
+class StrictJsonTests(unittest.TestCase):
+    def test_duplicate_keys_are_refused(self):
+        self.assertEqual(POLICY.strict_json('{"a": 1, "b": {"c": 2}}'), {"a": 1, "b": {"c": 2}})
+        with self.assertRaisesRegex(ValueError, "duplicate keys: x"):
+            POLICY.strict_json('{"tests": {"x": 1, "y": 2, "x": 3}}')
+
+
 class QuarantineTests(unittest.TestCase):
     def test_entry_is_valid_through_its_last_day(self):
         self.assertEqual(POLICY.quarantine_problems(quarantine(entry()), TODAY), [])
@@ -47,6 +54,11 @@ class QuarantineTests(unittest.TestCase):
     def test_duplicates_and_shape_fail(self):
         self.assertTrue(POLICY.quarantine_problems(quarantine(entry(), entry()), TODAY))
         self.assertTrue(POLICY.quarantine_problems({"entries": []}, TODAY))
+
+    def test_scope_can_only_name_the_ci_runner(self):
+        self.assertEqual(POLICY.quarantine_problems(quarantine(entry(test="probe:ui_contrast", scope="ci")), TODAY), [])
+        for value in ("local", "", None, True):
+            self.assertIn("scope", POLICY.quarantine_problems(quarantine(entry(scope=value)), TODAY)[0], value)
 
     def test_expiry_cannot_be_far_away(self):
         self.assertEqual(POLICY.quarantine_problems(quarantine(entry(expires="2027-02-03")), TODAY), [])

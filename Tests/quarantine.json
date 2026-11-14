@@ -186,6 +186,33 @@
    "owner": "#115 codex/speaker-assignment-20261106",
    "reason": "Behavior changed after 609e715e: an unresolved word joins its neighbour's turn and an ambiguous overlapping fragment reads as \"You\" instead of \"Unknown speaker\". The probe keeps the old expectations until the owner of #115 confirms the new behavior; the same change is quarantined in the XCTest entries owned by #115.",
    "expires": "2026-11-26"
+  },
+  {
+   "test": "PichiVoiceMobileIntegrationTests/MobileFirstUseModelTests/testInstallationFailureLeavesNoCaptureAndReleasesPreparation()",
+   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
+   "reason": "#157 keeps recording when model validation fails and defers speech. On iOS this test now reaches the permission preflight after a failed model installation, while it states that a failed installation leaves no capture. Needs a decision from the owner of #157 (issue #169). Fails alone on a clean simulator; it passed on the base before #157.",
+   "expires": "2026-11-26"
+  },
+  {
+   "test": "probe:command_ui_localization",
+   "scope": "ci",
+   "owner": "#176",
+   "reason": "The CI runner draws at 1x. The copy icon has 14 pixels at 3:1 and the copied checkmark 2, against 84 and 26 at 2x; the probe expects 12. Developer Macs keep running it.",
+   "expires": "2026-11-27"
+  },
+  {
+   "test": "probe:ui_contrast",
+   "scope": "ci",
+   "owner": "#176",
+   "reason": "The CI runner draws at 1x: NativeSidebarContrastTests finds no icon ink in a selected sidebar row, and later checks have not run there yet. Developer Macs keep running it.",
+   "expires": "2026-11-27"
+  },
+  {
+   "test": "probe:private_ai_idle_unloader",
+   "scope": "ci",
+   "owner": "#180",
+   "reason": "On the CI runner a 60 ms pause of this upstream test can outlast its 150 ms countdown, even when it runs alone after XCTest (run 43518105639). Developer Macs keep running it.",
+   "expires": "2026-11-27"
   }
  ]
 }

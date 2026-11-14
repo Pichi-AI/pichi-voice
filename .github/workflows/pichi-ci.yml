@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       run_macos:
-        description: Run the full macOS integration suite
+        description: Run the macOS L1 gate (XCTest, probes and test policy)
         type: boolean
         required: false
         default: false
@@ -22,8 +22,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: pichi-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # A newer pull request commit replaces an older run. Every other commit, main included, gets its own
+  # run: a group per branch would hold main's quick checks behind the macOS gate and drop queued commits.
+  group: pichi-ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   portable:
@@ -54,19 +56,79 @@ jobs:
             --swiftlint "docker run --rm --volume $PWD:$PWD --workdir $PWD ghcr.io/realm/swiftlint:0.65.1@sha256:f47e083201e47a136cda5ae847595bfe00226c444ca226fa74fa5dc648a9b057"
 
   macos:
-    name: macOS integration tests
-    if: (github.event_name == 'workflow_dispatch' && inputs.run_macos) || vars.PICHI_VOICE_MACOS_CI == 'true'
-    runs-on: macos-latest
-    timeout-minutes: 30
+    name: macOS gate L1
+    # Pull requests into main and pushes to main. A push to a codex/** branch is checked through its pull
+    # request into main; a pull request into another branch gets no macOS gate.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.run_macos) ||
+      (vars.PICHI_VOICE_MACOS_CI == 'true' &&
+       (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')))
+    runs-on: xcode-27
+    # XCTest with probes, then iOS for a mobile change, each up to the step limit below.
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+          # The gate compares the tree with origin/main.
+          fetch-depth: 0
       - name: Create isolated build worktree
         run: git worktree add --detach ../pichi-voice-ci HEAD
-      - name: Run macOS tests
+      - name: Install SwiftLint when the image has none
+        run: command -v swiftlint >/dev/null || brew install swiftlint
+      - name: Show the tools the gate uses
+        run: |
+          python3 --version
+          xcodebuild -version
+          swiftlint version
+          df -h "$GITHUB_WORKSPACE"
+      - name: Run the L1 gate
         working-directory: ../pichi-voice-ci
-        run: bash scripts/dev/macos.sh test
+        env:
+          # The three-core runner needs longer than the 30 minutes a heavy step gets on a developer Mac.
+          PICHI_VERIFY_STEP_LIMIT_SECONDS: "5400"
+          PUSH_BEFORE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: |
+          # On a push to main, origin/main is the pushed commit itself: compare with the previous tip
+          # instead, so the pushed commits decide whether the iOS step and Vendor packages run.
+          base=origin/main
+          case "$PUSH_BEFORE" in
+            "" | 0000000000000000000000000000000000000000) ;;
+            *) base="$PUSH_BEFORE" ;;
+          esac
+          # exec: a cancelled or timed-out job signals verify itself, which then stops its steps.
+          exec python3 -S scripts/dev/verify --layer L1 --base "$base"
+      - name: Show the receipt and the logs of failed steps
+        if: always()
+        working-directory: ../pichi-voice-ci
+        run: |
+          for receipt in .build/verify/*/receipt.json; do
+            [ -f "$receipt" ] || continue
+            cat "$receipt"
+            python3 -S - "$receipt" <<'PY'
+          import json, sys
+          import glob, os
+          receipt = json.load(open(sys.argv[1]))
+          for step in receipt["steps"]:
+              if step["status"] != "passed" and step.get("log"):
+                  with open(step["log"], errors="replace") as log:
+                      lines = log.readlines()
+                  if step["name"] == "xctest":
+                      print("--- failures in xctest")
+                      print("".join([line for line in lines if "error: -[" in line][:200]))
+                  print(f"--- last lines of {step['name']}")
+                  print("".join(lines[-80:]))
+          runs = sorted(glob.glob(".build/standalone-regression/*/"), key=os.path.getmtime)
+          for name in receipt.get("probesFailed", []):
+              path = os.path.join(runs[-1], f"{name}.log") if runs else ""
+              if os.path.exists(path):
+                  print(f"--- last lines of probe {name}")
+                  with open(path, errors="replace") as log:
+                      print("".join(log.readlines()[-60:]))
+          PY
+          done
+          echo "--- files git reports as changed or untracked in the gate worktree"
+          git status --porcelain=v1 --untracked-files=all | head -40
 
   ios:
     name: iOS simulator build
