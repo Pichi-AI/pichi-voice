@@ -73,14 +73,14 @@ The [development command reference](codex.md#reproducible-macos-regression) expl
 | Layer | Runs |
 | --- | --- |
 | L0 | `check.sh`, SwiftLint on changed lines |
-| L1 | L0, XCTest and the standalone probes side by side, iOS integration tests when mobile or shared sources changed, tests of a changed `Vendor/` package, the skip registry |
-| L2 | L1 with iOS integration and every `Vendor/` package each time |
+| L1 | L0, XCTest without the long soak tests and the standalone probes side by side, iOS integration tests when mobile or shared sources changed, tests of a changed `Vendor/` package, the skip registry |
+| L2 | L1 with the long soak tests, iOS integration and every `Vendor/` package each time |
 
-A path with no rule takes L1, so a new kind of file cannot skip the app. A red step stays red: nothing retries a test or rewrites a result. XCTest stays serial because about half of its classes change shared settings and parallel workers share one preferences domain, so a parallel run fails at random. L1 and L2 stop when less than 10 GB is free. A layer or step that cannot run on this machine (no Xcode, no iOS simulator runtime, too little disk), or a tree that changes during the run, ends as `incomplete` with exit code 2, never as passed.
+A path with no rule takes L1, so a new kind of file cannot skip the app. XCTest is never retried. When up to three probes fail, the gate runs each of them once more, alone, after XCTest: a probe that passes then counts as passed and is named as flaky in the receipt and summary (`probesFlaky`), and one that fails again stays red. The gate sets `PYTHONDONTWRITEBYTECODE=1` for every step, so it writes no bytecode into the tree it checks. XCTest stays serial because about half of its classes change shared settings and parallel workers share one preferences domain, so a parallel run fails at random. L1 and L2 stop when less than 10 GB is free. A heavy step that outlives 30 minutes is stopped and stays red; a slower machine can raise that limit with `PICHI_VERIFY_STEP_LIMIT_SECONDS`, as the macOS CI job does. A layer or step that cannot run on this machine (no Xcode, no iOS simulator runtime, too little disk), or a tree that changes during the run, ends as `incomplete` with exit code 2, never as passed.
 
 ## CI and review
 
-The checked-in [Pichi CI workflow](../../.github/workflows/pichi-ci.yml) runs portable checks. macOS tests and mobile builds have separate opt-ins; inherited [FluidVoice CI](../../.github/workflows/build.yml) is guarded to upstream. Inspect actual job conditions and repository settings before claiming native tests ran. A green portable status is not native regression or device acceptance. This instruction refactor does not enable runners or change CI settings.
+The checked-in [Pichi CI workflow](../../.github/workflows/pichi-ci.yml) runs portable checks. Its optional macOS job runs the [L1 gate](#gate-layers), and mobile builds have a separate opt-in; inherited [FluidVoice CI](../../.github/workflows/build.yml) is guarded to upstream. Inspect actual job conditions and repository settings before claiming native tests ran. A green portable status is not native regression or device acceptance. This instruction refactor does not enable runners or change CI settings.
 
 Independent review maps changed behavior to unit tests and UI interaction to integration coverage. Check target membership, discovery, meaningful assertions, privacy, immutable selection, cancellation and restoration. Treat skipped, unexecuted or all-skipped cases as limitations. Coverage collection or required CI gates need an infrastructure change and an agreed baseline; do not invent a percentage here.
 

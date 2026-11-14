@@ -73,6 +73,12 @@ unique(source, '.accessibilityLabel(localizedLabel)')
 source = source.replace(label, 'let localizedLabel = CommandCopyLabelProbe.record(\n'
                        '            PichiLocalization.text(self.copied ? "Copied" : self.label, locale: self.interfaceLocale),\n'
                        '            key: self.label, copied: self.copied, locale: self.interfaceLocale)')
+# Hold the transient copied state until the probe releases it. The button still
+# asks for its production duration, which the probe checks; only the wake-up moves
+# to the probe, so a slow runner cannot end the copied state between two steps.
+sleep = 'try await Task.sleep(for: .seconds(1.5))'
+unique(source, sleep)
+source = source.replace(sleep, 'try await CommandCopyFeedbackClock.sleep(for: .seconds(1.5))')
 (output / 'CommandMarkdownContent.swift').write_text(source)
 
 info = {'CFBundleIdentifier': 'ai.pichi.command-ui.fixture',

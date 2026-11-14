@@ -11,10 +11,11 @@ import sys
 
 def configure_targets(value, environment):
     """Handle format-1 targets and nested format-2 TestConfigurations/TestTargets."""
+    # CI markers stay out: an upstream test then switches to a shared model folder and sees folders that earlier
+    # tests created. Tests get the same environment on a CI runner as on a developer Mac.
     overrides = {
         key: item for key, item in environment.items()
         if key.startswith(("PICHI_", "FLUIDVOICE_", "FLUIDAUDIO_", "FV_", "TEST_"))
-        or key in ("CI", "GITHUB_ACTIONS")
     }
     overrides["FLUIDVOICE_MIC_PHASE1"] = "disabled"
     overrides["PICHI_INTERFACE_LANGUAGE"] = environment.get("PICHI_INTERFACE_LANGUAGE", "en")

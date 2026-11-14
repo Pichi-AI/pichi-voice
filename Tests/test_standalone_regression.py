@@ -260,7 +260,8 @@ class StandaloneRunnerTests(unittest.TestCase):
         class Process:
             pid = 123456
             returncode = 0
-            def wait(self): return 0
+            def poll(self): return 0
+            def wait(self, timeout=None): return 0
         for inspection_options in (
             {"return_value": subprocess.CompletedProcess([], 0, "123456 S\n", "")},
             {"side_effect": subprocess.TimeoutExpired(["ps"], 2)},
@@ -268,9 +269,11 @@ class StandaloneRunnerTests(unittest.TestCase):
             with self.subTest(inspection_options=inspection_options), \
                  patch.object(RUNNER.subprocess, "Popen", return_value=Process()), \
                  patch.object(RUNNER.os, "killpg", side_effect=PermissionError(errno.EPERM, "synthetic denied group")), \
-                 patch.object(RUNNER.subprocess, "run", **inspection_options):
-                # Each scenario has its own marker: a live or unobservable group
-                # must prevent another probe from acquiring the build storage.
+                 patch.object(RUNNER.subprocess, "run", **inspection_options), \
+                 patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.05), patch.object(RUNNER, "KILL_WAIT_SECONDS", 0.05):
+                # EPERM no longer ends cleanup early: escalation runs, and the inspection still
+                # decides. A live or unobservable group must keep its own marker so that no
+                # other probe acquires the build storage.
                 status, report, _ = self.run_probes([self.probe("denied"), self.probe("later")])
                 self.assertEqual(status, 1)
                 self.assertEqual(report["counts"], {"total": 2, "passed": 0, "failed": 1, "skipped": 1})
@@ -744,6 +747,33 @@ sys.exit(status)
         for group in RUNNER.EXCLUSIVE_PROBES:
             self.assertLessEqual(group, names)
 
+    def test_permission_error_from_signals_keeps_escalating_and_joins(self):
+        # Darwin has returned EPERM from killpg for an owned group whose members were changing state. The
+        # signal may still be delivered: cleanup must escalate and wait instead of leaving the group running.
+        ready = self.root / "trap-installed"
+        process = subprocess.Popen(["/bin/sh", "-c", f"trap '' TERM; touch {shlex.quote(str(ready))}; while :; do sleep 1; done"],
+                                   start_new_session=True)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        deadline = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(ready.exists(), "The shell must ignore TERM before cleanup starts")
+        real_killpg = os.killpg
+        sent = []
+
+        def killpg(group, number):
+            real_killpg(group, number)
+            if number:
+                sent.append(number)
+                raise PermissionError(errno.EPERM, "Operation not permitted")
+
+        with patch.object(RUNNER.os, "killpg", killpg), patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.2):
+            RUNNER.stop_process_group(process)
+        self.assertEqual(sent, [signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(process.returncode, -signal.SIGKILL)
+        # Cleanup promises no live member; an orphaned zombie may wait a moment for its reaper.
+        self.assertFalse(RUNNER.live_process_group(process.pid))
+
     def test_parallel_failure_does_not_stop_other_probes(self):
         status, report, directory = self.run_probes(
             [self.probe("bad", "echo broken; exit 3"), self.probe("good"), self.probe("later", "touch later-executed")], jobs=2)
@@ -792,7 +822,8 @@ sys.exit(status)
         self.assertEqual(status, 128 + number, (directory / "descendant.log").read_text())
         self.assertEqual(report["counts"], {"total": 3, "passed": 0, "failed": 2, "skipped": 1})
         for row in report["results"][:2]:
-            self.assertIn(row["exitCode"], [-signal.SIGTERM, -signal.SIGKILL])
+            # The whole row names a cleanup error when a group could not be stopped.
+            self.assertIn(row["exitCode"], [-signal.SIGTERM, -signal.SIGKILL], row)
             self.assertEqual(row["runnerExitCode"], 128 + number)
             self.assertEqual(row["reason"], "interrupted")
         self.assertFalse((self.root / "later-executed").exists())
@@ -938,7 +969,7 @@ sys.exit(status)
         self.assertIn("synthetic log close failure", report["results"][0]["logError"])
         for row in report["results"]:
             self.assertEqual(row["reason"], "interrupted")
-            self.assertIn(row["exitCode"], [-signal.SIGTERM, -signal.SIGKILL])
+            self.assertIn(row["exitCode"], [-signal.SIGTERM, -signal.SIGKILL], row)
         self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
 
     def test_sequential_interrupt_keeps_a_retained_marker(self):

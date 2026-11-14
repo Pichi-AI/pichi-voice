@@ -54,6 +54,8 @@ class RegressionConfigurationTests(unittest.TestCase):
                     self.assertEqual(variables["PICHI_INTERFACE_LANGUAGE"], "ru")
                     self.assertEqual(variables["FLUIDVOICE_MIC_PHASE1"], "disabled")
                     self.assertNotIn("UNRELATED_SECRET", variables)
+                    self.assertNotIn("CI", variables)
+                    self.assertNotIn("GITHUB_ACTIONS", variables)
         self.assertEqual(value["__xctestrun_metadata__"]["EnvironmentVariables"], {"untouched": "1"})
         self.assertEqual(first["TestingEnvironmentVariables"]["XCInjectBundleInto"], "__TESTROOT__/Synthetic.app")
 

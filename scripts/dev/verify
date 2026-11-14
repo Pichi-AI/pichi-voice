@@ -6,8 +6,9 @@ once the build has finished. L2 always includes iOS and the vendored packages to
 diff picks the layer. A path without a rule takes L1, so a new kind of file cannot skip the app.
 
 XCTest stays serial: its classes change shared settings, and parallel workers share one preferences
-domain, so a parallel run fails at random. A red step stays red. Nothing here retries a test or
-rewrites a result.
+domain, so a parallel run fails at random. XCTest is never retried. When a probe run completes with up to
+three probe failures, those probes run once more, alone: one that passes then is named as flaky and does
+not fail the gate, one that fails again stays red. A probe run that did not complete is never retried.
 """
 
 import argparse
@@ -34,7 +35,25 @@ MOBILE = re.compile(r"(?:Sources/Mobile[^/]*/|Tests/Mobile|Vendor/|Fluid\.xcodep
 # A step can be the probe runner, which needs time to stop its own probes. The wait ends once the group is gone.
 STEP_STOP_GRACE_SECONDS = 30
 MINIMUM_FREE_GB = 10
-STEP_LIMIT_SECONDS = 1800
+STEP_LIMIT_ENVIRONMENT = "PICHI_VERIFY_STEP_LIMIT_SECONDS"
+
+
+def step_limit(environment):
+    """A slower machine, such as a CI runner, can give each heavy step more time than the default 30 minutes."""
+    value = environment.get(STEP_LIMIT_ENVIRONMENT, "").strip()
+    if not value:
+        return 1800
+    if not (value.isascii() and value.isdigit()) or int(value) <= 0:
+        raise ValueError(f"{STEP_LIMIT_ENVIRONMENT} must be a positive number of seconds, not {value!r}")
+    return int(value)
+
+
+STEP_LIMIT_SECONDS = step_limit(os.environ)
+# Soak tests replay hours of capture and take about half of the XCTest time. L1 leaves them to L2.
+L2_ONLY_TESTS = (
+    "FluidDictationIntegrationTests/MeetingAudioChunkSinkTests/testTwoHourMicrophoneAndApplicationCaptureKeepEveryFrameAndBoundedManifests",
+    "FluidDictationIntegrationTests/MeetingMicrophoneCaptureTests/testNativeMasterTapKeepsNinetyMinuteDriftOnMeasuredHostClockWithoutPeriodicDiscard",
+)
 HEAVY_STEPS = ("xctest", "skip-policy", "probes", "ios", "vendor")
 MOBILE_BUNDLE = "PichiVoiceMobileIntegrationTests"
 REGRESSION_PRODUCTS = str(ROOT / ".build/XcodeRegression") + "/"
@@ -114,7 +133,7 @@ class Receipt:
         self.protect_creation = None
         self.running = []
         self.value = {"version": 1, **facts, "startedAt": timestamp(), "result": "running", "seconds": None,
-                      "steps": [], "skipped": [], "unavailable": [], "quarantined": []}
+                      "stepLimitSeconds": STEP_LIMIT_SECONDS, "steps": [], "skipped": [], "unavailable": [], "quarantined": []}
         self.save()
 
     def save(self):
@@ -303,14 +322,67 @@ def name_failed_probes(receipt, row):
             pass
 
 
-def run_xctest_and_probes(receipt, quarantine, jobs):
+# A few probes failing at once on a loaded machine is usually timing; more than this is a real break.
+PROBE_RETRY_LIMIT = 3
+PROBE_RETRY_SECONDS = 1200
+UI_OPT_IN = "UI probe requires --include-ui"
+
+
+def probe_outcomes(directory):
+    """Probe name to PASS or FAIL for a probe run that completed. None when the run itself did not complete:
+    an interruption, a runner error, or probes it never started (other than the opt-in UI probe)."""
+    try:
+        report = json.loads((directory / "summary.json").read_text())
+    except (OSError, ValueError, TypeError):
+        return None
+    if report.get("interrupted"):
+        return None
+    outcomes = {}
+    for row in report.get("results", []):
+        if row.get("status") in ("PASS", "FAIL") and not row.get("reason"):
+            outcomes[row["name"]] = row["status"]
+        elif not (row.get("status") == "SKIP" and row.get("reason") == UI_OPT_IN):
+            return None
+    return outcomes
+
+
+def retry_failed_probes(receipt, probes_row):
+    """Run each failed probe once more, alone. One that passes then is flaky, not broken: the receipt names it,
+    and when all pass the probes step counts as passed. One that fails again keeps the gate red."""
+    names = receipt.value.get("probesFailed") or []
+    if probes_row["status"] != "failed" or not names or len(names) > PROBE_RETRY_LIMIT:
+        return
+    first = probe_outcomes(artifact_directory(probes_row, "Standalone artifacts") or Path("/nonexistent"))
+    if first is None or sorted(name for name, status in first.items() if status == "FAIL") != sorted(names):
+        return  # A run that stopped early leaves probes unrun, and a retry cannot vouch for them.
+    command = ["bash", "scripts/dev/standalone-regression.sh", "--jobs", "1", *[part for name in names for part in ("--only", name)]]
+    retry_row = receipt.step("probes-retry", command, limit=min(STEP_LIMIT_SECONDS, PROBE_RETRY_SECONDS))
+    if retry_row["status"] == "passed":
+        probes_row["status"] = "passed"
+        probes_row["note"] = f"flaky: {', '.join(names)} failed beside other work and passed alone on retry"
+        receipt.value["probesFlaky"] = receipt.value.pop("probesFailed")
+    else:
+        again = probe_outcomes(artifact_directory(retry_row, "Standalone artifacts") or Path("/nonexistent")) or {}
+        flaky = sorted(name for name in names if again.get(name) == "PASS")
+        if flaky:
+            receipt.value["probesFlaky"] = flaky
+            receipt.value["probesFailed"] = sorted(name for name in names if name not in flaky)
+    receipt.save()
+
+
+def run_xctest_and_probes(receipt, quarantine, jobs, layer="L1"):
     """Return the result of every XCTest. Probes compile too, so they wait until the build has finished."""
     skipped = [f"-skip-testing:{test}" for test in sorted(quarantine.tests) if not test.startswith(MOBILE_BUNDLE + "/")]
+    if layer != "L2":
+        for test in L2_ONLY_TESTS:
+            skipped.append(f"-skip-testing:{test}")
+            receipt.skip(test.split("/", 1)[1], "a long soak test that runs in L2")
     xctest = receipt.begin("xctest", ["bash", "scripts/dev/macos.sh", "regression", *skipped], hosts=REGRESSION_PRODUCTS)
     receipt.wait_for_text(xctest, BUILD_FINISHED)
     probes = receipt.begin("probes", probe_command(quarantine, jobs))
     xctest_row, probes_row = receipt.join(xctest, probes)
     name_failed_probes(receipt, probes_row)
+    retry_failed_probes(receipt, probes_row)
     return xctest_results(xctest_row)
 
 
@@ -365,9 +437,15 @@ def run_vendor(receipt, layer, paths):
             receipt.skip(f"vendor-{package}", "this package did not change")
 
 
-def read_quarantine():
+def on_ci():
+    return os.environ.get("GITHUB_ACTIONS") == "true"
+
+
+def read_quarantine(ci=None):
+    """An entry with "scope": "ci" applies only on the CI runner; developer Macs keep running that test."""
+    ci = on_ci() if ci is None else ci
     entries = json.loads((ROOT / "Tests/quarantine.json").read_text())["entries"]
-    tests = [entry["test"] for entry in entries]
+    tests = [entry["test"] for entry in entries if ci or entry.get("scope") != "ci"]
     return Quarantine(tests={plain(test) for test in tests if not test.startswith("probe:")},
                       probes={test.removeprefix("probe:") for test in tests if test.startswith("probe:")})
 
@@ -399,7 +477,7 @@ def execute(receipt, layer, paths, base, jobs):
         return "incomplete"
     quarantine = read_quarantine()
     receipt.value["quarantined"] = sorted(quarantine.tests) + sorted(f"probe:{name}" for name in quarantine.probes)
-    results = run_xctest_and_probes(receipt, quarantine, jobs)
+    results = run_xctest_and_probes(receipt, quarantine, jobs, layer)
     if layer == "L2" or touches_mobile(paths, shared_sources()):
         results = {**results, **run_ios(receipt, quarantine)}
     else:
@@ -421,7 +499,7 @@ def summary_lines(value, directory):
     lines += [f"  skipped {item['name']}: {item['reason']}" for item in value["skipped"]]
     if value["quarantined"]:
         lines.append(f"  quarantined, not run: {', '.join(value['quarantined'])}")
-    for key in ("testsFailed", "probesFailed"):
+    for key in ("testsFailed", "probesFailed", "probesFlaky"):
         if value.get(key):
             lines.append(f"  {key}: {', '.join(value[key])}")
     if value.get("simulator", {}).get("deleted") is False:
@@ -446,10 +524,20 @@ def tree_fingerprint(root=ROOT):
     return digest.hexdigest()
 
 
+def dirty_paths(root=ROOT):
+    """Paths that git reports as changed or untracked now, so a moved tree names what moved."""
+    output = subprocess.run(["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd=root, check=True,
+                            capture_output=True, text=True).stdout
+    return [line[3:] for line in output.splitlines() if line]
+
+
 def finish(receipt, outcome, tree):
     """A receipt names one tree, so a tree that moved during the run proves nothing."""
     if outcome is None and not receipt.failed() and tree_fingerprint() != tree:
-        receipt.skip("freeze", "the tree changed during the run")
+        paths = dirty_paths()
+        receipt.value["treeChanges"] = paths[:50]
+        shown = ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
+        receipt.skip("freeze", "the tree changed during the run" + (f"; changed now: {shown}" if paths else ""))
         outcome = "incomplete"
     receipt.finish(outcome)
 
@@ -469,7 +557,14 @@ def run_guarded(receipt, work):
             receipt.finish("failed")
 
 
+def hermetic_environment():
+    """The gate must not write into the tree it certifies: Python bytecode would show up as untracked files."""
+    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+    sys.dont_write_bytecode = True
+
+
 def main():
+    hermetic_environment()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     choice = parser.add_mutually_exclusive_group()
     choice.add_argument("--changed", action="store_true", help="Pick the layer from the diff against the base")

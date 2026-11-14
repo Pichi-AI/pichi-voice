@@ -85,7 +85,13 @@ final nonisolated class UpdateDownloadTests: XCTestCase {
         task.cancel()
         do { try await task.value; XCTFail("Cancelled download must fail") }
         catch { XCTAssertTrue(error is CancellationError || (error as? URLError)?.code == .cancelled) }
-        let activeTasks = await fixture.session.allTasks
+        // URLSession stops the transport on its own queue, so the stop can land just after fetch returns.
+        // It must still arrive promptly, long before the 60 second request deadline.
+        var activeTasks = await fixture.session.allTasks
+        for _ in 0..<400 where !activeTasks.isEmpty || fixture.cancellations == 0 {
+            try await Task.sleep(for: .milliseconds(5))
+            activeTasks = await fixture.session.allTasks
+        }
         XCTAssertTrue(activeTasks.isEmpty, "Cancellation leaves no owned URLSession transport task active")
         XCTAssertGreaterThanOrEqual(fixture.cancellations, 1)
     }
