@@ -1370,11 +1370,11 @@ final class MeetingSessionModelTests: XCTestCase {
         XCTAssertEqual(decoded.microphoneCoreAudioUID, "core-audio-uid")
     }
 
-    func testUnconfiguredMeetingDefaultsRemainConservative() {
+    func testUnconfiguredMeetingDefaultsCaptureComputerAudio() {
         let defaults = MeetingRecordingDefaults.unconfigured
 
         XCTAssertFalse(defaults.isConfigured)
-        XCTAssertEqual(defaults.mode, .onlineCall)
+        XCTAssertEqual(defaults.mode, .systemAudio)
         XCTAssertEqual(defaults.microphoneRole, .unknown)
         XCTAssertNil(defaults.applicationBundleIdentifier)
         XCTAssertNil(defaults.microphoneCaptureDeviceID)
@@ -2399,7 +2399,7 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
         SettingsStore.shared.meetingTranscriptionBackendID = .gigaam
 
         let harness = self.makeHarness()
-        XCTAssertEqual(defaults.string(forKey: keys[0]), MeetingFinalProcessingConfiguration.defaultASRModel)
+        XCTAssertEqual(defaults.string(forKey: keys[0]), SettingsStore.SpeechModel.parakeetTDTv2.rawValue)
         XCTAssertEqual(SettingsStore.shared.meetingTranscriptionBackendID, .productionDefault)
         let session = try await harness.coordinator.startRecording(
             configuration: MeetingModelFixture.makeOnlineConfiguration()

@@ -36,7 +36,7 @@ nonisolated extension MeetingSession {
         if [.recording, .recordingDegraded, .stopping, .processing, .completed, .interrupted]
             .contains(self.state)
         {
-            let expectedKinds: Set<MeetingAudioTrackKind> = self.mode == .onlineCall
+            let expectedKinds: Set<MeetingAudioTrackKind> = self.mode.capturesComputerAudio
                 ? [.applicationAudio, .microphone]
                 : [.microphone]
             guard Set(trackKinds) == expectedKinds else {
@@ -148,7 +148,7 @@ nonisolated extension MeetingCaptureConfiguration {
             guard application == nil, scope != .systemAudio else {
                 throw MeetingModelValidationError.unexpectedInRoomApplication
             }
-        } else if scope == .systemAudio {
+        } else if mode == .systemAudio || scope == .systemAudio {
             guard application == nil else { throw MeetingModelValidationError.unexpectedSystemAudioApplication }
         } else if application == nil {
             throw MeetingModelValidationError.missingOnlineApplication

@@ -268,6 +268,7 @@ builds/
 !/docs/development/initial-verification-2026-10.md
 !/docs/development/instruction-refactor-2026-11-05.md
 !/docs/development/upstream.md
+!/docs/development/upstream-sync-1.6.13.md
 !/docs/development/least-change-refactoring.md
 !/docs/development/pichi-sso-delivery-plan.md
 !/docs/development/pichi-account-sync-contract-v1.md
@@ -352,3 +353,6 @@ builds/
 # Official service marks used only to identify conferencing applications
 !/website/dist/voice/assets/services/
 !/website/dist/voice/assets/services/*
+
+# Imported probe helpers create only reproducible Python bytecode here.
+/Tests/Standalone/__pycache__/

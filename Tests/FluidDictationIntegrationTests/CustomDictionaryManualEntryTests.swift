@@ -1,4 +1,7 @@
 import AppKit
+import AVFoundation
+import CryptoKit
+import SQLite3
 @testable import FluidVoice_Debug
 import Foundation
 import SwiftUI
@@ -1058,6 +1061,93 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         }
     }
 
+    private func correctionArchiveCandidate() throws -> AutomaticDictionaryCorrectionCandidate {
+        let oldConsent = SettingsStore.shared.dictionaryCorrectionArchiveEnabled
+        SettingsStore.shared.dictionaryCorrectionArchiveEnabled = true
+        defer { SettingsStore.shared.dictionaryCorrectionArchiveEnabled = oldConsent }
+        let admission = try XCTUnwrap(DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: true))
+        let recording = try XCTUnwrap(DictionaryCorrectionRecording(model: "fixture", rawTranscript: "Nora", samples: [0.1], archiveAdmission: admission))
+        var candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Nora", correctedText: "Norah")
+        candidate.trainingExample = DictionaryCorrectionExample.make(
+            id: candidate.id,
+            recording: recording,
+            before: "Nora",
+            after: "Norah",
+            insertedRange: NSRange(location: 0, length: 4),
+            heardWord: "Nora",
+            correctedWord: "Norah"
+        )
+        return candidate
+    }
+
+    func testArchiveFailureKeepsDictionaryCorrectionAndExplainsMissingAudio() async throws {
+        for error in [DictionaryCorrectionArchive.ArchiveError.capacityReached as Error, CocoaError(.fileWriteOutOfSpace)] {
+            let finished = expectation(description: "Archive failure is shown")
+            let session = try AutomaticDictionaryTrainingSession(
+                candidate: self.correctionArchiveCandidate(),
+                asr: AppServices.shared.asr,
+                archiveExample: { _ in throw error }
+            )
+            session.onSuccess = { finished.fulfill() }
+            self.withRestoredDictionary([]) {
+                session.addOnlyCorrection()
+                XCTAssertEqual(SettingsStore.shared.customDictionaryEntries.first?.replacement, "Norah")
+                XCTAssertEqual(session.capturePhase, .processing)
+                XCTAssertEqual(session.screen, .choice)
+            }
+            await fulfillment(of: [finished], timeout: 2)
+            XCTAssertEqual(session.screen, .success)
+            XCTAssertEqual(session.capturePhase, .idle)
+            XCTAssertNotNil(session.archiveWarning)
+            XCTAssertFalse(session.hasError, "The dictionary correction itself succeeded")
+            if case DictionaryCorrectionArchive.ArchiveError.capacityReached = error {
+                XCTAssertTrue(session.archiveWarning?.contains("archive is full") == true)
+            }
+        }
+    }
+
+    func testArchiveSuccessCompletesWithoutAWarning() async throws {
+        let finished = expectation(description: "Archive succeeded")
+        let session = try AutomaticDictionaryTrainingSession(
+            candidate: self.correctionArchiveCandidate(),
+                asr: AppServices.shared.asr,
+            archiveExample: { _ in }
+        )
+        session.onSuccess = { finished.fulfill() }
+        self.withRestoredDictionary([]) {
+            session.addOnlyCorrection()
+            let savedEntries = SettingsStore.shared.customDictionaryEntries
+            session.beginTraining()
+            session.addOnlyCorrection()
+            XCTAssertEqual(session.screen, .choice, "Training cannot interrupt an accepted audio save")
+            XCTAssertEqual(session.capturePhase, .processing)
+            XCTAssertEqual(session.statusMessage, PichiLocalization.text("Saving audio locally..."))
+            XCTAssertEqual(SettingsStore.shared.customDictionaryEntries, savedEntries)
+        }
+        await fulfillment(of: [finished], timeout: 2)
+        XCTAssertEqual(session.screen, .success)
+        XCTAssertEqual(session.capturePhase, .idle)
+        XCTAssertNil(session.archiveWarning)
+    }
+
+    func testClosingAcceptedCorrectionDoesNotCancelArchiveOrReopenPrompt() async throws {
+        let archived = expectation(description: "Accepted audio still saved")
+        let noPrompt = expectation(description: "Closed prompt stays closed")
+        noPrompt.isInverted = true
+        let session = try AutomaticDictionaryTrainingSession(
+            candidate: self.correctionArchiveCandidate(),
+                asr: AppServices.shared.asr,
+            archiveExample: { _ in archived.fulfill() }
+        )
+        session.onSuccess = { noPrompt.fulfill() }
+        self.withRestoredDictionary([]) {
+            session.addOnlyCorrection()
+            session.cancel()
+        }
+        await fulfillment(of: [archived, noPrompt], timeout: 2)
+        XCTAssertNotEqual(session.screen, .success)
+    }
+
     func testKeepsWhitespaceOnlyReplacements() {
         XCTAssertEqual(CustomDictionaryManualEntry.sanitizedReplacement("\n"), "\n")
         XCTAssertEqual(CustomDictionaryManualEntry.sanitizedReplacement(" "), " ")
@@ -1622,3 +1712,470 @@ extension CustomDictionaryManualEntryTests {
     }
 }
 #endif
+
+// Merge regressions live in this existing native target so they exercise production stores,
+// settings and UI actions rather than a source projection. All filesystem data is synthetic.
+private actor CorrectionArchiveSaveGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var isOpen = false
+    func wait() async {
+        if self.isOpen { return }
+        await withCheckedContinuation { self.continuation = $0 }
+    }
+    func open() { self.isOpen = true; self.continuation?.resume(); self.continuation = nil }
+}
+
+extension CustomDictionaryManualEntryTests {
+    private func withSyntheticArchiveProfile(
+        _ body: (PrivateProfileSnapshot, DictionaryCorrectionArchiveSaveCoordinator) async throws -> Void
+    ) async throws {
+        let original = PrivateProfileStorage.current
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ArchiveMerge-\(UUID())")
+        let profile = PrivateProfileSnapshot(id: "archive-test-\(UUID())", context: nil, generation: UUID(),
+            rootDirectory: root, legacyRootDirectory: root, isReadable: true)
+        PrivateProfileStorage.select(profile)
+        let coordinator = DictionaryCorrectionArchiveSaveCoordinator()
+        defer {
+            PrivateProfileStorage.select(original)
+            UserDefaults().removePersistentDomain(forName: AppBrand.storageNamespace + ".private-profile." + profile.id)
+            try? FileManager.default.removeItem(at: root)
+        }
+        do { try await body(profile, coordinator) }
+        catch { await coordinator.retireAndJoin(); throw error }
+        await coordinator.retireAndJoin()
+    }
+
+    private func archiveCandidate(admission: DictionaryCorrectionArchiveAdmission?) throws -> AutomaticDictionaryCorrectionCandidate {
+        var candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Ёжик", correctedText: "Ёжики")
+        let recording = try XCTUnwrap(DictionaryCorrectionRecording(model: "synthetic", rawTranscript: "Ёжик 🦔",
+            samples: [0, 0.25, -0.5, 0], archiveAdmission: admission))
+        let before = "PRIVATE PREFIX Ёжик 🦔 PRIVATE SUFFIX"
+        candidate.trainingExample = try XCTUnwrap(DictionaryCorrectionExample.make(id: candidate.id, recording: recording,
+            before: before, after: before.replacingOccurrences(of: "Ёжик", with: "Ёжики"),
+            insertedRange: (before as NSString).range(of: "Ёжик 🦔"), heardWord: candidate.heardText, correctedWord: candidate.correctedText))
+        return candidate
+    }
+
+    func testArchiveConsentDefaultsOffIsProfileScopedAndCannotBeGrantedRetroactively() async throws {
+        try await self.withSyntheticArchiveProfile { profile, coordinator in
+            XCTAssertFalse(SettingsStore.shared.dictionaryCorrectionArchiveEnabled)
+            XCTAssertNil(DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: true))
+            let candidate = try self.archiveCandidate(admission: nil)
+            SettingsStore.shared.dictionaryCorrectionArchiveEnabled = true
+            XCTAssertNil(DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: false), "Strict no-file admission denies archival")
+            let saved = expectation(description: "Only dictionary text saved")
+            let forbidden = expectation(description: "Earlier audio never enrolled")
+            forbidden.isInverted = true
+            let session = AutomaticDictionaryTrainingSession(candidate: candidate, asr: AppServices.shared.asr,
+                archiveExample: { _ in forbidden.fulfill() }, archiveSaves: coordinator)
+            session.onSuccess = { saved.fulfill() }
+            session.addOnlyCorrection()
+            await fulfillment(of: [saved, forbidden], timeout: 0.1)
+            XCTAssertTrue(SettingsStore.shared.customDictionaryEntries.contains { $0.replacement == candidate.correctedText })
+            XCTAssertFalse(FileManager.default.fileExists(atPath: profile.rootDirectory.path))
+            // A new generation of the same account retains preferences, but cannot accept old PCM.
+            let admitted = try XCTUnwrap(DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: true))
+            let nextGeneration = PrivateProfileSnapshot(id: profile.id, context: nil, generation: UUID(),
+                rootDirectory: profile.rootDirectory, legacyRootDirectory: profile.legacyRootDirectory, isReadable: true)
+            PrivateProfileStorage.select(nextGeneration)
+            XCTAssertTrue(SettingsStore.shared.dictionaryCorrectionArchiveEnabled)
+            let nextOwner = DictionaryCorrectionArchiveSaveCoordinator()
+            let old = try XCTUnwrap(try self.archiveCandidate(admission: admitted).trainingExample)
+            XCTAssertFalse(nextOwner.accept(old, archive: { _ in forbidden.fulfill() }))
+            await nextOwner.retireAndJoin()
+            PrivateProfileStorage.select(profile)
+        }
+    }
+
+    func testArchiveProfileTransitionJoinsAcceptedSaveAndSuppressesStalePresentation() async throws {
+        try await self.withSyntheticArchiveProfile { _, coordinator in
+            SettingsStore.shared.dictionaryCorrectionArchiveEnabled = true
+            let admission = try XCTUnwrap(DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: true))
+            let candidate = try self.archiveCandidate(admission: admission)
+            // Turning the setting off does not mutate the already captured admission.
+            SettingsStore.shared.dictionaryCorrectionArchiveEnabled = false
+            let gate = CorrectionArchiveSaveGate()
+            let entered = expectation(description: "Accepted save started")
+            let stored = expectation(description: "Cancellation-ignoring store finished")
+            let forbidden = expectation(description: "Retired UI receives no completion")
+            forbidden.isInverted = true
+            let example = try XCTUnwrap(candidate.trainingExample)
+            XCTAssertTrue(coordinator.accept(example, archive: { _ in
+                entered.fulfill()
+                await gate.wait()
+                stored.fulfill()
+            }, completion: { _ in forbidden.fulfill() }))
+            await fulfillment(of: [entered], timeout: 1)
+            var joined = false
+            let retirement = Task { @MainActor in await coordinator.retireAndJoin(); joined = true }
+            for _ in 0..<10 { await Task.yield() }
+            XCTAssertFalse(joined, "Retirement cannot release the original owner while its store is still writing")
+            XCTAssertFalse(coordinator.accept(example, archive: { _ in forbidden.fulfill() }))
+            await gate.open()
+            await retirement.value
+            XCTAssertTrue(joined)
+            await fulfillment(of: [stored, forbidden], timeout: 0.1)
+        }
+    }
+
+    func testAutomaticCommitArchivesWithPronunciationOffAndRejectsForeignReceipts() async throws {
+        try await self.withSyntheticArchiveProfile { profile, coordinator in
+            SettingsStore.shared.dictionaryCorrectionArchiveEnabled = true
+            SettingsStore.shared.pronunciationMatchingEnabled = false
+            let candidate = try self.archiveCandidate(admission: DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: true))
+            let entry = SettingsStore.CustomDictionaryEntry(triggers: [candidate.heardText], replacement: candidate.correctedText)
+            SettingsStore.shared.customDictionaryEntries = [entry]
+            let receipt = DictionaryAudioLearningService.SavedCorrection(id: candidate.id, entry: entry,
+                heardText: candidate.heardText, correctedText: candidate.correctedText, profile: profile, createdEntry: true,
+                audioWasSaved: false)
+            let saved = expectation(description: "Automatic word-only commit archives independently")
+            XCTAssertTrue(AutomaticDictionaryCorrectionTracker.archiveCommittedCorrection(candidate, receipt: receipt,
+                coordinator: coordinator, archive: { _ in saved.fulfill() }))
+            await fulfillment(of: [saved], timeout: 1)
+            let foreignProfile = PrivateProfileSnapshot(id: "foreign", context: nil, generation: UUID(),
+                rootDirectory: profile.rootDirectory.appendingPathComponent("foreign"), legacyRootDirectory: profile.rootDirectory,
+                isReadable: true)
+            let foreign = DictionaryAudioLearningService.SavedCorrection(id: candidate.id, entry: entry,
+                heardText: candidate.heardText, correctedText: candidate.correctedText, profile: foreignProfile, createdEntry: true)
+            XCTAssertFalse(AutomaticDictionaryCorrectionTracker.archiveCommittedCorrection(candidate, receipt: foreign,
+                coordinator: coordinator, archive: { _ in XCTFail("Foreign receipt archived") }))
+            var mismatched = candidate
+            mismatched.trainingExample = nil
+            XCTAssertFalse(AutomaticDictionaryCorrectionTracker.archiveCommittedCorrection(mismatched, receipt: receipt,
+                coordinator: coordinator, archive: { _ in XCTFail("Missing captured evidence archived") }))
+        }
+    }
+
+    func testArchiveRejectsOtherProfileAndBoundsAcceptedPCM() async throws {
+        try await self.withSyntheticArchiveProfile { profile, _ in
+            SettingsStore.shared.dictionaryCorrectionArchiveEnabled = true
+            let candidate = try self.archiveCandidate(admission: DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: true))
+            let example = try XCTUnwrap(candidate.trainingExample)
+            let limited = DictionaryCorrectionArchiveSaveCoordinator(maximumPendingBytes: 15)
+            XCTAssertFalse(limited.accept(example, archive: { _ in XCTFail("Byte limit bypassed") }))
+            await limited.retireAndJoin()
+            let one = DictionaryCorrectionArchiveSaveCoordinator(maximumPendingBytes: 16, maximumPendingSaves: 1)
+            let gate = CorrectionArchiveSaveGate()
+            XCTAssertTrue(one.accept(example, archive: { _ in await gate.wait() }))
+            XCTAssertFalse(one.accept(example, archive: { _ in XCTFail("Pending count limit bypassed") }))
+            await gate.open()
+            await one.retireAndJoin()
+            let other = PrivateProfileSnapshot(id: "other-\(UUID())", context: nil, generation: UUID(),
+                rootDirectory: profile.rootDirectory.appendingPathComponent("other"), legacyRootDirectory: profile.rootDirectory,
+                isReadable: true)
+            PrivateProfileStorage.select(other)
+            XCTAssertFalse(SettingsStore.shared.dictionaryCorrectionArchiveEnabled, "No inheritance from the previous profile")
+            let otherOwner = DictionaryCorrectionArchiveSaveCoordinator()
+            XCTAssertFalse(otherOwner.accept(example, archive: { _ in XCTFail("Cross-profile admission accepted") }))
+            await otherOwner.retireAndJoin()
+            PrivateProfileStorage.select(profile)
+        }
+    }
+
+    func testNativeArchiveRoundTripValidatesExistingPairAndDeniesUnadmittedPCM() async throws {
+        try await self.withSyntheticArchiveProfile { profile, _ in
+            SettingsStore.shared.dictionaryCorrectionArchiveEnabled = true
+            let candidate = try self.archiveCandidate(admission: DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: true))
+            let example = try XCTUnwrap(candidate.trainingExample)
+            let store = DictionaryCorrectionArchive.scoped(to: profile)
+            try await store.saveAccepted(example)
+            let folder = profile.rootDirectory.appendingPathComponent("Dictionary/TrainingExamples/\(example.id)")
+            let jsonURL = folder.appendingPathComponent("example.json")
+            let audioURL = folder.appendingPathComponent("audio.wav")
+            let original = try Data(contentsOf: jsonURL)
+            let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+            let metadata = try decoder.decode(DictionaryCorrectionArchive.Metadata.self, from: original)
+            XCTAssertEqual(metadata.profileID, profile.id)
+            XCTAssertEqual(metadata.profileGeneration, profile.generation)
+            XCTAssertEqual(metadata.originalText, "Ёжик 🦔")
+            XCTAssertFalse(String(decoding: original, as: UTF8.self).contains("PRIVATE"))
+            let file = try AVAudioFile(forReading: audioURL)
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4))
+            try file.read(into: buffer)
+            XCTAssertEqual(Array(UnsafeBufferPointer(start: buffer.floatChannelData?[0], count: Int(buffer.frameLength))), example.recording.samples)
+            try await store.saveAccepted(example)
+            try Data("broken metadata".utf8).write(to: jsonURL)
+            do { try await store.saveAccepted(example); XCTFail("Damaged pair was accepted") } catch {}
+            XCTAssertEqual(try Data(contentsOf: jsonURL), Data("broken metadata".utf8))
+            try original.write(to: jsonURL)
+            let foreign = DictionaryCorrectionExample(id: example.id, recording: example.recording, originalText: "Foreign",
+                correctedText: example.correctedText, heardWord: example.heardWord, correctedWord: example.correctedWord)
+            do { try await store.saveAccepted(foreign); XCTFail("Foreign existing pair accepted") } catch {}
+            XCTAssertEqual(try Data(contentsOf: jsonURL), original)
+            let denied = try XCTUnwrap(try self.archiveCandidate(admission: nil).trainingExample)
+            do { try await store.saveAccepted(denied); XCTFail("Unadmitted PCM reached disk") }
+            catch { XCTAssertEqual(error as? DictionaryCorrectionArchive.ArchiveError, .notAuthorized) }
+            XCTAssertFalse(FileManager.default.fileExists(atPath: folder.deletingLastPathComponent().appendingPathComponent(denied.id.uuidString).path))
+        }
+    }
+
+    func testHistoryRepeatImportKeepsSQLiteEditsAndCannotResurrectClearedIDs() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryMerge-\(UUID())")
+        let suite = "HistoryMerge-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        let key = "TranscriptionHistoryEntries", url = root.appendingPathComponent("history.sqlite3")
+        let first = TranscriptionHistoryEntry(timestamp: Date(timeIntervalSince1970: 1), rawText: "source", processedText: "source",
+            appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: false)
+        let newer = TranscriptionHistoryEntry(timestamp: Date(timeIntervalSince1970: 2), rawText: "new", processedText: "new",
+            appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: false)
+        let original = try JSONEncoder().encode([first])
+        defaults.set(original, forKey: key)
+        let writer = TranscriptionHistoryWriter(defaults: defaults, url: url)
+        let loaded = try await writer.load()
+        XCTAssertEqual(loaded, [first])
+        var starred = first; starred.isStarred = true
+        let saveError = await withCheckedContinuation { continuation in
+            writer.write(upserts: [starred]) { continuation.resume(returning: $0) }
+        }
+        XCTAssertNil(saveError)
+        defaults.set(try JSONEncoder().encode([first, newer]), forKey: key)
+        let merged = try await writer.load()
+        XCTAssertEqual(merged, [newer, starred])
+        let cleared = await withCheckedContinuation { continuation in
+            writer.write(upserts: [], replacing: true) { continuation.resume(returning: $0) }
+        }
+        XCTAssertNil(cleared)
+        defaults.set(original, forKey: key)
+        let replay = try await TranscriptionHistoryWriter(defaults: defaults, url: url).load()
+        XCTAssertTrue(replay.isEmpty)
+        let unseen = TranscriptionHistoryEntry(timestamp: Date(timeIntervalSince1970: 3), rawText: "unseen", processedText: "unseen",
+            appName: "Synthetic", windowTitle: "Synthetic", wasAIProcessed: false)
+        defaults.set(try JSONEncoder().encode([first, newer, unseen]), forKey: key)
+        let changed = try await TranscriptionHistoryWriter(defaults: defaults, url: url).load()
+        XCTAssertEqual(changed, [unseen])
+        defaults.set(Data("unreadable bytes".utf8), forKey: key)
+        let valid = try await writer.load()
+        XCTAssertEqual(valid, [unseen], "Unreadable legacy must not hide valid SQLite rows")
+        XCTAssertEqual(defaults.data(forKey: key), Data("unreadable bytes".utf8))
+        let pending = await writer.pendingLegacyHistory()
+        XCTAssertTrue(pending)
+    }
+}
+
+extension CustomDictionaryManualEntryTests {
+    func testArchiveQueueLeaseReleasesDroppedPCMAndTransfersOnlyOnce() async throws {
+        try await self.withSyntheticArchiveProfile { _, _ in
+            SettingsStore.shared.dictionaryCorrectionArchiveEnabled = true
+            let example = try XCTUnwrap(try self.archiveCandidate(admission: DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: true)).trainingExample)
+            let owner = DictionaryCorrectionArchiveSaveCoordinator(maximumPendingBytes: 16, maximumPendingSaves: 1)
+            var pending = owner.holdForCommit(example)
+            XCTAssertNotNil(pending)
+            XCTAssertNil(owner.holdForCommit(example), "Queued clips participate in the same byte/count limit as accepted saves")
+            pending = nil
+            let replacement = try XCTUnwrap(owner.holdForCommit(example), "Dropping a cancelled queue callback releases its optional phrase PCM")
+            let saved = expectation(description: "Reserved example transferred")
+            XCTAssertTrue(owner.acceptHeld(replacement, archive: { _ in saved.fulfill() }))
+            XCTAssertFalse(owner.acceptHeld(replacement, archive: { _ in XCTFail("Duplicate commit reused a lease") }))
+            await fulfillment(of: [saved], timeout: 1)
+            await owner.retireAndJoin()
+        }
+    }
+
+    func testHistoryConcealDuringLoadPreservesLegacySnapshotForOriginalProfile() async throws {
+        try await self.withSyntheticArchiveProfile { profile, _ in
+            let suite = "HistoryConceal-\(UUID())", key = "TranscriptionHistoryEntries"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite); PrivateProfileStorage.select(profile) }
+            let entry = TranscriptionHistoryEntry(timestamp: Date(), rawText: "synthetic", processedText: "synthetic",
+                appName: "Fixture", windowTitle: "Fixture", wasAIProcessed: false)
+            let bytes = try JSONEncoder().encode([entry])
+            defaults.set(bytes, forKey: key)
+            let writer = TranscriptionHistoryWriter(defaults: defaults, profile: profile, didReadSnapshot: {
+                PrivateProfileStorage.conceal(generation: UUID())
+            })
+            do { _ = try await writer.load(); XCTFail("Concealed load became visible") } catch is CancellationError {} catch { throw error }
+            XCTAssertEqual(defaults.data(forKey: key), bytes, "A concealed defaults source is not an empty migration or permission to retire bytes")
+            let pending = await writer.pendingLegacyHistory()
+            XCTAssertTrue(pending)
+            PrivateProfileStorage.select(profile)
+            let reloaded = try await TranscriptionHistoryWriter(defaults: defaults, profile: profile).load()
+            XCTAssertEqual(reloaded, [entry])
+            XCTAssertNil(defaults.data(forKey: key))
+        }
+    }
+
+    func testHistoryRecoveryDefersActiveWritesRejectsLinksAndVerifiesOriginalBytes() async throws {
+        try await self.withSyntheticArchiveProfile { profile, _ in
+            let suite = "HistoryRecovery-\(UUID())", key = "TranscriptionHistoryEntries"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let original = Data("synthetic unreadable legacy".utf8)
+            defaults.set(original, forKey: key)
+            let writer = TranscriptionHistoryWriter(defaults: defaults, profile: profile)
+            let rows = try await writer.load()
+            XCTAssertTrue(rows.isEmpty)
+            let audioFolder = profile.rootDirectory.appendingPathComponent("DictationAudioHistory")
+            try FileManager.default.createDirectory(at: audioFolder, withIntermediateDirectories: true)
+            let pcm = Data([0, 1, 2, 3])
+            let originalAudio = audioFolder.appendingPathComponent("unindexed.wav")
+            try pcm.write(to: originalAudio)
+            let admission = try writer.admitRecordingWrite(entryID: UUID(), saveGeneration: 0)
+            do { _ = try await writer.archiveUnreadableLegacyHistory(); XCTFail("Recovery ran before admitted work joined") } catch {}
+            XCTAssertEqual(defaults.data(forKey: key), original)
+            try await writer.finish(admission)
+            let link = audioFolder.appendingPathComponent("unsafe.wav")
+            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: originalAudio)
+            do { _ = try await writer.archiveUnreadableLegacyHistory(); XCTFail("Linked audio entered recovery") } catch {}
+            XCTAssertEqual(defaults.data(forKey: key), original)
+            try FileManager.default.removeItem(at: link)
+            let recovery = try await writer.archiveUnreadableLegacyHistory()
+            XCTAssertEqual(try Data(contentsOf: recovery.appendingPathComponent("legacy-0.json")), original)
+            XCTAssertEqual(try Data(contentsOf: recovery.appendingPathComponent("audio/unindexed.wav")), pcm)
+            XCTAssertEqual(try Data(contentsOf: originalAudio), pcm, "Recovery itself never deletes original audio")
+            XCTAssertNil(defaults.data(forKey: key), "Only verified copies authorize retiring unreadable defaults")
+        }
+    }
+
+    func testArchiveBackupFieldRoundTripAndOlderPayloadDecoding() async throws {
+        try await self.withSyntheticArchiveProfile { _, _ in
+            var payload = SettingsStore.shared.makeBackupPayload()
+            payload.dictionaryCorrectionArchiveEnabled = true
+            let encoder = JSONEncoder(), decoder = JSONDecoder()
+            let encoded = try encoder.encode(payload)
+            let roundTrip = try decoder.decode(SettingsBackupPayload.self, from: encoded)
+            XCTAssertEqual(roundTrip.dictionaryCorrectionArchiveEnabled, true)
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+            object.removeValue(forKey: "dictionaryCorrectionArchiveEnabled")
+            let old = try decoder.decode(SettingsBackupPayload.self, from: JSONSerialization.data(withJSONObject: object))
+            XCTAssertNil(old.dictionaryCorrectionArchiveEnabled)
+        }
+    }
+}
+
+private final class ConcealingHistoryRecoveryDefaults: UserDefaults, @unchecked Sendable {
+    private let didRetire: @Sendable () -> Void
+    init?(suiteName: String, didRetire: @escaping @Sendable () -> Void) {
+        self.didRetire = didRetire
+        super.init(suiteName: suiteName)
+    }
+    override func removeObject(forKey key: String) {
+        super.removeObject(forKey: key)
+        if key == "TranscriptionHistoryEntries" { self.didRetire() }
+    }
+}
+
+extension CustomDictionaryManualEntryTests {
+    func testRecoveryPreservesVerifiedExportIfVisibilityClosesDuringKeyRetirement() async throws {
+        try await self.withSyntheticArchiveProfile { profile, _ in
+            let ownSuite = "RecoveryFirst-\(UUID())", otherSuite = "RecoveryOther-\(UUID())"
+            let own = try XCTUnwrap(ConcealingHistoryRecoveryDefaults(suiteName: ownSuite, didRetire: {
+                PrivateProfileStorage.conceal(generation: UUID())
+            }))
+            let other = try XCTUnwrap(UserDefaults(suiteName: otherSuite))
+            defer {
+                own.removePersistentDomain(forName: ownSuite); other.removePersistentDomain(forName: otherSuite)
+                PrivateProfileStorage.select(profile)
+            }
+            let key = "TranscriptionHistoryEntries", firstBytes = Data("synthetic first corrupt source".utf8)
+            let otherBytes = Data("synthetic second corrupt source".utf8)
+            own.set(firstBytes, forKey: key); other.set(otherBytes, forKey: key)
+            let writer = TranscriptionHistoryWriter(defaults: own, url: profile.rootDirectory.appendingPathComponent("history.sqlite3"),
+                profile: profile, otherInstallDefaults: [other])
+            _ = try await writer.load()
+            do { _ = try await writer.archiveUnreadableLegacyHistory(); XCTFail("Visibility closed during retirement") }
+            catch is CancellationError {} catch { throw error }
+            XCTAssertNil(own.data(forKey: key))
+            XCTAssertEqual(other.data(forKey: key), otherBytes)
+            let exports = try FileManager.default.contentsOfDirectory(at: profile.rootDirectory.appendingPathComponent("History Recovery"), includingPropertiesForKeys: nil)
+            XCTAssertEqual(exports.count, 1, "Partial retirement cannot delete its verified recovery directory")
+            let export = try XCTUnwrap(exports.first)
+            XCTAssertEqual(try Data(contentsOf: export.appendingPathComponent("legacy-0.json")), firstBytes)
+            XCTAssertEqual(try Data(contentsOf: export.appendingPathComponent("legacy-1.json")), otherBytes)
+        }
+    }
+}
+
+extension CustomDictionaryManualEntryTests {
+    private func makePreAccountingHistoryDatabase(at url: URL, source: Data) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var handle: OpaquePointer?
+        let status = sqlite3_open(url.path, &handle)
+        defer { if let handle { sqlite3_close(handle) } }
+        XCTAssertEqual(status, SQLITE_OK)
+        let database = try XCTUnwrap(handle)
+        let digest = SHA256.hash(data: source).map { String(format: "%02x", $0) }.joined()
+        let sql = """
+        CREATE TABLE history (id TEXT PRIMARY KEY, payload BLOB NOT NULL);
+        CREATE TABLE metadata (key TEXT PRIMARY KEY);
+        INSERT INTO metadata(key) VALUES ('legacy_imported');
+        INSERT INTO metadata(key) VALUES ('legacy_source_sha256:\(digest)');
+        """
+        XCTAssertEqual(sqlite3_exec(database, sql, nil, nil, nil), SQLITE_OK)
+    }
+
+    func testPreAccountingClearDefersAmbiguousSourceUntilExactDigestRebuildsDeletionLedger() async throws {
+        try await self.withSyntheticArchiveProfile { profile, _ in
+            let suite = "HistoryPreAccounting-\(UUID())", key = "TranscriptionHistoryEntries"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let old = TranscriptionHistoryEntry(timestamp: Date(timeIntervalSince1970: 1), rawText: "cleared", processedText: "cleared",
+                appName: "Fixture", windowTitle: "Fixture", wasAIProcessed: false)
+            let new = TranscriptionHistoryEntry(timestamp: Date(timeIntervalSince1970: 2), rawText: "new", processedText: "new",
+                appName: "Fixture", windowTitle: "Fixture", wasAIProcessed: false)
+            let original = try JSONEncoder().encode([old])
+            let changed = try JSONEncoder().encode([new, old])
+            let url = profile.rootDirectory.appendingPathComponent("history.sqlite3")
+            // A previous Pichi version cleared SQLite rows but retained only a source digest.
+            try self.makePreAccountingHistoryDatabase(at: url, source: original)
+            defaults.set(changed, forKey: key)
+            let writer = TranscriptionHistoryWriter(defaults: defaults, url: url, profile: profile)
+            let ambiguous = try await writer.load()
+            XCTAssertTrue(ambiguous.isEmpty, "A changed snapshot cannot distinguish new rows from pre-upgrade deletions")
+            XCTAssertEqual(defaults.data(forKey: key), changed, "Defer ambiguous originals instead of silently deleting or restoring them")
+            defaults.set(original, forKey: key)
+            let exact = try await writer.load()
+            XCTAssertTrue(exact.isEmpty, "The old digest proves these absent IDs were already cleared")
+            XCTAssertNil(defaults.data(forKey: key))
+            defaults.set(changed, forKey: key)
+            let resolved = try await writer.load()
+            XCTAssertEqual(resolved, [new], "Once original source IDs are accounted, unseen rows can import safely")
+        }
+    }
+
+    func testAmbiguousReadableLegacyCanBeExportedWithoutRestoringDeletedRows() async throws {
+        try await self.withSyntheticArchiveProfile { profile, _ in
+            let suite = "HistoryAmbiguousExport-\(UUID())", key = "TranscriptionHistoryEntries"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let old = TranscriptionHistoryEntry(timestamp: Date(), rawText: "cleared", processedText: "cleared",
+                appName: "Fixture", windowTitle: "Fixture", wasAIProcessed: false)
+            var changed = old; changed.isStarred = true
+            let original = try JSONEncoder().encode([old])
+            let rewritten = try JSONEncoder().encode([changed])
+            let url = profile.rootDirectory.appendingPathComponent("history.sqlite3")
+            try self.makePreAccountingHistoryDatabase(at: url, source: original)
+            defaults.set(rewritten, forKey: key)
+            let writer = TranscriptionHistoryWriter(defaults: defaults, url: url, profile: profile)
+            let rows = try await writer.load()
+            XCTAssertTrue(rows.isEmpty)
+            let recovery = try await writer.archiveUnreadableLegacyHistory()
+            XCTAssertEqual(try Data(contentsOf: recovery.appendingPathComponent("legacy-0.json")), rewritten)
+            XCTAssertNil(defaults.data(forKey: key))
+            let after = try await writer.load()
+            XCTAssertTrue(after.isEmpty)
+        }
+    }
+
+    func testRejectedSubstitutionCannotBecomePositiveDictionaryOrArchiveEnrollment() async throws {
+        try await self.withSyntheticArchiveProfile { profile, coordinator in
+            SettingsStore.shared.dictionaryCorrectionArchiveEnabled = true
+            var candidate = try self.archiveCandidate(admission: DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: true))
+            let entry = SettingsStore.CustomDictionaryEntry(triggers: [candidate.heardText], replacement: candidate.correctedText)
+            candidate.negativeCorrection = DictionaryNegativeCorrection(evidence: DictionaryAcousticEvidence(id: UUID(), entryID: entry.id,
+                label: candidate.heardText, profileKey: "synthetic", modelKey: "synthetic", sourceWordRange: 0..<1,
+                frames: DictionaryMatchFrames(hiddenSize: 1, values: [1])), correctedText: candidate.correctedText,
+                expiresAt: Date().addingTimeInterval(60))
+            let receipt = DictionaryAudioLearningService.SavedCorrection(id: candidate.id, entry: entry, heardText: candidate.heardText,
+                correctedText: candidate.correctedText, profile: profile, createdEntry: true)
+            XCTAssertFalse(AutomaticDictionaryCorrectionTracker.archiveCommittedCorrection(candidate, receipt: receipt,
+                coordinator: coordinator, archive: { _ in XCTFail("Rejected substitution archived as a positive example") }))
+            let session = AutomaticDictionaryTrainingSession(candidate: candidate, asr: AppServices.shared.asr,
+                archiveExample: { _ in XCTFail("Negative feedback became positive archival") }, archiveSaves: coordinator)
+            session.addOnlyCorrection()
+            XCTAssertTrue(SettingsStore.shared.customDictionaryEntries.isEmpty)
+            XCTAssertEqual(session.screen, .choice)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: profile.rootDirectory.path))
+        }
+    }
+}

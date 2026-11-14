@@ -16,19 +16,18 @@ import Foundation
     var saveTranscriptionHistory = true
     var saveAudioWithTranscriptionHistory = true
     var automaticDictionaryLearningEnabled = false
-}
-nonisolated struct PrivateProfileSnapshot: Sendable { let id: String }
-nonisolated enum PrivateProfileStorage {
-    static let current = PrivateProfileSnapshot(id: "A")
-    nonisolated(unsafe) static var acceptsNewWork = true
-    nonisolated(unsafe) static var readable = true
-    static func isReadable(_ profile: PrivateProfileSnapshot) -> Bool { readable }
+    var dictionaryCorrectionArchiveEnabled = false
 }
 nonisolated enum DictionaryMatcherExperiment { static let collectNegatives = true }
 nonisolated struct PronunciationEnrollmentCapture: Sendable {}
 nonisolated struct DictionaryLearningAlignment: Sendable {}
 nonisolated struct DictationAudioSnapshot { let samples: [Float]; let sampleRate: Double; let channels: Int }
-nonisolated enum AppBrand { static func text(_ value: String) -> String { value } }
+nonisolated enum AppBrand {
+    static func text(_ value: String) -> String { value }
+    static let storageNamespace = "synthetic.dictation-admission"
+    static let keychainService = "synthetic.dictation-admission"
+    static let applicationSupportDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("SyntheticAdmission-" + String(ProcessInfo.processInfo.processIdentifier))
+}
 // ACTUAL_TRANSCRIPTION_PROVIDER_SOURCE
 
 @MainActor final class Provider: TranscriptionProvider {
@@ -134,6 +133,7 @@ actor Gate {
 
 @main struct Main {
     @MainActor static func main() async throws {
+        let profile = PrivateProfileStorage.current
         let service = ASRService(), a = Provider("A"), b = Provider("B")
         var checks = 0
         func check(_ value: @autoclosure () -> Bool, _ message: String) {
@@ -170,10 +170,10 @@ actor Gate {
         check(service.admittedTranscription?.automaticLearning == false, "hidden default cannot turn original PCM learning on")
         service.retainAdmittedCaptureAudio([0.125, -0.125])
         check(service.lastCompletedAudioSnapshot?.samples == [0.125, -0.125], "visible ASR failure retains approved PCM for a later concealed handoff")
-        PrivateProfileStorage.readable = false
+        PrivateProfileStorage.conceal(generation: UUID())
         service.retainAdmittedCaptureAudio([1, 2, 3])
         check(service.lastCompletedAudioSnapshot?.samples == [1, 2, 3], "concealed training preserves original audio only under frozen history choices")
-        PrivateProfileStorage.readable = true
+        PrivateProfileStorage.select(profile)
         check(service.isTranscriptionSelectionCurrent(model: .gigaam, admittedLease: leaseA), "admitted readiness survives concealed defaults")
         check(!service.isTranscriptionSelectionCurrent(model: .whisper, admittedLease: leaseA), "another model is never current for A")
         check(!service.isTranscriptionSelectionCurrent(model: .gigaam, admittedLease: nil), "ordinary readiness still follows current profile")
@@ -222,10 +222,10 @@ actor Gate {
         check(service.activeActivityLease == leaseB && b.ends == 0, "stale A cleanup cannot release B")
         check(service.admittedTranscription?.retainHistoryAudio == false, "B owns its own output choices")
         service.lastCompletedAudioSnapshot = nil
-        PrivateProfileStorage.readable = false
+        PrivateProfileStorage.conceal(generation: UUID())
         service.retainAdmittedCaptureAudio([4, 5])
         check(service.lastCompletedAudioSnapshot == nil, "conceal cannot enable audio when original history choices prohibited it")
-        PrivateProfileStorage.readable = true
+        PrivateProfileStorage.select(profile)
         check(!service.isTranscriptionSelectionCurrent(model: .gigaam, admittedLease: leaseA), "stale admission cannot pass readiness")
         do {
             try service.admitDictationTranscription(leaseB)
@@ -266,12 +266,12 @@ actor Gate {
         settings.selectedSpeechModel = .gigaam
         _ = try service.beginAdmittedTranscription(lease: apiLease)
         settings.selectedSpeechModel = .whisper
-        PrivateProfileStorage.readable = false
+        PrivateProfileStorage.conceal(generation: UUID())
         check((service.transcriptionProvider as AnyObject) === a && service.selectedTranscriptionModel == .gigaam,
             "local API cold preparation owns the same admitted provider and model")
         await service.endAdmittedTranscription(lease: apiLease)
         service.releaseExclusiveActivity(apiLease)
-        PrivateProfileStorage.readable = true
+        PrivateProfileStorage.select(profile)
 
         let recoveryService = ASRService(), recoveryProvider = Provider("recovery")
         recoveryService.modelProvidersForTesting = [.gigaam: recoveryProvider]
@@ -285,7 +285,7 @@ actor Gate {
         recoveryService.retainAdmittedCaptureAudio(recoveryService.audioBuffer.getAll())
         let recoveryToken = UUID()
         recoveryService.beginStreamingDrainRecovery(sessionID: 1, token: recoveryToken)
-        PrivateProfileStorage.readable = false
+        PrivateProfileStorage.conceal(generation: UUID())
         check(recoveryService.lastCompletedAudioSnapshot?.samples == [0.125, -0.125],
             "timeout hands off approved original PCM before a late conceal")
         check(recoveryService.activeActivityLease == recoveryLease && recoveryProvider.ends == 0,
@@ -299,15 +299,52 @@ actor Gate {
             "actual recovery clears only its buffer and preserves the handed-off original snapshot")
         check(recoveryProvider.ends == 1 && recoveryService.activeActivityLease == nil,
             "actual streaming recovery joins the original provider before releasing its lease")
-        PrivateProfileStorage.readable = true
+        PrivateProfileStorage.select(profile)
 
         let hiddenLease = ASRActivityLease(id: UUID(), activity: .fileTranscription)
         service.activeActivityLease = hiddenLease
-        PrivateProfileStorage.acceptsNewWork = false
+        PrivateProfileStorage.closeAdmission()
         do { _ = try service.beginAdmittedTranscription(lease: hiddenLease); preconditionFailure("hidden new admission must reject") } catch { checks += 1 }
         check(service.admittedTranscription == nil, "hidden rejection cannot pin fallback provider")
         service.releaseExclusiveActivity(hiddenLease)
-        PrivateProfileStorage.acceptsNewWork = true
+        PrivateProfileStorage.select(profile)
+        // Compile and exercise the real archive consent carrier against real profile identity.
+        settings.automaticDictionaryLearningEnabled = true
+        settings.dictionaryCorrectionArchiveEnabled = false
+        check(DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: true) == nil,
+            "Pronunciation permission never grants archive admission")
+        settings.dictionaryCorrectionArchiveEnabled = true
+        check(DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: false) == nil,
+            "A no-file boundary denies archive admission even with consent")
+        let archive = DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: true)!
+        check(archive.belongs(to: profile), "Archive carrier retains its exact admitted owner")
+        let foreignRoot = PrivateProfileSnapshot(id: profile.id, context: profile.context,
+            generation: profile.generation, rootDirectory: profile.rootDirectory.appendingPathComponent("foreign-root"),
+            legacyRootDirectory: profile.legacyRootDirectory, isReadable: true)
+        check(!archive.belongs(to: foreignRoot), "Matching identity and generation cannot authorize a foreign root")
+        let nextGeneration = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: profile.legacyRootDirectory)
+        check(!archive.belongs(to: nextGeneration), "A new generation cannot reuse an archive carrier")
+        PrivateProfileStorage.conceal(generation: UUID())
+        check(DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: true) == nil,
+            "A concealed profile cannot admit archive persistence")
+        PrivateProfileStorage.select(profile)
+        settings.dictionaryCorrectionArchiveEnabled = false
+        check(archive.belongs(to: profile) && DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: true) == nil,
+            "Revoking consent denies new carriers without retargeting an admitted carrier")
+        settings.dictionaryCorrectionArchiveEnabled = true
+        for activity in [ASRExclusiveActivity.dictation, .fileTranscription, .localAPI] {
+            let scoped = ASRService(), provider = Provider("archive-scope")
+            scoped.modelProvidersForTesting = [.gigaam: provider]
+            settings.selectedSpeechModel = .gigaam
+            let lease = ASRActivityLease(id: UUID(), activity: activity)
+            scoped.activeActivityLease = lease
+            _ = try scoped.beginAdmittedTranscription(lease: lease)
+            check((scoped.admittedTranscription?.correctionArchiveAdmission != nil) == (activity == .dictation),
+                "Only dictation admission grants the archive carrier")
+            await scoped.endAdmittedTranscription(lease: lease)
+            scoped.releaseExclusiveActivity(lease)
+        }
+        settings.dictionaryCorrectionArchiveEnabled = false
         print("Dictation capture admission: \(checks) assertions passed")
     }
 }

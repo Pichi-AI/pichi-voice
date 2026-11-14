@@ -83,7 +83,9 @@ literal=block(read('Sources/Fluid/Services/ASRService+DictationLiteralFormatting
 assessment=read('Sources/Fluid/Services/DeliveryTargetAssessment.swift').replace('import ApplicationServices\n','').replace('import AppKit\n','')
 analytics=block(read('Sources/Fluid/Analytics/AnalyticsEvent.swift'),'enum AnalyticsInsertionPath: String {')
 fixture='import Foundation\nimport CoreFoundation\n'+clipboard_types+'\n'+literal+'\n'+analytics+'\n'+assessment+'\n'
-fixture+='@MainActor '+block(read('Sources/Fluid/Services/PasteVerifier.swift'),'final class PasteRecoveryPresentationPolicy {')+'\n'
+for marker in ('final class PasteRecoveryEvidence {', 'final class PasteRecoverySequence {'):
+    fixture+='@MainActor '+block(read('Sources/Fluid/Services/PasteVerifier.swift'),marker)+'\n'
+fixture+='extension Notification.Name { static let fluidPasteRecoveryAvailable = Notification.Name("synthetic.pasteRecovery") }\n'
 fixture+='''nonisolated struct PrivateProfileSnapshot {}
 nonisolated enum PrivateProfileStorage {
     static var current: PrivateProfileSnapshot { .init() }
@@ -103,6 +105,7 @@ failure_card=block(read('Sources/Fluid/Views/DeliveryFailureOverlay.swift'),'   
 fixture+='@MainActor final class DeliveryFailureOverlayController {\n'+failure_card+'\n}\n'
 fixture+=(repo/'Tests/Support/TypingNativeTransportFixture.swift').read_text()+'\n'+clipboard_doubles+'\n@MainActor '+coord_body+'\n'
 fixture+='extension PasteDeliveryCoordinator { var fixtureWaiterCount:Int { self.deliveryWaiters.count }; var fixtureHasLease:Bool { self.lease != nil }; var fixtureIsDelivering:Bool { self.isDelivering } }\n'
+methods += [method(read('Sources/Fluid/Services/TypingService.swift'), name) for name in ('verifyPasteLanded', 'capturePasteBaseline')]
 fixture+='@MainActor final class TypingService {\n'+'\n'.join(declarations+methods)+'''
     nonisolated static let directInsertionQueue = DispatchQueue(label: "test.synthetic.direct-insertion")
     nonisolated static let cgEventUnicodeChunkSize = 200
@@ -113,7 +116,6 @@ fixture+='@MainActor final class TypingService {\n'+'\n'.join(declarations+metho
     func bench(_ text: String) {}
     func ghosttyTargetPID(preferredTargetPID: pid_t?) -> pid_t? { nil }
     func recordInsertionLatency(path: AnalyticsInsertionPath, result: TextDeliveryResult, requestedAt: TimeInterval, textReadyAt: TimeInterval?, toggleStopRequestedAt: TimeInterval?, completedAt: TimeInterval = 0) {}
-    func verifyPasteLanded(_ text: String, before: Int, profile: PrivateProfileSnapshot, verificationID: UInt64, postedAt: TimeInterval, isOutputValid: @escaping @MainActor () -> Bool) {}
     func waitForPhysicalModifiersToRelease(timeout: TimeInterval) async -> Bool { true }
     func postReturnKey(_ key: SettingsStore.SpokenSendKey, targetPID: pid_t) async -> Bool { syntheticAX.sendCount += 1; return true }
 }\n'''

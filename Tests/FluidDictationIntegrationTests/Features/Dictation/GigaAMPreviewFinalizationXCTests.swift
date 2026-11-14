@@ -361,7 +361,8 @@ final class GigaAMPreviewFinalizationXCTests: XCTestCase {
                 settings.automaticDictionaryLearningEnabled = priorLearning
             }
             // A private coordinator: shutdownForTermination() must not end the process-wide one that later tests use.
-            let asr = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+            let residency = MeetingModelResidencyCoordinator()
+            let asr = ASRService(meetingModelResidency: residency)
             asr.modelProvidersForTesting[.gigaam] = provider
             asr.isAsrReady = true
             let lease = try asr.acquireExclusiveActivity(.dictation)
@@ -390,6 +391,9 @@ final class GigaAMPreviewFinalizationXCTests: XCTestCase {
             let calls = await native.calls
             XCTAssertEqual(calls.map(\.session), [lease.id, lease.id])
             await asr.shutdownForTermination()
+            XCTAssertEqual(residency.phase, .terminating)
+            let ordinary = try MeetingModelResidencyCoordinator.shared.beginOperation(owner: "gigaam-fixture-isolation", modelID: "synthetic")
+            MeetingModelResidencyCoordinator.shared.endOperation(ordinary)
             await provider.endAdmittedTranscription(leaseID: lease.id)
             let discarded = await native.discarded
             XCTAssertEqual(discarded, [lease.id])

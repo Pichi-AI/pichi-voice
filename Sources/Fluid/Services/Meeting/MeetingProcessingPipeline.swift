@@ -715,7 +715,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Version 15: merge frozen word attribution with main without resuming distinct version-14 rules.
     /// Version 16: admit protected speech at sealed empty ASR boundaries while capture continues.
     /// Version 17: upstream unfiltered-microphone admission with downstream native attribution preserved.
-    nonisolated static let pipelineVersion = 17
+    /// Version 20: upstream reply barriers and final normalization before privacy publication.
+    nonisolated static let pipelineVersion = 20
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -1407,7 +1408,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     let backendRegistry: MeetingTranscriptionBackendRegistry
     private let backendIDProvider: @MainActor (String) -> MeetingBackendID
     private let usesRecordingBackendPin: Bool
-    private let preferredASRModelProvider: @MainActor () -> SettingsStore.SpeechModel
+    private let dictionaryEntriesProvider: @MainActor () -> [SettingsStore.CustomDictionaryEntry]
+    private let preferredASRModelProvider: @MainActor () async throws -> SettingsStore.SpeechModel
     /// Canonical path only: observes chunk files for the analysis manifest. `nil` uses the real
     /// filesystem observer; tests inject fixture observations instead of writing audio.
     private let chunkObserver: (any MeetingChunkAudioObserving)?
@@ -1449,7 +1451,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         prepareDiarizationDependencies: (@MainActor (Set<MeetingDiarizationDependency>) async throws -> Void)? = nil,
         diarizationSupported: @escaping @MainActor () -> Bool = { CPUArchitecture.isAppleSilicon },
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil,
-        preferredASRModelProvider: (@MainActor () -> SettingsStore.SpeechModel)? = nil
+        dictionaryEntriesProvider: (@MainActor () -> [SettingsStore.CustomDictionaryEntry])? = nil,
+        preferredASRModelProvider: (@MainActor () async throws -> SettingsStore.SpeechModel)? = nil
     ) {
         let settings = settings ?? SettingsStore.shared
         self.settings = settings
@@ -1458,6 +1461,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         self.pcmAdmissionContextProvider = pcmAdmissionContextProvider
         self.usesRecordingBackendPin = backendID == nil && backendIDProvider == nil && backendRegistry == nil
         self.preferredASRModelProvider = preferredASRModelProvider ?? { settings.selectedSpeechModel }
+        self.dictionaryEntriesProvider = dictionaryEntriesProvider ?? { settings.customDictionaryEntries }
         self.managesModelResidency = managesModelResidency
         self.serializationGate = serializationGate
         self.chunkObserver = chunkObserver
@@ -1540,13 +1544,55 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         try Task.checkCancellation()
     }
 
+    /// Fresh, bounded installation check off the main actor. Dictation preferences and
+    /// UI snapshot refreshes do not influence an in-flight meeting transcription.
+    static func defaultPreferredASRModel() async throws -> SettingsStore.SpeechModel {
+        let descriptors = [ParakeetSpeechModelCatalog.pro, ParakeetSpeechModelCatalog.v3]
+        let installed = try await SpeechModelInstallationSnapshot.scan(descriptors.map {
+            .init(modelID: $0.modelID, kind: .parakeet($0))
+        })
+        try Task.checkCancellation()
+        return MeetingProviderOptions.defaultModel(installedModelIDs: installed)
+    }
+
     func process(
         session: MeetingSession,
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
         if session.audioStorageMode == .memoryOnly || self.memoryAttempts[session.id] != nil {
-            return try await self.finishMemoryAudio(session: session, progress: progress)
+            // Freeze final-only formatting before Stop joins the PCM owner. Live recognition,
+            // its protected journal and terminal acknowledgement retain their existing path.
+            guard let attempt = self.memoryAttempts[session.id] else {
+                throw MeetingProcessingError.noRecoverableAudio
+            }
+            let configuration = Self.withDictionaryEntries(
+                attempt.request.configuration.customDictionaryRewritingEnabled
+                    ? attempt.request.configuration.customDictionaryEntries : self.dictionaryEntriesProvider(),
+                in: attempt.request.configuration
+            )
+            let redactor = attempt.redactor
+            let privacyIdentity = redactor?.checkpointIdentity
+            var result = try await self.finishMemoryAudio(session: session, progress: { stage in
+                if stage != .completed { progress(stage) }
+            })
+            let completed = result
+            let publish: () async throws -> [MeetingTranscriptSegment] = {
+                try await attempt.preparePrivacy()
+                return try await Self.normalizedPublicationSegments(
+                    completed.segments, speakers: completed.speakers, session: session,
+                    coverageGaps: completed.coverageGaps.isEmpty
+                        ? session.transcriptCoverageGaps ?? [] : completed.coverageGaps,
+                    configuration: configuration, redactor: redactor, privacyIdentity: privacyIdentity
+                )
+            }
+            if self.managesModelResidency, redactor != nil {
+                result.segments = try await self.asrServiceProvider().withMeetingModelResidency(
+                    attemptID: attempt.request.attemptID, acceptsCompletedCancellation: { _ in false }, work: publish
+                )
+            } else { result.segments = try await publish() }
+            progress(.completed)
+            return result
         }
         let attemptRedactor = session.piiRedactionEnabled == true ? try self.privacyRedactorProvider() : nil
         if session.piiRedactionEnabled == true, attemptRedactor == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
@@ -1567,6 +1613,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             || retainedPin.configuration.recordingTimePolicy != session.timebase.recordingTimePolicy {
             throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
         }
+        // A resumed pin owns its original rules. The checkpoint reader rejects a digest
+        // whose ephemeral rules are unavailable; current settings never repair that pin.
+        let dictionaryEntries = retainedPin?.configuration.customDictionaryEntries ?? self.dictionaryEntriesProvider()
 
         // The selection is read exactly once, here, and every later decision in this attempt uses
         // the local copy. Re-reading the preference after an await could split one attempt across
@@ -1614,8 +1663,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
                         asrModel: recordingModelID, languageCode: session.languageCode))
                     preferredASRModel = recorded
-                } else { preferredASRModel = nil }
-            } else { preferredASRModel = self.preferredASRModelProvider() }
+                } else { preferredASRModel = try await self.preferredASRModelProvider() }
+            } else { preferredASRModel = try await self.preferredASRModelProvider() }
         } else { preferredASRModel = nil }
         if session.speakerLabelsEnabled != false, let descriptor = declaredDescriptor {
             try await self.prepareSpeakerDependencies(for: descriptor, session: session)
@@ -1639,8 +1688,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 diarizationEnabled: session.speakerLabelsEnabled ?? true,
                 speakerProcessingMode: session.effectiveSpeakerProcessingMode
             )
+            configuration = Self.withDictionaryEntries(dictionaryEntries, in: configuration)
         }
         configuration.recordingTimePolicy = session.timebase.recordingTimePolicy
+        try Task.checkCancellation()
         let request = MeetingBackendRequest(
             attemptID: Self.resolvedAttemptID(session: session),
             session: session,
@@ -1740,6 +1791,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     } else {
                         processed = try await legacyWork()
                     }
+                    processed.segments = try await Self.normalizedPublicationSegments(
+                        processed.segments, speakers: processed.speakers, session: session,
+                        coverageGaps: processed.coverageGaps, configuration: request.configuration,
+                        redactor: nil, privacyIdentity: nil
+                    )
                 case .canonicalEvidence:
                     processed = try await self.processCanonicalAttempt(plan: plan, backend: backend, redactor: attemptRedactor, progress: progress)
                 }
@@ -1767,6 +1823,229 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }
         // Exactly one release on every path: the throwing paths above, this one otherwise.
         await self.serializationGate.release()
+        return result
+    }
+
+    /// Copy only the final-text option onto the registered provider's frozen snapshot. In
+    /// particular, do not resolve its model, artifact, attribution or time policy a second time.
+    private nonisolated static func withDictionaryEntries(
+        _ entries: [SettingsStore.CustomDictionaryEntry],
+        in configuration: MeetingFinalProcessingConfiguration
+    ) -> MeetingFinalProcessingConfiguration {
+        // Do not turn a decoded digest-only configuration into a dictionary-disabled one.
+        if configuration.customDictionaryRewritingEnabled && entries.isEmpty { return configuration }
+        return MeetingFinalProcessingConfiguration(
+            asrModel: configuration.asrModel,
+            asrArtifactFingerprint: configuration.asrArtifactFingerprint,
+            asrArtifactDirectory: configuration.asrArtifactDirectory,
+            languageCode: configuration.languageCode,
+            vocabularyBoostingEnabled: configuration.vocabularyBoostingEnabled,
+            pronunciationMatchingEnabled: configuration.pronunciationMatchingEnabled,
+            customDictionaryRewritingEnabled: !entries.isEmpty,
+            customDictionaryEntries: entries,
+            experimentalUnifiedFinalEnabled: configuration.experimentalUnifiedFinalEnabled,
+            diarizationFingerprint: configuration.diarizationFingerprint,
+            pipelineVersion: configuration.pipelineVersion,
+            speakerLabelsEnabled: configuration.speakerLabelsEnabled,
+            speakerProcessingMode: configuration.effectiveSpeakerProcessingMode,
+            speakerAttributionPolicy: configuration.speakerAttributionPolicy,
+            recordingTimePolicy: configuration.recordingTimePolicy
+        )
+    }
+
+    /// Final formatting is a text projection, never a speaker assignment or a new timing
+    /// measurement. Both Stop and retained processing use this gate before returning text.
+    nonisolated static func normalizedPublicationSegments(
+        _ segments: [MeetingTranscriptSegment],
+        speakers: [MeetingSessionSpeaker],
+        session: MeetingSession,
+        coverageGaps: [MeetingTranscriptCoverageGap],
+        configuration: MeetingFinalProcessingConfiguration,
+        redactor: (any TranscriptTextRedacting)?,
+        privacyIdentity: String?
+    ) async throws -> [MeetingTranscriptSegment] {
+        try Task.checkCancellation()
+        if configuration.customDictionaryRewritingEnabled && configuration.customDictionaryEntries.isEmpty {
+            throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+        }
+        let worker = Task.detached(priority: .utility) {
+            var context = session
+            context.transcriptSegments = segments
+            context.speakers = speakers
+            context.transcriptCoverageGaps = coverageGaps.isEmpty ? nil : coverageGaps
+            let groups = try Self.normalizationGroups(segments, in: context)
+            let turns = groups.map { members -> MeetingTranscriptSegment in
+                var turn = members[0]
+                turn.text = MeetingTranscriptExporter.DisplayParagraph(segments: members).text
+                return turn
+            }
+            let formatted = try await MeetingTranscriptNormalizer.normalize(
+                turns, languageCode: configuration.languageCode,
+                dictionaryEntries: configuration.customDictionaryEntries
+            )
+            var replacements: [MeetingTranscriptSegmentID: String] = [:]
+            for (members, turn) in zip(groups, formatted) {
+                try Task.checkCancellation()
+                let texts = try Self.projectNormalizedText(turn.text, onto: members)
+                for (member, text) in zip(members, texts) { replacements[member.id] = text }
+            }
+            return segments.map { segment in
+                var copy = segment
+                if let text = replacements[segment.id] { copy.text = text }
+                return copy
+            }
+        }
+        let normalized = try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: { worker.cancel() }
+        try Task.checkCancellation()
+        guard session.piiRedactionEnabled == true else { return normalized }
+        guard let redactor else { throw MeetingPrivacyPublicationError.redactorUnavailable }
+        guard redactor.checkpointIdentity == privacyIdentity else {
+            throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+        }
+        // Full final context, not the provisional lexical-tail admission used during capture.
+        // No dictionary/quantity transform may run after this publication check.
+        let safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(
+            MeetingPCMTranscriptBatch(segments: normalized), using: redactor
+        )
+        try Task.checkCancellation()
+        guard redactor.checkpointIdentity == privacyIdentity else {
+            throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+        }
+        return safe.segments
+    }
+
+    /// Reuse reading ownership without copying it into native evidence. Work per track so
+    /// simultaneous word streams remain phrases, then apply the upstream completed-reply
+    /// barrier and bounded turn sizes. Manual text edits are never automatically rewritten.
+    private nonisolated static func normalizationGroups(
+        _ segments: [MeetingTranscriptSegment], in session: MeetingSession
+    ) throws -> [[MeetingTranscriptSegment]] {
+        let ordered = segments.enumerated().sorted {
+            ($0.element.start, $0.element.end, $0.element.sourceTrackID.uuidString, $0.offset)
+                < ($1.element.start, $1.element.end, $1.element.sourceTrackID.uuidString, $1.offset)
+        }.map(\.element)
+        var paragraphByMember: [MeetingTranscriptSegmentID: MeetingTranscriptSegmentID] = [:]
+        for members in Dictionary(grouping: ordered, by: \.sourceTrackID).values {
+            try Task.checkCancellation()
+            for paragraph in MeetingTranscriptExporter.displayParagraphs(for: members, in: session) {
+                for member in paragraph.segments { paragraphByMember[member.id] = paragraph.id }
+            }
+        }
+        let completedSpeech = ordered.filter { !$0.isEcho && $0.hasReadableContent }.sorted { $0.end < $1.end }
+        var completedIndex = 0
+        var latestCompleted: [MeetingTranscriptSegment] = []
+        var groups: [[MeetingTranscriptSegment]] = []
+        var lengths: [Int] = []
+        var lastGroupByTrack: [MeetingAudioTrackID: Int] = [:]
+        for next in ordered {
+            try Task.checkCancellation()
+            while completedIndex < completedSpeech.count, completedSpeech[completedIndex].end <= next.start {
+                let completed = completedSpeech[completedIndex]
+                completedIndex += 1
+                if let index = latestCompleted.firstIndex(where: { $0.sourceTrackID == completed.sourceTrackID }) {
+                    if completed.start > latestCompleted[index].start { latestCompleted[index] = completed }
+                } else { latestCompleted.append(completed) }
+                latestCompleted.sort { $0.start > $1.start }
+                if latestCompleted.count > 2 { latestCompleted.removeLast() }
+            }
+            guard next.status == .final, next.isUserTextEdited != true, next.originalText == nil else {
+                lastGroupByTrack.removeValue(forKey: next.sourceTrackID)
+                continue
+            }
+            if let index = lastGroupByTrack[next.sourceTrackID], let previous = groups[index].last,
+               paragraphByMember[next.id] != nil,
+               paragraphByMember[next.id] == paragraphByMember[previous.id],
+               next.isEcho == previous.isEcho,
+               next.start.seconds - previous.end.seconds <= Self.canonicalTurnMergeGapSeconds,
+               next.end.seconds - groups[index][0].start.seconds <= Self.canonicalTurnMaximumDurationSeconds,
+               // Bound the character diff as well as the normalizer's own input budget.
+               lengths[index] + next.text.utf8.count + 1 <= 4_096,
+               !latestCompleted.contains(where: {
+                   !next.isEcho && $0.sourceTrackID != next.sourceTrackID && $0.start >= previous.end
+               }),
+               !(session.transcriptCoverageGaps ?? []).contains(where: {
+                   $0.trackID == next.sourceTrackID
+                       && $0.start < next.end.seconds && $0.end > previous.start.seconds
+               }) {
+                groups[index].append(next)
+                lengths[index] += next.text.utf8.count + 1
+            } else {
+                lastGroupByTrack[next.sourceTrackID] = groups.count
+                groups.append([next])
+                lengths.append(next.text.utf8.count)
+            }
+        }
+        return groups
+    }
+
+    /// Project textual edits onto the original rows without joining or deleting those rows.
+    /// Unchanged characters keep their source member; replacement characters belong to the
+    /// first affected member. A contraction may leave an empty display fragment, but every
+    /// UUID, native unit, exact timestamp and acoustic attribution remains recoverable.
+    /// The independently protected sidecar continues to contain the original ASR evidence.
+    private nonisolated static func projectNormalizedText(
+        _ text: String, onto members: [MeetingTranscriptSegment]
+    ) throws -> [String] {
+        let original = MeetingTranscriptExporter.DisplayParagraph(segments: members).text
+        guard original != text else { return members.map(\.text) }
+        guard members.count > 1 else { return [text] }
+        var source: [Character] = []
+        var owners: [Int] = []
+        for (index, member) in members.enumerated() {
+            let separator = MeetingTranscriptExporter.DisplayParagraph.separator(
+                after: index > 0 ? members[index - 1].text : nil, before: member.text
+            )
+            source.append(contentsOf: separator)
+            owners.append(contentsOf: repeatElement(max(0, index - 1), count: separator.count))
+            source.append(contentsOf: member.text)
+            owners.append(contentsOf: repeatElement(index, count: member.text.count))
+        }
+        let target = Array(text)
+        let difference = target.difference(from: source)
+        var removed = Set<Int>(), inserted = Set<Int>()
+        for change in difference {
+            switch change {
+            case let .remove(offset, _, _): removed.insert(offset)
+            case let .insert(offset, _, _): inserted.insert(offset)
+            }
+        }
+        var result = Array(repeating: "", count: members.count)
+        var cursor = 0
+        var replacementOwner: Int?
+        for index in target.indices {
+            try Task.checkCancellation()
+            while cursor < source.count, removed.contains(cursor) {
+                if replacementOwner == nil { replacementOwner = owners[cursor] }
+                cursor += 1
+            }
+            if inserted.contains(index) {
+                let owner = replacementOwner ?? (cursor < owners.count ? owners[cursor] : owners.last ?? 0)
+                result[owner].append(target[index])
+            } else {
+                guard cursor < source.count, source[cursor] == target[index] else {
+                    throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+                }
+                result[owners[cursor]].append(target[index])
+                cursor += 1
+                replacementOwner = nil
+            }
+        }
+        guard result.joined() == text else {
+            throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+        }
+        // A replacement may remove a word separator ("New York" -> "NewYork").
+        // Keep that textual edit in one fragment so the reading projection cannot insert
+        // the deleted separator again. The emptied member still retains all native metadata.
+        for index in result.indices.dropFirst() where !result[index].isEmpty {
+            if !MeetingTranscriptExporter.DisplayParagraph.separator(
+                after: result[index - 1], before: result[index]
+            ).isEmpty {
+                result[index - 1] += result[index]
+                result[index] = ""
+            }
+        }
         return result
     }
 
@@ -1811,12 +2090,6 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             )
         }
 
-        let publishedEvidence: MeetingFinalTranscriptEvidence
-        if request.session.piiRedactionEnabled == true {
-            guard let redactor else { throw MeetingPrivacyPublicationError.redactorUnavailable }
-            publishedEvidence = try await MeetingTranscriptPrivacyPolicy.redactedEvidence(bundle.evidence, using: redactor)
-        } else { publishedEvidence = bundle.evidence }
-
         let echoProvider: any MeetingUnitEchoVerdictProviding = self.echoVerdictProvider
             ?? backend.echoVerdictProvider
             ?? MeetingFailClosedEchoVerdictProvider()
@@ -1828,25 +2101,49 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         try Task.checkCancellation()
 
         progress(.finalizing)
-        let assemblyInput = MeetingAssemblyInput(
-            plan: plan,
-            manifest: manifest,
-            evidence: publishedEvidence,
-            coverageReceipts: bundle.coverageReceipts,
-            echoVerdicts: echoVerdicts,
-            confirmedLocalUserTokens: bundle.confirmedLocalUserTokens,
-            speakerAttributionPolicy: request.configuration.speakerAttributionPolicy
+        func assemble(_ evidence: MeetingFinalTranscriptEvidence) async throws -> MeetingAssemblyResult {
+            let input = MeetingAssemblyInput(
+                plan: plan, manifest: manifest, evidence: evidence,
+                coverageReceipts: bundle.coverageReceipts, echoVerdicts: echoVerdicts,
+                confirmedLocalUserTokens: bundle.confirmedLocalUserTokens,
+                speakerAttributionPolicy: request.configuration.speakerAttributionPolicy
+            )
+            let task = Task.detached(priority: .userInitiated) {
+                try MeetingTranscriptAssembler(speakerNameFormat: speakerNameFormat).assemble(input)
+            }
+            let result = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: { task.cancel() }
+            try Task.checkCancellation()
+            return result
+        }
+        // The unpersisted assembly supplies reading turns without changing native words.
+        // Normalize before privacy so even a rule whose trigger is sensitive can run.
+        // Publication separately protects the original evidence and the rewritten product.
+        let formattingAssembly = try await assemble(bundle.evidence)
+        let formattedSegments = try await Self.normalizedPublicationSegments(
+            Self.mergeCanonicalSegments(formattingAssembly.segments), speakers: formattingAssembly.speakers,
+            session: request.session, coverageGaps: formattingAssembly.coverageGaps.map(Self.productCoverageGap),
+            configuration: request.configuration, redactor: redactor,
+            privacyIdentity: request.privacyFingerprint
         )
-        let assemblyTask = Task.detached(priority: .userInitiated) {
-            try MeetingTranscriptAssembler(speakerNameFormat: speakerNameFormat).assemble(assemblyInput)
+        let assembly: MeetingAssemblyResult
+        if request.session.piiRedactionEnabled == true {
+            guard let redactor else { throw MeetingPrivacyPublicationError.redactorUnavailable }
+            let publishedEvidence = try await MeetingTranscriptPrivacyPolicy.redactedEvidence(bundle.evidence, using: redactor)
+            try Task.checkCancellation()
+            guard redactor.checkpointIdentity == request.privacyFingerprint else {
+                throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+            }
+            // Reuse the same assembler for the protected sidecar and complete-context
+            // attribution. Formatting must not replace its speaker or native evidence fields.
+            assembly = try await assemble(publishedEvidence)
+        } else { assembly = formattingAssembly }
+        let formattedByID = Dictionary(uniqueKeysWithValues: formattedSegments.map { ($0.id, $0) })
+        let segments = Self.mergeCanonicalSegments(assembly.segments)
+        guard Set(segments.map(\.id)) == Set(formattedByID.keys) else {
+            throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
         }
-        let assembly = try await withTaskCancellationHandler {
-            try await assemblyTask.value
-        } onCancel: {
-            assemblyTask.cancel()
-        }
-        try Task.checkCancellation()
-
         let sidecar = assembly.sidecar
         let attemptID = plan.attemptID
         let backendID = plan.backendID
@@ -1867,7 +2164,17 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         try Task.checkCancellation()
 
         progress(.completed)
-        return Self.canonicalResult(from: assembly, plan: plan, sidecarReference: reference)
+        var result = Self.canonicalResult(from: assembly, plan: plan, sidecarReference: reference)
+        result.segments = segments.map { segment in
+            var updated = segment
+            if let formatted = formattedByID[segment.id] {
+                updated.text = formatted.text
+                updated.containsPrivacyReplacement = formatted.containsPrivacyReplacement
+            }
+            if !assembly.isComplete { updated.completeness = .incompleteTrack }
+            return updated
+        }
+        return result
     }
 
     /// Turns the validated assembly into the normal result. Attempt identity comes from the
@@ -1955,51 +2262,81 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         )
     }
 
-    /// Canonical evidence remains word-granular in the sidecar, but product session JSON and UI
-    /// rows stay turn-granular. Folds each track chronologically and merges only a segment with
-    /// the immediately preceding turn on that same track — never across an intervening
-    /// different-key segment — so A → B → A stays three turns instead of collapsing the two A
-    /// segments around B. A merge additionally requires an identical full attribution/state key
-    /// and the named gap/duration turn bounds.
+    /// Native word rows and attribution provenance remain intact in product storage as well
+    /// as the sidecar. Only legacy rows without that evidence can merge. A visible reply on
+    /// another track wholly inside a gap splits those turns; simultaneous words and hidden
+    /// echoes do not. Readable phrase formatting uses a separate, temporary projection.
     nonisolated static func mergeCanonicalSegments(
         _ segments: [MeetingTranscriptSegment],
         maximumGapSeconds: TimeInterval = MeetingProcessingPipeline.canonicalTurnMergeGapSeconds,
         maximumDurationSeconds: TimeInterval = MeetingProcessingPipeline.canonicalTurnMaximumDurationSeconds
     ) -> [MeetingTranscriptSegment] {
-        let byTrack = Dictionary(grouping: segments, by: \.sourceTrackID)
+        let ordered = segments.enumerated().sorted {
+            ($0.element.start, $0.element.end, $0.element.sourceTrackID.uuidString, $0.offset)
+                < ($1.element.start, $1.element.end, $1.element.sourceTrackID.uuidString, $1.offset)
+        }.map(\.element)
+        let completedSpeech = ordered.filter { !$0.isEcho }.sorted { $0.end < $1.end }
+        var completedIndex = 0
+        // Keep the latest completed starts from two distinct tracks. Two suffice to answer
+        // "another track" without scanning every word for every gap.
+        var latestCompleted: [MeetingTranscriptSegment] = []
         var merged: [MeetingTranscriptSegment] = []
-        for (_, members) in byTrack {
-            let ordered = members.enumerated().sorted {
-                ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
-            }.map(\.element)
-            guard var current = ordered.first else { continue }
-            var currentKey = Self.canonicalSegmentMergeKey(current)
-            var memberIDs = [current.id]
-            for next in ordered.dropFirst() {
+        for isEcho in [false, true] {
+            let members = ordered.filter { $0.isEcho == isEcho }
+            var lastTurnByTrack: [MeetingAudioTrackID: Int] = [:]
+            var memberIDsByTrack: [MeetingAudioTrackID: [MeetingTranscriptSegmentID]] = [:]
+            for next in members {
+                if !isEcho {
+                    while completedIndex < completedSpeech.count, completedSpeech[completedIndex].end <= next.start {
+                        let completed = completedSpeech[completedIndex]
+                        completedIndex += 1
+                        if let index = latestCompleted.firstIndex(where: { $0.sourceTrackID == completed.sourceTrackID }) {
+                            if completed.start > latestCompleted[index].start { latestCompleted[index] = completed }
+                        } else {
+                            latestCompleted.append(completed)
+                        }
+                        latestCompleted.sort { $0.start > $1.start }
+                        if latestCompleted.count > 2 { latestCompleted.removeLast() }
+                    }
+                }
+                guard let index = lastTurnByTrack[next.sourceTrackID] else {
+                    lastTurnByTrack[next.sourceTrackID] = merged.count
+                    memberIDsByTrack[next.sourceTrackID] = [next.id]
+                    merged.append(next)
+                    continue
+                }
+                var current = merged[index]
+                let currentKey = Self.canonicalSegmentMergeKey(current)
                 let nextKey = Self.canonicalSegmentMergeKey(next)
                 let gap = next.start.seconds - current.end.seconds
                 let combinedDuration = max(current.end.seconds, next.end.seconds) - current.start.seconds
+                let interrupted = !isEcho && latestCompleted.contains {
+                    $0.sourceTrackID != next.sourceTrackID && $0.start >= current.end
+                }
                 if current.nativePrecision != .word, next.nativePrecision != .word,
                    current.speakerAttribution == nil, next.speakerAttribution == nil,
                    current.nativeTiming == nil, next.nativeTiming == nil,
                    current.nativeWordTimingProvenance == nil, next.nativeWordTimingProvenance == nil,
                    current.nativeUnitID == nil, next.nativeUnitID == nil,
                    current.nativeSpeakerAssignment == nil, next.nativeSpeakerAssignment == nil,
-                   nextKey == currentKey, gap <= maximumGapSeconds, combinedDuration <= maximumDurationSeconds {
+                   current.speakerAttributionInference == nil, next.speakerAttributionInference == nil,
+                   current.originalText == nil, next.originalText == nil,
+                   current.isUserTextEdited != true, next.isUserTextEdited != true,
+                   current.isUserSpeakerAssigned != true, next.isUserSpeakerAssigned != true,
+                   nextKey == currentKey, !interrupted, gap <= maximumGapSeconds, combinedDuration <= maximumDurationSeconds {
                     current.end = Self.mediaTime(max(current.end.seconds, next.end.seconds))
                     current.text = Self.joinTranscriptText(current.text, next.text)
-                    memberIDs.append(next.id)
+                    memberIDsByTrack[next.sourceTrackID, default: []].append(next.id)
                     current.id = Self.stableUUID(
-                        "canonical-merged:" + memberIDs.map(\.uuidString).joined(separator: ":")
+                        "canonical-merged:" + (memberIDsByTrack[next.sourceTrackID] ?? []).map(\.uuidString).joined(separator: ":")
                     )
+                    merged[index] = current
                 } else {
-                    merged.append(current)
-                    current = next
-                    currentKey = nextKey
-                    memberIDs = [next.id]
+                    lastTurnByTrack[next.sourceTrackID] = merged.count
+                    memberIDsByTrack[next.sourceTrackID] = [next.id]
+                    merged.append(next)
                 }
             }
-            merged.append(current)
         }
         return merged.enumerated().sorted {
             ($0.element.start, $0.element.end, $0.element.sourceTrackID.uuidString, $0.offset)
@@ -2176,7 +2513,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         var microphoneSkippedChunkIDs: [MeetingAudioChunkID] = []
         var coverageGaps: [MeetingTranscriptCoverageGap] = []
         if let microphoneTrack = session.audioTracks.first(where: { $0.kind == .microphone }) {
-            if session.mode == .onlineCall {
+            if session.mode.capturesComputerAudio {
                 coverageGaps = Self.microphoneCoverageGaps(
                     track: microphoneTrack,
                     origin: context.origin
@@ -2514,7 +2851,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 try await self.processMicrophoneChunk(
                     chunk,
                     track: track,
-                    requiresEchoProtection: session.mode == .onlineCall,
+                    requiresEchoProtection: session.mode.capturesComputerAudio,
                     eras: eras,
                     era0AnchorRelative: era0AnchorRelative,
                     diarizer: diarizer,
@@ -2539,7 +2876,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             }
         }
 
-        let admittedTurns = session.mode == .onlineCall
+        let admittedTurns = session.mode.capturesComputerAudio
             ? stagedTurns.filter {
                 Self.microphoneIntervalIsAdmitted(
                     start: $0.rawStart ?? $0.start,

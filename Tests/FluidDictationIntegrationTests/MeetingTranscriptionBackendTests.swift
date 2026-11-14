@@ -272,7 +272,8 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
     private func makePipeline(
         registry: MeetingTranscriptionBackendRegistry,
         backendID: MeetingBackendID?,
-        gate: MeetingProcessingSerializationGate = MeetingProcessingSerializationGate()
+        gate: MeetingProcessingSerializationGate = MeetingProcessingSerializationGate(),
+        dictionaryEntriesProvider: @escaping @MainActor () -> [SettingsStore.CustomDictionaryEntry] = { [] }
     ) -> MeetingProcessingPipeline {
         MeetingProcessingPipeline(
             asrServiceProvider: {
@@ -282,7 +283,8 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
             managesModelResidency: false,
             serializationGate: gate,
             backendRegistry: registry,
-            backendID: backendID
+            backendID: backendID,
+            dictionaryEntriesProvider: dictionaryEntriesProvider
         )
     }
 
@@ -560,6 +562,26 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
     }
 
     // MARK: - Pipeline dispatch
+
+    func testLegacyDictionaryRunsOnceOnFinalTextWithoutChangingMetadata() async throws {
+        let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: Self.fixtureBackendID)
+        var raw: MeetingProcessingResult?
+        registry.register(Self.fixtureBackendID) { [self] _ in
+            FixtureMeetingBackend(descriptor: self.makeFixtureDescriptor()) { plan in
+                let result = self.makeResult(attemptID: plan.attemptID, text: "space fest costs twenty dollars")
+                raw = result
+                return .legacyCompatibility(result)
+            }
+        }
+        let entries: [SettingsStore.CustomDictionaryEntry] = [.init(triggers: ["space fest"], replacement: "Spacefast")]
+        let pipeline = self.makePipeline(registry: registry, backendID: nil, dictionaryEntriesProvider: { entries })
+        let result = try await pipeline.process(session: self.makeSession(), sessionDirectory: FileManager.default.temporaryDirectory, progress: { _ in })
+        var expected = try XCTUnwrap(raw).segments
+        expected[0].text = "Spacefast costs $20"
+        XCTAssertEqual(result.segments, expected)
+        XCTAssertEqual(result.coverageGaps, raw?.coverageGaps)
+        XCTAssertEqual(result.isComplete, raw?.isComplete)
+    }
 
     func testPipelineDispatchesToTheInjectedBackendBeforeAnyModelWork() async throws {
         let session = self.makeSession()
@@ -857,7 +879,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         XCTAssertEqual(backend.executeCallCount, 1)
     }
 
-    func testSavedLegacyBackendUsesProductionForFrenchWithoutChangingPreference() async {
+    func testSavedLegacyBackendUsesProductionForEnglishAndFrenchWithoutChangingPreference() async {
         let settings = SettingsStore.shared
         let defaults = UserDefaults.standard
         let speechModelKey = "SelectedSpeechModel"
@@ -876,19 +898,22 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         let pipeline = MeetingProcessingPipeline(
             asrServiceProvider: { XCTFail("Routing must happen before ASR loading"); return ASRService() },
             managesModelResidency: false,
-            prepareDiarizationModel: { productionPreparations += 1; throw marker }
+            prepareDiarizationModel: { productionPreparations += 1; throw marker },
+            preferredASRModelProvider: { .fluidParakeetPro }
         )
-        do {
-            _ = try await pipeline.process(
-                session: self.makeSession(languageCode: "fr"),
-                sessionDirectory: FileManager.default.temporaryDirectory,
-                progress: { _ in }
-            )
-            XCTFail("Expected the production preparation marker")
-        } catch {
-            XCTAssertEqual(error as? CocoaError, marker)
+        for language in ["en", "fr"] {
+            do {
+                _ = try await pipeline.process(
+                    session: self.makeSession(languageCode: language),
+                    sessionDirectory: FileManager.default.temporaryDirectory,
+                    progress: { _ in }
+                )
+                XCTFail("Expected the production preparation marker")
+            } catch {
+                XCTAssertEqual(error as? CocoaError, marker)
+            }
         }
-        XCTAssertEqual(productionPreparations, 1)
+        XCTAssertEqual(productionPreparations, 2)
         XCTAssertEqual(settings.meetingTranscriptionBackendID, .legacyCompatibility)
     }
 
@@ -948,7 +973,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         XCTAssertNotNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: SettingsStore.SpeechModel.whisperTiny.rawValue))
         XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: SettingsStore.SpeechModel.whisperSmall.rawValue))
         let selections: [(saved: MeetingBackendID, english: MeetingBackendID, nonEnglish: MeetingBackendID)] = [
-            (.legacyCompatibility, .legacyCompatibility, .productionDefault),
+            (.legacyCompatibility, .productionDefault, .productionDefault),
             (.productionDefault, .productionDefault, .productionDefault),
             (unknown, unknown, unknown),
         ]
@@ -2166,7 +2191,7 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
             var output = MeetingPCMTranscriptBatch(segments: [.init(id: sourceID,
                 start: .init(value: Int64((offset * 16_000).rounded()), timescale: 16_000),
                 end: .init(value: Int64((offset * 16_000).rounded()) + Int64(frames), timescale: 16_000),
-                sourceTrackID: track, speakerID: nil, text: text, originalText: text, revision: 0,
+                sourceTrackID: track, speakerID: nil, text: text, originalText: nil, revision: 0,
                 status: provisional ? .provisional : .final, overlap: .none, completeness: .complete)],
                 isComplete: !provisional)
             output.speechObservationIsFinal = !provisional
@@ -2255,7 +2280,8 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
     }
     private func verifyScheduling(policy: Bool, capability: Bool, privacy: Bool,
                                   refusingPrivacy: Bool = false, permitsProvisionalDisplay: Bool = true,
-                                  completesAttempt: Bool = false) async throws {
+                                  completesAttempt: Bool = false,
+                                  finalDictionaryRules: [SettingsStore.CustomDictionaryEntry] = []) async throws {
         let runtime = Runtime(progressive: capability)
         let registered = try descriptor(policy: policy)
         let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: .whisperTiny)
@@ -2278,7 +2304,7 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
             privacyRedactorProvider: { redactor }, backendRegistry: registry,
             meetingRuntimeFactory: { _ in runtime }, prepareDiarizationDependencies: { _ in
                 XCTFail("Disabled speaker labels cannot prepare speaker weights")
-            })
+            }, dictionaryEntriesProvider: { finalDictionaryRules })
         let capture = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic", languageCode: "auto",
             microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic"),
             audioStorageMode: .memoryOnly, speakerLabelsEnabled: false, piiRedactionEnabled: privacy)
@@ -2360,8 +2386,11 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
                 diarizationModel: nil, lastCompletedTrackID: nil, errorCode: nil))
             session.audioTracks = [track]
             session.transcriptSegments = observations.checkpoints.flatMap(\.segments)
+            let inferenceCountBeforeStop = runtime.sealedCalls + runtime.progressiveCalls
             let result = try await pipeline.process(session: session,
                 sessionDirectory: URL(fileURLWithPath: "/synthetic-never-created"), progress: { _ in })
+            XCTAssertEqual(runtime.sealedCalls + runtime.progressiveCalls, inferenceCountBeforeStop,
+                "Healthy final normalization must reuse accepted speech without ASR replay")
             XCTAssertEqual(result.attempt.id, frozen.attemptID)
             XCTAssertNotEqual(result.attempt.id, unrelatedID)
             XCTAssertEqual(result.attempt.stage, .completed)
@@ -2375,12 +2404,34 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
             XCTAssertEqual(result.attempt.asrProvider, registered.id.rawValue)
             XCTAssertEqual(result.attempt.backendVersion, registered.version)
             XCTAssertFalse(result.segments.isEmpty)
-            XCTAssertTrue(result.segments.allSatisfy { $0.originalText == nil && !$0.text.contains("Иван") })
+            if privacy {
+                XCTAssertTrue(result.segments.allSatisfy { $0.originalText == nil && !$0.text.contains("Иван") })
+            }
+            if !finalDictionaryRules.isEmpty {
+                let text = result.segments.map(\.text).joined(separator: " ")
+                if privacy {
+                    XCTAssertFalse(text.contains("Synthetic participant"),
+                        "Known limitation: final rules cannot match text already hidden during capture")
+                    XCTAssertTrue(text.contains(PIIKind.person.placeholder))
+                } else {
+                    XCTAssertTrue(text.contains("Synthetic participant"),
+                        "Negative control: the same final rule matches when its trigger remains visible")
+                }
+            }
         } else {
             await pipeline.cancelMemoryAudio(sessionID: session.id)
         }
         XCTAssertTrue(pipeline.memoryAttempts.isEmpty)
     }
+    /// Documents a bounded privacy-contract limitation, not sensitive-trigger parity with retained ASR.
+    func testCompletedPCMFinalRulesCannotRestoreMaskedTriggersWithoutReplay() async throws {
+        let rules: [SettingsStore.CustomDictionaryEntry] = [.init(triggers: ["Иван Тестов"], replacement: "Synthetic participant")]
+        for privacy in [true, false] {
+            try await verifyScheduling(policy: true, capability: true, privacy: privacy,
+                completesAttempt: true, finalDictionaryRules: rules)
+        }
+    }
+
     func testCompletedStrictAttemptRetainsFrozenRuntimeLineageAndProtectedText() async throws {
         try await verifyScheduling(policy: true, capability: true, privacy: true, completesAttempt: true)
     }

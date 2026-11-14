@@ -285,13 +285,13 @@
         PrivateProfileStorage.select(profileA)
         let manager = MenuBarFeedbackProbe(), typing = TypingService()
         var notifications: [Notification] = []
-        let observer = NotificationCenter.default.publisher(for: .fluidPasteNotLanded).sink { notifications.append($0) }
+        let observer = NotificationCenter.default.publisher(for: .fluidPasteRecoveryAvailable).sink { notifications.append($0) }
         defer { observer.cancel() }
         let gate = PasteVerificationGate()
         PasteVerifier.gate = gate
         let before = PasteVerifier.Snapshot(pid: 123, summary: "SECRET A verifier metadata")
         let logs = DebugLogger.shared.information.count
-        let held = typing.verifyPasteLanded("SECRET A held paste", before: before, profile: profileA, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
+        let held = typing.verifyPasteForTest("SECRET A held paste", before: before, profile: profileA, verificationID: PasteRecoverySequence.shared.nextID(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
         await gate.waitUntilEntered()
         PrivateProfileStorage.conceal(generation: UUID())
         PrivateProfileStorage.select(profileB)
@@ -304,55 +304,62 @@
 
         // A has already posted its local notification, but the real menu handler's Task is queued.
         PrivateProfileStorage.select(profileA)
-        NotificationCenter.default.post(name: .fluidPasteNotLanded, object: nil,
-            userInfo: ["transcript": "SECRET A queued notification", "privateProfile": profileA, "verificationID": PasteRecoveryPresentationPolicy.shared.beginDelivery(), "postedAt": ProcessInfo.processInfo.systemUptime])
+        NotificationCenter.default.post(name: .fluidPasteRecoveryAvailable, object: nil,
+            userInfo: ["transcript": "SECRET A queued notification", "privateProfile": profileA, "verificationID": PasteRecoverySequence.shared.nextID(), "unverified": false])
         check(notifications.count == 1, "The original A notification is delivered synchronously before its queued menu action")
         PrivateProfileStorage.conceal(generation: UUID())
         PrivateProfileStorage.select(profileB)
         await drainMenuQueue()
         check(DeliveryFailureOverlayController.shared.cards.isEmpty, "A queued paste notification cannot present private A text under B")
-        manager.showPasteNotLandedFailure(transcript: "SECRET A direct stale card", profile: profileA, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime)
+        manager.showPasteNotLandedFailure(transcript: "SECRET A direct stale card", profile: profileA, verificationID: PasteRecoverySequence.shared.nextID(), postedAt: ProcessInfo.processInfo.systemUptime)
         check(DeliveryFailureOverlayController.shared.cards.isEmpty, "The concrete failure presentation also refuses a stale original profile")
 
         PasteVerifier.gate = nil
-        let valid = typing.verifyPasteLanded("valid B paste", before: before, profile: profileB, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
+        let validID = PasteRecoverySequence.shared.nextID()
+        let valid = typing.verifyPasteForTest("valid B paste", before: before, profile: profileB, verificationID: validID, postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
         await valid.value
         await drainMenuQueue()
         check(notifications.last?.userInfo?["privateProfile"] as? PrivateProfileSnapshot == profileB,
               "Successful verifier feedback carries its exact original profile snapshot locally")
+        check(notifications.last?.userInfo?["verificationID"] as? UInt64 == validID,
+              "Recovery notification retains the original delivery identity")
         check(DeliveryFailureOverlayController.shared.cards.count == 1
               && DeliveryFailureOverlayController.shared.cards[0].profile == profileB
               && DeliveryFailureOverlayController.shared.cards[0].text == "valid B paste",
               "Current B verification preserves the existing failure card behavior")
-        let suppressed = typing.verifyPasteLanded("dismissed B output", before: before, profile: profileB, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { false })
+        let suppressed = typing.verifyPasteForTest("dismissed B output", before: before, profile: profileB, verificationID: PasteRecoverySequence.shared.nextID(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { false })
         check(suppressed == nil, "The original caller's output-validity callback can suppress verification admission")
 
         // Diagnostics remain available with alerts off, while presentation stays opt-in.
         let notificationsBeforeMutedCheck = notifications.count
         let logsBeforeMutedCheck = DebugLogger.shared.information.count
         SettingsStore.shared.showPasteCheckAlerts = false
-        let muted = typing.verifyPasteLanded("muted B paste", before: before, profile: profileB,
-            verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime,
+        let muted = typing.verifyPasteForTest("muted B paste", before: before, profile: profileB,
+            verificationID: PasteRecoverySequence.shared.nextID(), postedAt: ProcessInfo.processInfo.systemUptime,
             isOutputValid: { true })!
         await muted.value
         await drainMenuQueue()
         SettingsStore.shared.showPasteCheckAlerts = true
-        check(DebugLogger.shared.information.count == logsBeforeMutedCheck + 1 && notifications.count == notificationsBeforeMutedCheck,
+        check(DebugLogger.shared.information.count == logsBeforeMutedCheck + 2 && notifications.count == notificationsBeforeMutedCheck,
               "Alerts off preserves readable-owner diagnostics without publishing recovery feedback")
 
-        // A newer delivery invalidates a still-pending warning in the same profile.
+        // A newer accepted recovery makes an older late arrival ineligible for presentation.
         let supersededGate = PasteVerificationGate()
         PasteVerifier.gate = supersededGate
-        let superseded = typing.verifyPasteLanded("superseded B paste", before: before, profile: profileB,
-            verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime,
+        let superseded = typing.verifyPasteForTest("superseded B paste", before: before, profile: profileB,
+            verificationID: PasteRecoverySequence.shared.nextID(), postedAt: ProcessInfo.processInfo.systemUptime,
             isOutputValid: { true })!
         await supersededGate.waitUntilEntered()
-        _ = PasteRecoveryPresentationPolicy.shared.beginDelivery()
+        let newerID = PasteRecoverySequence.shared.nextID()
+        let cardsBeforeNewer = DeliveryFailureOverlayController.shared.cards.count
+        manager.queuePasteRecovery(transcript: "newer B paste", profile: profileB, verificationID: newerID, unverified: false)
+        let cardsAfterNewer = DeliveryFailureOverlayController.shared.cards.count
+        check(cardsAfterNewer == cardsBeforeNewer + 1, "The newer recovery is actually admitted")
         await supersededGate.open()
         await superseded.value
         await drainMenuQueue()
-        check(notifications.count == notificationsBeforeMutedCheck,
-              "A newer delivery suppresses a late warning from the same readable profile")
+        check(DeliveryFailureOverlayController.shared.cards.count == cardsAfterNewer,
+              "The inbox rejects a late warning older than an accepted recovery")
         PasteVerifier.gate = nil
     }
 
@@ -410,13 +417,13 @@
         let profiles = PrivateProfileService.shared, typing = TypingService()
         PrivateProfileStorage.select(profileA)
         var notifications: [Notification] = []
-        let observer = NotificationCenter.default.publisher(for: .fluidPasteNotLanded).sink { notifications.append($0) }
+        let observer = NotificationCenter.default.publisher(for: .fluidPasteRecoveryAvailable).sink { notifications.append($0) }
         defer { observer.cancel(); PasteVerifier.gate = nil }
         let before = PasteVerifier.Snapshot(pid: 123, summary: "synthetic original A")
         let logs = DebugLogger.shared.information.count
         let gate = PasteVerificationGate()
         PasteVerifier.gate = gate
-        let verifier = typing.verifyPasteLanded("SECRET A held reader", before: before, profile: profileA, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
+        let verifier = typing.verifyPasteForTest("SECRET A held reader", before: before, profile: profileA, verificationID: PasteRecoverySequence.shared.nextID(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
         await gate.waitUntilEntered()
         let state = DiscoveryTransitionState()
         let transition = Task {
@@ -445,7 +452,7 @@
         PrivateProfileStorage.select(profileA)
         let queuedGate = PasteVerificationGate()
         PasteVerifier.gate = queuedGate
-        let queued = typing.verifyPasteLanded("SECRET A queued reader", before: before, profile: profileA, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
+        let queued = typing.verifyPasteForTest("SECRET A queued reader", before: before, profile: profileA, verificationID: PasteRecoverySequence.shared.nextID(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
         try await profiles.transition(from: nil, to: profileB.context, generation: UUID())
         await queued.value
         let queuedEntered = await queuedGate.hasEntered
@@ -456,7 +463,7 @@
 
         PrivateProfileStorage.select(profileA)
         PasteVerifier.gate = nil
-        let valid = typing.verifyPasteLanded("valid A paste", before: before, profile: profileA, verificationID: PasteRecoveryPresentationPolicy.shared.beginDelivery(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
+        let valid = typing.verifyPasteForTest("valid A paste", before: before, profile: profileA, verificationID: PasteRecoverySequence.shared.nextID(), postedAt: ProcessInfo.processInfo.systemUptime, isOutputValid: { true })!
         await valid.value
         check(notifications.last?.userInfo?["privateProfile"] as? PrivateProfileSnapshot == profileA
               && notifications.last?.userInfo?["transcript"] as? String == "valid A paste",
@@ -465,7 +472,7 @@
 
     @MainActor private static func checkRealPasteReadbackCancellation() async throws {
         let element = NSObject()
-        let before = ActualPasteVerifierProbe.Snapshot(element: element, pid: 123, role: "synthetic",
+        let before = ActualPasteVerifierProbe.Snapshot(element: element, pid: 123, role: "AXTextArea",
             value: "before", characterCount: 6, caret: CFRange(location: 6, length: 0))
         let readback = PasteReadbackDouble.shared
         for completedReads in 0...2 {
@@ -481,7 +488,7 @@
             check(verdict == .unknown(reason: "cancelled"), "Real verifier returns a silent cancelled verdict during delay \(completedReads + 1)")
             check(readback.readCount == completedReads, "Real verifier performs no AX read after cancellation during delay \(completedReads + 1)")
         }
-        readback.reset([.init(element: element, pid: 123, role: "synthetic", value: "before new",
+        readback.reset([.init(element: element, pid: 123, role: "AXTextArea", value: "before new",
                               characterCount: 10, caret: CFRange(location: 10, length: 0))])
         let confirmed = await Task.detached { await ActualPasteVerifierProbe.verify(before: before, pastedText: "new") }.value
         check(confirmed == .confirmed(method: "value") && readback.readCount == 1,

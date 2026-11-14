@@ -79,6 +79,14 @@ final class CommandModeService: ObservableObject, PrivateProfileTransitionPartic
             case user
             case assistant
             case tool
+
+            var appleRole: AppleIntelligenceTurn.Role {
+                switch self {
+                case .user: return .user
+                case .assistant: return .assistant
+                case .tool: return .tool
+                }
+            }
         }
 
         enum StepType: Equatable {
@@ -868,6 +876,24 @@ final class CommandModeService: ObservableObject, PrivateProfileTransitionPartic
     private func callLLM(isOutputValid: @escaping @MainActor () -> Bool) async throws -> LLMResponse {
         guard isOutputValid() else { throw CancellationError() }
         let settings = SettingsStore.shared
+        if settings.effectiveCommandModeProviderID == AppleIntelligenceAvailability.providerID {
+            if let issue = settings.commandModeReadinessIssue {
+                throw LLMError.invalidRequest(issue)
+            }
+            self.streamingText = ""
+            self.streamingThinkingText = ""
+            let history = self.conversationHistory.map {
+                (role: $0.role.appleRole, content: $0.content, call: $0.toolCall.map {
+                    AppleIntelligenceCall(id: $0.id, command: $0.command, workingDirectory: $0.workingDirectory, purpose: $0.purpose)
+                })
+            }
+            let reply = try await AppleIntelligenceCommandProvider.respond(to: AppleIntelligenceTurn.turns(history))
+            guard isOutputValid() else { throw CancellationError() }
+            return LLMResponse(content: reply.content, thinking: nil, toolCall: reply.call.map {
+                LLMResponse.ToolCallData(id: $0.id, command: $0.command, workingDirectory: $0.workingDirectory, purpose: $0.purpose)
+            })
+        }
+
         guard let verified = settings.verifiedChatModelConfiguration(
             providerID: settings.effectiveCommandModeProviderID,
             modelID: settings.effectiveCommandModeSelectedModel

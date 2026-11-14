@@ -29,6 +29,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     @Published private(set) var statusMessage = ""
     @Published private(set) var hasError = false
     @Published private(set) var successTitle = "Added to Dictionary"
+    @Published private(set) var archiveWarning: String?
     @Published private(set) var isAutomaticCaptureEnabled = false
     @Published private(set) var isUndoingSavedCorrection = false
     @Published private(set) var didUndoSavedCorrection = false
@@ -45,6 +46,8 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     private var isProfileVisible: Bool { PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork }
     private let asr: ASRService
     private let audioLearning: DictionaryAudioLearningService
+    private let archiveExample: (@Sendable (DictionaryCorrectionExample) async throws -> Void)?
+    private let archiveSaves: DictionaryCorrectionArchiveSaveCoordinator
     private var stopRequestedDuringStart = false
     private var didStartAudioCapture = false
     private var discardCurrentCapture = false
@@ -64,12 +67,16 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         candidate: AutomaticDictionaryCorrectionCandidate,
         asr: ASRService,
         audioLearning: DictionaryAudioLearningService? = nil,
-        savedCorrection: DictionaryAudioLearningService.SavedCorrection? = nil
+        savedCorrection: DictionaryAudioLearningService.SavedCorrection? = nil,
+        archiveExample: (@Sendable (DictionaryCorrectionExample) async throws -> Void)? = nil,
+        archiveSaves: DictionaryCorrectionArchiveSaveCoordinator? = nil
     ) {
         self.candidate = candidate
         self.asr = asr
         self.audioLearning = audioLearning ?? .shared
         self.savedCorrection = savedCorrection
+        self.archiveExample = archiveExample
+        self.archiveSaves = archiveSaves ?? .shared
 
         let replacement = CustomDictionaryTrainingMerge.normalizedReplacement(candidate.correctedText)
         let savedVariants = SettingsStore.shared.customDictionaryEntries
@@ -202,7 +209,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     func beginTraining() {
-        guard self.isProfileVisible, DictionaryMatcherExperiment.sharedFeaturesEnabled, !self.isCancelled, self.screen == .choice else { return }
+        guard self.isProfileVisible, DictionaryMatcherExperiment.sharedFeaturesEnabled, !self.isCancelled, self.screen == .choice, self.capturePhase == .idle else { return }
         self.onInteraction?()
         self.screen = .training
         self.statusMessage = ""
@@ -257,7 +264,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     func addOnlyCorrection() {
-        guard self.isProfileVisible, !self.isCancelled, self.capturePhase == .idle else { return }
+        guard self.candidate.negativeCorrection == nil, self.isProfileVisible, !self.isCancelled, self.capturePhase == .idle else { return }
         self.persist(triggers: [self.candidate.heardText])
     }
 
@@ -566,7 +573,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     private func persist(triggers: [String]) {
-        guard self.isProfileVisible, !self.isCancelled else { return }
+        guard self.candidate.negativeCorrection == nil, self.isProfileVisible, !self.isCancelled else { return }
         self.onInteraction?()
         let currentEntries = SettingsStore.shared.customDictionaryEntries
         let updatedExisting = currentEntries.contains {
@@ -594,7 +601,32 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         SettingsStore.shared.customDictionaryEntries = mergedEntries
         ASRService.invalidateDictionaryCache()
         NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
-        self.completeSave(title: updatedExisting ? "Dictionary Updated" : "Added to Dictionary")
+        self.archiveThenCompleteSave(title: updatedExisting ? "Dictionary Updated" : "Added to Dictionary")
+    }
+
+    func setArchiveWarning(_ warning: String?) {
+        guard self.isProfileVisible, !self.isCancelled else { return }
+        self.archiveWarning = warning
+    }
+
+    private func archiveThenCompleteSave(title: String) {
+        guard let example = self.candidate.trainingExample, example.recording.archiveAdmission != nil else {
+            self.completeSave(title: title)
+            return
+        }
+        self.capturePhase = .processing
+        self.statusMessage = PichiLocalization.text("Saving audio locally...")
+        let admitted = self.archiveSaves.accept(example, archive: self.archiveExample) { [weak self] warning in
+            guard let self, !self.isCancelled, self.isProfileVisible else { return }
+            self.capturePhase = .idle
+            self.archiveWarning = warning
+            self.completeSave(title: title)
+        }
+        if !admitted {
+            self.capturePhase = .idle
+            self.archiveWarning = PichiLocalization.text("The correction is saved, but its audio example could not be stored.")
+            self.completeSave(title: title)
+        }
     }
 
     private func completeSave(title: String) {

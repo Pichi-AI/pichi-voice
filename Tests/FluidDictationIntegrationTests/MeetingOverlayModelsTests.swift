@@ -383,7 +383,7 @@ final class MeetingMenuBarStartTests: XCTestCase {
         let windows = NSApp.windows.count
         MeetingFloatingCaptionsController.shared.show(from: nil)
         MeetingRecordingPillController.shared.expand()
-        MeetingStillRecordingNudgeController.shared.present()
+        MeetingStillRecordingNudgeController.shared.present(sessionID: UUID())
         MeetingDetectionPromptController.shared.present(.init(
             episodeID: UUID(), bundleIdentifier: "us.zoom.xos", pid: 42, tier: .nativeTier1
         ))
@@ -437,10 +437,22 @@ final class MeetingMenuBarStartTests: XCTestCase {
 
     func testFreshMenuBarDefaultsCaptureSystemAudioWithoutDetectedCall() throws {
         let configuration = try self.configuration(defaults: .unconfigured, target: nil, applications: [])
-        XCTAssertEqual(configuration.applicationAudioScope, .systemAudio)
+        XCTAssertEqual(configuration.mode, .systemAudio)
+        XCTAssertEqual(configuration.effectiveApplicationAudioScope, .systemAudio)
         XCTAssertNil(configuration.application)
         XCTAssertNil(configuration.platform)
         XCTAssertNoThrow(try configuration.validate())
+
+        var scopedDefaults = MeetingRecordingDefaults.unconfigured
+        scopedDefaults.mode = .onlineCall
+        scopedDefaults.applicationAudioScope = .systemAudio
+        let scopedConfiguration = try self.configuration(defaults: scopedDefaults, target: nil, applications: [])
+        XCTAssertEqual(scopedConfiguration.mode, .onlineCall)
+        XCTAssertEqual(scopedConfiguration.applicationAudioScope, .systemAudio)
+        XCTAssertEqual(scopedConfiguration.effectiveApplicationAudioScope, configuration.effectiveApplicationAudioScope)
+        XCTAssertNil(scopedConfiguration.application)
+        XCTAssertNil(scopedConfiguration.platform)
+        XCTAssertNoThrow(try scopedConfiguration.validate())
     }
 
     func testAutomaticSourceUsesExactProcessAndWindow() throws {
@@ -468,6 +480,7 @@ final class MeetingMenuBarStartTests: XCTestCase {
 
     func testSavedManualApplicationWorksWithoutAutomaticDetection() throws {
         var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
         defaults.isConfigured = true
         defaults.applicationAudioScope = .selectedApplication
         defaults.applicationBundleIdentifier = "manual.app"
@@ -480,6 +493,7 @@ final class MeetingMenuBarStartTests: XCTestCase {
 
     func testUnavailableSavedManualApplicationNeverUsesDetectedAlternative() {
         var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
         defaults.isConfigured = true
         defaults.applicationAudioScope = .selectedApplication
         defaults.applicationBundleIdentifier = "manual.app"
@@ -525,6 +539,18 @@ final class MeetingMenuBarStartTests: XCTestCase {
 
 @MainActor
 final class MeetingSetupSourceSelectionTests: XCTestCase {
+    func testUpstreamSystemModeAdaptsToExistingSetupScopeWithoutLosingMicrophoneOnly() {
+        var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .systemAudio
+        let system = self.draft(defaults)
+        XCTAssertEqual(system.mode, .onlineCall)
+        XCTAssertEqual(system.applicationAudioScope, .systemAudio)
+        XCTAssertNil(system.selectedApplicationID)
+        defaults.mode = .inRoom
+        let microphoneOnly = self.draft(defaults)
+        XCTAssertEqual(microphoneOnly.mode, .inRoom)
+    }
+
     private let app = MeetingApplicationIdentity(bundleIdentifier: "manual.app", processID: 42, displayName: "Manual App", windowID: 100)
     private let other = MeetingApplicationIdentity(bundleIdentifier: "other.app", processID: 73, displayName: "Other App")
     private let microphone = MeetingMicrophoneIdentity(captureDeviceID: "mic", coreAudioUID: "mic", displayName: "Microphone")
@@ -1051,8 +1077,16 @@ final class MeetingPageActionAvailabilityTests: XCTestCase {
 
 @MainActor
 extension MeetingMenuBarStartTests {
+    func testAutomaticCapturesComputerAudioWithoutARecognizedCall() throws {
+        let config = try self.savedSourceConfiguration(defaults: .unconfigured, applications: [])
+        XCTAssertEqual(config.mode, .systemAudio)
+        XCTAssertNil(config.application)
+        XCTAssertEqual(config.microphone.captureDeviceID, "mic")
+    }
+
     func testSavedOnlineApplicationIsUsedWithoutAutomaticDetection() throws {
         var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
         defaults.isConfigured = true
         defaults.applicationAudioScope = .selectedApplication
         defaults.applicationBundleIdentifier = "us.zoom.xos"
@@ -1066,6 +1100,7 @@ extension MeetingMenuBarStartTests {
 
     func testUnavailableSavedApplicationCannotSilentlyBecomeMicrophoneOnly() {
         var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
         defaults.isConfigured = true
         defaults.applicationAudioScope = .selectedApplication
         defaults.applicationBundleIdentifier = "us.zoom.xos"

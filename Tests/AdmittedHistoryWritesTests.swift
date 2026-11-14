@@ -209,13 +209,18 @@ import SQLite3
             profile: guest, queue: changedQueue)
         let changedLoading = Task { try await changedWriter.load() }
         await changedSignal.wait()
-        let newer = try JSONEncoder().encode(legacy + legacy)
+        let added = TranscriptionHistoryEntry(rawText: "later raw", processedText: "later preserved",
+            appName: "synthetic", windowTitle: "synthetic", wasAIProcessed: false)
+        let newer = try JSONEncoder().encode(legacy + [added])
         changing.legacyBytes = newer
         changedQueue.resume()
         expect(try await changedLoading.value == legacy, "Queued migration keeps its immutable captured source")
         expect(changing.legacyBytes == newer, "Queued migration never deletes a changed legacy source")
-        _ = try await changedWriter.load()
-        expect(changing.legacyBytes == newer, "A later load never retires bytes whose digest was not imported")
+        let imported = try await changedWriter.load()
+        expect(Set(imported.map(\.id)) == Set((legacy + [added]).map(\.id)),
+            "A later explicit load imports the changed source without losing existing rows")
+        expect(changing.legacyBytes == nil, "A later load retires the changed source only after importing its digest")
+        expect(try await changedWriter.load() == imported, "A repeated load preserves the imported rows without resurrecting source data")
 
         let racing = ConcealingDefaults(profile: guest, bytes: bytes)
         let racingURL = root.appendingPathComponent("conceal-during-snapshot.sqlite3")

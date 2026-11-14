@@ -78,6 +78,9 @@ nonisolated enum FluidServeSkill {
         ## If it does not work
 
         - It says meetings are not shared yet: ask the user to open \(appName), go to meeting settings > Integrations, and add this agent there. Do not look for another way to read the meetings.
+        - It cannot verify sharing permission: the preference may be unset or a sandbox may prevent reading it. Ask the user to check Integrations. \
+        If sharing is already on, use the agent's normal permission-approval flow before retrying this same command with the required access. \
+        Do not disable the sandbox, change sharing settings, or read meeting files directly to bypass the check.
         - The command is not found: \(appName) was moved or removed. Ask the user to open meeting settings > Integrations in \(appName) and press Update skill.
         """ + "\n"
     }

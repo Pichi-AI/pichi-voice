@@ -407,6 +407,9 @@ nonisolated enum ASRHardwareListenerPolicy {
 /// Models are cached locally to avoid repeated downloads.
 @MainActor
 final class ASRService: ObservableObject {
+    #if DEBUG
+    var initialMenuBarStateDeliveredForTests = false
+    #endif
     // Below this the Transcribing status only adds a main-thread overlay re-render
     // that delays the result it is announcing; final ASR on short audio is ~40 ms.
     private static let finalTranscriptionStatusDelayNanoseconds: UInt64 = 250_000_000
@@ -598,6 +601,7 @@ final class ASRService: ObservableObject {
         let automaticLearning: Bool
         let collectNegatives: Bool
         let profile: PrivateProfileSnapshot
+        let correctionArchiveAdmission: DictionaryCorrectionArchiveAdmission?
     }
     private var admittedTranscription: AdmittedTranscription?
     private var dictationFinalizationLease: ASRActivityLease?
@@ -934,7 +938,8 @@ final class ASRService: ObservableObject {
                 && SettingsStore.shared.saveAudioWithTranscriptionHistory,
             automaticLearning: SettingsStore.shared.automaticDictionaryLearningEnabled,
             collectNegatives: DictionaryMatcherExperiment.collectNegatives,
-            profile: PrivateProfileStorage.current
+            profile: PrivateProfileStorage.current,
+            correctionArchiveAdmission: DictionaryCorrectionArchiveAdmission.capture(filePersistenceAllowed: lease.activity == .dictation)
         )
         return provider
     }
@@ -1815,6 +1820,8 @@ final class ASRService: ObservableObject {
         let expiry = dictionaryLearningExpiryTask
         expiry?.cancel(); await expiry?.value
         dictionaryLearningExpiryTask = nil; lastDictionaryLearningRecording = nil
+        let correctionExpiry = correctionRecordingExpiryTask
+        retainCorrectionRecording(nil); await correctionExpiry?.value
         let replacementExpiry = dictionaryReplacementExpiryTask
         retainDictionaryReplacementTrace(nil); await replacementExpiry?.value
         lastCompletedAudioSnapshot = nil; lastDictionaryTrainingResult = nil
@@ -2359,6 +2366,8 @@ final class ASRService: ObservableObject {
     private var dictionaryReplacementExpiryTask: Task<Void, Never>?
     private var dictionaryReplacementGeneration = UUID()
     private var dictionaryLearningExpiryTask: Task<Void, Never>?
+    private var lastCorrectionRecording: DictionaryCorrectionRecording?
+    private var correctionRecordingExpiryTask: Task<Void, Never>?
 
     // Streaming transcription state (no VAD)
     private let streamingTaskLifecycle = StreamingTaskLifecycle()
@@ -2458,6 +2467,24 @@ final class ASRService: ObservableObject {
             await self.endAdmittedTranscription(lease: lease)
             throw error
         }
+    }
+
+    private func retainCorrectionRecording(_ recording: DictionaryCorrectionRecording?) {
+        self.correctionRecordingExpiryTask?.cancel()
+        self.correctionRecordingExpiryTask = nil
+        self.lastCorrectionRecording = recording
+        guard let id = recording?.id else { return }
+        self.correctionRecordingExpiryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(DictionaryCorrectionRecording.lifetime))
+            guard !Task.isCancelled, let self, self.lastCorrectionRecording?.id == id else { return }
+            self.lastCorrectionRecording = nil
+            self.correctionRecordingExpiryTask = nil
+        }
+    }
+
+    func consumeCorrectionRecording() -> DictionaryCorrectionRecording? {
+        defer { self.retainCorrectionRecording(nil) }
+        return self.lastCorrectionRecording
     }
 
     func originalAudioEnrollment(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture {
@@ -3248,6 +3275,7 @@ final class ASRService: ObservableObject {
         }
         self.retainDictionaryLearningRecording(nil)
         self.retainDictionaryReplacementTrace(nil)
+        self.retainCorrectionRecording(nil)
         defer {
             if !self.isRunning { self.releaseDictationActivityIfNeeded(captureLease) }
         }
@@ -3909,6 +3937,7 @@ final class ASRService: ObservableObject {
         self.lastCompletedAudioSnapshot = nil
         self.retainDictionaryLearningRecording(nil)
         self.retainDictionaryReplacementTrace(nil)
+        self.retainCorrectionRecording(nil)
         let stopStartedAt = Date().timeIntervalSince1970
         let traceStartedAt = ProcessInfo.processInfo.systemUptime
         var tracePreviousAt = traceStartedAt
@@ -4263,6 +4292,19 @@ final class ASRService: ObservableObject {
                     alignment: alignment,
                     samples: capturedPCM,
                     retainAudio: self.admittedTranscription?.automaticLearning == true
+                ))
+            }
+
+            if !isolatedDictionaryCapture,
+               let admission = self.admittedTranscription,
+               let archiveAdmission = admission.correctionArchiveAdmission,
+               archiveAdmission.belongs(to: admission.profile),
+               PrivateProfileStorage.isReadable(admission.profile) {
+                self.retainCorrectionRecording(DictionaryCorrectionRecording(
+                    model: result.dictionaryLearningAlignment?.modelKey ?? provider.name,
+                    rawTranscript: result.text,
+                    samples: capturedPCM,
+                    archiveAdmission: archiveAdmission
                 ))
             }
 
@@ -8140,13 +8182,7 @@ final class ASRService: ObservableObject {
     /// Cache for compiled custom dictionary regexes.
     /// Key: trigger word, Value: (compiled regex, escaped replacement template)
     /// Cleared when dictionary entries change.
-    private struct CachedDictionaryPattern {
-        let entryID: UUID
-        let trigger: String
-        let regex: NSRegularExpression
-        let template: String
-        let canonical: NSRegularExpression?
-    }
+    private typealias CachedDictionaryPattern = DictionaryReplacementRule
 
     private static var cachedDictionaryPatterns: [CachedDictionaryPattern] = []
     private static var cachedBuiltInDictionaryPatterns: [CachedDictionaryPattern] = []
@@ -8157,58 +8193,17 @@ final class ASRService: ObservableObject {
     /// Called lazily on first apply after settings change.
     private static func rebuildDictionaryCache() {
         let userEntries = SettingsStore.shared.customDictionaryEntries
-        self.cachedDictionaryPatterns = self.dictionaryPatterns(for: userEntries)
-        self.cachedBuiltInDictionaryPatterns = self.dictionaryPatterns(for: BuiltInDictionary.entries(excludingSpellingsIn: userEntries))
+        self.cachedDictionaryPatterns = DictionaryReplacementRule.compile(for: userEntries)
+        self.cachedBuiltInDictionaryPatterns = DictionaryReplacementRule.compile(for: BuiltInDictionary.entries(excludingSpellingsIn: userEntries))
         self.cachedUserDictionaryProtections = self.cachedDictionaryPatterns.map(\.regex)
         var protectedPatterns = Set(self.cachedUserDictionaryProtections.map(\.pattern))
         for entry in userEntries where !entry.replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let pattern = self.dictionaryPattern(for: entry.replacement)
+            let pattern = DictionaryReplacementRule.pattern(for: entry.replacement)
             guard protectedPatterns.insert(pattern).inserted,
                   let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
             self.cachedUserDictionaryProtections.append(regex)
         }
         self.dictionaryCacheNeedsRebuild = false
-    }
-
-    private static func dictionaryPatterns(for entries: [SettingsStore.CustomDictionaryEntry]) -> [CachedDictionaryPattern] {
-        var patterns: [CachedDictionaryPattern] = []
-
-        for entry in entries {
-            var canonical: NSRegularExpression?
-            let replacementRange = NSRange(entry.replacement.startIndex..., in: entry.replacement)
-            for trigger in entry.triggers {
-                guard !trigger.isEmpty else { continue }
-
-                let consumesHorizontalSeparators = !entry.replacement.isEmpty &&
-                    entry.replacement.allSatisfy(\.isWhitespace)
-                let escapedTrigger = self.dictionaryPattern(
-                    for: trigger,
-                    consumesHorizontalSeparators: consumesHorizontalSeparators
-                )
-                guard let regex = try? NSRegularExpression(
-                    pattern: escapedTrigger,
-                    options: .caseInsensitive
-                ) else { continue }
-
-                let needsProtection = regex.matches(in: entry.replacement, range: replacementRange).contains {
-                    $0.range.length < replacementRange.length
-                }
-                if needsProtection, canonical == nil {
-                    canonical = try? NSRegularExpression(pattern: self.dictionaryPattern(for: entry.replacement), options: .caseInsensitive)
-                }
-                patterns.append(CachedDictionaryPattern(
-                    entryID: entry.id,
-                    trigger: trigger,
-                    regex: regex,
-                    template: NSRegularExpression.escapedTemplate(for: entry.replacement),
-                    canonical: needsProtection ? canonical : nil
-                ))
-            }
-        }
-
-        return patterns.sorted {
-            $0.regex.pattern.utf16.count > $1.regex.pattern.utf16.count
-        }
     }
 
     /// Apply defaults only outside user-defined phrases and completed user replacements.
@@ -8254,31 +8249,6 @@ final class ASRService: ObservableObject {
             output.replaceCharacters(in: match.range, with: replacement)
         }
         return output as String
-    }
-
-    private static func dictionaryPattern(
-        for trigger: String,
-        consumesHorizontalSeparators: Bool = false
-    ) -> String {
-        let escapedTrigger = NSRegularExpression.escapedPattern(for: trigger)
-        let prefix = self.startsWithWordCharacter(trigger) ? "\\b" : ""
-        let suffix = self.endsWithWordCharacter(trigger) ? "\\b" : ""
-        let separator = consumesHorizontalSeparators ? "[ \\t]*" : ""
-        return separator + prefix + escapedTrigger + suffix + separator
-    }
-
-    private static func startsWithWordCharacter(_ text: String) -> Bool {
-        guard let scalar = text.unicodeScalars.first else { return false }
-        return self.isWordCharacter(scalar)
-    }
-
-    private static func endsWithWordCharacter(_ text: String) -> Bool {
-        guard let scalar = text.unicodeScalars.last else { return false }
-        return self.isWordCharacter(scalar)
-    }
-
-    private static func isWordCharacter(_ scalar: Unicode.Scalar) -> Bool {
-        CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
     }
 
     /// Invalidates the dictionary cache. Called when settings change.

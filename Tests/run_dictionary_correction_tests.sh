@@ -9,13 +9,15 @@ export DEVELOPER_DIR="$task_developer_dir"
 task_repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 task_test_dir=$(mktemp -d /tmp/fluidvoice-correction-tests.XXXXXX)
 trap 'rm -rf "$task_test_dir"' EXIT
-xcrun swiftc -D DICTIONARY_CORRECTION_STANDALONE -parse-as-library \
+cd "$task_repo_dir"
+python3 -S Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ArchiveCarriers.swift" --archive-carriers --archive-only
+xcrun swiftc -module-cache-path "$task_test_dir/ModuleCache" -D DICTIONARY_ARCHIVE_STANDALONE "$task_test_dir/ArchiveCarriers.swift" -D DICTIONARY_CORRECTION_STANDALONE -parse-as-library \
     "$task_repo_dir/Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift" \
     "$task_repo_dir/Sources/Fluid/Services/AutomaticDictionaryCorrectionDetector.swift" \
     "$task_repo_dir/Tests/Standalone/DictionaryCorrectionDetectorTests.swift" \
     -o "$task_test_dir/tests"
 "$task_test_dir/tests"
-xcrun swiftc -D DICTIONARY_TRAINING_REQUEST_STANDALONE -parse-as-library \
+xcrun swiftc -module-cache-path "$task_test_dir/ModuleCache" -D DICTIONARY_ARCHIVE_STANDALONE "$task_test_dir/ArchiveCarriers.swift" -D DICTIONARY_TRAINING_REQUEST_STANDALONE -parse-as-library \
     "$task_repo_dir/Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift" \
     "$task_repo_dir/Sources/Fluid/Services/AutomaticDictionaryCorrectionDetector.swift" \
     "$task_repo_dir/Sources/Fluid/Services/DictionaryWordTrainingRequest.swift" \

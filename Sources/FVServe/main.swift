@@ -43,7 +43,7 @@ guard let profileToken = admittedToken else {
 let result = FluidServeCommand.run(
     arguments: arguments,
     root: meetingRoot,
-    accessEnabled: requiresPrivateAccess && FluidServeMeetings.isAccessEnabled(bundleIdentifier: bundleIdentifier),
+    accessEnabled: requiresPrivateAccess ? FluidServeMeetings.isAccessEnabled(bundleIdentifier: bundleIdentifier) : false,
     toolPath: executable.path,
     ownerBundleIdentifier: bundleIdentifier,
     appName: (NSDictionary(contentsOf: executable.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Info.plist"))?["CFBundleDisplayName"] as? String) ?? "Voice app",

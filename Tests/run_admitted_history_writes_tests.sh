@@ -3,12 +3,12 @@ set -eu
 cd "$(dirname "$0")/.."
 task_test_dir="$PWD/.build/admitted-history-writes-tests"
 mkdir -p "$task_test_dir"
-task_evidence_base="$PWD/private_assets/test-artifacts/admitted-history-writes"
+task_evidence_base="$PWD/.build/probe-contracts/admitted-history-writes"
 mkdir -p "$task_evidence_base"
 task_evidence_dir=$(mktemp -d "$task_evidence_base/run.XXXXXX")
 echo "Evidence: $task_evidence_dir"
 cleanup() {
-    python3 - "$task_test_dir/owned-domains.json" "$task_evidence_dir/preferences-cleanup.json" <<'PY_CLEANUP'
+    python3 -S -B - "$task_test_dir/owned-domains.json" "$task_evidence_dir/preferences-cleanup.json" <<'PY_CLEANUP'
 from pathlib import Path
 import json,sys,plistlib
 manifest=Path(sys.argv[1]); output=Path(sys.argv[2]); rows=[]
@@ -28,7 +28,7 @@ trap cleanup EXIT HUP INT TERM
 # Extract only the policy class. The unrelated Accessibility observer is owned by composition.
 sed '/^final class AutomaticDictionaryCorrectionTracker/,$d' \
     Sources/Fluid/Services/AutomaticDictionaryCorrectionTracker.swift | sed '$ { /^@MainActor$/d; }' > "$task_test_dir/CorrectionPolicy.swift"
-python3 - "$task_test_dir/HotkeyFallback.swift" <<'PY_HOTKEY'
+python3 -S -B - "$task_test_dir/HotkeyFallback.swift" <<'PY_HOTKEY'
 from pathlib import Path
 import sys
 source = Path("Sources/Fluid/Services/GlobalHotkeyManager.swift").read_text()

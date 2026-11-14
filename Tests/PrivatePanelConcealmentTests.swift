@@ -10,6 +10,21 @@
         let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID())
         PrivateProfileStorage.select(guest)
         let pill = Probe0(); let captions = Probe1(); let prompt = Probe2(); let nudge = Probe3(); let failure = Probe4()
+        nudge.presentationProfile = guest
+        check(nudge.canPresentCurrentProfile, "Readable nudge is visible")
+        PrivateProfileService.shared.isPrivateDataVisible = false
+        check(!nudge.canPresentCurrentProfile, "Hidden profile fences the nudge")
+        nudge.attemptReopen()
+        check(nudge.reopens == 0, "Hidden profile also rejects nudge admission")
+        PrivateProfileService.shared.isPrivateDataVisible = true
+        nudge.panel = PanelDouble()
+        nudge.isPresented = true
+        nudge.presentationProfile = guest
+        let ticket = nudge.countdown.begin(sessionID: UUID(), now: 0)
+        let countdownGate = PanelStartGate()
+        let countdownWorker = Task { @MainActor in await countdownGate.wait() }
+        nudge.countdownTask = countdownWorker
+        nudge.countdownTasks[ticket.generation] = countdownWorker
         let panels = [pill.panel!, captions.panel!, prompt.panel!, nudge.panel!, failure.panel!]
         prompt.presentationProfile = guest
         check(prompt.canPresentCurrentProfile, "Readable guest prompt is admitted")
@@ -38,6 +53,18 @@
         check(prompt.appDisplayName.isEmpty && prompt.appIcon == nil && prompt.startErrorMessage == nil,
               "Prompt clears private presentation metadata")
         check(!nudge.isPresented && failure.hostingView == nil, "Nudge flag and transcript hosting view are cleared")
+        check(nudge.countdown.ticket == nil && countdownWorker.isCancelled && nudge.presentationProfile == nil,
+              "Conceal cancels the current countdown and retires its ticket and profile")
+        var joined = false
+        let transition = Task { @MainActor in
+            try await nudge.prepareForPrivateProfileTransition()
+            joined = true
+        }
+        await Task.yield()
+        check(!joined, "Transition waits for a cancelled countdown that has not finished")
+        countdownGate.open()
+        try await transition.value
+        check(joined, "Transition joins the original countdown worker")
         pill.attemptReopen(); captions.attemptReopen(); prompt.attemptReopen(); nudge.attemptReopen(); failure.attemptReopen()
         check([pill.reopens, captions.reopens, prompt.reopens, nudge.reopens, failure.reopens].allSatisfy { $0 == 0 },
               "Timer or coordinator reentry cannot reopen any concealed panel")
@@ -49,6 +76,8 @@
         PrivateProfileStorage.select(account)
         prompt.presentationProfile = guest
         check(!prompt.canPresentCurrentProfile, "A held guest prompt cannot publish into account B")
+        nudge.presentationProfile = guest
+        check(!nudge.canPresentCurrentProfile, "A held guest nudge cannot publish into account B")
         prompt.presentationProfile = account
         check(prompt.canPresentCurrentProfile, "A newly admitted account prompt works")
         let nextGeneration = try PrivateProfileStorage.proposed(context: context, generation: UUID())

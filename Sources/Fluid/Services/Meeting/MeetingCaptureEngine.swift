@@ -93,7 +93,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         let clockContexts = Dictionary(uniqueKeysWithValues: tracks.compactMap { track in
             recordingClock.map { (track.kind, $0.source(track.id)) }
         })
-        let privacyGate = configuration.mode == .onlineCall
+        let privacyGate = configuration.mode.capturesComputerAudio
             ? MeetingMicrophonePrivacyGate(configuration: .init(admissionPolicy: .latchedTransitions),
                                           clockContext: clockContexts[.microphone]) : nil
         let muteMonitor: MeetingCallMicrophoneObservation?
@@ -155,7 +155,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             }
             let runtime: any MeetingCaptureRuntime
             switch configuration.mode {
-            case .onlineCall:
+            case .onlineCall, .systemAudio:
                 guard let audioSource = configuration.applicationAudioSource,
                       let applicationWriter = writersByKind[.applicationAudio],
                       let microphoneWriter = writersByKind[.microphone]
@@ -466,7 +466,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             timebase: session.timebase,
             health: .waiting,
             chunks: [],
-            captureMethod: configuration.mode == .onlineCall ? .screenCaptureKit : .avCaptureSession
+            captureMethod: configuration.mode.capturesComputerAudio ? .screenCaptureKit : .avCaptureSession
         ))
         return tracks
     }
@@ -1228,13 +1228,15 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             case .active:
                 pipeline?.consumeCapture(sampleBuffer, stream: streamToken)
             case .armed:
+                // The format handshake is raw warm-up too. Persist its provenance before
+                // validation can activate or invalidate the pipeline; never drop the first PCM.
+                self.emitDirectRawMicrophone(sampleBuffer, producer: streamToken)
                 self.validateArmedCallback(
                     sampleBuffer,
                     kind: .capture,
                     stream: stream,
                     token: streamToken
                 )
-                self.emitDirectRawMicrophone(sampleBuffer, producer: streamToken)
             case .raw, .constructing, .ready:
                 self.emitDirectRawMicrophone(sampleBuffer, producer: streamToken)
             }
@@ -3078,13 +3080,16 @@ nonisolated enum MeetingCaptureSourceCatalog {
     static func resolveApplication(
         from applications: [MeetingApplicationIdentity],
         preferredBundleIdentifier: String?,
+        preferredProcessID: Int32? = nil,
         requirePreferredApplication: Bool
     ) throws -> MeetingApplicationIdentity {
         if requirePreferredApplication {
             guard let preferredBundleIdentifier else {
                 throw MeetingCaptureError.applicationNotSelected
             }
-            guard let match = applications.first(where: { $0.bundleIdentifier == preferredBundleIdentifier }) else {
+            guard let match = applications.first(where: {
+                $0.bundleIdentifier == preferredBundleIdentifier && (preferredProcessID == nil || $0.processID == preferredProcessID)
+            }) else {
                 throw MeetingCaptureError.applicationUnavailable(preferredBundleIdentifier)
             }
             return match
@@ -3657,7 +3662,7 @@ nonisolated enum MeetingCapturePathDecider {
         forcePairedScreenCaptureKit: Bool = false,
         preferDirectAEC3: Bool = false
     ) -> MeetingCapturePathDecision {
-        guard mode == .onlineCall else {
+        guard mode.capturesComputerAudio else {
             return .screenCaptureKit(reason: "Voice-processing capture only applies to online-call recordings.")
         }
         guard let coreAudioUID = microphone.coreAudioUID, !coreAudioUID.isEmpty else {
@@ -3704,6 +3709,12 @@ nonisolated enum MeetingScreenCaptureAudioSettings {
             guard let display = displays.first else { throw MeetingCaptureError.noCaptureDisplay }
             return (SCContentFilter(display: display, excludingApplications: [], exceptingWindows: []), .systemAudio)
         case let .application(application):
+            if application.capturesAllInstances == true {
+                let matching = applications.filter { $0.bundleIdentifier == application.bundleIdentifier && $0.processID > 0 }
+                guard !matching.isEmpty else { throw MeetingCaptureError.applicationUnavailable(application.displayName) }
+                guard let display = displays.first else { throw MeetingCaptureError.noCaptureDisplay }
+                return (SCContentFilter(display: display, including: matching, exceptingWindows: []), .display)
+            }
             let candidates = applications.map {
                 MeetingApplicationIdentity(bundleIdentifier: $0.bundleIdentifier, processID: $0.processID,
                                            displayName: $0.applicationName)
@@ -6893,7 +6904,7 @@ final nonisolated class MeetingMultiTrackCaptureTee: @unchecked Sendable {
                 detail: PichiLocalization.text("Audio recording continues. Live transcription will be retried later.")))
             return nil
         }
-        let required: Set<MeetingAudioTrackKind> = configuration.mode == .onlineCall
+        let required: Set<MeetingAudioTrackKind> = configuration.mode.capturesComputerAudio
             ? [.microphone, .applicationAudio] : [.microphone]
         guard tracks.count == required.count, Set(tracks.map(\.kind)) == required else {
             throw MeetingCaptureError.captureStartFailed(PichiLocalization.text("In-memory transcription is not available for this attempt."))

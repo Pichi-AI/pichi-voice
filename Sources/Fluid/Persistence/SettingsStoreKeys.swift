@@ -59,6 +59,7 @@ extension SettingsStore {
         static let launchAtStartup = "LaunchAtStartup"
         static let showInDock = "ShowInDock"
         static let accentColorOption = "AccentColorOption"
+        static let customAccentColorHex = "CustomAccentColorHex"
         static let themePreference = "ThemePreference"
         static let enableTranscriptionSounds = "EnableTranscriptionSounds"
         static let transcriptionStartSound = "TranscriptionStartSound"
@@ -159,8 +160,10 @@ extension SettingsStore {
 
         // Custom Dictionary
         static let customDictionaryEntries = "CustomDictionaryEntries"
+        static let dictionaryCorrectionArchiveEnabled = "DictionaryCorrectionArchiveEnabled"
         static let automaticDictionaryLearningEnabled = "AutomaticDictionaryLearningEnabled"
         static let automaticDictionarySuggestionFrequency = "AutomaticDictionarySuggestionFrequency"
+        static let automaticDictionaryPromptDelay = "AutomaticDictionaryPromptDelay"
         static let vocabularyBoostingEnabled = "VocabularyBoostingEnabled"
         static let pronunciationMatchingEnabled = "PronunciationMatchingEnabled"
 

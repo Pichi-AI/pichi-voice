@@ -105,7 +105,18 @@ nonisolated final class NSWorkspace: @unchecked Sendable { static let shared = N
     enum TextInsertionMode: String { case standard, reliablePaste }
     enum SpokenSendKey { case enter }
 }
-@MainActor enum PasteVerifier { static func capture() -> Int? { nil } }
+nonisolated enum PasteVerifier {
+    struct Snapshot: Sendable { let pid: pid_t; let summary: String }
+    enum Verdict: Sendable {
+        case confirmed, notLanded, unknown(reason: String)
+        var logDescription: String { "synthetic" }
+    }
+    static let totalDecisionDelay: TimeInterval = 0
+    static func capture() -> Snapshot? { nil }
+    static func verify(before: Snapshot, pastedText: String) async -> Verdict { .unknown(reason: "synthetic") }
+    static func userActedAfterPaste(secondsSinceLastInput: Double, secondsSincePaste: Double) -> Bool { false }
+    static func secondsSinceLastUserInput() -> Double { 0 }
+}
 struct OverlayCloseTrace { init(_ name:String) {}; mutating func finish() {} }
 @MainActor final class DebugLogger {
     static let shared=DebugLogger()

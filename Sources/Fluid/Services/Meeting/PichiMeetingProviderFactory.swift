@@ -329,7 +329,8 @@ enum PichiMeetingProviderFactory {
         let modelID = selectedModelID ?? SettingsStore.shared.selectedSpeechModel.rawValue
         if let registration = self.registrations[modelID] { return registration.descriptor.id }
         let saved = savedBackendID ?? SettingsStore.shared.meetingTranscriptionBackendID
-        return saved == .legacyCompatibility && languageCode != "en" ? .productionDefault : saved
+        // A saved compatibility default is migrated; explicit request overrides remain pinned by the caller.
+        return saved == .legacyCompatibility ? .productionDefault : saved
     }
 
     /// A registered provider's frozen configuration binds ASR and artifact identity. The

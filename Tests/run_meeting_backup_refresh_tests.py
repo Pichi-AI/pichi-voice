@@ -51,6 +51,7 @@ def main() -> None:
         assert "settingsBackupDidRestore" not in baseline
     assert "self.appDetailContent\n" in (ROOT / "Sources/Fluid/ContentView.swift").read_text()
     assert ".onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore))" in source
+    assert ".onReceive(NotificationCenter.default.publisher(for: .meetingRecordingSourceChoiceDidChange))" in source
     assert ".onChange(of: self.canRefreshSetupAfterBackupRestore)" in source
     mode_observer = declaration(source, ".onChange(of: self.privateState.setupDraft.mode)")
     assert "self.privateState.run { _ in await self.refreshSources(requestPermissions: false) }" in mode_observer
@@ -152,12 +153,24 @@ def main() -> None:
         "nonisolated struct MeetingMicrophoneIdentity:",
     ))
     application_option = declaration(source, "nonisolated struct MeetingApplicationOption:")
+    source_contract = (ROOT / "Sources/Fluid/Services/Meeting/MeetingRecordingSource.swift").read_text()
+    source_declarations = "\n".join(declaration(source_contract, marker) for marker in (
+        "nonisolated enum MeetingRecordingSource:",
+        "nonisolated enum MeetingRecordingSourceResolver",
+        "nonisolated extension MeetingRecordingDefaults",
+    ))
+    source_refresh = declaration(source, "private func applyPendingSourceChoiceRefresh()")
+    source_selection = declaration(source, "private func selectPreferredApplication(from")
     capture = (ROOT / "Sources/Fluid/Services/Meeting/MeetingCaptureEngine.swift").read_text()
     application_resolver = declaration(capture, "static func resolveRecordingApplication(")
     recording_start = declaration(source, "private func startRecording()")
     private_projection = "@MainActor\n" + declaration(source, "private final class MeetingViewPrivateProjection:")
     private_projection = private_projection.replace("private final class MeetingViewPrivateProjection:",
                                                      "final class MeetingViewPrivateProjection:", 1)
+    detection_save = "\n".join(declaration(source, marker) for marker in (
+        "if self.privateState.setupDraft.autoDetectEnabled != self.privateState.setupDraftBeforeEditing.autoDetectEnabled",
+        "if self.privateState.setupDraft.browserDetectionEnabled != self.privateState.setupDraftBeforeEditing.browserDetectionEnabled",
+    ))
     swift = r'''
 import AppKit
 import Combine
@@ -177,6 +190,7 @@ final class SettingsStore {
     }
     var selectedSpeechModel = SpeechModel(rawValue: PichiMeetingProviderFactory.gigaamModelID)
     var meetingRecordingDefaults = MeetingRecordingDefaults.unconfigured
+    var meetingRecentApplication: MeetingApplicationIdentity?
     var meetingAutoDetectEnabled = true
     var meetingAutoDetectBrowserEnabled = true
     var meetingAudioRetentionPolicy = 7
@@ -202,6 +216,7 @@ final class Coordinator { var isQuiescent = true; var activeLanguage = "en" }
 }
 typealias MeetingSessionID = UUID
 struct MeetingSession { let id: MeetingSessionID }
+struct MeetingApplicationIcon: Equatable, Sendable {}
 ''' + metadata + factory + model_declarations + '\n' + application_option + r'''
 enum MeetingAutoDetector {
     struct ResolvedTarget { let bundleIdentifier: String; let pid: Int32; let windowID: UInt32? }
@@ -210,7 +225,29 @@ enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavai
 enum MeetingCaptureSourceCatalog {
 ''' + application_resolver + r'''
 }
-''' + draft + '\n' + private_projection + r'''
+''' + source_declarations + '\n' + draft + '\n' + private_projection + r'''
+final class SourceChoiceHarness {
+    let privateState = MeetingViewPrivateProjection()
+    var canRefreshSetupAfterBackupRestore = true
+    var applications: [MeetingApplicationOption] = []
+    var appServices = SourceChoiceServices()
+    func regenerateDefaultTitleIfNeeded() {
+        if !privateState.setupDraft.titleWasEdited {
+            privateState.setupDraft.title = MeetingTranscriptionSetupDraft.defaultTitle(
+                mode: privateState.setupDraft.mode, applicationDisplayName: nil)
+        }
+    }
+    func changed() {
+        privateState.pendingSourceChoiceRefresh = true
+        applyPendingSourceChoiceRefresh()
+    }
+    func safe() {
+        canRefreshSetupAfterBackupRestore = true
+        applyPendingSourceChoiceRefresh()
+    }
+''' + source_refresh + '\n' + source_selection + r'''
+}
+struct SourceChoiceServices { var meetingAutomaticTarget: MeetingAutoDetector.ResolvedTarget? }
 final class Harness {
     let coordinator = Coordinator()
     let privateState = MeetingViewPrivateProjection()
@@ -257,6 +294,10 @@ final class Harness {
         }
     }
 ''' + members + r'''
+    func saveDetection() {
+        let settings = SettingsStore.shared
+''' + detection_save + r'''
+    }
     func notifyRestore() { pendingBackupSetupRefresh = true; applyPendingBackupSetupRefresh() }
     func reachSafePoint() { if canRefreshSetupAfterBackupRestore { applyPendingBackupSetupRefresh() } }
     func closeSheetSaving() {
@@ -284,6 +325,7 @@ func fresh() -> Harness {
     SettingsStore.shared.meetingAutoDetectEnabled = true
     SettingsStore.shared.meetingAutoDetectBrowserEnabled = true
     SettingsStore.shared.meetingAudioRetentionPolicy = 7
+    SettingsStore.shared.meetingRecentApplication = nil
     SettingsStore.shared.selectedSpeechModel = .init(rawValue: PichiMeetingProviderFactory.gigaamModelID)
     return Harness()
 }
@@ -317,7 +359,7 @@ struct StartReadiness {
         set { privateState.pendingBackupSetupRefresh = newValue }
     }
     var isStarting = false
-    init() { setupDraft.chooseApplication(applications[0].identity) }
+    init() { setupDraft.mode = .onlineCall; setupDraft.chooseApplication(applications[0].identity) }
     func waitForStart() async { while coordinator.continuation == nil { await Task.yield() } }
     func finish() async { coordinator.finish(); while isStarting { await Task.yield() } }
 ''' + recording_start + r'''
@@ -325,6 +367,24 @@ struct StartReadiness {
 }
 @main enum Tests {
  @MainActor static func main() async {
+    let stale = fresh()
+    SettingsStore.shared.meetingAutoDetectEnabled = false
+    SettingsStore.shared.meetingAutoDetectBrowserEnabled = false
+    stale.saveDetection()
+    check(!SettingsStore.shared.meetingAutoDetectEnabled && !SettingsStore.shared.meetingAutoDetectBrowserEnabled,
+          "saving an unchanged sheet preserves newer detection choices")
+    let edited = fresh()
+    edited.setupDraft.autoDetectEnabled = false
+    edited.setupDraft.browserDetectionEnabled = false
+    edited.saveDetection()
+    check(!SettingsStore.shared.meetingAutoDetectEnabled && !SettingsStore.shared.meetingAutoDetectBrowserEnabled,
+          "explicit switch edits are saved")
+    let mixed = fresh()
+    mixed.setupDraft.autoDetectEnabled = false
+    SettingsStore.shared.meetingAutoDetectBrowserEnabled = false
+    mixed.saveDetection()
+    check(!SettingsStore.shared.meetingAutoDetectEnabled && !SettingsStore.shared.meetingAutoDetectBrowserEnabled,
+          "editing one switch does not overwrite a newer choice for the other")
     // Reproduce pre-fix: real production draft is a value snapshot, not a settings binding.
     let baseline = fresh()
     restored()
@@ -332,7 +392,7 @@ struct StartReadiness {
           "baseline hidden page keeps stale language/mode after defaults import")
     print("PASS: setup draft is a snapshot; restore notification must refresh it")
     baseline.notifyRestore()
-    check(baseline.setupDraft.languageCode == "fr" && baseline.setupDraft.mode == .inRoom, "idle restore refreshes language/mode")
+    check(baseline.setupDraft.languageCode == "fr" && baseline.setupDraft.mode == .inRoom, "idle restore refreshes language/mode without widening microphone-only capture")
     check(baseline.setupDraftBeforeEditing == baseline.setupDraft, "cancel snapshot follows restored setup")
     check(baseline.hardwareQueries == 0 && baseline.persistedWrites == 0, "restore handler performs neither synchronous source queries nor persistence")
     check(baseline.setupDraft.selectedMicrophoneID == "cached-mic" && baseline.setupDraft.selectedApplicationID == "cached-app", "cached identities populate restored setup")
@@ -423,6 +483,84 @@ struct StartReadiness {
             check(saved.mode == .inRoom && saved.languageCode == "fr" && saved.applicationBundleIdentifier == nil, "backup or another window's settings during start supersede older frozen defaults")
         }
     }
+    let source = SourceChoiceHarness()
+    let chosen = MeetingApplicationIdentity(bundleIdentifier: "synthetic.call", processID: 41, displayName: "Synthetic Call")
+    let replacement = MeetingApplicationIdentity(bundleIdentifier: chosen.bundleIdentifier, processID: 42, displayName: chosen.displayName)
+    source.applications = [MeetingApplicationOption(identity: chosen), MeetingApplicationOption(identity: replacement)]
+    source.privateState.setupDraft.title = "User's private meeting"
+    source.privateState.setupDraft.titleWasEdited = true
+    source.privateState.setupDraft.languageCode = "ru"
+    source.privateState.setupDraft.selectedMicrophoneID = "chosen-mic"
+    var sourceDefaults = MeetingRecordingDefaults.unconfigured
+    sourceDefaults.isConfigured = true
+    sourceDefaults.mode = .onlineCall
+    sourceDefaults.applicationAudioScope = .selectedApplication
+    sourceDefaults.applicationBundleIdentifier = chosen.bundleIdentifier
+    SettingsStore.shared.meetingRecordingDefaults = sourceDefaults
+    SettingsStore.shared.meetingRecentApplication = chosen
+    source.changed()
+    check(source.privateState.setupDraft.selectedApplicationID == MeetingApplicationOption(identity: chosen).id,
+          "source notification restores the exact last-picked PID among simultaneous app instances")
+    check(source.privateState.setupDraft.languageCode == "ru" && source.privateState.setupDraft.selectedMicrophoneID == "chosen-mic"
+          && source.privateState.setupDraft.title == "User's private meeting" && source.privateState.setupDraft.titleWasEdited,
+          "source-only refresh preserves language, microphone and user title data")
+    source.applications = [MeetingApplicationOption(identity: replacement)]
+    source.changed()
+    check(!source.applications.contains { $0.id == source.privateState.setupDraft.selectedApplicationID },
+          "missing exact PID stays unavailable instead of following a replacement process")
+    let appWide = MeetingRecordingSourceResolver.applicationChoices(from: [chosen, replacement])[0]
+    let legacyUnbound = MeetingApplicationIdentity(bundleIdentifier: chosen.bundleIdentifier, processID: nil, displayName: chosen.displayName)
+    check(MeetingApplicationOption(identity: legacyUnbound).id != MeetingApplicationOption(identity: appWide).id,
+          "absent all-instances intent cannot alias an explicitly app-wide picker identity")
+    source.applications.append(MeetingApplicationOption(identity: appWide))
+    SettingsStore.shared.meetingRecentApplication = appWide
+    source.changed()
+    check(source.privateState.setupDraft.selectedApplicationID == MeetingApplicationOption(identity: appWide).id
+          && appWide.capturesAllInstances == true,
+          "only an explicit app-wide choice restores an all-instances selection")
+    SettingsStore.shared.meetingRecentApplication = chosen
+    source.changed()
+    check(source.privateState.setupDraft.selectedApplicationID == MeetingApplicationOption(identity: chosen).id,
+          "legacy PID recency never widens to an available all-instances option")
+    source.canRefreshSetupAfterBackupRestore = false
+    sourceDefaults.applicationAudioScope = .systemAudio
+    sourceDefaults.applicationBundleIdentifier = nil
+    SettingsStore.shared.meetingRecordingDefaults = sourceDefaults
+    SettingsStore.shared.meetingRecentApplication = nil
+    source.changed()
+    check(source.privateState.pendingSourceChoiceRefresh && source.privateState.setupDraft.applicationAudioScope == .selectedApplication,
+          "busy capture or open settings defers source updates")
+    sourceDefaults.mode = .inRoom
+    SettingsStore.shared.meetingRecordingDefaults = sourceDefaults
+    source.changed(); source.safe()
+    check(source.privateState.setupDraft.mode == .inRoom && !source.privateState.pendingSourceChoiceRefresh,
+          "deferred updates coalesce to the latest microphone-only choice")
+    sourceDefaults.mode = .onlineCall
+    SettingsStore.shared.meetingRecordingDefaults = sourceDefaults
+    source.changed()
+    check(source.privateState.setupDraft.mode == .onlineCall && source.privateState.setupDraft.applicationAudioScope == .systemAudio
+          && source.privateState.setupDraft.selectedApplicationID == nil,
+          "system audio remains distinct from microphone-only and selected-application capture")
+    sourceDefaults.applicationAudioScope = .selectedApplication
+    SettingsStore.shared.meetingRecordingDefaults = sourceDefaults
+    source.applications = [MeetingApplicationOption(identity: chosen), MeetingApplicationOption(identity: replacement)]
+    source.appServices.meetingAutomaticTarget = MeetingAutoDetector.ResolvedTarget(
+        bundleIdentifier: chosen.bundleIdentifier, pid: chosen.processID!, windowID: nil)
+    source.changed()
+    check(source.privateState.setupDraft.usesAutomaticApplication
+          && source.privateState.setupDraft.selectedApplicationID == MeetingApplicationOption(identity: chosen).id
+          && SettingsStore.shared.meetingRecentApplication == nil,
+          "automatic detection keeps its exact PID without persisting suggestion recency")
+    PrivateProfileService.shared.isPrivateDataVisible = false
+    sourceDefaults.mode = .inRoom
+    SettingsStore.shared.meetingRecordingDefaults = sourceDefaults
+    source.changed()
+    check(source.privateState.pendingSourceChoiceRefresh && source.privateState.setupDraft.mode == .onlineCall,
+          "concealed profiles cannot apply source callbacks")
+    source.privateState.clearPayloads()
+    check(!source.privateState.pendingSourceChoiceRefresh && !source.privateState.setupDraft.titleWasEdited,
+          "profile concealment clears pending source refresh and private title payloads")
+    PrivateProfileService.shared.isPrivateDataVisible = true
     print("PASS: \(assertions) production-handler assertions")
  }
 }

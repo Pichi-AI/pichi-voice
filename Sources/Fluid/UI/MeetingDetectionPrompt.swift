@@ -3,7 +3,21 @@ import ApplicationServices
 import Combine
 import SwiftUI
 
-/// Floating "Meeting detected" prompt — a NEW controller, deliberately separate from
+private enum MeetingPromptLayout {
+    static let panelSize = NSSize(width: 460, height: 76)
+    private static let topInset: CGFloat = 12
+
+    static func frame(panelSize: NSSize, visibleFrame: NSRect) -> NSRect {
+        NSRect(
+            x: visibleFrame.midX - panelSize.width / 2,
+            y: visibleFrame.maxY - panelSize.height - self.topInset,
+            width: panelSize.width,
+            height: panelSize.height
+        )
+    }
+}
+
+/// Floating "Meeting detected" prompt, deliberately separate from
 /// `MeetingRecordingPillController`. The pill's contract (state-driven order-out, fixed 84×32
 /// size, recording a11y label) fights a prompt mode, so this reuses only the shared panel
 /// factory, not the pill's controller.
@@ -16,8 +30,7 @@ final class MeetingDetectionPromptController: ObservableObject {
         case fullscreenOtherApp = "fullscreen-other-app"
     }
 
-    static let panelSize = NSSize(width: 392, height: 120)
-    private static let defaultTopInset: CGFloat = 12
+    static let panelSize = MeetingPromptLayout.panelSize
     static let autoDismissSeconds: TimeInterval = 20
     static let suppressionRetryInterval: TimeInterval = 0.5
 
@@ -64,9 +77,9 @@ final class MeetingDetectionPromptController: ObservableObject {
     private var autoDismissTask: Task<Void, Never>?
     private var suppressionRetryTask: Task<Void, Never>?
     private var startTask: Task<Void, Never>?
-    private var autoDismissLegStartedAt: Date?
-    private var remainingAutoDismissSeconds: TimeInterval = 0
-    private var isAutoDismissPaused = false
+    @Published private(set) var autoDismissLegStartedAt: Date?
+    @Published private(set) var remainingAutoDismissSeconds: TimeInterval = 0
+    @Published private(set) var isAutoDismissPaused = false
     private var pendingSuppressedRequest: MeetingAutoDetector.PromptRequest?
     private var hasLoggedCurrentSuppression = false
 
@@ -459,6 +472,12 @@ final class MeetingDetectionPromptController: ObservableObject {
         max(0, remaining - max(0, elapsed))
     }
 
+    static func autoDismissProgress(remaining: TimeInterval, startedAt: Date?, now: Date) -> Double {
+        let elapsed = startedAt.map { now.timeIntervalSince($0) } ?? 0
+        let left = self.remainingAutoDismissSeconds(remaining, after: elapsed)
+        return min(1, max(0, 1 - left / self.autoDismissSeconds))
+    }
+
     static func reminderPresentationDecision(
         remainingBudget: TimeInterval,
         isSuppressed: Bool,
@@ -565,12 +584,23 @@ final class MeetingDetectionPromptController: ObservableObject {
     }
 
     static func defaultFrame(panelSize: NSSize, visibleFrame: NSRect) -> NSRect {
-        NSRect(
-            x: visibleFrame.midX - panelSize.width / 2,
-            y: visibleFrame.maxY - panelSize.height - self.defaultTopInset,
-            width: panelSize.width,
-            height: panelSize.height
-        )
+        MeetingPromptLayout.frame(panelSize: panelSize, visibleFrame: visibleFrame)
+    }
+}
+
+private struct MeetingPromptProgress: View {
+    @Environment(\.theme) private var theme
+    let value: Double
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(self.theme.palette.separator.opacity(0.35))
+                Capsule().fill(self.theme.palette.accent)
+                    .frame(width: geometry.size.width * min(1, max(0, self.value)))
+            }
+        }
+        .frame(height: 2)
     }
 }
 
@@ -578,127 +608,128 @@ private struct MeetingDetectionPromptContent: View {
     @ObservedObject var controller: MeetingDetectionPromptController
 
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private func dismissProgress(at now: Date) -> some View {
+        let progress = MeetingDetectionPromptController.autoDismissProgress(
+            remaining: self.controller.remainingAutoDismissSeconds,
+            startedAt: self.controller.autoDismissLegStartedAt,
+            now: now
+        )
+        return MeetingPromptProgress(value: progress)
+            .animation(self.reduceMotion || self.controller.isAutoDismissPaused ? nil : .linear(duration: 1), value: progress)
+            .accessibilityHidden(true)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                if let icon = self.controller.appIcon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 34, height: 34)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                } else {
-                    Image(systemName: "person.2.wave.2.fill")
-                        .font(.fluidSystem(size: 20))
-                        .foregroundStyle(self.theme.palette.accentText)
-                        .frame(width: 34, height: 34)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(self.theme.palette.accent.opacity(0.12))
-                        )
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Record this meeting?")
-                        .font(self.theme.typography.bodyStrong)
-                        .foregroundStyle(self.theme.palette.primaryText)
-                    Text(self.controller.appDisplayName)
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .lineLimit(1)
-                }
-                Spacer()
+        HStack(spacing: 10) {
+            Button { self.controller.dismissTapped() } label: {
+                Image(systemName: "xmark")
             }
-
-            HStack(spacing: 8) {
-                if let startErrorMessage = self.controller.startErrorMessage {
-                    Label(startErrorMessage, systemImage: "exclamationmark.triangle.fill")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.warning)
-                        .lineLimit(1)
-                } else if self.controller.isStarting {
-                    Label("Starting…", systemImage: "waveform")
-                        .font(self.theme.typography.caption)
+            .fluidGlassAction(circular: true, quiet: true)
+            .disabled(self.controller.isStarting)
+            .help("Dismiss")
+            .accessibilityLabel(PichiLocalization.text("Dismiss"))
+            if let icon = self.controller.appIcon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 32, height: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                Image(systemName: "person.2.wave.2.fill")
+                    .foregroundStyle(self.theme.palette.accent)
+                    .frame(width: 32, height: 32)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Record this meeting?")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .lineLimit(1)
+                if let error = self.controller.startErrorMessage {
+                    Text(error).foregroundStyle(self.theme.palette.warning).help(error)
+                } else {
+                    Text(self.controller.isStarting ? PichiLocalization.text("Starting…") : self.controller.appDisplayName)
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }
-
-                Spacer(minLength: 8)
-
-                Menu {
-                    Button("Don’t show again") {
-                        self.controller.dontShowAgainTapped()
+            }
+            .font(self.theme.typography.caption)
+            .lineLimit(1)
+            Spacer(minLength: 0)
+            FluidSplitAction(title: self.controller.request?.cta == .setup ? PichiLocalization.text("Set up") : PichiLocalization.text("Record")) {
+                self.controller.startTapped()
+            } options: {
+                Button("Don’t show again") { self.controller.dontShowAgainTapped() }
+            }
+            .disabled(self.controller.isStarting)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 4)
+        .frame(width: MeetingDetectionPromptController.panelSize.width, height: MeetingDetectionPromptController.panelSize.height)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(self.theme.palette.contentBackground.opacity(0.98)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(self.theme.palette.separator.opacity(0.55), lineWidth: 1))
+        .overlay(alignment: .top) {
+            if self.controller.request != nil, self.controller.remainingAutoDismissSeconds > 0 {
+                Group {
+                    if self.controller.isAutoDismissPaused {
+                        self.dismissProgress(at: Date())
+                    } else {
+                        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                            self.dismissProgress(at: timeline.date)
+                        }
                     }
-                } label: {
-                    Text("Not now")
-                } primaryAction: {
-                    self.controller.dismissTapped()
                 }
-                .menuStyle(.button)
-                .fluidButton(.compact, size: .small)
-                .disabled(self.controller.isStarting)
-                .help("Click to dismiss. Use the arrow for more options.")
-
-                Button {
-                    self.controller.startTapped()
-                } label: {
-                    Label(
-                        self.controller.request?.cta == .setup ? PichiLocalization.text("Set up") : PichiLocalization.text("Record"),
-                        systemImage: self.controller.request?.cta == .setup ? "gearshape" : "record.circle"
-                    )
-                }
-                .fluidButton(.accent, size: .small)
-                .disabled(self.controller.isStarting)
+                .padding(.horizontal, 24)
+                .padding(.top, 4)
+                .allowsHitTesting(false)
             }
         }
-        .padding(14)
-        .frame(
-            width: MeetingDetectionPromptController.panelSize.width,
-            height: MeetingDetectionPromptController.panelSize.height,
-            alignment: .top
-        )
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(self.theme.palette.contentBackground)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(self.theme.palette.separator.opacity(0.55), lineWidth: 1)
-        )
         .shadow(color: .black.opacity(0.35), radius: 16, x: 0, y: 6)
         .onHover { hovering in
-            if hovering {
-                self.controller.pauseAutoDismiss()
-            } else {
-                self.controller.resumeAutoDismiss()
-            }
+            if hovering { self.controller.pauseAutoDismiss() } else { self.controller.resumeAutoDismiss() }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(PichiLocalization.format("Record this meeting? %@. Nothing is recording yet. Record, or dismiss.", self.controller.appDisplayName))
     }
 }
 
-/// "Meeting ended?" nudge — passive, pill-adjacent, shown while the meeting behind our own
-/// recording looks over. It stays until the user answers, the call resumes, or the recording stops:
-/// someone who walked away should still find it when they come back.
+/// A short, session-bound chance to keep recording after the call appears to end.
 @MainActor
-final class MeetingStillRecordingNudgeController: ObservableObject {
+final class MeetingStillRecordingNudgeController: ObservableObject, PrivateProfileTransitionParticipant {
     static let shared = MeetingStillRecordingNudgeController()
 
-    static let panelSize = NSSize(width: 332, height: 56)
+    static let panelSize = MeetingPromptLayout.panelSize
 
     @Published private(set) var isPresented = false
-    var onStop: (() -> Void)?
+    @Published private(set) var secondsRemaining = Int(MeetingEndCountdown.duration)
+    var onStop: ((MeetingSessionID) -> Void)?
     /// The user closed the question without stopping.
-    var onDismiss: (() -> Void)?
+    var onDismiss: ((MeetingSessionID) -> Void)?
+    var shouldContinueCountdown: ((MeetingSessionID) -> Bool)?
 
     private var panel: MeetingFloatingCaptionsPanel?
+    private var countdown = MeetingEndCountdown()
+    private var countdownTask: Task<Void, Never>?
+    private var countdownTasks: [UUID: Task<Void, Never>] = [:]
     private var profileSubscription: AnyCancellable?
+    private var presentationProfile: PrivateProfileSnapshot?
+    private let now: () -> TimeInterval
 
-    private init() {
+    var presentationID: UUID? { self.countdown.ticket?.generation }
+
+    init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.now = now
+        PrivateProfileService.shared.register(self)
         self.profileSubscription = NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated { self?.concealPrivatePresentation() }
             }
+    }
+
+    private var canPresentCurrentProfile: Bool {
+        guard let presentationProfile else { return false }
+        return PrivateProfileService.shared.isPrivateDataVisible && PrivateProfileStorage.acceptsNewWork &&
+            PrivateProfileStorage.current == presentationProfile && PrivateProfileStorage.isReadable(presentationProfile)
     }
 
     private func concealPrivatePresentation() {
@@ -707,36 +738,73 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
         self.panel = nil
     }
 
-    func present() {
-        guard SettingsStore.shared.fluidMeetEnabled else { return }
-        guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
-        guard !self.isPresented else { return }
+    func prepareForPrivateProfileTransition() async throws {
+        self.concealPrivatePresentation()
+        for task in Array(self.countdownTasks.values) { await task.value }
+        self.concealPrivatePresentation()
+    }
+
+    func present(sessionID: MeetingSessionID) {
+        guard PrivateProfileStorage.acceptsNewWork, PrivateProfileService.shared.isPrivateDataVisible else {
+            self.concealPrivatePresentation(); return
+        }
+        guard SettingsStore.shared.fluidMeetEnabled, self.shouldContinueCountdown?(sessionID) == true else { return }
+        guard self.countdown.ticket?.sessionID != sessionID || !self.isPresented else { return }
+        self.hide()
+        self.presentationProfile = PrivateProfileStorage.current
+        let ticket = self.countdown.begin(sessionID: sessionID, now: self.now())
+        self.secondsRemaining = Int(MeetingEndCountdown.duration)
         self.isPresented = true
         let panel = self.panelOrCreate()
-        if let pillFrame = MeetingRecordingPillController.shared.currentOverlayFrame ?? self.pillFrameFallback() {
-            let screen = NSScreen.screens.first { $0.frame.intersects(pillFrame) }?.visibleFrame
-            panel.setFrame(Self.frame(abovePill: pillFrame, within: screen), display: false)
+        if let screen = OverlayScreenResolver.screenForCurrentPointer() ?? NSScreen.main {
+            panel.setFrame(MeetingPromptLayout.frame(panelSize: Self.panelSize, visibleFrame: screen.visibleFrame), display: false)
         }
         panel.orderFrontRegardless()
+        self.countdownTask = Task { @MainActor [weak self] in
+            defer { self?.countdownTasks.removeValue(forKey: ticket.generation) }
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+                guard let self, !Task.isCancelled, self.advanceCountdown(ticket) else { return }
+            }
+        }
+        self.countdownTasks[ticket.generation] = self.countdownTask
         DebugLogger.shared.log("end-of-meeting-prompt-shown", source: "MeetingAutoDetector")
     }
 
-    /// Centered just above the recording pill, pulled back inside the screen when the pill sits
-    /// near an edge.
-    static func frame(abovePill pillFrame: NSRect, within screen: NSRect?) -> NSRect {
-        var frame = NSRect(
-            x: pillFrame.midX - Self.panelSize.width / 2,
-            y: pillFrame.maxY + 8,
-            width: Self.panelSize.width,
-            height: Self.panelSize.height
-        )
-        if let screen, screen.width >= frame.width {
-            frame.origin.x = min(max(frame.origin.x, screen.minX), screen.maxX - frame.width)
+    /// Uses the current coordinator snapshot, including rapid stop/start transitions.
+    func synchronizeRecording(sessionID: MeetingSessionID?) {
+        guard self.countdown.ticket?.sessionID != sessionID else { return }
+        self.hide()
+    }
+
+    @discardableResult
+    private func advanceCountdown(_ ticket: MeetingEndCountdown.Ticket, stopNow: Bool = false) -> Bool {
+        let eligible = self.canPresentCurrentProfile && SettingsStore.shared.fluidMeetEnabled && self.shouldContinueCountdown?(ticket.sessionID) == true
+        switch self.countdown.advance(ticket, now: self.now(), isEligible: eligible, stopNow: stopNow) {
+        case let .waiting(seconds):
+            if self.secondsRemaining != seconds { self.secondsRemaining = seconds }
+            return true
+        case let .stop(sessionID):
+            self.hide()
+            self.onStop?(sessionID)
+        case .cancelled:
+            self.hide()
+        case .stale:
+            break
         }
-        return frame
+        return false
+    }
+
+    func stopNow(presentationID: UUID? = nil) {
+        guard let ticket = self.countdown.ticket, ticket.generation == presentationID else { return }
+        self.advanceCountdown(ticket, stopNow: true)
     }
 
     func hide() {
+        self.countdownTask?.cancel()
+        self.countdownTask = nil
+        self.countdown.cancel()
+        self.presentationProfile = nil
         if self.isPresented {
             DebugLogger.shared.log("end-of-meeting-prompt-hidden", source: "MeetingAutoDetector")
         }
@@ -744,17 +812,11 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
         self.panel?.orderOut(nil)
     }
 
-    func dismiss() {
-        guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
-        self.onDismiss?()
+    func dismiss(presentationID: UUID? = nil) {
+        guard let ticket = self.countdown.ticket, ticket.generation == presentationID else { return }
+        guard self.canPresentCurrentProfile else { self.concealPrivatePresentation(); return }
         self.hide()
-    }
-
-    private func pillFrameFallback() -> NSRect? {
-        let screen = OverlayScreenResolver.screenForCurrentPointer() ?? NSScreen.main
-        guard let screen else { return nil }
-        let visible = screen.visibleFrame
-        return NSRect(x: visible.midX - 42, y: visible.minY + 64, width: 84, height: 32)
+        self.onDismiss?(ticket.sessionID)
     }
 
     private func panelOrCreate() -> MeetingFloatingCaptionsPanel {
@@ -762,9 +824,10 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
         let content = AnyView(
             AdaptiveAppTheme(accent: SettingsStore.shared.accentColor) {
                 MeetingStillRecordingNudgeContent(controller: self)
+                    .environment(\.locale, PichiLocalization.locale)
             }
         )
-        let panel = MeetingFloatingPanelFactory.make(size: Self.panelSize, resizable: false, content: content)
+        let panel = MeetingFloatingPanelFactory.make(size: Self.panelSize, resizable: false, content: content, allowsKeyboardFocus: true)
         self.panel = panel
         return panel
     }
@@ -785,49 +848,55 @@ private struct MeetingStillRecordingNudgeContent: View {
     @ObservedObject var controller: MeetingStillRecordingNudgeController
 
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
+        let presentationID = self.controller.presentationID
         HStack(spacing: 10) {
-            Image(systemName: "questionmark.circle.fill")
+            Button { self.controller.dismiss(presentationID: presentationID) } label: { Image(systemName: "xmark") }
+                .fluidGlassAction(circular: true, quiet: true)
+                .help("Keep recording")
+                .accessibilityLabel(PichiLocalization.text("Keep recording"))
+            Image(systemName: "clock.badge.exclamationmark")
                 .foregroundStyle(self.theme.palette.warning)
-            Text("Meeting ended?")
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.primaryText)
-                .lineLimit(1)
-                .fixedSize()
-            Spacer(minLength: 0)
-            Button("Stop & Transcribe") {
-                self.controller.onStop?()
-                self.controller.hide()
-            }
-            .fluidButton(.compact, size: .small)
-            Button {
-                self.controller.dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
+                .frame(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Meeting ended")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                Text(PichiLocalization.format("Stopping in %llds", Int64(self.controller.secondsRemaining)))
+                    .font(self.theme.typography.caption)
+                    .monospacedDigit()
                     .foregroundStyle(self.theme.palette.secondaryText)
-                    .frame(width: 20, height: 20)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .help(PichiLocalization.text("Keep recording"))
-            .accessibilityLabel(PichiLocalization.text("Keep recording"))
+            .lineLimit(1)
+            Spacer(minLength: 0)
+            FluidGlassControlGroup {
+                HStack(spacing: 4) {
+                    Button("Stop now") { self.controller.stopNow(presentationID: presentationID) }
+                        .fluidGlassAction(quiet: true)
+                        .help("Stop recording and transcribe this meeting")
+                        .accessibilityIdentifier("meeting-end-stop-now")
+                    Button("Keep recording") { self.controller.dismiss(presentationID: presentationID) }
+                        .buttonStyle(FluidOutlinedButtonStyle(height: 34))
+                        .accessibilityIdentifier("meeting-end-keep-recording")
+                }
+            }
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 8)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .padding(.top, 4)
         .frame(width: MeetingStillRecordingNudgeController.panelSize.width, height: MeetingStillRecordingNudgeController.panelSize.height)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(self.theme.palette.contentBackground)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(self.theme.palette.separator.opacity(0.55), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 4)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(self.theme.palette.contentBackground.opacity(self.reduceTransparency ? 1 : 0.98)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(self.theme.palette.separator.opacity(0.55), lineWidth: 1))
+        .overlay(alignment: .top) {
+            MeetingPromptProgress(value: 1 - Double(self.controller.secondsRemaining) / MeetingEndCountdown.duration)
+                .padding(.horizontal, 24)
+                .padding(.top, 4)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.35), radius: 16, x: 0, y: 6)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(PichiLocalization.text("Meeting may have ended. Stop and transcribe?"))
+        .accessibilityLabel(PichiLocalization.format("Meeting ended. Stopping and transcribing in %lld seconds.", Int64(self.controller.secondsRemaining)))
     }
 }

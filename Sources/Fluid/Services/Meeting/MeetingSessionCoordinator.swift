@@ -127,7 +127,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     func toggleMicrophoneRecording(expectedSessionID: MeetingSessionID?) async {
         guard !self.isMicrophoneControlPending, self.isRecording,
               let session = self.activeSession, session.id == expectedSessionID,
-              session.mode == .onlineCall else { return }
+              session.mode.capturesComputerAudio else { return }
         self.isMicrophoneControlPending = true
         defer { self.isMicrophoneControlPending = false }
         try? await self.capture.setMicrophoneManuallyMuted(self.microphoneMuteState != .manuallyMuted, sessionID: session.id)
@@ -459,6 +459,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         title: String,
         preferredBundleIdentifier: String?,
         preferredWindowID: UInt32?,
+        preferredProcessID: Int32? = nil,
         requirePreferredApplication: Bool = false
     ) async throws -> MeetingCaptureConfiguration {
         if let defaultConfigurationResolver { return try await defaultConfigurationResolver(mode, title) }
@@ -478,11 +479,17 @@ final class MeetingSessionCoordinator: ObservableObject {
         var application: MeetingApplicationIdentity?
         if mode == .onlineCall, scope == .selectedApplication {
             let applications = try await MeetingCaptureSourceCatalog.availableApplications()
-            var resolved = try MeetingCaptureSourceCatalog.resolveApplication(
-                from: applications,
-                preferredBundleIdentifier: defaults.usesAutomaticApplication ? preferredBundleIdentifier : defaults.applicationBundleIdentifier,
-                requirePreferredApplication: requirePreferredApplication || !defaults.usesAutomaticApplication
-            )
+            var resolved: MeetingApplicationIdentity
+            if defaults.usesAutomaticApplication {
+                resolved = try MeetingCaptureSourceCatalog.resolveApplication(
+                    from: applications, preferredBundleIdentifier: preferredBundleIdentifier,
+                    preferredProcessID: preferredProcessID, requirePreferredApplication: requirePreferredApplication)
+            } else {
+                guard let saved = try MeetingRecordingSourceResolver.resolve(mode: .onlineCall,
+                    source: MeetingRecordingSource(defaults: defaults), target: nil, applications: applications)
+                else { throw MeetingCaptureError.applicationNotSelected }
+                resolved = saved
+            }
             if let preferredWindowID, resolved.bundleIdentifier == preferredBundleIdentifier {
                 resolved.windowID = preferredWindowID
             }
@@ -864,7 +871,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.activeSession = session
         self.state = .preparing(session.id)
         #if os(macOS)
-        self.microphoneMuteState = configuration.mode == .onlineCall ? .unmuted : .notApplicable
+        self.microphoneMuteState = configuration.mode.capturesComputerAudio ? .unmuted : .notApplicable
         #endif
         self.startupTrackHealth.removeAll()
         self.startupWriterFailures.removeAll()
@@ -875,7 +882,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         await self.pendingSpeechTeardownTask?.value
         self.pendingSpeechTeardownTask = nil
         let captureOrigin = MeetingLiveOriginBox()
-        if timebase.recordingTimePolicy == .hostMonotonicV1 || (configuration.mode == .onlineCall && Self.usesPCMProcessing(configuration)) {
+        if timebase.recordingTimePolicy == .hostMonotonicV1 || (configuration.mode.capturesComputerAudio && Self.usesPCMProcessing(configuration)) {
             let seconds = Double(timebase.startedHostTime) * Double(timebase.machTimebaseNumerator)
                 / Double(timebase.machTimebaseDenominator) / 1_000_000_000
             let origin = CMTime(seconds: seconds, preferredTimescale: 1_000_000_000)
@@ -921,7 +928,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         await MeetingTimelineTrace.shared?.claimSession(session.id.uuidString)
         let pendingSpeechCapture = MeetingPendingSpeechCapture(originBox: captureOrigin,
             activityModel: self.speechActivityModel,
-            activitySources: configuration.mode == .onlineCall ? [.you, .them] : [.you], diagnostics: pendingDiagnostics) { [weak self] snapshot in
+            activitySources: configuration.mode.capturesComputerAudio ? [.you, .them] : [.you], diagnostics: pendingDiagnostics) { [weak self] snapshot in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 guard self.captureGeneration == generation,
@@ -1386,6 +1393,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         session.transcriptSegments = inputSession.transcriptSegments
         session.postProcessing = inputSession.postProcessing
         session.transcriptCoverageGaps = inputSession.transcriptCoverageGaps
+        session.events.removeAll { $0.kind == .transcriptCoverageIncomplete }
+        session.events.append(contentsOf: inputSession.events.filter { $0.kind == .transcriptCoverageIncomplete })
         session.resultSidecarReference = inputSession.resultSidecarReference
         session.transcriptIsComplete = inputSession.transcriptIsComplete
         session.transcriptTimeDomain = inputSession.transcriptTimeDomain
@@ -1872,6 +1881,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Not a transcript correction: does not push onto `correctionUndoStacks`.
     @discardableResult
     func renameSession(sessionID: MeetingSessionID, to title: String, expectedOwnership: MeetingProfileOwnership? = nil) async throws -> MeetingSession {
+        if self.activeSession?.id == sessionID, self.isRecording {
+            return try await self.renameRecordingSession(sessionID: sessionID, to: title, expectedOwnership: expectedOwnership)
+        }
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.activityInProgress }
         self.isMutatingSession = true
         defer { self.releaseMutationGate() }
@@ -2341,7 +2353,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 }
                 continue
             }
-            let expectedKinds: Set<MeetingAudioTrackKind> = session.mode == .onlineCall
+            let expectedKinds: Set<MeetingAudioTrackKind> = session.mode.capturesComputerAudio
                 ? [.applicationAudio, .microphone]
                 : [.microphone]
             let hasExpectedTracks = Set(session.audioTracks.map(\.kind)) == expectedKinds
@@ -2967,6 +2979,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                     }
                 }
             }
+            // This is the current transcript's status, not a permanent capture interruption.
+            session.events.removeAll { $0.kind == .transcriptCoverageIncomplete }
             if !result.coverageGaps.isEmpty {
                 let excludedSeconds = result.coverageGaps.reduce(0.0) { total, gap in
                     total + max(0, gap.end - gap.start)
@@ -3748,5 +3762,38 @@ enum MeetingCoordinatorError: LocalizedError {
         case .unsupportedRetranscriptionLanguage:
             return String(localized: "Choose a language the meeting transcription model supports.")
         }
+    }
+}
+
+extension MeetingSessionCoordinator {
+    /// Change only title metadata before suspending, so every subsequent capture/stop snapshot keeps it.
+    /// The serialized persistence queue prevents a slow rename save from overwriting newer audio or state.
+    private func renameRecordingSession(sessionID: MeetingSessionID, to title: String, expectedOwnership: MeetingProfileOwnership?) async throws -> MeetingSession {
+        guard !self.isMutatingSession, !self.hasBlockingActivityTask, !self.isDeleting,
+              var session = self.activeSession, session.id == sessionID, self.isRecording
+        else { throw MeetingCoordinatorError.activityInProgress }
+        try Self.validateCorrectionOwnership(session, expected: expectedOwnership)
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
+        self.isMutatingSession = true
+        defer { self.releaseMutationGate() }
+        session.title = trimmed
+        session.defaultTitleBase = nil
+        session.automaticTitle = nil
+        session.updatedAt = Date()
+        self.activeSession = session
+        do {
+            try await self.persistence.save(session)
+        } catch {
+            // Keep the edited title in the live snapshot so capture updates and stopping can retry it.
+            throw NSError(domain: "MeetingTitle", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The title could not be saved yet. Recording can continue; try renaming again to retry.",
+                NSUnderlyingErrorKey: error,
+            ])
+        }
+        // Capture or Stop may have advanced the session while its title was being saved.
+        if let current = self.activeSession, current.id == sessionID { return current }
+        if let completed = self.latestCompletedSession, completed.id == sessionID { return completed }
+        return session
     }
 }

@@ -11,10 +11,13 @@ final class MeetingRecordingSourceTests: XCTestCase {
     private var originalFeature = false
     private var originalRecentApplication: MeetingApplicationIdentity?
 
+    private var originalRecordingDefaults: MeetingRecordingDefaults?
+
     override func setUp() {
         super.setUp()
         self.originalFeature = SettingsStore.shared.fluidMeetEnabled
         self.originalRecentApplication = SettingsStore.shared.meetingRecentApplication
+        self.originalRecordingDefaults = SettingsStore.shared.meetingRecordingDefaults
         SettingsStore.shared.meetingRecentApplication = nil
         SettingsStore.shared.fluidMeetEnabled = true
     }
@@ -22,11 +25,13 @@ final class MeetingRecordingSourceTests: XCTestCase {
     override func tearDown() {
         SettingsStore.shared.fluidMeetEnabled = self.originalFeature
         SettingsStore.shared.meetingRecentApplication = self.originalRecentApplication
+        if let defaults = self.originalRecordingDefaults { SettingsStore.shared.meetingRecordingDefaults = defaults }
         super.tearDown()
     }
 
     private func selectedAppDefaults() -> MeetingRecordingDefaults {
         var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
         defaults.applicationAudioScope = .selectedApplication
         return defaults
     }
@@ -195,12 +200,12 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertTrue(MeetingAppPickerEntry.entries(applications: [], installed: []).isEmpty)
     }
 
-    func testPickerPreservesSeparateRunningProcessesForTheSameApp() {
+    func testPickerGroupsRunningProcessesByApp() {
         let first = MeetingApplicationIdentity(bundleIdentifier: "browser", processID: 1, displayName: "Browser")
         let second = MeetingApplicationIdentity(bundleIdentifier: "browser", processID: 2, displayName: "Browser")
-        let entries = MeetingAppPickerEntry.entries(applications: [first, second], installed: [])
-        XCTAssertEqual(entries.compactMap(\.application), [first, second])
-        XCTAssertEqual(Set(entries.map(\.id)).count, 2)
+        let entries = MeetingAppPickerEntry.entries(applications: MeetingRecordingSourceResolver.applicationChoices(from: [first, second]), installed: [])
+        XCTAssertEqual(entries.first?.application?.capturesAllInstances, true)
+        XCTAssertEqual(Set(entries.map(\.id)).count, 1)
     }
 
     func testMicrophoneLabelWhenNoDevicesAreAvailable() {
@@ -230,15 +235,18 @@ final class MeetingRecordingSourceTests: XCTestCase {
     func testAutomaticPrefersDetectedCallThenExactForegroundApp() {
         let defaults = self.selectedAppDefaults()
         let target = MeetingAutoDetector.ResolvedTarget(bundleIdentifier: "zoom", pid: 42, windowID: 7)
+        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: .unconfigured, target: target, foreground: self.browser, applications: [self.zoom, self.browser]))
         let detected = MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: target, foreground: self.browser, applications: [self.zoom, self.browser])
-        XCTAssertEqual(detected?.processID, 42)
+        XCTAssertEqual(detected?.processID, self.zoom.processID)
         XCTAssertEqual(detected?.windowID, 7)
-        let fallback = MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: self.browser, applications: [self.zoom, self.browser])
-        XCTAssertEqual(fallback, self.browser)
+        let foreground = MeetingApplicationIdentity(bundleIdentifier: "com.google.Chrome", processID: 44, displayName: "Chrome")
+        XCTAssertEqual(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: foreground, applications: [self.zoom, foreground]), foreground)
         XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: nil, applications: [self.zoom]))
-        var restarted = self.browser
+        var restarted = foreground
         restarted.processID = 99
-        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: self.browser, applications: [restarted]))
+        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: foreground, applications: [restarted]))
+        let unsupported = MeetingApplicationIdentity(bundleIdentifier: "synthetic.unsupported", processID: 45, displayName: "Unsupported")
+        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: unsupported, applications: [unsupported]))
     }
 
     func testInPersonSettingsKeepTheRememberedAppWithoutRunningApplications() throws {
@@ -291,7 +299,10 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: target, foreground: self.zoom, applications: [self.zoom]))
         var duplicate = self.browser
         duplicate.processID = 99
-        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: self.zoom, applications: [self.browser, duplicate]))
+        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: self.zoom, applications: [self.browser, duplicate]), "A legacy saved bundle must not authorize multiple processes")
+        defaults.applicationCapturesAllInstances = true
+        XCTAssertEqual(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: self.zoom, applications: [self.browser, duplicate])?.capturesAllInstances, true)
+        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: target, foreground: self.zoom, applications: [self.zoom]), "An explicit app-wide choice must also stay unavailable when the app is missing")
     }
 
     func testConfirmationCannotChangeAppProcessOrMicrophone() throws {
@@ -314,11 +325,25 @@ final class MeetingRecordingSourceTests: XCTestCase {
 
     func testUnconfiguredAndExplicitSystemAudioDoNotRequireAnApplication() throws {
         let defaults = MeetingRecordingDefaults.unconfigured
+        XCTAssertEqual(defaults.mode, .systemAudio)
+        XCTAssertEqual(defaults.effectiveApplicationAudioScope, .systemAudio)
         XCTAssertEqual(MeetingRecordingSource(defaults: defaults), .systemAudio)
+        let setup = MeetingTranscriptionSetupDraft(defaults: defaults, autoDetectEnabled: true, browserDetectionEnabled: true, fallbackLanguageCode: "en")
+        XCTAssertEqual(setup.mode, .onlineCall, "The existing setup UI keeps computer-audio scope separate from meeting kind")
+        XCTAssertEqual(setup.applicationAudioScope, .systemAudio)
         XCTAssertNil(try MeetingRecordingSourceResolver.resolve(
             mode: .onlineCall, source: .systemAudio, target: nil, applications: []
         ))
         var snapshot = self.snapshot()
+        snapshot.defaults = defaults
+        snapshot.selectedApplication = nil
+        let currentDefault = try snapshot.configuration(applications: [], microphones: [self.mic])
+        XCTAssertEqual(currentDefault.mode, .systemAudio)
+        XCTAssertEqual(currentDefault.effectiveApplicationAudioScope, .systemAudio)
+        XCTAssertNil(currentDefault.application)
+        XCTAssertNoThrow(try currentDefault.validate())
+        XCTAssertThrowsError(try snapshot.configuration(applications: [], microphones: []))
+        snapshot.defaults.mode = .onlineCall
         snapshot.defaults.applicationAudioScope = .systemAudio
         snapshot.selectedApplication = nil
         let configuration = try snapshot.configuration(applications: [], microphones: [self.mic])
@@ -424,15 +449,17 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertEqual(starts, 2)
     }
 
-    func testRefreshKeepsAnExplicitInPersonChoice() async {
+    func testRefreshKeepsAnExplicitComputerAudioChoice() async {
         let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in self.snapshot() }, start: { _ in XCTFail("Refreshing must not record") })
         controller.handleShortcut()
         await self.waitUntil { !controller.isLoading }
-        controller.selectApplication(nil)
+        controller.selectSystemAudio()
         controller.refresh()
         await self.waitUntil { !controller.isLoading }
-        XCTAssertEqual(controller.snapshot?.defaults.mode, .inRoom)
+        XCTAssertEqual(controller.snapshot?.defaults.mode, .onlineCall)
+        XCTAssertEqual(controller.snapshot?.defaults.effectiveApplicationAudioScope, .systemAudio)
         XCTAssertNil(controller.snapshot?.selectedApplication)
+        XCTAssertTrue(controller.canConfirm)
         controller.cancel()
     }
 
@@ -620,14 +647,18 @@ final class MeetingRecordingSourceTests: XCTestCase {
         await self.waitUntil { !controller.isLoading }
         XCTAssertNil(controller.snapshot?.availableRecentApplication, "An automatic suggestion is not a recent explicit choice")
         controller.selectApplication(self.browser)
-        XCTAssertEqual(controller.snapshot?.applicationLabel(self.browser), PichiLocalization.format("%@ (Recent)", "Browser"))
+        XCTAssertEqual(controller.snapshot?.applicationLabel(self.browser), PichiLocalization.format("%@ (Last picked)", "Browser"))
         XCTAssertEqual(controller.snapshot?.applicationLabel(self.zoom), "Zoom")
         XCTAssertEqual(SettingsStore.shared.meetingRecentApplication, self.browser)
         controller.selectApplication(self.zoom)
-        XCTAssertEqual(controller.snapshot?.applicationLabel(self.zoom), PichiLocalization.format("%@ (Recent)", "Zoom"))
+        XCTAssertEqual(controller.snapshot?.applicationLabel(self.zoom), PichiLocalization.format("%@ (Last picked)", "Zoom"))
         XCTAssertEqual(controller.snapshot?.applicationLabel(self.browser), "Browser")
         controller.selectApplication(nil)
-        XCTAssertEqual(SettingsStore.shared.meetingRecentApplication, self.zoom, "In person does not replace the most recent app")
+        XCTAssertEqual(SettingsStore.shared.meetingRecentApplication, self.zoom, "In person keeps the last explicit app choice")
+        XCTAssertEqual(controller.snapshot?.defaults.mode, .inRoom)
+        XCTAssertNil(controller.snapshot?.selectedApplication)
+        controller.selectSystemAudio()
+        XCTAssertNil(SettingsStore.shared.meetingRecentApplication, "Explicit system audio clears the previous app choice")
         controller.selectApplication(self.browser)
         controller.cancel()
 
@@ -635,38 +666,68 @@ final class MeetingRecordingSourceTests: XCTestCase {
         reopened.handleShortcut()
         await self.waitUntil { !reopened.isLoading }
         XCTAssertEqual(reopened.snapshot?.availableRecentApplication, self.browser)
-        XCTAssertEqual(reopened.snapshot?.selectedApplication, self.zoom, "Recency must not replace the detected or foreground suggestion")
-        XCTAssertEqual(reopened.snapshot?.applicationLabel(self.browser), PichiLocalization.format("%@ (Recent)", "Browser"))
-        XCTAssertEqual(SettingsStore.shared.meetingRecordingDefaults, defaultsBefore)
+        XCTAssertEqual(reopened.snapshot?.selectedApplication, self.browser, "The last explicit pick wins over the detected or foreground suggestion")
+        XCTAssertEqual(reopened.snapshot?.applicationLabel(self.browser), PichiLocalization.format("%@ (Last picked)", "Browser"))
+        XCTAssertEqual(SettingsStore.shared.meetingRecordingDefaults.applicationBundleIdentifier, self.browser.bundleIdentifier)
+        XCTAssertEqual(SettingsStore.shared.meetingRecordingDefaults.languageCode, defaultsBefore.languageCode)
+        XCTAssertEqual(SettingsStore.shared.meetingRecordingDefaults.microphoneCaptureDeviceID, defaultsBefore.microphoneCaptureDeviceID)
         XCTAssertEqual(starts, 0)
         reopened.cancel()
     }
 
-    func testRecentTagFollowsARelaunchedAppWithoutChoosingAmongDuplicateCopies() {
+    func testMissingLastPickCannotBecomeTheDetectedAppOnOpenOrRefresh() async {
+        SettingsStore.shared.meetingRecentApplication = self.browser
+        var loaded = self.snapshot()
+        loaded.applications = [self.zoom]
+        var starts = 0
+        let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in loaded }, start: { _ in starts += 1 })
+        controller.handleShortcut(foreground: self.zoom)
+        await self.waitUntil { !controller.isLoading }
+        XCTAssertNil(controller.snapshot?.selectedApplication)
+        XCTAssertFalse(controller.canConfirm)
+        XCTAssertTrue(controller.errorMessage?.contains("Browser") == true)
+        controller.refresh()
+        await self.waitUntil { !controller.isLoading }
+        controller.confirm()
+        XCTAssertNil(controller.snapshot?.selectedApplication)
+        XCTAssertEqual(starts, 0)
+        XCTAssertEqual(SettingsStore.shared.meetingRecentApplication, self.browser)
+        controller.cancel()
+    }
+
+    func testRecentChoiceCoversRelaunchedAndDuplicateInstances() throws {
         var snapshot = self.snapshot()
         snapshot.recentApplication = self.browser
         var restarted = self.browser
         restarted.processID = 99
         snapshot.applications = [self.zoom, restarted]
-        XCTAssertEqual(snapshot.availableRecentApplication, restarted)
-        XCTAssertEqual(snapshot.applicationLabel(restarted), PichiLocalization.format("%@ (Recent)", "Browser"))
+        XCTAssertNil(snapshot.availableRecentApplication, "A missing exact PID must never select a replacement process")
+        XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser")
+        var allInstances = self.browser
+        allInstances.processID = nil
+        allInstances.capturesAllInstances = true
+        snapshot.recentApplication = allInstances
+        XCTAssertEqual(snapshot.availableRecentApplication, allInstances)
+        XCTAssertEqual(snapshot.applicationLabel(allInstances), PichiLocalization.format("%@ (Last picked)", "Browser"))
         var duplicate = restarted
         duplicate.processID = 100
         snapshot.applications.append(duplicate)
-        XCTAssertNil(snapshot.availableRecentApplication)
+        XCTAssertEqual(snapshot.availableRecentApplication?.capturesAllInstances, true)
         XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser")
+        snapshot.recentApplication = self.browser
+        XCTAssertNil(snapshot.availableRecentApplication, "Duplicate replacements cannot widen a missing exact process choice")
         snapshot.recentApplication = duplicate
         XCTAssertEqual(snapshot.availableRecentApplication, duplicate)
         XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser")
-        XCTAssertEqual(snapshot.applicationLabel(duplicate), PichiLocalization.format("%@ (Recent)", "Browser"))
+        XCTAssertEqual(snapshot.applicationLabel(duplicate), PichiLocalization.format("%@ (Last picked)", "Browser"))
         snapshot.applications = [self.zoom]
         XCTAssertNil(snapshot.availableRecentApplication)
         XCTAssertEqual(snapshot.selectedApplication, self.zoom)
     }
 
     func testRecentApplicationFormatsPreserveTheAppNameInBothCatalogLanguages() {
-        XCTAssertEqual(PichiLocalization.format("%@ (Recent)", language: .russian, bundle: .main, arguments: ["Browser"]), "Browser (Недавнее)")
-        XCTAssertEqual(PichiLocalization.format("%@ (Recent)", language: .english, bundle: .main, arguments: ["Browser"]), "Browser (Recent)")
+        XCTAssertEqual(PichiLocalization.format("%@ (Last picked)", language: .russian, bundle: .main, arguments: ["Browser"]), "Browser (последний выбор)")
+        XCTAssertEqual(PichiLocalization.format("%@ (Last picked)", language: .english, bundle: .main, arguments: ["Browser"]), "Browser (Last picked)")
     }
 
     func testRecentAppPersistenceDoesNotKeepWindowOrDisplayTargets() {
@@ -738,5 +799,76 @@ final class MeetingRecordingSourceTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(5))
         }
         XCTFail("Timed out waiting for the source prompt", file: file, line: line)
+    }
+}
+
+extension MeetingRecordingSourceTests {
+    func testSystemAudioModeKeepsTwoTrackContractAndNoApplicationFilter() throws {
+        let microphone = MeetingMicrophoneIdentity(captureDeviceID: "synthetic-mic", displayName: "Fixture")
+        let configuration = MeetingCaptureConfiguration(mode: .systemAudio, title: "Synthetic system audio",
+            microphone: microphone, speakerProcessingMode: .streaming)
+        XCTAssertTrue(configuration.mode.capturesComputerAudio)
+        if case .systemAudio? = configuration.applicationAudioSource {} else { XCTFail("System audio must not select an application filter") }
+        XCTAssertNoThrow(try configuration.validate())
+        let session = MeetingSession(configuration: configuration,
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        XCTAssertEqual(session.effectiveSpeakerProcessingMode, .streaming)
+        let registered = MeetingTranscriptionBackendRegistry.makeDefault()
+        let descriptor = try XCTUnwrap(registered.descriptor(for: .parakeetV2))
+        let request = PichiMeetingProviderFactory.configuration(asrModel: "parakeet-tdt-v2", languageCode: "en",
+            artifactFingerprintOverride: "synthetic-export", speakerProcessingMode: .streaming)
+        XCTAssertNoThrow(try descriptor.validatePCMInput(configuration: request, mode: .systemAudio))
+    }
+
+    func testLegacySavedBundleDoesNotAuthorizeMultipleProcesses() throws {
+        let first = MeetingApplicationIdentity(bundleIdentifier: "synthetic.browser", processID: 11, displayName: "Browser")
+        let second = MeetingApplicationIdentity(bundleIdentifier: "synthetic.browser", processID: 12, displayName: "Browser")
+        var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
+        defaults.isConfigured = true
+        defaults.applicationAudioScope = .selectedApplication
+        defaults.applicationBundleIdentifier = first.bundleIdentifier
+        XCTAssertThrowsError(try MeetingRecordingSourceResolver.resolve(mode: .onlineCall,
+            source: MeetingRecordingSource(defaults: defaults), target: nil, applications: [first, second]))
+        let legacy = try MeetingRecordingSourceResolver.resolve(mode: .onlineCall,
+            source: MeetingRecordingSource(defaults: defaults), target: nil, applications: [first])
+        XCTAssertEqual(legacy, first)
+        defaults.applicationCapturesAllInstances = true
+        let selected = try MeetingRecordingSourceResolver.resolve(mode: .onlineCall,
+            source: MeetingRecordingSource(defaults: defaults), target: nil, applications: [first, second])
+        XCTAssertEqual(selected?.capturesAllInstances, true)
+        let decoded = try JSONDecoder().decode(MeetingRecordingDefaults.self, from: JSONEncoder().encode(defaults))
+        XCTAssertEqual(decoded.applicationCapturesAllInstances, true)
+    }
+
+    func testExplicitAllInstancesAndLegacyProcessSelectionStayDistinct() throws {
+        let first = MeetingApplicationIdentity(bundleIdentifier: "test.browser", processID: 11, displayName: "Browser")
+        let second = MeetingApplicationIdentity(bundleIdentifier: "test.browser", processID: 12, displayName: "Browser")
+        let exact = try MeetingRecordingSourceResolver.resolve(
+            mode: .onlineCall, source: MeetingRecordingSource(application: first),
+            target: nil, applications: [first, second]
+        )
+        XCTAssertEqual(exact?.processID, 11)
+        XCTAssertNil(exact?.capturesAllInstances)
+        let all = try MeetingRecordingSourceResolver.resolve(
+            mode: .onlineCall, source: .allInstances(bundleIdentifier: "test.browser", displayName: "Browser"),
+            target: nil, applications: [first, second]
+        )
+        XCTAssertEqual(all?.capturesAllInstances, true)
+        XCTAssertNil(all?.processID)
+        XCTAssertThrowsError(try MeetingRecordingSourceResolver.resolve(
+            mode: .onlineCall, source: .allInstances(bundleIdentifier: "missing", displayName: "Missing"),
+            target: nil, applications: [first, second]
+        ))
+    }
+
+    func testLastAppDoesNotChangeMicrophoneOnlyOrSystemAudioDefaults() {
+        let application = MeetingApplicationIdentity(bundleIdentifier: "test.browser", processID: 11, displayName: "Browser")
+        var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .inRoom
+        XCTAssertEqual(defaults.preferringLastPickedApplication(application), defaults)
+        defaults.mode = .onlineCall
+        defaults.applicationAudioScope = .systemAudio
+        XCTAssertEqual(defaults.preferringLastPickedApplication(application), defaults)
     }
 }

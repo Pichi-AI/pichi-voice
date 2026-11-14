@@ -8,11 +8,6 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     var fingerprint: String { "test-policy" }
 }
 nonisolated enum MeetingProcessingCheckpoint { static let currentDiarizationFingerprint = "test-speaker" }
-nonisolated enum MeetingConfigFingerprintEncoding {
-    static func encode(_ pairs: [(key: String, value: String)]) -> String {
-        pairs.map { "\($0.key)=\($0.value)" }.joined(separator: ";")
-    }
-}
 // MeetingRetranscriptionLanguage.failedAttemptLanguage(for:) reads only these session fields.
 nonisolated struct MeetingProcessingAttempt { let languageCode: String? }
 nonisolated struct MeetingSession {

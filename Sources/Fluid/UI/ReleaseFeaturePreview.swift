@@ -11,7 +11,8 @@ struct ReleaseFeaturePreview: View {
             switch self.kind {
             case .meeting: self.meeting
             case .dashboard: self.dashboard
-            case .models: self.models
+            case .ripple: self.cleanupModel("Fluid 1.1 Ripple", detail: "Fast & capable", symbol: "bolt")
+            case .splash: self.cleanupModel("Fluid 1.1 Splash", detail: "Higher quality", symbol: "sparkles")
             case .speech: self.speech
             }
         }
@@ -82,32 +83,27 @@ struct ReleaseFeaturePreview: View {
 
     private func stat(_ value: String, label: String, symbol: String) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Image(systemName: symbol).font(.system(size: 10)).foregroundStyle(self.theme.palette.accentText)
+            Image(systemName: symbol).font(.fluidSystem(size: 10)).foregroundStyle(self.theme.palette.accentText)
             Text(value).font(.fluidSystem(size: 16, weight: .semibold, design: .rounded))
             Text(PichiLocalization.text(label)).font(.fluidSystem(size: 6, weight: .medium)).foregroundStyle(self.theme.palette.secondaryText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var models: some View {
+    private func cleanupModel(_ name: String, detail: String, symbol: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(PrivateAIProviderFeature.shared.isAvailable ? AppBrand.text("Fluid Intelligence") : PichiLocalization.text("AI Settings"), systemImage: "sparkles")
                 .font(.fluidSystem(size: 11, weight: .semibold))
-            if PrivateAIProviderFeature.shared.isAvailable {
-                self.model("Fluid 1.1 Splash", detail: "Reads your screen", symbol: "text.viewfinder")
-                self.model("Fluid 1 Mini", detail: "Everyday writing", symbol: "text.alignleft")
-                self.model("Fluid 1 Pico", detail: "Light & quick", symbol: "bolt")
-            } else {
-                self.model("Your provider", detail: "Your choice", symbol: "sparkles")
-                self.model("Your model", detail: "Your workflow", symbol: "cpu")
-            }
+            self.model(name, detail: detail, symbol: symbol)
+            self.model("On-device", detail: "Private", symbol: "lock")
+            self.model("Research preview", detail: "Review text", symbol: "text.magnifyingglass")
         }
     }
 
     private var speech: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Voice Engine", systemImage: "waveform")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.fluidSystem(size: 11, weight: .semibold))
             self.model("Fluid Speech Pro", detail: "Most accurate", symbol: "star")
             self.model("Fluid Speech Mini", detail: "Half the size", symbol: "waveform")
             self.model("Fluid Speech Pico", detail: "Smallest", symbol: "bolt")
@@ -117,7 +113,7 @@ struct ReleaseFeaturePreview: View {
     private func model(_ name: String, detail: String, symbol: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: symbol)
-                .font(.system(size: 11)).foregroundStyle(self.theme.palette.accentText)
+                .font(.fluidSystem(size: 11)).foregroundStyle(self.theme.palette.accentText)
                 .frame(width: 23, height: 23)
                 .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(self.theme.palette.accent.opacity(0.1), lineWidth: 1))

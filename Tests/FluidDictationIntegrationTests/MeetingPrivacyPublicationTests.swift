@@ -26,6 +26,31 @@ private struct SyntheticFailingRedactor: TranscriptTextRedacting {
 
 @MainActor
 final class MeetingPrivacyPublicationTests: XCTestCase {
+    func testFinalDictionaryReplacementIsRedactedBeforePublication() async throws {
+        let session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic normalization",
+            microphone: .init(captureDeviceID: "synthetic-mic", displayName: "Fixture"),
+            audioStorageMode: .memoryOnly, piiRedactionEnabled: true),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        var segment = MeetingTranscriptSegment(id: UUID(), start: .init(value: 0, timescale: 1),
+            end: .init(value: 1, timescale: 1), sourceTrackID: UUID(), speakerID: nil,
+            text: "syntheticAlias", revision: 1, status: .final, overlap: .none, completeness: .complete)
+        segment.nativePrecision = .word
+        let configuration = MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true,
+            customDictionaryEntries: [.init(triggers: ["syntheticAlias"], replacement: "Анна Тестова")])
+        let redactor = SyntheticPersonRedactor()
+        let result = try await MeetingProcessingPipeline.normalizedPublicationSegments([segment], speakers: [],
+            session: session, coverageGaps: [], configuration: configuration, redactor: redactor,
+            privacyIdentity: redactor.checkpointIdentity)
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result[0].text, "[PERSON]")
+        XCTAssertTrue(redactor.inputs.contains { $0.contains("Анна Тестова") }, "Privacy must see the dictionary's final replacement")
+        XCTAssertEqual(result[0].id, segment.id)
+        XCTAssertEqual(result[0].start, segment.start)
+        XCTAssertEqual(result[0].end, segment.end)
+        XCTAssertEqual(result[0].nativePrecision, .word)
+        XCTAssertEqual(result[0].speakerID, segment.speakerID)
+    }
+
     func testProtectedPreviewPreservesExactPCMEnvelopeAcrossPrivacyAdmission() async throws {
         let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
         let start = 9.0 / 16_000, end = 16_009.0 / 16_000

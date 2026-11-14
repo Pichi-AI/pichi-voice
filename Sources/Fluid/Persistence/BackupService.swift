@@ -53,6 +53,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let hideFromDockAndAppSwitcher: Bool
     let showMainWindowAtLoginLaunch: Bool?
     let accentColorOption: SettingsStore.AccentColorOption
+    var customAccentColorHex: String? = nil
     let transcriptionStartSound: SettingsStore.TranscriptionStartSound
     let transcriptionSoundVolume: Float
     // Independent Volume was removed, but the key is still written (always false) so backups
@@ -150,6 +151,9 @@ struct SettingsBackupPayload: Codable, Equatable {
     // A present empty map clears prompt overrides; an absent map preserves them.
     // swiftlint:disable:next discouraged_optional_collection
     var dictationPromptConfigurations: [String: SettingsStore.DictationPromptConfiguration]? = nil
+    var dictionaryCorrectionArchiveEnabled: Bool? = nil
+    var automaticDictionaryPromptDelay: SettingsStore.AutomaticDictionaryPromptDelay? = nil
+
     // Nonsecret folder/scope metadata only. Old backups preserve current values.
     // swiftlint:disable:next discouraged_optional_collection
     var providerConnectionOptions: [String: [String: String]]? = nil
@@ -221,18 +225,26 @@ final class BackupService {
         try self.beginOperation()
         defer { self.operationInProgress = false }
         try Task.checkCancellation()
-        try await TranscriptionHistoryStore.shared.waitUntilLoaded()
+        let profile = PrivateProfileStorage.current
+        let settingsStore = SettingsStore.shared.boundToCurrentPrivateProfile()
+        let historyStore = TranscriptionHistoryStore.shared
+        let pronunciationStore = PronunciationDictionaryStore.shared
+        let archiveEnabled = settingsStore.dictionaryCorrectionArchiveEnabled
+        try await historyStore.waitUntilLoaded()
         try Task.checkCancellation()
-        let pronunciationProfiles = await PronunciationDictionaryStore.shared.allProfiles()
+        let pronunciationProfiles = await pronunciationStore.allProfiles()
         try Task.checkCancellation()
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
+        var settings = settingsStore.makeBackupPayload()
+        settings.dictionaryCorrectionArchiveEnabled = archiveEnabled
         return AppBackupDocument(
             schemaVersion: .current,
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown",
             exportedAt: Date(),
-            settings: SettingsStore.shared.makeBackupPayload(),
-            promptProfiles: SettingsStore.shared.dictationPromptProfiles,
-            appPromptBindings: SettingsStore.shared.appPromptBindings,
-            transcriptionHistory: TranscriptionHistoryStore.shared.makeBackupPayload(),
+            settings: settings,
+            promptProfiles: settingsStore.dictationPromptProfiles,
+            appPromptBindings: settingsStore.appPromptBindings,
+            transcriptionHistory: historyStore.makeBackupPayload(),
             pronunciationProfiles: pronunciationProfiles
         )
     }
@@ -267,6 +279,8 @@ final class BackupService {
         defer { self.operationInProgress = false }
         try Task.checkCancellation()
         try self.validate(document)
+        let profile = PrivateProfileStorage.current
+        let settings = SettingsStore.shared.boundToCurrentPrivateProfile()
         let asr = AppServices.shared.asr
         let activityLease = try asr.beginSettingsBackupRestore()
         defer { asr.releaseExclusiveActivity(activityLease) }
@@ -279,12 +293,16 @@ final class BackupService {
         // Profile replacement is a synchronous actor write once admitted. Finish
         // the matching settings/History commit even if cancellation arrives during
         // its actor hop; stopping here would leave a partially restored document.
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
         let previousIdleUnload = SettingsStore.shared.privateAIIdleUnload
         SettingsStore.shared.restore(
             from: document.settings,
             promptProfiles: document.promptProfiles,
             appPromptBindings: document.appPromptBindings
         )
+        if let enabled = document.settings.dictionaryCorrectionArchiveEnabled {
+            settings.dictionaryCorrectionArchiveEnabled = enabled
+        }
         // Commit settings, History and synchronous observers together before
         // yielding to another actor, keeping the settings/History snapshot consistent.
         TranscriptionHistoryStore.shared.restore(from: document.transcriptionHistory)

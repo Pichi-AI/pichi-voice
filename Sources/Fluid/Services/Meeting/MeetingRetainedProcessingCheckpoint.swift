@@ -54,7 +54,13 @@ nonisolated struct MeetingRetainedProcessingCheckpoint: Sendable {
     /// The guard precedes even filesystem observation. Strict mode neither creates nor reads
     /// audio-working-state files, including a stale file from a different storage-mode snapshot.
     func read(session: MeetingSession) throws -> Value? {
-        try self.read(session: session, matchingLanguageCode: session.languageCode)
+        let value = try self.read(session: session, matchingLanguageCode: session.languageCode)
+        // Dictionary rules are deliberately absent from the authenticated plaintext header.
+        // Until rule recovery is available, never resume with an empty or current dictionary.
+        if value?.pin.configuration.customDictionaryRewritingEnabled == true {
+            throw Failure.changedConfiguration
+        }
+        return value
     }
 
     /// Retry admission needs the authenticated inference language independently of the visible
@@ -122,7 +128,7 @@ nonisolated struct MeetingRetainedProcessingCheckpoint: Sendable {
         guard bytes.count <= Self.maximumBytes else { throw Failure.unavailable }
         try Task.checkCancellation()
         try self.atomicWrite(bytes, to: self.confinedURL(Self.fileName))
-        guard try self.read(session: session)?.payload == value.payload else { throw Failure.invalid }
+        guard try self.read(session: session, matchingLanguageCode: session.languageCode)?.payload == value.payload else { throw Failure.invalid }
     }
 
     static func remove(in directory: URL) throws {

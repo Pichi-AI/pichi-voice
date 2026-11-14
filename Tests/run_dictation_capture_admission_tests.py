@@ -72,10 +72,12 @@ assert recovery.index("self.recordingBufferHandoffGate.complete(recovery.token)"
 
 with tempfile.TemporaryDirectory(prefix="pichi-dictation-admission-") as directory:
     directory = Path(directory)
+    profile_types = directory / "ProfileTypes.swift"
+    subprocess.run(["python3", "-S", "Tests/Support/write_private_profile_standalone_types.py", str(profile_types), "--archive-carriers"], check=True, cwd=repo)
     generated = directory / "AdmissionTests.swift"
     generated.write_text(combined)
     for mode in ([], ["-default-isolation", "MainActor"]):
         executable = directory / ("tests-actor" if mode else "tests-default")
-        subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-strict-concurrency=targeted", "-D", "DEBUG", *(["-D", "TEST_MAIN_ACTOR"] if mode else []), *mode, "-module-cache-path", str(directory / "ModuleCache"), str(repo / "Sources/Fluid/Localization/PichiLocalization.swift"), str(repo / "Sources/Fluid/Services/ASRActivityLease.swift"), str(repo / "Sources/Fluid/Services/ThreadSafeAudioBuffer.swift"), str(generated), "-o", str(executable)], check=True, cwd=repo)
+        subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-strict-concurrency=targeted", "-D", "DEBUG", *(["-D", "TEST_MAIN_ACTOR"] if mode else []), *mode, "-module-cache-path", str(directory / "ModuleCache"), str(repo / "Sources/Fluid/Localization/PichiLocalization.swift"), str(profile_types), str(repo / "Sources/Fluid/Account/PrivateProfileStorage.swift"), str(repo / "Sources/Fluid/Services/ASRActivityLease.swift"), str(repo / "Sources/Fluid/Services/ThreadSafeAudioBuffer.swift"), str(generated), "-o", str(executable)], check=True, cwd=repo)
         subprocess.run([str(executable)], check=True, cwd=repo)
 print("ASR capture source wiring passed")

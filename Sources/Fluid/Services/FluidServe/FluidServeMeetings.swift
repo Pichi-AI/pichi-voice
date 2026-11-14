@@ -129,6 +129,7 @@ nonisolated enum FluidServeMeetings {
 
     enum ReadError: LocalizedError, Equatable {
         case accessOff
+        case accessUnavailable
         case noMeetings
         case notFound(String)
         case ambiguous(String, Int)
@@ -137,6 +138,9 @@ nonisolated enum FluidServeMeetings {
             switch self {
             case .accessOff:
                 return "Meeting sharing is off. Open the application's meeting settings > Integrations and add your agent."
+            case .accessUnavailable:
+                return "Could not verify application meeting-sharing permission. The setting may be unset or blocked by a sandbox. "
+                    + "Check meeting settings > Integrations; if sharing is on, check the agent's sandbox permissions. No meeting data was read."
             case .noMeetings:
                 return "No finished meetings with a transcript were found."
             case let .notFound(reference):
@@ -185,9 +189,11 @@ nonisolated enum FluidServeMeetings {
     /// but through CFPreferences rather than `UserDefaults`, which would also honour a
     /// `-FluidServeMeetingAccessEnabled YES` argument and let a caller switch it on.
     /// This is a consent switch, not a lock: anything running as the user could read the files anyway.
-    static func isAccessEnabled(bundleIdentifier: String) -> Bool {
+    /// A missing value cannot distinguish an unset preference from a sandbox-denied read.
+    /// Only an explicit true grants access; nil is unknown, not proof that sharing is off.
+    static func isAccessEnabled(bundleIdentifier: String) -> Bool? {
         guard (try? self.guestAccessToken(root: self.defaultRoot(storageNamespace: bundleIdentifier))) != nil else { return false }
-        return (CFPreferencesCopyAppValue(self.accessDefaultsKey as CFString, bundleIdentifier as CFString) as? Bool) ?? false
+        return CFPreferencesCopyAppValue(self.accessDefaultsKey as CFString, bundleIdentifier as CFString) as? Bool
     }
 
     static let customSummaryPromptDefaultsKey = "MeetingSummaryCustomPrompt"

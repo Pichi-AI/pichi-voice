@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 private struct ThemeKey: EnvironmentKey {
     static var defaultValue: AppTheme = .dark
@@ -48,9 +51,10 @@ struct AdaptiveAppTheme<Content: View>: View {
         #else
         let activeScheme = preferredScheme ?? self.colorScheme
         #endif
-        let activeAccent = self.settings.accentColorOption == .brand
-            ? (Color(hex: activeScheme == .dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight) ?? self.accent)
-            : self.accent
+        let activeAccent = self.settings.customAccentColorHex.flatMap(Color.init(hex:))
+            ?? (self.settings.accentColorOption == .brand
+                ? (Color(hex: activeScheme == .dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight) ?? self.accent)
+                : self.accent)
         let theme = AppTheme.adaptive(accent: activeAccent, colorScheme: activeScheme)
 
         self.content
@@ -96,6 +100,16 @@ extension Color {
 
         self.init(red: red, green: green, blue: blue)
     }
+
+    #if os(macOS)
+    /// "#RRGGBB" in sRGB, the inverse of `init?(hex:)`.
+    var hexString: String? {
+        guard let rgb = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        let channel = { (value: CGFloat) in Int((min(max(value, 0), 1) * 255).rounded()) }
+        return String(format: "#%02X%02X%02X", channel(rgb.redComponent), channel(rgb.greenComponent), channel(rgb.blueComponent))
+    }
+
+    #endif
 
     static var fluidGreen: Color {
         SettingsStore.shared.accentColor

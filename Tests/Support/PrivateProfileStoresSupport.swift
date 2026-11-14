@@ -6,11 +6,13 @@ nonisolated final class DebugLogger: Sendable {
     static let diagnosticsEnabled = false
     func debug(_ message: String, source: String) {}
     func info(_ message: String, source: String) {}
+    func warning(_ message: String, source: String) {}
     func error(_ message: String, source: String) {}
 }
 
 @MainActor final class SettingsStore {
     static let shared = SettingsStore()
+    var dictionaryCorrectionArchiveEnabled = false
     var audioHistoryBudgetBytes: Int64 { 1_000_000 }
     var weekendsDontBreakStreak: Bool { false }
 }

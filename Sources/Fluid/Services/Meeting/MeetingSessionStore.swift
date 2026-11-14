@@ -95,12 +95,29 @@ actor MeetingSessionStore: MeetingSessionStoring {
     private var encryptedSessionIDs: Set<MeetingSessionID> = []
     private var encryptionCipher: MeetingRecordingCipher?
 
+    #if DEBUG
+    /// XCTest launches the real app host as well as the fixture coordinators. Its startup
+    /// maintenance must never see recordings belonging to the person running the tests.
+    private static let testHostRoot: URL? = {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment.keys.contains(where: { $0.hasPrefix("XCTest") })
+            || NSClassFromString("XCTestCase") != nil
+        else { return nil }
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent("FluidVoice-XCTest-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("Meetings", isDirectory: true)
+    }()
+    #endif
+
     init(rootDirectory: URL? = nil, fileManager: FileManager = .default,
          encryptionCipher: MeetingRecordingCipher? = nil,
          automaticTitleOwnership: MeetingProfileOwnership = .guest) {
         self.automaticTitleOwnership = automaticTitleOwnership
         self.encryptionCipher = encryptionCipher
         self.fileSystem = MeetingSessionFileSystem(manager: fileManager)
+        #if DEBUG
+        let rootDirectory = rootDirectory ?? Self.testHostRoot
+        #endif
         if let rootDirectory {
             self.rootDirectory = rootDirectory
         } else {
@@ -655,7 +672,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
             return session
         }
 
-        let expectedKinds: Set<MeetingAudioTrackKind> = session.mode == .onlineCall
+        let expectedKinds: Set<MeetingAudioTrackKind> = session.mode.capturesComputerAudio
             ? [.applicationAudio, .microphone]
             : [.microphone]
         let sessionDirectory = self.sessionDirectoryURL(for: session.id)

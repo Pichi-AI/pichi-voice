@@ -88,7 +88,7 @@ struct DictationScreenContextSettings: View {
     private var supportedModelsDescription: String {
         let feature = PrivateAIProviderFeature.shared
         let names = PrivateAIIntegrationService.dictationContextModelIDs.compactMap { feature.model(id: $0)?.displayName }
-        return PichiLocalization.format("Supported models: %@. Everything is processed on your device.", names.joined(separator: ", "))
+        return PichiLocalization.format("Off by default. Supported models: %@. Everything is processed on your device. Research preview: review your text before sending; context may cause inaccurate changes.", names.joined(separator: ", "))
     }
 
     private func beginScreenPermissionRequest() {

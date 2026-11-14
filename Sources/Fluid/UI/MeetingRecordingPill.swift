@@ -361,7 +361,7 @@ struct MeetingRecordingPillContent: View {
     }
 
     private var mutePresentation: MeetingMicrophoneMutePresentation {
-        .init(state: self.coordinator.activeSession?.mode == .onlineCall ? self.coordinator.microphoneMuteState : .notApplicable)
+        .init(state: self.coordinator.activeSession?.mode.capturesComputerAudio == true ? self.coordinator.microphoneMuteState : .notApplicable)
     }
 
     var microphoneIndicator: MeetingMicrophoneMuteIndicator {

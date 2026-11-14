@@ -4,6 +4,7 @@ cd "$(dirname "$0")/.."
 mkdir -p "$PWD/.build"
 task_test_dir=$(mktemp -d "$PWD/.build/admitted-pronunciation-read-tests.XXXXXX")
 trap 'rm -rf "$task_test_dir"' EXIT HUP INT TERM
+python3 -S Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ArchiveCarriers.swift" --archive-carriers --archive-only
 xcrun swiftc -target x86_64-apple-macosx15.0 -parse-as-library -swift-version "${PICHI_TEST_SWIFT_VERSION:-5}" \
     -D DICTIONARY_CORRECTION_REAL_CANDIDATE \
     -module-cache-path "$task_test_dir/ModuleCache" \
@@ -16,6 +17,6 @@ xcrun swiftc -target x86_64-apple-macosx15.0 -parse-as-library -swift-version "$
     Sources/Fluid/Services/DictionaryLearningEvidence.swift Sources/Fluid/Services/DictionaryNegativeExamples.swift \
     Sources/Fluid/Services/DictionaryExperimentalMatcher.swift Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift \
     Sources/Fluid/Services/AutomaticDictionaryCorrectionDetector.swift \
-    Tests/Support/PrivateProfileStoresSupport.swift \
+    "$task_test_dir/ArchiveCarriers.swift" Tests/Support/PrivateProfileStoresSupport.swift \
     Tests/AdmittedPronunciationReadTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests" "$@"

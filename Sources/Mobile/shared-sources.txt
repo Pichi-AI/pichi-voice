@@ -239,3 +239,12 @@ Sources/Fluid/Services/Meeting/MeetingTitleLanguage.swift
 Sources/Fluid/Services/Privacy/SensitiveBusinessGroupCatalog.swift
 
 Sources/Fluid/Services/Privacy/SensitiveTopicClassifier.swift
+
+# Final transcript normalization uses the same literal dictionary and quantity rules.
+Sources/Fluid/Services/Meeting/MeetingTranscriptNormalizer.swift
+Sources/Fluid/Services/DictionaryReplacementRule.swift
+Sources/Fluid/TextNormalization/FluidTextNormalizer.swift
+Sources/Fluid/TextNormalization/SpokenEmojiRules.swift
+Sources/Fluid/TextNormalization/DictationNumberParser.swift
+Sources/Fluid/TextNormalization/DictationQuantityFormatter.swift
+Sources/Fluid/Persistence/DictionaryCorrectionArchive.swift

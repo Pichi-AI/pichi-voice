@@ -1841,7 +1841,7 @@ final class ASRServiceMeetingASRScopeTests: XCTestCase {
         settings.vocabularyBoostingEnabled = true
 
         let provider = try FluidAudioProvider(meetingConfiguration: MeetingFinalProcessingConfiguration())
-        XCTAssertEqual(provider.modelOverride, .parakeetTDTv2)
+        XCTAssertEqual(provider.modelOverride, .fluidParakeetPro)
         #if DEBUG
         let options = provider.effectiveEnhancementOptionsForTesting
         XCTAssertFalse(options.experimentalUnifiedFinalEnabled)

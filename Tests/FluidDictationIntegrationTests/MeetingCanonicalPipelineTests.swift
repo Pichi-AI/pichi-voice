@@ -92,13 +92,14 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
 
         init(
             version: String = "c2b2-test",
+            languageCodes: Set<String> = ["en"],
             makeBundle: @escaping @MainActor (MeetingBackendPlan, MeetingAnalysisManifest) throws -> MeetingCanonicalResultBundle
         ) {
             self.descriptor = MeetingBackendDescriptor(
                 id: MeetingCanonicalPipelineTests.canonicalBackendID,
                 version: version,
                 execution: .local,
-                supportedLanguageCodes: ["en"],
+                supportedLanguageCodes: languageCodes,
                 supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
                 supportedFinalPrecisions: [.word],
                 resultContract: .canonicalEvidence,
@@ -309,7 +310,8 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         backend: any MeetingTranscriptionBackend,
         observer: any MeetingChunkAudioObserving,
         echoProvider: (any MeetingUnitEchoVerdictProviding)? = nil,
-        probe: ((MeetingResultSidecarReference) -> Void)? = nil
+        probe: ((MeetingResultSidecarReference) -> Void)? = nil,
+        dictionaryEntriesProvider: @escaping @MainActor () -> [SettingsStore.CustomDictionaryEntry] = { [] }
     ) -> MeetingProcessingPipeline {
         let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: Self.canonicalBackendID)
         registry.register(Self.canonicalBackendID) { _ in backend }
@@ -324,7 +326,8 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
             backendID: nil,
             chunkObserver: observer,
             echoVerdictProvider: echoProvider,
-            canonicalSidecarVerifiedProbe: probe
+            canonicalSidecarVerifiedProbe: probe,
+            dictionaryEntriesProvider: dictionaryEntriesProvider
         )
     }
 
@@ -345,7 +348,7 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
 
     // MARK: - Legacy isolation
 
-    func testLegacyBackendBuildsNoManifestWritesNoSidecarAndReturnsUnchangedResult() async throws {
+    func testLegacyBackendNormalizesTextWithoutChangingMetadataOrWritingSidecar() async throws {
         let fixture = self.makeInRoomFixture()
         let directory = try self.makeTempSessionDirectory()
         let observer = RecordingObserver()
@@ -358,7 +361,7 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
                 end: MeetingMediaTime(value: 101_000, timescale: 1000),
                 sourceTrackID: fixture.track.id,
                 speakerID: nil,
-                text: "legacy",
+                text: "twenty dollars",
                 revision: 0,
                 status: .final,
                 overlap: .none,
@@ -436,7 +439,10 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         XCTAssertNil(backend.receivedManifest ?? nil, "the legacy backend receives no manifest")
         XCTAssertTrue(self.sidecarFiles(in: directory).isEmpty, "the legacy path writes no sidecar")
         XCTAssertNil(result.resultSidecarReference)
-        XCTAssertEqual(result.segments.map(\.text), ["legacy"])
+        var formatted = expected.segments
+        formatted[0].text = "$20"
+        XCTAssertEqual(result.segments, formatted)
+        XCTAssertEqual(expected.segments[0].text, "twenty dollars")
         XCTAssertEqual(result.attempt.id, expected.attempt.id)
         XCTAssertNil(result.attempt.backendID)
         XCTAssertNil(result.attempt.backendVersion)
@@ -444,7 +450,93 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
 
     // MARK: - Canonical success and retry
 
-    private func orderedWordResult(attemptID: UUID, words: [(text: String, start: Double, end: Double)]) async throws -> MeetingProcessingResult {
+    func testCanonicalDictionaryIsFrozenDuringProcessingAndRefreshedForRedo() async throws {
+        let fixture = self.makeInRoomFixture()
+        let directory = try self.makeTempSessionDirectory()
+        var entries: [SettingsStore.CustomDictionaryEntry] = [.init(triggers: ["space fest"], replacement: "Spacefast")]
+        let backend = CanonicalFixtureBackend { plan, manifest in
+            entries[0].replacement = "New Name"
+            return self.standardBundle(plan: plan, manifest: manifest, text: "space fest costs twenty dollars")
+        }
+        let pipeline = self.makeCanonicalPipeline(
+            backend: backend,
+            observer: FixtureObserver(results: [
+                MeetingAnalysisChunkKey(trackID: fixture.track.id, chunkID: fixture.chunk.id): self.makeObserved(fixture.chunk, duration: 10),
+            ]),
+            dictionaryEntriesProvider: { entries }
+        )
+        let first = try await pipeline.process(session: fixture.session, sessionDirectory: directory, progress: { _ in })
+        XCTAssertEqual(first.segments.map(\.text), ["Spacefast costs $20"])
+        let reference = try XCTUnwrap(first.resultSidecarReference)
+        let sidecar = try MeetingResultSidecarStore(sessionDirectory: directory).read(
+            expectedAttemptID: first.attempt.id, expectedBackendID: Self.canonicalBackendID, reference: reference
+        )
+        XCTAssertEqual(sidecar.units.map(\.text), ["space fest costs twenty dollars"])
+        var redoSession = fixture.session
+        redoSession.processingAttempts = []
+        let redo = try await pipeline.process(session: redoSession, sessionDirectory: directory, progress: { _ in })
+        XCTAssertEqual(redo.segments.map(\.text), ["New Name costs $20"])
+        XCTAssertEqual(redo.coverageGaps, first.coverageGaps)
+        XCTAssertEqual(redo.isComplete, first.isComplete)
+    }
+
+    func testCanonicalFormattingUsesTheRequestedTranscriptionLanguage() async throws {
+        let fixture = self.makeInRoomFixture()
+        let directory = try self.makeTempSessionDirectory()
+        let backend = CanonicalFixtureBackend(languageCodes: ["en", "es"]) { plan, manifest in
+            self.standardBundle(plan: plan, manifest: manifest, text: "twenty dollars")
+        }
+        let pipeline = self.makeCanonicalPipeline(
+            backend: backend,
+            observer: FixtureObserver(results: [
+                MeetingAnalysisChunkKey(trackID: fixture.track.id, chunkID: fixture.chunk.id):
+                    self.makeObserved(fixture.chunk, duration: 10),
+            ])
+        )
+        for (language, expected) in [("en", "$20"), ("es", "twenty dollars")] {
+            var session = fixture.session
+            session.languageCode = language
+            session.processingAttempts = []
+            let result = try await pipeline.process(session: session, sessionDirectory: directory, progress: { _ in })
+            XCTAssertEqual(result.segments.map(\.text), [expected])
+            XCTAssertEqual(result.attempt.languageCode, language)
+        }
+    }
+
+    func testCanonicalQuantitiesAreFormattedWithoutChangingRawSidecarOnRetry() async throws {
+        let fixture = self.makeInRoomFixture()
+        let directory = try self.makeTempSessionDirectory()
+        let backend = CanonicalFixtureBackend { plan, manifest in
+            self.standardBundle(plan: plan, manifest: manifest, text: "twenty dollars fire emoji")
+        }
+        let pipeline = self.makeCanonicalPipeline(
+            backend: backend,
+            observer: FixtureObserver(results: [
+                MeetingAnalysisChunkKey(trackID: fixture.track.id, chunkID: fixture.chunk.id):
+                    self.makeObserved(fixture.chunk, duration: 10),
+            ])
+        )
+        let first = try await pipeline.process(session: fixture.session, sessionDirectory: directory, progress: { _ in })
+        XCTAssertEqual(first.segments.map(\.text), ["$20 fire emoji"])
+        let reference = try XCTUnwrap(first.resultSidecarReference)
+        let sidecar = try MeetingResultSidecarStore(sessionDirectory: directory).read(
+            expectedAttemptID: first.attempt.id, expectedBackendID: Self.canonicalBackendID, reference: reference
+        )
+        XCTAssertEqual(sidecar.units.map(\.text), ["twenty dollars fire emoji"])
+        let url = try XCTUnwrap(self.sidecarFiles(in: directory).first)
+        let bytes = try Data(contentsOf: url)
+        let retry = try await pipeline.process(session: fixture.session, sessionDirectory: directory, progress: { _ in })
+        XCTAssertEqual(retry.segments, first.segments)
+        XCTAssertEqual(retry.resultSidecarReference, reference)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        XCTAssertEqual(retry.coverageGaps, first.coverageGaps)
+        XCTAssertEqual(retry.isComplete, first.isComplete)
+    }
+
+    private func orderedWordResult(
+        attemptID: UUID, words: [(text: String, start: Double, end: Double)],
+        sessionDirectory: URL? = nil, onRawAssembly: ((MeetingAssemblyResult) -> Void)? = nil
+    ) async throws -> MeetingProcessingResult {
         let fixture = self.makeInRoomFixture()
         var session = fixture.session
         session.processingAttempts[session.processingAttempts.count - 1].id = attemptID
@@ -464,10 +556,19 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
                     analysisSpanIDs: [span.id]
                 )
             }
-            return MeetingCanonicalResultBundle(
+            let bundle = MeetingCanonicalResultBundle(
                 evidence: .init(backendID: plan.backendID, attemptID: plan.attemptID, units: units),
                 coverageReceipts: standard.coverageReceipts
             )
+            if let onRawAssembly {
+                onRawAssembly(try MeetingTranscriptAssembler(speakerNameFormat: PichiLocalization.text("Speaker %lld")).assemble(
+                    MeetingAssemblyInput(plan: plan, manifest: manifest, evidence: bundle.evidence,
+                        coverageReceipts: bundle.coverageReceipts,
+                        confirmedLocalUserTokens: bundle.confirmedLocalUserTokens,
+                        speakerAttributionPolicy: plan.request.configuration.speakerAttributionPolicy)
+                ))
+            }
+            return bundle
         }
         let pipeline = self.makeCanonicalPipeline(
             backend: backend,
@@ -476,7 +577,7 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
                     self.makeObserved(fixture.chunk, duration: 10),
             ])
         )
-        return try await pipeline.process(session: session, sessionDirectory: self.makeTempSessionDirectory(), progress: { _ in })
+        return try await pipeline.process(session: session, sessionDirectory: sessionDirectory ?? self.makeTempSessionDirectory(), progress: { _ in })
     }
 
     func testEqualTimestampWordsPreserveSourceOrderAcrossAttemptIDs() async throws {
@@ -542,6 +643,51 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         XCTAssertEqual(paragraphs.first?.text, expected.map(\.text).joined(separator: " "))
         XCTAssertEqual(paragraphs.flatMap(\.segments), result.segments,
             "Readable coalescing preserves every UUID, word, timestamp and attribution")
+    }
+
+    func testQuantityFormattingRunsAfterWordUnitsBecomeASpeakerTurn() async throws {
+        let attemptID = UUID()
+        let directory = try self.makeTempSessionDirectory()
+        let words = [
+            (text: "twenty", start: 0.0, end: 0.2),
+            (text: "dollars", start: 0.2, end: 0.4),
+        ]
+        var rawAssembly: MeetingAssemblyResult?
+        let result = try await self.orderedWordResult(attemptID: attemptID, words: words,
+            sessionDirectory: directory, onRawAssembly: { rawAssembly = $0 })
+        let raw = try XCTUnwrap(rawAssembly)
+        XCTAssertEqual(result.segments.count, words.count)
+        XCTAssertEqual(result.segments.first?.start.seconds, 0)
+        XCTAssertEqual(result.segments.last?.end.seconds ?? -1, 0.4, accuracy: 0.001)
+        XCTAssertEqual(result.speakers, raw.speakers)
+        for (segment, native) in zip(result.segments, raw.segments) {
+            var withoutFormatting = segment
+            withoutFormatting.text = native.text
+            XCTAssertEqual(withoutFormatting, native,
+                "Formatting preserves every native ID, timestamp, attribution and source field")
+        }
+        XCTAssertEqual(result.segments.map(\.nativeUnitID), words.indices.map { "unit:\(attemptID.uuidString):\($0)" })
+        for (segment, word) in zip(result.segments, words) {
+            XCTAssertEqual(segment.nativePrecision, .word)
+            XCTAssertEqual(segment.start.seconds, word.start, accuracy: 1e-9)
+            XCTAssertEqual(segment.end.seconds, word.end, accuracy: 1e-9)
+            let timing = try XCTUnwrap(segment.nativeTiming)
+            XCTAssertEqual(timing.start, word.start, accuracy: 1e-9)
+            XCTAssertEqual(timing.end, word.end, accuracy: 1e-9)
+        }
+        var session = self.makeSession(mode: .inRoom, tracks: [])
+        session.speakers = result.speakers
+        session.transcriptSegments = result.segments
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: result.segments, in: session)
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertEqual(paragraphs.first?.text, "$20")
+        XCTAssertEqual(paragraphs.flatMap(\.segments), result.segments)
+        let reference = try XCTUnwrap(result.resultSidecarReference)
+        let sidecar = try MeetingResultSidecarStore(sessionDirectory: directory).read(
+            expectedAttemptID: attemptID, expectedBackendID: Self.canonicalBackendID, reference: reference
+        )
+        XCTAssertEqual(sidecar, raw.sidecar, "Readable quantities never replace raw sidecar evidence")
+        XCTAssertEqual(sidecar.units.map(\.text), words.map(\.text))
     }
 
     private actor CheckpointFailureSummaryProvider: MeetingPostProcessingProviding {
@@ -1160,6 +1306,9 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
             error: nil
         )
         session.postProcessing = originalSummary
+        let originalWarning = MeetingSessionEvent(id: UUID(), occurredAt: Date(), kind: .transcriptCoverageIncomplete, trackID: nil, detail: "Previous attempt was incomplete")
+        session.events.append(originalWarning)
+        session.transcriptIsComplete = false
 
         let root = try self.makeTempSessionDirectory()
             .appendingPathComponent("meetings", isDirectory: true)
@@ -1218,6 +1367,8 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
             "Rolling back a transcript must also roll back its summary"
         )
         XCTAssertEqual(savedAfterFailure?.transcriptSegments, session.transcriptSegments)
+        XCTAssertEqual(savedAfterFailure?.hasIncompleteTranscriptCoverage, true)
+        XCTAssertEqual(savedAfterFailure?.events.filter { $0.kind == .transcriptCoverageIncomplete }.map(\.id), [originalWarning.id])
         XCTAssertEqual(coordinator.activeSession?.postProcessing, originalSummary)
 
         // Retry: a fresh attempt publishes; the completed-state save still observed the
@@ -1227,6 +1378,8 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         guard case .completed = coordinator.state else {
             return XCTFail("Expected completed state, got \(coordinator.state)")
         }
+        XCTAssertFalse(published.hasIncompleteTranscriptCoverage)
+        XCTAssertFalse(published.events.contains { $0.kind == .transcriptCoverageIncomplete })
         let reference = try XCTUnwrap(published.resultSidecarReference)
         let publishedAttempt = try XCTUnwrap(published.processingAttempts.last {
             $0.backendID == Self.canonicalBackendID.rawValue

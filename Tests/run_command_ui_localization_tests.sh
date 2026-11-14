@@ -15,6 +15,8 @@ import plistlib
 import sys
 
 output = Path(sys.argv[1])
+apple = Path('Sources/Fluid/Services/AppleIntelligenceCommandProvider.swift').read_text()
+(output / 'AppleCore.swift').write_text('import Foundation\n' + apple[apple.index('struct AppleIntelligenceCall:'):apple.index('// MARK: - FoundationModels')])
 
 def unique(source, marker):
     assert source.count(marker) == 1, f"Expected exactly one {marker!r}"
@@ -88,9 +90,9 @@ PY
 
 xcrun xcstringstool compile Sources/Fluid/Localization/Localizable.xcstrings \
     --output-directory "$task_bundle_dir/Contents/Resources" --language en --language ru
-python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift"
+python3 -S -B Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift"
 xcrun swiftc -default-isolation MainActor -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
-    "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift \
+    "$task_test_dir/AppleCore.swift" "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift \
     Tests/Support/StandaloneGuestProfileDefaults.swift \
     "$task_test_dir/CommandMessageModel.swift" "$task_test_dir/ChatModels.swift" \
     "$task_test_dir/CommandSessionProjection.swift" "$task_test_dir/ThemeEnvironment.swift" \
@@ -101,7 +103,8 @@ xcrun swiftc -default-isolation MainActor -parse-as-library -module-cache-path "
     Sources/Fluid/Theme/NativeButtonStyles.swift \
     Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift \
     Sources/Fluid/Theme/Components/FluidGlassControls.swift \
-    Sources/Fluid/Theme/Components/FluidDropdown.swift Sources/Fluid/Theme/Components/EditableTitle.swift \
+    Sources/Fluid/Theme/Components/FluidDropdown.swift Sources/Fluid/Theme/Components/FluidEditControls.swift \
+    Sources/Fluid/Theme/Components/EditableTitle.swift \
     "$task_test_dir/CommandMarkdownContent.swift" Sources/Fluid/Views/CommandMessageView.swift \
     Sources/Fluid/Views/CommandSessionSidebar.swift Tests/CommandUILocalizationTests.swift \
     -o "$task_bundle_dir/Contents/MacOS/tests"

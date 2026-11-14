@@ -73,6 +73,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Account/PrivateProfileOperationOwner.swift \
     Tests/Support/StandaloneGuestProfileDefaults.swift \
     "$task_test_dir/CommandModeService.swift" \
+    Sources/Fluid/Services/AppleIntelligenceCommandProvider.swift \
     "$task_test_dir/ChatHistoryStore.swift" \
     Sources/Fluid/Persistence/PersistedHistory.swift \
     Tests/CommandSessionBoundaryTests.swift \
