@@ -288,7 +288,7 @@ final class ModelRepository {
                 "fetchModels: Invalid URL constructed from baseURL='\(baseURL)' -> '\(urlString)'",
                 source: "ModelRepository"
             )
-            throw FetchError.invalidURL(details: "Could not construct valid URL from base: \(baseURL)")
+            throw FetchError.invalidURL(details: PichiLocalization.format("Could not construct valid URL from base: %@", baseURL))
         }
 
         DebugLogger.shared.debug(
@@ -340,7 +340,7 @@ final class ModelRepository {
         // Check for HTTP errors and preserve the provider body for the UI.
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
             if cloud != nil { throw CloudTextProviderError.http(httpResponse.statusCode) }
-            let bodyString = String(data: data, encoding: .utf8) ?? "<unable to decode response body>"
+            let bodyString = String(data: data, encoding: .utf8) ?? PichiLocalization.text("<unable to decode response body>")
             let errorDetails = self.rawHTTPErrorDetails(responseBody: bodyString)
             DebugLogger.shared.error(
                 "fetchModels: HTTP \(httpResponse.statusCode) for '\(providerID)': \(errorDetails)\nResponse body: \(bodyString.prefix(500))",
@@ -357,7 +357,7 @@ final class ModelRepository {
                 "fetchModels: Failed to parse JSON for '\(providerID)'. Response preview: \(bodyPreview)",
                 source: "ModelRepository"
             )
-            throw FetchError.invalidResponse(details: "Response is not valid JSON. Check if the base URL '\(baseURL)' is correct.")
+            throw FetchError.invalidResponse(details: PichiLocalization.format("Response is not valid JSON. Check if the base URL '%@' is correct.", baseURL))
         }
 
         // Try OpenAI/Groq/Cerebras format first
@@ -394,12 +394,12 @@ final class ModelRepository {
             "fetchModels: Unknown response format for '\(providerID)'. Top-level keys: [\(topLevelKeys)]. Expected 'data' or 'models' array.",
             source: "ModelRepository"
         )
-        throw FetchError.invalidResponse(details: "Unknown response format. Top-level keys: [\(topLevelKeys)]. Expected 'data' or 'models'.")
+        throw FetchError.invalidResponse(details: PichiLocalization.format("Unknown response format. Top-level keys: [%@]. Expected 'data' or 'models'.", topLevelKeys))
     }
 
     private func rawHTTPErrorDetails(responseBody: String) -> String {
         let trimmed = responseBody.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "<empty response body>" : trimmed
+        return trimmed.isEmpty ? PichiLocalization.text("<empty response body>") : trimmed
     }
 
     /// Provides detailed network error messages
@@ -407,19 +407,19 @@ final class ModelRepository {
         let nsError = error as NSError
         switch nsError.code {
         case NSURLErrorTimedOut:
-            return "Connection timed out - The server didn't respond in time. Check if the base URL is correct and the service is running."
+            return PichiLocalization.text("Connection timed out - The server didn't respond in time. Check if the base URL is correct and the service is running.")
         case NSURLErrorCannotConnectToHost:
-            return "Cannot connect to host - Check if the base URL is correct. For local providers (Ollama, LM Studio), ensure the server is running."
+            return PichiLocalization.text("Cannot connect to host - Check if the base URL is correct. For local providers (Ollama, LM Studio), ensure the server is running.")
         case NSURLErrorNetworkConnectionLost:
-            return "Network connection lost - Check your internet connection."
+            return PichiLocalization.text("Network connection lost - Check your internet connection.")
         case NSURLErrorNotConnectedToInternet:
-            return "No internet connection - Check your network settings."
+            return PichiLocalization.text("No internet connection - Check your network settings.")
         case NSURLErrorSecureConnectionFailed:
-            return "SSL/TLS error - The server's security certificate may be invalid or expired."
+            return PichiLocalization.text("SSL/TLS error - The server's security certificate may be invalid or expired.")
         case NSURLErrorCannotFindHost:
-            return "Cannot find host - The domain name doesn't exist. Check if the base URL is spelled correctly."
+            return PichiLocalization.text("Cannot find host - The domain name doesn't exist. Check if the base URL is spelled correctly.")
         default:
-            return "\(error.localizedDescription) (Error code: \(nsError.code))"
+            return PichiLocalization.format("%@ (Error code: %@)", String(describing: error.localizedDescription), String(describing: nsError.code))
         }
     }
 
@@ -432,13 +432,13 @@ final class ModelRepository {
         var errorDescription: String? {
             switch self {
             case let .invalidURL(details):
-                return "Invalid API URL: \(details)"
+                return PichiLocalization.format("Invalid API URL: %@", String(describing: details))
             case let .httpError(code, details):
-                return "API error (HTTP \(code)): \(details)"
+                return PichiLocalization.format("API error (HTTP %@): %@", String(describing: code), String(describing: details))
             case let .invalidResponse(details):
-                return "Invalid response: \(details)"
+                return PichiLocalization.format("Invalid response: %@", String(describing: details))
             case let .networkError(details):
-                return "Network error: \(details)"
+                return PichiLocalization.format("Network error: %@", String(describing: details))
             }
         }
     }

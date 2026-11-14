@@ -3327,7 +3327,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ошибки AI-обработки"
+            "value": "Ошибки ИИ-обработки"
           }
         }
       }
@@ -3581,7 +3581,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "AI-провайдер"
+            "value": "ИИ-провайдер"
           }
         }
       }
@@ -3718,7 +3718,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Для AI-обработки нужен API-ключ"
+            "value": "Для ИИ-обработки нужен API-ключ"
           }
         }
       }
@@ -6229,7 +6229,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "CPU Apple Silicon / Intel"
+            "value": "Процессор Apple Silicon / Intel"
           }
         }
       }
@@ -8124,7 +8124,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Режим Basic открывает меню режимов. Указатель выбирает Smart, затем панель возвращается вниз и исчезает."
+            "value": "Открывается меню режимов. Указатель переключает базовый режим на умный, затем панель возвращается вниз и исчезает."
           }
         }
       }
@@ -8141,7 +8141,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Basic · Без Fluid Intelligence"
+            "value": "Базовый · Без Fluid Intelligence"
           }
         }
       },
@@ -9018,7 +9018,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "CPU"
+            "value": "Процессор"
           }
         }
       }
@@ -15655,7 +15655,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Свои стили обработки требуют внешнего AI-провайдера. Fluid Intelligence здесь не поддерживается."
+            "value": "Свои стили обработки требуют внешнего ИИ-провайдера. Fluid Intelligence здесь не поддерживается."
           }
         }
       },
@@ -20962,7 +20962,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Внешний AI-провайдер"
+            "value": "Внешний ИИ-провайдер"
           }
         }
       }
@@ -23334,7 +23334,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "GPU"
+            "value": "Графический процессор"
           }
         }
       }
@@ -34718,7 +34718,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Нет проверенного AI-провайдера"
+            "value": "Нет проверенного ИИ-провайдера"
           }
         }
       }
@@ -35558,7 +35558,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "ОК"
+            "value": "Понятно"
           }
         }
       }
@@ -39419,7 +39419,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Конфиденциальный AI на устройстве."
+            "value": "Конфиденциальный ИИ на устройстве."
           }
         }
       }
@@ -46901,7 +46901,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Настроить AI-провайдера"
+            "value": "Настроить ИИ-провайдера"
           }
         }
       }
@@ -48042,7 +48042,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Для этой сборки не настроены подписанные обновления. Установите проверенную сборку вручную."
+            "value": "Обновления с проверкой подписи для этой сборки не настроены. Установите проверенную сборку вручную."
           }
         }
       }
@@ -48314,7 +48314,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Smart · С Fluid Intelligence"
+            "value": "Умный · С Fluid Intelligence"
           }
         }
       },
@@ -50043,7 +50043,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Остановите диктовку и снова включите режим Smart."
+            "value": "Остановите диктовку и снова включите умный режим."
           }
         }
       }
@@ -53197,7 +53197,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Тот же наклонный вид панели, что и в видео, с выбранным режимом Smart."
+            "value": "Наклонный вид панели из видео с выбранным умным режимом."
           }
         }
       }
@@ -53297,7 +53297,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "У выбранного приложения нет корректного идентификатора bundle."
+            "value": "У выбранного приложения нет корректного идентификатора пакета."
           }
         }
       }
@@ -65769,7 +65769,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "high"
+            "value": "Высокий"
           }
         }
       }
@@ -66109,7 +66109,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "low"
+            "value": "Низкий"
           }
         }
       }
@@ -66233,7 +66233,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "medium"
+            "value": "Средний"
           }
         }
       }
@@ -66439,7 +66439,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "minimal"
+            "value": "Минимальный"
           }
         }
       }
@@ -66474,7 +66474,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "none"
+            "value": "Отключено"
           }
         }
       }
@@ -67589,7 +67589,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "value"
+            "value": "значение"
           }
         }
       }
@@ -67932,7 +67932,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "~428,8 MiB"
+            "value": "~428,8 МиБ"
           }
         }
       }
@@ -67949,7 +67949,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "~435,2 MiB"
+            "value": "~435,2 МиБ"
           }
         }
       }
@@ -69292,6 +69292,3559 @@
           "stringUnit": {
             "state": "translated",
             "value": "Наша наиболее точная модель для чёткой диктовки в шумной обстановке. Работает на вашем устройстве."
+          }
+        }
+      }
+    },
+    "A different update is now available. Please review it before installing.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A different update is now available. Please review it before installing."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступна другая версия обновления. Проверьте её перед установкой."
+          }
+        }
+      }
+    },
+    "An update is already being installed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An update is already being installed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновление уже устанавливается."
+          }
+        }
+      }
+    },
+    "Downloaded app’s code signature does not match current app.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloaded app’s code signature does not match current app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подпись загруженного приложения не соответствует подписи установленного приложения."
+          }
+        }
+      }
+    },
+    "Extracted content does not contain an app bundle.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extracted content does not contain an app bundle."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В распакованном архиве нет приложения."
+          }
+        }
+      }
+    },
+    "Failed to download update.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to download update."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось загрузить обновление."
+          }
+        }
+      }
+    },
+    "Failed to extract the update archive.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to extract the update archive."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось распаковать архив обновления."
+          }
+        }
+      }
+    },
+    "Failed to restore a previous version.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to restore a previous version."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось восстановить предыдущую версию."
+          }
+        }
+      }
+    },
+    "FluidVoice %@ is now available. The app will restart automatically after installation.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FluidVoice %@ is now available. The app will restart automatically after installation."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступна версия FluidVoice %@. После установки приложение автоматически перезапустится."
+          }
+        }
+      }
+    },
+    "History could not be saved": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "History could not be saved"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сохранить историю"
+          }
+        }
+      }
+    },
+    "Install Now": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Install Now"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установить"
+          }
+        }
+      }
+    },
+    "Installing FluidVoice %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installing FluidVoice %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установка FluidVoice %@"
+          }
+        }
+      }
+    },
+    "Invalid HTTP response from GitHub.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid HTTP response from GitHub."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Получен некорректный ответ от GitHub."
+          }
+        }
+      }
+    },
+    "Invalid URL.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid URL."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный адрес."
+          }
+        }
+      }
+    },
+    "Keep Open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep Open"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не закрывать"
+          }
+        }
+      }
+    },
+    "Later": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Later"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Позже"
+          }
+        }
+      }
+    },
+    "No Beta Updates": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Beta Updates"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новых бета-версий нет"
+          }
+        }
+      }
+    },
+    "No Updates": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Updates"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновлений нет"
+          }
+        }
+      }
+    },
+    "No matching asset found in the latest release.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching asset found in the latest release."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В последнем выпуске не найден подходящий файл для установки."
+          }
+        }
+      }
+    },
+    "No release notes available.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No release notes available."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Описание изменений отсутствует."
+          }
+        }
+      }
+    },
+    "No rollback backup is available.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No rollback backup is available."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервной копии для отката нет."
+          }
+        }
+      }
+    },
+    "No suitable release found.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No suitable release found."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подходящая версия не найдена."
+          }
+        }
+      }
+    },
+    "Quit Anyway": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quit Anyway"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Всё равно завершить"
+          }
+        }
+      }
+    },
+    "The app could not restart. Your previous version is saved at %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The app could not restart. Your previous version is saved at %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось перезапустить приложение. Предыдущая версия сохранена по адресу: %@."
+          }
+        }
+      }
+    },
+    "The current app could not be backed up. Nothing was replaced.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The current app could not be backed up. Nothing was replaced."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось создать резервную копию приложения. Установленная версия сохранена."
+          }
+        }
+      }
+    },
+    "The data couldn’t be read because it isn’t in the correct format.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The data couldn’t be read because it isn’t in the correct format."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось прочитать данные: неверный формат."
+          }
+        }
+      }
+    },
+    "The new app could not start. Your previous version has been restored. Please try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The new app could not start. Your previous version has been restored. Please try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось запустить новую версию. Предыдущая версия восстановлена. Попробуйте ещё раз."
+          }
+        }
+      }
+    },
+    "The previous update could not be cleaned up. Retained staging: %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The previous update could not be cleaned up. Retained staging: %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось удалить временные файлы предыдущего обновления. Они сохранены в папке: %@."
+          }
+        }
+      }
+    },
+    "Unable to check for updates. Please try again later.\n\nError: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to check for updates. Please try again later.\n\nError: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось проверить обновления. Попробуйте позже.\n\nОшибка: %@"
+          }
+        }
+      }
+    },
+    "Unable to install the update. Please try again later.\n\nError: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to install the update. Please try again later.\n\nError: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось установить обновление. Попробуйте позже.\n\nОшибка: %@"
+          }
+        }
+      }
+    },
+    "Update Available": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update Available"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступно обновление"
+          }
+        }
+      }
+    },
+    "Update Check Failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update Check Failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось проверить обновления"
+          }
+        }
+      }
+    },
+    "Update Failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update Failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось установить обновление"
+          }
+        }
+      }
+    },
+    "The update requires hardened runtime and a secure signing timestamp.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update requires hardened runtime and a secure signing timestamp."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновление должно использовать усиленную защиту среды выполнения и доверенную метку времени подписи."
+          }
+        }
+      }
+    },
+    "The update could not pass stapled notarization and Gatekeeper checks.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update could not pass stapled notarization and Gatekeeper checks."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновление не прошло проверку нотарификации и Gatekeeper."
+          }
+        }
+      }
+    },
+    "The update is not a valid application bundle.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update is not a valid application bundle."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновление не содержит корректного пакета приложения."
+          }
+        }
+      }
+    },
+    "The update's expected identity or signing policy is invalid.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update's expected identity or signing policy is invalid."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректная ожидаемая идентичность приложения или политика подписи обновления."
+          }
+        }
+      }
+    },
+    "The update's signature or sealed contents could not be verified.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update's signature or sealed contents could not be verified."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось проверить подпись или целостность обновления."
+          }
+        }
+      }
+    },
+    "The update has no trusted signing identity.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update has no trusted signing identity."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "У обновления нет доверенной подписи разработчика."
+          }
+        }
+      }
+    },
+    "The update has invalid application metadata.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update has invalid application metadata."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновление содержит некорректные сведения о приложении."
+          }
+        }
+      }
+    },
+    "The update belongs to a different application.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update belongs to a different application."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновление предназначено для другого приложения."
+          }
+        }
+      }
+    },
+    "The update does not match the selected release version.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update does not match the selected release version."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновление не соответствует выбранной версии выпуска."
+          }
+        }
+      }
+    },
+    "The update does not match the expected build.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update does not match the expected build."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновление не соответствует ожидаемому номеру сборки."
+          }
+        }
+      }
+    },
+    "The update image could not be detached. Retained staging: %@. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update image could not be detached. Retained staging: %@. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось отключить образ обновления. Временные файлы сохранены в папке: %@. %@"
+          }
+        }
+      }
+    },
+    " Retained backup files: %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " Retained backup files: %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " Резервные файлы сохранены в папке: %@."
+          }
+        }
+      }
+    },
+    "The current app could not be backed up. Nothing was replaced.%@ %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The current app could not be backed up. Nothing was replaced.%@ %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось создать резервную копию приложения. Установленная версия сохранена.%@ %@"
+          }
+        }
+      }
+    },
+    "Preparing app replacement": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing app replacement"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подготовка замены приложения"
+          }
+        }
+      }
+    },
+    "Replacing app": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replacing app"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Замена приложения"
+          }
+        }
+      }
+    },
+    "Restoring previous app": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restoring previous app"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Восстановление предыдущей версии"
+          }
+        }
+      }
+    },
+    "Removing temporary update files": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removing temporary update files"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удаление временных файлов обновления"
+          }
+        }
+      }
+    },
+    " Recovery files: %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " Recovery files: %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " Файлы для восстановления: %@."
+          }
+        }
+      }
+    },
+    "App replacement failed (%@): %@.%@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App replacement failed (%@): %@.%@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось заменить приложение (%@): %@.%@"
+          }
+        }
+      }
+    },
+    "No verified AI provider selected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No verified AI provider selected"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не выбран проверенный ИИ-провайдер"
+          }
+        }
+      }
+    },
+    "API key not set for %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "API key not set for %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не задан ключ API для %@"
+          }
+        }
+      }
+    },
+    "No model selected for %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No model selected for %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не выбрана модель для %@"
+          }
+        }
+      }
+    },
+    "AI returned an empty response": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI returned an empty response"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ИИ вернул пустой ответ"
+          }
+        }
+      }
+    },
+    "Dictation exceeded the AI context window": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dictation exceeded the AI context window"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диктовка превысила объём контекста ИИ"
+          }
+        }
+      }
+    },
+    "This compact voice model has no valid pinned download.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This compact voice model has no valid pinned download."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой компактной модели речи не настроена проверенная загрузка."
+          }
+        }
+      }
+    },
+    "Voice model download files are unsafe at %@. Remove that file or folder and try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice model download files are unsafe at %@. Remove that file or folder and try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Файлы загрузки модели по адресу %@ небезопасны. Удалите этот файл или папку и попробуйте снова."
+          }
+        }
+      }
+    },
+    "The model server returned an invalid download range. Please try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model server returned an invalid download range. Please try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сервер модели вернул некорректный диапазон загрузки. Попробуйте ещё раз."
+          }
+        }
+      }
+    },
+    "This voice model is already downloading in another app process. Please try again when it finishes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This voice model is already downloading in another app process. Please try again when it finishes."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта модель речи уже загружается другим процессом приложения. Дождитесь завершения загрузки."
+          }
+        }
+      }
+    },
+    "The model staging folder is not safe to use.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model staging folder is not safe to use."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Папку временных файлов модели небезопасно использовать."
+          }
+        }
+      }
+    },
+    "The downloaded model is incomplete.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The downloaded model is incomplete."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель загружена не полностью."
+          }
+        }
+      }
+    },
+    "The downloaded model is not the expected release.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The downloaded model is not the expected release."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загруженная модель не соответствует ожидаемому выпуску."
+          }
+        }
+      }
+    },
+    "The downloaded model failed verification (%@).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The downloaded model failed verification (%@)."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загруженная модель не прошла проверку (%@)."
+          }
+        }
+      }
+    },
+    "The downloaded model holds an unexpected file (%@).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The downloaded model holds an unexpected file (%@)."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В загруженной модели найден неожиданный файл (%@)."
+          }
+        }
+      }
+    },
+    "This voice model has no valid pinned download.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This voice model has no valid pinned download."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой модели речи не настроена проверенная загрузка."
+          }
+        }
+      }
+    },
+    "The model server did not return the expected archive. Please try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model server did not return the expected archive. Please try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сервер модели не вернул ожидаемый архив. Попробуйте ещё раз."
+          }
+        }
+      }
+    },
+    "The downloaded voice model failed verification. Please try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The downloaded voice model failed verification. Please try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загруженная модель речи не прошла проверку. Попробуйте ещё раз."
+          }
+        }
+      }
+    },
+    "The voice model archive contains invalid or unsafe files.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The voice model archive contains invalid or unsafe files."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Архив модели речи содержит некорректные или небезопасные файлы."
+          }
+        }
+      }
+    },
+    "The voice model archive is incomplete.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The voice model archive is incomplete."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Архив модели речи неполон."
+          }
+        }
+      }
+    },
+    "A different or incomplete voice model is already cached. Delete this model in Voice Engine settings, then download it again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A different or incomplete voice model is already cached. Delete this model in Voice Engine settings, then download it again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В кэше уже есть другая или неполная модель речи. Удалите её в настройках распознавания речи и загрузите заново."
+          }
+        }
+      }
+    },
+    "Voice model temporary files could not be removed: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice model temporary files could not be removed: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось удалить временные файлы модели речи: %@"
+          }
+        }
+      }
+    },
+    "Available disk space could not be checked. Your installed model was kept. Please try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Available disk space could not be checked. Your installed model was kept. Please try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось проверить свободное место на диске. Установленная модель сохранена. Попробуйте ещё раз."
+          }
+        }
+      }
+    },
+    "There is not enough free disk space to safely update this voice model. Free some space and try again. Your installed model was kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There is not enough free disk space to safely update this voice model. Free some space and try again. Your installed model was kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Недостаточно свободного места для безопасного обновления модели речи. Освободите место и попробуйте снова. Установленная модель сохранена."
+          }
+        }
+      }
+    },
+    "The installed voice model changed during this update. Its files were preserved. Please try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The installed voice model changed during this update. Its files were preserved. Please try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Во время обновления установленная модель речи изменилась. Её файлы сохранены. Попробуйте ещё раз."
+          }
+        }
+      }
+    },
+    "The updated voice model is installed at %@, but its old files could not be removed: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The updated voice model is installed at %@, but its old files could not be removed: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновлённая модель речи установлена в %@, но не удалось удалить старые файлы: %@"
+          }
+        }
+      }
+    },
+    "The voice model update failed: %@. ": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The voice model update failed: %@. "
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось обновить модель речи: %@. "
+          }
+        }
+      }
+    },
+    "This backup uses an unsupported schema version (%@.%@).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This backup uses an unsupported schema version (%@.%@)."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта резервная копия использует неподдерживаемую версию формата (%@.%@)."
+          }
+        }
+      }
+    },
+    "A backup import or export is already running. Wait for it to finish, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A backup import or export is already running. Wait for it to finish, then try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импорт или экспорт резервной копии уже выполняется. Дождитесь завершения и попробуйте снова."
+          }
+        }
+      }
+    },
+    "Could not access Application Support.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not access Application Support."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось получить доступ к папке данных приложения."
+          }
+        }
+      }
+    },
+    "Saved audio is missing.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved audio is missing."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранённое аудио отсутствует."
+          }
+        }
+      }
+    },
+    "No saved dictation audio is available to export.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No saved dictation audio is available to export."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет сохранённого аудио диктовки для экспорта."
+          }
+        }
+      }
+    },
+    "Could not create export zip. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not create export zip. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось создать архив экспорта. %@"
+          }
+        }
+      }
+    },
+    "Failed to convert key data.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to convert key data."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось преобразовать данные ключа."
+          }
+        }
+      }
+    },
+    "%@ (OSStatus: %@)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (OSStatus: %@)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (код системы: %@)"
+          }
+        }
+      }
+    },
+    "Unhandled Keychain error (OSStatus: %@)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unhandled Keychain error (OSStatus: %@)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Необработанная ошибка Связки ключей (код системы: %@)"
+          }
+        }
+      }
+    },
+    "Missing required files: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Missing required files: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отсутствуют необходимые файлы: %@"
+          }
+        }
+      }
+    },
+    "Manifest file not found at %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manifest file not found at %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Файл описания модели не найден по адресу %@"
+          }
+        }
+      }
+    },
+    "Failed to read manifest at %@: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to read manifest at %@: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось прочитать файл описания модели по адресу %@: %@"
+          }
+        }
+      }
+    },
+    "Unexpected model_id '%@'. Expected '%@'.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unexpected model_id '%@'. Expected '%@'."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неожиданное значение model_id «%@». Ожидалось «%@»."
+          }
+        }
+      }
+    },
+    "Unexpected sample rate %@. Expected %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unexpected sample rate %@. Expected %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неожиданная частота дискретизации %@. Ожидалась %@."
+          }
+        }
+      }
+    },
+    "Invalid max_audio_seconds %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid max_audio_seconds %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректное значение max_audio_seconds: %@."
+          }
+        }
+      }
+    },
+    "Invalid max_audio_samples %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid max_audio_samples %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректное значение max_audio_samples: %@."
+          }
+        }
+      }
+    },
+    "Manifest audio window is inconsistent: %@ samples vs %@s at %@ Hz.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manifest audio window is inconsistent: %@ samples vs %@s at %@ Hz."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Несогласованные параметры аудио в описании модели: %@ отсчётов вместо %@ с при %@ Гц."
+          }
+        }
+      }
+    },
+    "Invalid overlap_samples %@ for max_audio_samples %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid overlap_samples %@ for max_audio_samples %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректное значение overlap_samples: %@ при max_audio_samples: %@."
+          }
+        }
+      }
+    },
+    "Transcription feedback uploads are not configured for this distribution.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcription feedback uploads are not configured for this distribution."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправка отзывов о распознавании для этой сборки не настроена."
+          }
+        }
+      }
+    },
+    "Invalid report endpoint.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid report endpoint."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный адрес отправки отчёта."
+          }
+        }
+      }
+    },
+    "Invalid report response.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid report response."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный ответ при отправке отчёта."
+          }
+        }
+      }
+    },
+    "Report failed with HTTP %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Report failed with HTTP %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось отправить отчёт. Код HTTP: %@."
+          }
+        }
+      }
+    },
+    "Invalid URL": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid URL"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный адрес"
+          }
+        }
+      }
+    },
+    "Invalid response from LLM": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid response from LLM"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный ответ языковой модели"
+          }
+        }
+      }
+    },
+    "HTTP %@: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HTTP %@: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HTTP %@: %@"
+          }
+        }
+      }
+    },
+    "Failed to encode request": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to encode request"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось подготовить запрос"
+          }
+        }
+      }
+    },
+    "Request timed out after %@ seconds": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Request timed out after %@ seconds"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Время ожидания запроса истекло через %@ с"
+          }
+        }
+      }
+    },
+    "Use the support link for this distribution.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use the support link for this distribution."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Воспользуйтесь ссылкой поддержки для этой сборки."
+          }
+        }
+      }
+    },
+    "Add a valid email and a message within the character limit.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add a valid email and a message within the character limit."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Укажите корректный адрес электронной почты и сообщение в пределах допустимой длины."
+          }
+        }
+      }
+    },
+    "Too many messages at once. Please wait a minute, then try again. Your draft is still here.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many messages at once. Please wait a minute, then try again. Your draft is still here."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слишком много сообщений за короткое время. Подождите минуту и попробуйте снова. Ваш черновик сохранён."
+          }
+        }
+      }
+    },
+    "The server couldn’t accept this message. Check your email and message length. Your draft is still here.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server couldn’t accept this message. Check your email and message length. Your draft is still here."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сервер не принял сообщение. Проверьте адрес электронной почты и длину сообщения. Ваш черновик сохранён."
+          }
+        }
+      }
+    },
+    "Feedback is temporarily unavailable. Please try again later. Your draft is still here.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Feedback is temporarily unavailable. Please try again later. Your draft is still here."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обратная связь временно недоступна. Попробуйте позже. Ваш черновик сохранён."
+          }
+        }
+      }
+    },
+    "Delivery couldn’t be confirmed. Check your connection before retrying; your message may already have arrived. Your draft is still here.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delivery couldn’t be confirmed. Check your connection before retrying; your message may already have arrived. Your draft is still here."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось подтвердить доставку. Проверьте соединение перед повторной отправкой: сообщение уже могло дойти. Ваш черновик сохранён."
+          }
+        }
+      }
+    },
+    "We couldn’t confirm delivery. Your draft is still here; please try again later.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "We couldn’t confirm delivery. Your draft is still here; please try again later."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось подтвердить доставку. Ваш черновик сохранён. Попробуйте позже."
+          }
+        }
+      }
+    },
+    "Finish the current recording, transcription, microphone preview, or voice model operation, then import the backup again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish the current recording, transcription, microphone preview, or voice model operation, then import the backup again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завершите запись, распознавание, проверку микрофона или операцию с моделью речи, затем повторите импорт резервной копии."
+          }
+        }
+      }
+    },
+    "Invalid vocabulary JSON: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid vocabulary JSON: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный файл словаря JSON: %@"
+          }
+        }
+      }
+    },
+    "Could not access Application Support directory.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not access Application Support directory."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось получить доступ к папке данных приложения."
+          }
+        }
+      }
+    },
+    "The meeting backend cannot use the requested speech model (%@).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The meeting backend cannot use the requested speech model (%@)."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Механизм распознавания встреч не может использовать выбранную модель речи (%@)."
+          }
+        }
+      }
+    },
+    "The selected speech model does not support meeting language %@. Choose a compatible model or change the meeting language.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected speech model does not support meeting language %@. Choose a compatible model or change the meeting language."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранная модель речи не поддерживает язык встречи %@. Выберите совместимую модель или измените язык встречи."
+          }
+        }
+      }
+    },
+    "Meeting transcription does not support %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting transcription does not support %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание встреч не поддерживает %@."
+          }
+        }
+      }
+    },
+    "Model file is not installed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model file is not installed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Файл модели не установлен."
+          }
+        }
+      }
+    },
+    "Audio buffer has an invalid sample rate or channel count.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio buffer has an invalid sample rate or channel count."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиобуфер содержит некорректную частоту дискретизации или число каналов."
+          }
+        }
+      }
+    },
+    "Target audio sample rate must be greater than zero.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Target audio sample rate must be greater than zero."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Целевая частота дискретизации должна быть больше нуля."
+          }
+        }
+      }
+    },
+    "Could not access Float32 audio channel data.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not access Float32 audio channel data."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось прочитать данные аудиоканала Float32."
+          }
+        }
+      }
+    },
+    "Could not create the target mono audio format.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not create the target mono audio format."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось создать целевой одноканальный формат аудио."
+          }
+        }
+      }
+    },
+    "Could not create an audio converter.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not create an audio converter."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось создать преобразователь аудио."
+          }
+        }
+      }
+    },
+    "Could not allocate the converted audio buffer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not allocate the converted audio buffer."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось выделить буфер преобразованного аудио."
+          }
+        }
+      }
+    },
+    "Invalid API URL: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid API URL: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный адрес API: %@"
+          }
+        }
+      }
+    },
+    "API error (HTTP %@): %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "API error (HTTP %@): %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка API (HTTP %@): %@"
+          }
+        }
+      }
+    },
+    "Invalid response: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid response: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный ответ: %@"
+          }
+        }
+      }
+    },
+    "Network error: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network error: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка сети: %@"
+          }
+        }
+      }
+    },
+    "No finalized meeting audio is available to transcribe.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No finalized meeting audio is available to transcribe."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет завершённых аудиофрагментов встречи для распознавания."
+          }
+        }
+      }
+    },
+    "Finish the active dictation before transcribing this meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish the active dictation before transcribing this meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завершите текущую диктовку перед распознаванием этой встречи."
+          }
+        }
+      }
+    },
+    "The selected speech model is not ready.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected speech model is not ready."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранная модель речи не готова."
+          }
+        }
+      }
+    },
+    "The selected speech model cannot transcribe meeting language %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected speech model cannot transcribe meeting language %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранная модель речи не поддерживает язык встречи %@."
+          }
+        }
+      }
+    },
+    "A finalized meeting audio chunk could not be read.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A finalized meeting audio chunk could not be read."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось прочитать завершённый аудиофрагмент встречи."
+          }
+        }
+      }
+    },
+    "No speech was detected in the saved meeting audio.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No speech was detected in the saved meeting audio."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В сохранённом аудио встречи речь не обнаружена."
+          }
+        }
+      }
+    },
+    "The transcript exceeds this summary model's input limit.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The transcript exceeds this summary model's input limit."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст встречи превышает допустимый объём входных данных модели итогов."
+          }
+        }
+      }
+    },
+    "The meeting summary model is not installed or ready.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The meeting summary model is not installed or ready."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель итогов встречи не установлена или не готова."
+          }
+        }
+      }
+    },
+    "The summary model returned an invalid result.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The summary model returned an invalid result."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель итогов вернула некорректный результат."
+          }
+        }
+      }
+    },
+    "Could not save the transcript checkpoint. Summary generation was skipped.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not save the transcript checkpoint. Summary generation was skipped."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сохранить промежуточный текст встречи. Подготовка итогов пропущена."
+          }
+        }
+      }
+    },
+    "Models are busy. Wait for the current model operation to finish.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Models are busy. Wait for the current model operation to finish."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модели заняты. Дождитесь завершения текущей операции с моделью."
+          }
+        }
+      }
+    },
+    "This model operation no longer owns meeting processing.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This model operation no longer owns meeting processing."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта операция с моделью больше не управляет обработкой встречи."
+          }
+        }
+      }
+    },
+    "This Fluid provider needs an update before meeting model switching can run.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Fluid provider needs an update before meeting model switching can run."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для переключения моделей встреч необходимо обновить этот компонент Fluid."
+          }
+        }
+      }
+    },
+    "The meeting no longer holds the exclusive audio activity lease.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The meeting no longer holds the exclusive audio activity lease."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "У встречи больше нет исключительного доступа к аудио."
+          }
+        }
+      }
+    },
+    "Wait for the active voice model download to finish.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wait for the active voice model download to finish."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дождитесь завершения загрузки модели речи."
+          }
+        }
+      }
+    },
+    "Meeting transcription preparation is already in progress.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting transcription preparation is already in progress."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подготовка к распознаванию встречи уже выполняется."
+          }
+        }
+      }
+    },
+    "The prepared transcription resource is unavailable or does not match this meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The prepared transcription resource is unavailable or does not match this meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подготовленный ресурс распознавания недоступен или не соответствует этой встрече."
+          }
+        }
+      }
+    },
+    "Unsupported meeting schema version %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unsupported meeting schema version %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неподдерживаемая версия формата встречи: %@."
+          }
+        }
+      }
+    },
+    "Enable FluidMeet in Settings to record a meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable FluidMeet in Settings to record a meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включите FluidMeet в настройках, чтобы записать встречу."
+          }
+        }
+      }
+    },
+    "There is no active meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There is no active meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет текущей встречи."
+          }
+        }
+      }
+    },
+    "This meeting has no finalized audio to retry.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This meeting has no finalized audio to retry."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "У этой встречи нет завершённых аудиофрагментов для повторной обработки."
+          }
+        }
+      }
+    },
+    "Stop the active meeting activity first.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop the active meeting activity first."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала остановите текущую запись или обработку встречи."
+          }
+        }
+      }
+    },
+    "Stop dictation before starting a meeting recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop dictation before starting a meeting recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Остановите диктовку перед записью встречи."
+          }
+        }
+      }
+    },
+    "There is nothing to undo.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There is nothing to undo."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет действий для отмены."
+          }
+        }
+      }
+    },
+    "A meeting session with this identifier already exists.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A meeting session with this identifier already exists."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встреча с таким идентификатором уже существует."
+          }
+        }
+      }
+    },
+    "This meeting was created with unsupported schema version %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This meeting was created with unsupported schema version %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта встреча создана в неподдерживаемой версии формата: %@."
+          }
+        }
+      }
+    },
+    "This meeting has been deleted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This meeting has been deleted."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта встреча удалена."
+          }
+        }
+      }
+    },
+    "%@. Open AI Settings to configure a provider.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@. Open AI Settings to configure a provider."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@. Откройте настройки ИИ и настройте провайдера."
+          }
+        }
+      }
+    },
+    "This update did not replace the installed model at %@. ": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This update did not replace the installed model at %@. "
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновление не заменило установленную модель в %@. "
+          }
+        }
+      }
+    },
+    "Temporary files could not be removed: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Temporary files could not be removed: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось удалить временные файлы: %@"
+          }
+        }
+      }
+    },
+    "Error: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка: %@"
+          }
+        }
+      }
+    },
+    "Network error: no internet connection.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network error: no internet connection."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка сети: нет подключения к интернету."
+          }
+        }
+      }
+    },
+    "Network error: request timed out.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network error: request timed out."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка сети: время ожидания запроса истекло."
+          }
+        }
+      }
+    },
+    "Network error: could not find API host.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network error: could not find API host."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка сети: не удалось найти сервер API."
+          }
+        }
+      }
+    },
+    "Network error: could not connect to API host.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network error: could not connect to API host."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка сети: не удалось подключиться к серверу API."
+          }
+        }
+      }
+    },
+    "Network error: connection dropped during the request.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network error: connection dropped during the request."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка сети: соединение прервано во время запроса."
+          }
+        }
+      }
+    },
+    "Network error: TLS certificate validation failed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network error: TLS certificate validation failed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка сети: не удалось проверить сертификат TLS."
+          }
+        }
+      }
+    },
+    "The downloaded speaker model was damaged. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The downloaded speaker model was damaged. Try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загруженная модель определения участников повреждена. Попробуйте ещё раз."
+          }
+        }
+      }
+    },
+    "Couldn't download the speaker model. Check your internet connection and try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't download the speaker model. Check your internet connection and try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось загрузить модель определения участников. Проверьте соединение с интернетом и попробуйте снова."
+          }
+        }
+      }
+    },
+    "The speaker model isn't available for download right now. Try again later.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The speaker model isn't available for download right now. Try again later."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель определения участников временно недоступна для загрузки. Попробуйте позже."
+          }
+        }
+      }
+    },
+    "Couldn't download the speaker model (%@). Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't download the speaker model (%@). Try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось загрузить модель определения участников (%@). Попробуйте ещё раз."
+          }
+        }
+      }
+    },
+    "The dictionary entry changed before audio learning finished.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The dictionary entry changed before audio learning finished."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись словаря изменилась до завершения обучения по аудио."
+          }
+        }
+      }
+    },
+    "Pronunciation samples must use the same model and embedding size.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pronunciation samples must use the same model and embedding size."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Образцы произношения должны использовать одну модель и одинаковый размер векторов."
+          }
+        }
+      }
+    },
+    "These pronunciation recordings use an older voice model. Retrain this word by voice. Your custom words and text corrections remain saved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These pronunciation recordings use an older voice model. Retrain this word by voice. Your custom words and text corrections remain saved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эти записи произношения используют устаревшую модель речи. Заново обучите это слово голосом. Ваши слова и текстовые исправления сохранены."
+          }
+        }
+      }
+    },
+    "Connection timed out - The server didn't respond in time. Check if the base URL is correct and the service is running.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connection timed out - The server didn't respond in time. Check if the base URL is correct and the service is running."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Время ожидания соединения истекло. Проверьте адрес сервера и убедитесь, что сервис запущен."
+          }
+        }
+      }
+    },
+    "Cannot connect to host - Check if the base URL is correct. For local providers (Ollama, LM Studio), ensure the server is running.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cannot connect to host - Check if the base URL is correct. For local providers (Ollama, LM Studio), ensure the server is running."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось подключиться к серверу. Проверьте его адрес. Для локальных провайдеров (Ollama, LM Studio) убедитесь, что сервер запущен."
+          }
+        }
+      }
+    },
+    "Network connection lost - Check your internet connection.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network connection lost - Check your internet connection."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сетевое соединение потеряно. Проверьте подключение к интернету."
+          }
+        }
+      }
+    },
+    "No internet connection - Check your network settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No internet connection - Check your network settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет подключения к интернету. Проверьте настройки сети."
+          }
+        }
+      }
+    },
+    "SSL/TLS error - The server's security certificate may be invalid or expired.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSL/TLS error - The server's security certificate may be invalid or expired."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка SSL/TLS. Сертификат безопасности сервера может быть недействительным или просроченным."
+          }
+        }
+      }
+    },
+    "Cannot find host - The domain name doesn't exist. Check if the base URL is spelled correctly.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cannot find host - The domain name doesn't exist. Check if the base URL is spelled correctly."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось найти сервер. Проверьте правильность доменного имени в адресе."
+          }
+        }
+      }
+    },
+    "%@ (Error code: %@)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (Error code: %@)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (код ошибки: %@)"
+          }
+        }
+      }
+    },
+    "History could not be loaded. New dictations are kept in memory until you retry. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "History could not be loaded. New dictations are kept in memory until you retry. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось загрузить историю. Новые диктовки хранятся в памяти, пока вы не повторите попытку. %@"
+          }
+        }
+      }
+    },
+    "History could not be saved. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "History could not be saved. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сохранить историю. %@"
+          }
+        }
+      }
+    },
+    "\n\nmacOS returned unreadable Keychain data.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\n\nmacOS returned unreadable Keychain data."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\n\nmacOS вернула нечитаемые данные Связки ключей."
+          }
+        }
+      }
+    },
+    "\n\nmacOS reported: %@ (%lld)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\n\nmacOS reported: %@ (%lld)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\n\nСообщение macOS: %@ (%lld)"
+          }
+        }
+      }
+    },
+    "\n\nmacOS reported Keychain status %lld.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\n\nmacOS reported Keychain status %lld."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\n\nmacOS вернула код Связки ключей: %lld."
+          }
+        }
+      }
+    },
+    "Could not construct valid URL from base: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not construct valid URL from base: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось составить корректный адрес сервера из: %@"
+          }
+        }
+      }
+    },
+    "Response is not valid JSON. Check if the base URL '%@' is correct.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Response is not valid JSON. Check if the base URL '%@' is correct."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответ не является корректным JSON. Проверьте адрес сервера «%@»."
+          }
+        }
+      }
+    },
+    "Unknown response format. Top-level keys: [%@]. Expected 'data' or 'models'.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown response format. Top-level keys: [%@]. Expected 'data' or 'models'."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неизвестный формат ответа. Ключи верхнего уровня: [%@]. Ожидалось поле data или models."
+          }
+        }
+      }
+    },
+    "<unable to decode response body>": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<unable to decode response body>"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<не удалось прочитать содержимое ответа>"
+          }
+        }
+      }
+    },
+    "<empty response body>": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<empty response body>"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<пустой ответ>"
+          }
+        }
+      }
+    },
+    "Simulated download failure. No update was downloaded or installed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Simulated download failure. No update was downloaded or installed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Тестовая ошибка загрузки. Обновление не загружалось и не устанавливалось."
+          }
+        }
+      }
+    },
+    "Return": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Return"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ввод"
+          }
+        }
+      }
+    },
+    "Escape": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escape"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esc"
+          }
+        }
+      }
+    },
+    "Left": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Left"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Влево"
+          }
+        }
+      }
+    },
+    "Right": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Right"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вправо"
+          }
+        }
+      }
+    },
+    "Down": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Down"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вниз"
+          }
+        }
+      }
+    },
+    "Up": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Up"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вверх"
+          }
+        }
+      }
+    },
+    "Left Click": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Left Click"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Левая кнопка мыши"
+          }
+        }
+      }
+    },
+    "Right Click": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Right Click"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Правая кнопка мыши"
+          }
+        }
+      }
+    },
+    "Middle Click": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Middle Click"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Средняя кнопка мыши"
+          }
+        }
+      }
+    },
+    "Mouse %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mouse %lld"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Кнопка мыши %lld"
+          }
+        }
+      }
+    },
+    "%@ needs a modifier key": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ needs a modifier key"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для сочетания «%@» добавьте клавишу-модификатор"
+          }
+        }
+      }
+    },
+    "Left ⌘": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Left ⌘"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Левая ⌘"
+          }
+        }
+      }
+    },
+    "Right ⌘": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Right ⌘"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Правая ⌘"
+          }
+        }
+      }
+    },
+    "Left ⌥": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Left ⌥"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Левая ⌥"
+          }
+        }
+      }
+    },
+    "Right ⌥": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Right ⌥"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Правая ⌥"
+          }
+        }
+      }
+    },
+    "Left ⌃": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Left ⌃"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Левая ⌃"
+          }
+        }
+      }
+    },
+    "Right ⌃": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Right ⌃"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Правая ⌃"
+          }
+        }
+      }
+    },
+    "Left ⇧": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Left ⇧"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Левая ⇧"
+          }
+        }
+      }
+    },
+    "Right ⇧": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Right ⇧"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Правая ⇧"
           }
         }
       }

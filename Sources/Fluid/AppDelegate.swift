@@ -144,10 +144,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             await TranscriptionHistoryStore.shared.finishPendingWrites()
             if let error = TranscriptionHistoryStore.shared.persistenceError {
                 let alert = NSAlert()
-                alert.messageText = "History could not be saved"
+                alert.messageText = PichiLocalization.text("History could not be saved")
                 alert.informativeText = error
-                alert.addButton(withTitle: "Keep Open")
-                alert.addButton(withTitle: "Quit Anyway")
+                alert.addButton(withTitle: PichiLocalization.text("Keep Open"))
+                alert.addButton(withTitle: PichiLocalization.text("Quit Anyway"))
                 sender.reply(toApplicationShouldTerminate: alert.runModal() == .alertSecondButtonReturn)
                 return
             }
@@ -531,11 +531,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     @MainActor
-    private func showUpdateAlert(title: String, message: String) {
+    private func showUpdateAlert(title: String, message: @autoclosure @escaping () -> String) {
         DebugLogger.shared.info("🔔 Showing alert: \(title)", source: "AppDelegate")
         self.updatePromptPresenter.presentFloatingPrompt(
             title: title,
-            message: message,
+            message: message(),
             actions: [FloatingPromptAction(title: "OK") {}]
         )
     }
@@ -559,7 +559,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             Task { try? await SimpleUpdater.shared.checkAndUpdate(owner: AppBrand.repositoryOwner, repo: AppBrand.repositoryName) }
         case "failure":
             SimpleUpdater.shared.finishSimulatedUpdate()
-            self.showUpdateAlert(title: "Update Check Failed", message: "Simulated download failure. No update was downloaded or installed.")
+            self.showUpdateAlert(title: "Update Check Failed", message: PichiLocalization.text("Simulated download failure. No update was downloaded or installed."))
         case "dismiss":
             SimpleUpdater.shared.finishSimulatedUpdate()
             self.updatePromptPresenter.dismissAll()

@@ -3757,19 +3757,19 @@ nonisolated enum MeetingProcessingError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedLanguage:
-            return "Choose a supported meeting language from Recording settings."
+            return PichiLocalization.text("Choose a supported meeting language from Recording settings.")
         case .noRecoverableAudio:
-            return "No finalized meeting audio is available to transcribe."
+            return PichiLocalization.text("No finalized meeting audio is available to transcribe.")
         case .dictationActive:
-            return "Finish the active dictation before transcribing this meeting."
+            return PichiLocalization.text("Finish the active dictation before transcribing this meeting.")
         case .modelUnavailable:
-            return "The selected speech model is not ready."
+            return PichiLocalization.text("The selected speech model is not ready.")
         case let .providerDoesNotSupportLanguage(languageCode):
-            return "The selected speech model cannot transcribe meeting language \(languageCode)."
+            return PichiLocalization.format("The selected speech model cannot transcribe meeting language %@.", String(describing: languageCode))
         case .audioUnreadable:
-            return "A finalized meeting audio chunk could not be read."
+            return PichiLocalization.text("A finalized meeting audio chunk could not be read.")
         case .noSpeech:
-            return "No speech was detected in the saved meeting audio."
+            return PichiLocalization.text("No speech was detected in the saved meeting audio.")
         }
     }
 }

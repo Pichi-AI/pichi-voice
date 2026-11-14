@@ -199,11 +199,11 @@ enum BackupServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .unsupportedSchemaVersion(version):
-            return "This backup uses an unsupported schema version (\(version.major).\(version.minor))."
+            return PichiLocalization.format("This backup uses an unsupported schema version (%@.%@).", String(describing: version.major), String(describing: version.minor))
         case .invalidJSON:
             return AppBrand.text("The selected backup file is not a valid FluidVoice backup.")
         case .operationInProgress:
-            return "A backup import or export is already running. Wait for it to finish, then try again."
+            return PichiLocalization.text("A backup import or export is already running. Wait for it to finish, then try again.")
         }
     }
 }

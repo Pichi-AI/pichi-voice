@@ -38,9 +38,9 @@ nonisolated enum ASRActivityError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .activityInProgress(activity):
-            return "Wait for the active \(activity.displayName) to finish."
+            return PichiLocalization.format("Wait for the active %@ to finish.", PichiLocalization.text(activity.displayName))
         case .settingsRestoreUnavailable:
-            return "Finish the current recording, transcription, microphone preview, or voice model operation, then import the backup again."
+            return PichiLocalization.text("Finish the current recording, transcription, microphone preview, or voice model operation, then import the backup again.")
         }
     }
 }

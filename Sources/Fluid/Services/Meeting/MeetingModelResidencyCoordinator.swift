@@ -121,10 +121,10 @@ nonisolated enum MeetingModelResidencyError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .busy: return "Models are busy. Wait for the current model operation to finish."
-        case .staleGrant: return "This model operation no longer owns meeting processing."
-        case .terminating: return "The app is shutting down."
-        case .unsupportedProvider: return "This Fluid provider needs an update before meeting model switching can run."
+        case .busy: return PichiLocalization.text("Models are busy. Wait for the current model operation to finish.")
+        case .staleGrant: return PichiLocalization.text("This model operation no longer owns meeting processing.")
+        case .terminating: return PichiLocalization.text("The app is shutting down.")
+        case .unsupportedProvider: return PichiLocalization.text("This Fluid provider needs an update before meeting model switching can run.")
         }
     }
 }

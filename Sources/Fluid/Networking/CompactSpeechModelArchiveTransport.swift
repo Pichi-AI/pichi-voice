@@ -14,10 +14,10 @@ nonisolated enum CompactSpeechModelArchiveTransport {
 
         var errorDescription: String? {
             switch self {
-            case .invalidDescriptor: "This compact voice model has no valid pinned download."
-            case let .unsafePartial(url): "Voice model download files are unsafe at \(url.path). Remove that file or folder and try again."
-            case .invalidRange: "The model server returned an invalid download range. Please try again."
-            case .alreadyDownloading: "This voice model is already downloading in another app process. Please try again when it finishes."
+            case .invalidDescriptor: PichiLocalization.text("This compact voice model has no valid pinned download.")
+            case let .unsafePartial(url): PichiLocalization.format("Voice model download files are unsafe at %@. Remove that file or folder and try again.", String(describing: url.path))
+            case .invalidRange: PichiLocalization.text("The model server returned an invalid download range. Please try again.")
+            case .alreadyDownloading: PichiLocalization.text("This voice model is already downloading in another app process. Please try again when it finishes.")
             }
         }
     }

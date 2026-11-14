@@ -1718,25 +1718,25 @@ nonisolated enum MeetingDomainError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .emptySpeakerName:
-            return "Speaker name cannot be empty."
+            return PichiLocalization.text("Speaker name cannot be empty.")
         case .speakerNotFound:
-            return "The speaker is no longer part of this meeting."
+            return PichiLocalization.text("The speaker is no longer part of this meeting.")
         case .segmentNotFound:
-            return "This transcript line is no longer part of the meeting."
+            return PichiLocalization.text("This transcript line is no longer part of the meeting.")
         case .segmentAlreadyAssigned:
-            return "This transcript line already has a speaker."
+            return PichiLocalization.text("This transcript line already has a speaker.")
         case .segmentTrackNotFound:
-            return "The transcript line's audio track is no longer available."
+            return PichiLocalization.text("The transcript line's audio track is no longer available.")
         case .cannotMergeSpeakerWithItself:
-            return "A speaker can't be merged into itself."
+            return PichiLocalization.text("A speaker can't be merged into itself.")
         case .cannotMergeSpeakers:
-            return "These speakers can't be merged."
+            return PichiLocalization.text("These speakers can't be merged.")
         case .emptyTranscriptText:
-            return "Transcript text cannot be empty."
+            return PichiLocalization.text("Transcript text cannot be empty.")
         case .staleTranscriptEdit:
-            return "This paragraph changed while you were editing. Reopen it and try again."
+            return PichiLocalization.text("This paragraph changed while you were editing. Reopen it and try again.")
         case .emptyMeetingTitle:
-            return "Meeting title cannot be empty."
+            return PichiLocalization.text("Meeting title cannot be empty.")
         }
     }
 }
@@ -1770,24 +1770,24 @@ nonisolated enum MeetingModelValidationError: LocalizedError, Equatable {
         case .invalidSpeakerAttribution:
             return PichiLocalization.text("The transcript contains inconsistent speaker attribution metadata.")
         case let .unsupportedSchema(version):
-            return "Unsupported meeting schema version \(version)."
+            return PichiLocalization.format("Unsupported meeting schema version %@.", String(describing: version))
         case .unsupportedLanguage:
-            return "Choose a supported meeting language from Recording settings."
+            return PichiLocalization.text("Choose a supported meeting language from Recording settings.")
         case .missingMicrophone:
-            return "A microphone must be selected."
+            return PichiLocalization.text("A microphone must be selected.")
         case .missingOnlineApplication:
-            return "An online meeting application must be selected."
+            return PichiLocalization.text("An online meeting application must be selected.")
         case .unexpectedSystemAudioApplication:
             return PichiLocalization.text("System audio cannot be restricted to an application.")
         case .unexpectedInRoomApplication:
-            return "In-room meetings cannot include an application-audio source."
+            return PichiLocalization.text("In-room meetings cannot include an application-audio source.")
         case .duplicateTrackID, .duplicateTrackKind, .invalidTrackSet:
-            return "The meeting has an invalid audio track manifest."
+            return PichiLocalization.text("The meeting has an invalid audio track manifest.")
         case .invalidChunkSequence, .duplicateChunkID, .invalidTimeRange, .invalidMediaTimescale,
              .invalidTimebase, .invalidAudioFormat, .invalidRelativePath, .incompleteFinalizedChunk:
-            return "The meeting has an invalid audio chunk manifest."
+            return PichiLocalization.text("The meeting has an invalid audio chunk manifest.")
         case .duplicateSpeakerID, .duplicateSegmentID, .missingSegmentTrack, .missingSegmentSpeaker:
-            return "The meeting transcript contains invalid references."
+            return PichiLocalization.text("The meeting transcript contains invalid references.")
         }
     }
 }

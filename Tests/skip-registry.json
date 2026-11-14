@@ -53,6 +53,14 @@
    "layer": "diagnostic-tool",
    "reason": "Local encoder dictionary replay is opt-in"
   },
+  "FluidDictationIntegrationTests/GigaAMPreviewFinalizationXCTests/testRealModelLongDictationReusesWindowsAndMatchesFullFinalizationWhenEnabled()": {
+   "layer": "L3-real-model",
+   "reason": "Set approved local GigaAM weights, public/synthetic audio and a private report path for real replay"
+  },
+  "FluidDictationIntegrationTests/GigaAMPrivateLatencyReplayXCTests/testRecentLocalDictationsWithTheirActualPronunciationSnapshotWhenEnabled()": {
+   "layer": "manual-private-data",
+   "reason": "Set explicitly approved private replay, model and report paths"
+  },
   "FluidDictationIntegrationTests/MeetingAnalysisManifestTests/testOptInSavedRecordingManifestWithoutChangingSession()": {
    "layer": "manual-private-data",
    "reason": "Set FLUIDVOICE_MEETING_MANIFEST_SESSION for read-only real-recording validation."

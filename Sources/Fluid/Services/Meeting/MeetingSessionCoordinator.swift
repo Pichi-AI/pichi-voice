@@ -3744,19 +3744,19 @@ enum MeetingCoordinatorError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .featureDisabled:
-            return "Enable FluidMeet in Settings to record a meeting."
+            return AppBrand.text("Enable FluidMeet in Settings to record a meeting.")
         case .recordingAlreadyActive:
-            return "Another meeting recording is already active."
+            return PichiLocalization.text("Another meeting recording is already active.")
         case .noActiveMeeting:
-            return "There is no active meeting."
+            return PichiLocalization.text("There is no active meeting.")
         case .noRecoverableAudio:
-            return "This meeting has no finalized audio to retry."
+            return PichiLocalization.text("This meeting has no finalized audio to retry.")
         case .activityInProgress:
-            return "Stop the active meeting activity first."
+            return PichiLocalization.text("Stop the active meeting activity first.")
         case .dictationActive:
-            return "Stop dictation before starting a meeting recording."
+            return PichiLocalization.text("Stop dictation before starting a meeting recording.")
         case .noCorrectionToUndo:
-            return "There is nothing to undo."
+            return PichiLocalization.text("There is nothing to undo.")
         case .maintenanceInProgress:
             return AppBrand.text("FluidVoice is tidying up meeting storage. Try again in a moment.")
         case .unsupportedRetranscriptionLanguage:

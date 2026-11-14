@@ -33,7 +33,7 @@ struct HotkeyShortcut: Codable, Equatable {
         parts.append(Self.keyCodeToString(self.keyCode) ?? "?")
 
         if self.modifierFlags.isEmpty {
-            return parts.last ?? "Unknown"
+            return parts.last ?? PichiLocalization.text("Unknown")
         }
 
         return parts.joined(separator: " + ")
@@ -61,34 +61,34 @@ struct HotkeyShortcut: Codable, Equatable {
         case UInt16(kVK_F18): return "F18"
         case UInt16(kVK_F19): return "F19"
         case UInt16(kVK_F20): return "F20"
-        case 36: return "Return"
-        case 48: return "Tab"
-        case 49: return "Space"
-        case 51: return "Delete"
-        case 53: return "Escape"
-        case 55: return "Left ⌘"
-        case 54: return "Right ⌘"
-        case 58: return "Left ⌥"
-        case 61: return "Right ⌥"
-        case 59: return "Left ⌃"
-        case 62: return "Right ⌃"
-        case 56: return "Left ⇧"
-        case 60: return "Right ⇧"
+        case 36: return PichiLocalization.text("Return")
+        case 48: return PichiLocalization.text("Tab")
+        case 49: return PichiLocalization.text("Space")
+        case 51: return PichiLocalization.text("Delete")
+        case 53: return PichiLocalization.text("Escape")
+        case 55: return PichiLocalization.text("Left ⌘")
+        case 54: return PichiLocalization.text("Right ⌘")
+        case 58: return PichiLocalization.text("Left ⌥")
+        case 61: return PichiLocalization.text("Right ⌥")
+        case 59: return PichiLocalization.text("Left ⌃")
+        case 62: return PichiLocalization.text("Right ⌃")
+        case 56: return PichiLocalization.text("Left ⇧")
+        case 60: return PichiLocalization.text("Right ⇧")
         case 63: return "fn"
-        case 123: return "Left"
-        case 124: return "Right"
-        case 125: return "Down"
-        case 126: return "Up"
+        case 123: return PichiLocalization.text("Left")
+        case 124: return PichiLocalization.text("Right")
+        case 125: return PichiLocalization.text("Down")
+        case 126: return PichiLocalization.text("Up")
         default: return self.characterForKeyCode(keyCode) ?? self.qwertyFallback[keyCode]
         }
     }
 
     static func mouseButtonToString(_ button: Int) -> String {
         switch button {
-        case 0: return "Left Click"
-        case 1: return "Right Click"
-        case 2: return "Middle Click"
-        default: return "Mouse \(button + 1)"
+        case 0: return PichiLocalization.text("Left Click")
+        case 1: return PichiLocalization.text("Right Click")
+        case 2: return PichiLocalization.text("Middle Click")
+        default: return PichiLocalization.format("Mouse %lld", button + 1)
         }
     }
 

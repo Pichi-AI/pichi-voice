@@ -360,6 +360,7 @@ final class GigaAMPreviewFinalizationXCTests: XCTestCase {
                 settings.saveTranscriptionHistory = priorHistory
                 settings.automaticDictionaryLearningEnabled = priorLearning
             }
+            // A private coordinator: shutdownForTermination() must not end the process-wide one that later tests use.
             let residency = MeetingModelResidencyCoordinator()
             let asr = ASRService(meetingModelResidency: residency)
             asr.modelProvidersForTesting[.gigaam] = provider

@@ -1014,11 +1014,11 @@ enum MeetingSessionStoreError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .sessionAlreadyExists:
-            return "A meeting session with this identifier already exists."
+            return PichiLocalization.text("A meeting session with this identifier already exists.")
         case let .unsupportedSchema(version):
-            return "This meeting was created with unsupported schema version \(version)."
+            return PichiLocalization.format("This meeting was created with unsupported schema version %@.", String(describing: version))
         case .sessionDeleted:
-            return "This meeting has been deleted."
+            return PichiLocalization.text("This meeting has been deleted.")
         case .historyUnavailable:
             return PichiLocalization.text("Meeting history could not be loaded.")
         }

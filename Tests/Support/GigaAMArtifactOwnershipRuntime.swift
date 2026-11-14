@@ -69,12 +69,18 @@ public actor GigaAMRuntime {
     public var executionStatus: GigaAMExecutionStatus? { nil }
     public var isReady: Bool { false }
     public func beginAttempt() throws {}
-    public func load(descriptor: GigaAMModelDescriptor, directory: URL, executionProvider: GigaAMExecutionProvider) async throws {
+    public func load(descriptor: GigaAMModelDescriptor, directory: URL,
+                     executionProvider: GigaAMExecutionProvider = .automatic) async throws {
         try await GigaAMArtifactTestGate.shared.load(descriptor: descriptor, directory: directory)
     }
-    public func discardWindowReuse(for sessionID: UUID) async {}
     public func unload() async {}
-    public func transcribe(_ samples: [Float], captureEncoderFeatures: Bool = false, reusingWindowsFor session: GigaAMWindowReuseSession? = nil) async throws -> GigaAMTranscript {
+    public func transcribe(_ samples: [Float], captureEncoderFeatures: Bool = false,
+                           reusingWindowsFor session: GigaAMWindowReuseSession? = nil) async throws -> GigaAMTranscript {
         preconditionFailure("Artifact ownership tests must never perform inference")
     }
+    // Inference never runs here, so no window output is retained to discard.
+    public func discardWindowReuse(for sessionID: UUID) {}
 }
+
+// GigaAMTranscript, GigaAMWordTiming and GigaAMExecutionProvider are real declarations
+// the runner appends; it also compiles the real GigaAMWindowReuse.swift beside this file.
