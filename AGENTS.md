@@ -14,6 +14,7 @@ This file defines shared principles and non-negotiable boundaries for contributo
 | Setup, environments and commands | [Development setup](docs/development/codex.md) |
 | Extension contracts and upstream integration | [Upstream strategy](docs/development/upstream.md) |
 | Appearance and interface language | [Branding](docs/development/branding.md), [localization](docs/development/localization.md) |
+| GitHub release descriptions and languages | [Release notes](docs/development/release-notes.md) |
 | Contribution and review | [Contributing](CONTRIBUTING.md) |
 
 These guides elaborate this policy rather than create competing copies. Dated reports describe evidence at their recorded revisions; they do not establish current behavior or override this guidance. Keep global personal preferences outside the repository. Update the owning guide when a convention changes.
@@ -59,6 +60,10 @@ Deliver a small, usable and verified increment. State acceptance behavior, affec
 Native acceptance uses the actual combined app and exact frozen signed build. Verify changed states, relevant light/dark appearances, localization and accessibility. For mobile UI changes, validate both iPhone and iPad simulators and show native evidence for user review before physical testing. Protect active recordings and existing installations. Follow the [native acceptance procedure](docs/development/agent-workflow.md#native-acceptance) for signing, permissions, captures and ownership.
 
 Distinguish portable checks, unit tests, integration tests, native UI evidence, real inference and physical acceptance. None silently substitutes for another. Review the integrated revision independently before publication, including architecture, behavioral tests, privacy boundaries and upstream impact. Fix material findings and repeat affected checks.
+
+## Public release descriptions
+
+**MUST:** Pichi Voice GitHub release notes include English and Russian in one release, with clearly labelled language sections and consistent navigation. Preserve the established format between releases. Follow [Release notes](docs/development/release-notes.md) for the template, translation parity, publication checks and corrections to existing descriptions.
 
 ## Data, resources and completion
 
