@@ -267,6 +267,49 @@ class ProbeTests(unittest.TestCase):
             self.assertEqual(receipt.value["probesFailed"], ["a"])
 
 
+class ProbeRetryTests(unittest.TestCase):
+    def retry(self, names, status="failed", script=((0, None),)):
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory)
+        receipt = FakeReceipt(directory, list(script))
+        row = {"name": "probes", "status": status, "exitCode": 1, "seconds": 0, "log": "probes"}
+        receipt.value["steps"].append(row)
+        if names:
+            receipt.value["probesFailed"] = names
+        VERIFY.retry_failed_probes(receipt, row)
+        return receipt, row
+
+    def test_a_probe_that_passes_alone_on_retry_is_flaky_not_failed(self):
+        receipt, row = self.retry(["a", "b"])
+        self.assertEqual(receipt.calls[0][1][-6:], ["--jobs", "1", "--only", "a", "--only", "b"])
+        self.assertEqual(row["status"], "passed")
+        self.assertIn("flaky: a, b", row["note"])
+        self.assertEqual(receipt.value["probesFlaky"], ["a", "b"])
+        self.assertNotIn("probesFailed", receipt.value)
+        receipt.finish()
+        self.assertEqual(receipt.value["result"], "passed")
+
+    def test_a_probe_that_fails_again_keeps_the_gate_red(self):
+        receipt, row = self.retry(["a"], script=((1, None),))
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(receipt.value["probesFailed"], ["a"])
+        receipt.finish()
+        self.assertEqual(receipt.value["result"], "failed")
+
+    def test_many_failures_a_timeout_or_no_names_are_not_retried(self):
+        for names, status in ((["a", "b", "c", "d"], "failed"), (["a"], "timed out"), ([], "failed")):
+            with self.subTest(names=names, status=status):
+                receipt, row = self.retry(names, status=status, script=())
+                self.assertEqual(receipt.calls, [])
+                self.assertEqual(row["status"], status)
+
+    def test_the_gate_writes_no_python_bytecode(self):
+        with patch.dict(os.environ, {"PYTHONDONTWRITEBYTECODE": ""}), patch.object(VERIFY.sys, "dont_write_bytecode", False):
+            VERIFY.hermetic_environment()
+            self.assertEqual(os.environ["PYTHONDONTWRITEBYTECODE"], "1")
+            self.assertTrue(VERIFY.sys.dont_write_bytecode)
+
+
 class QuarantineTests(unittest.TestCase):
     def test_entries_split_by_kind(self):
         entries = {"entries": [{"test": f"{BUNDLE}/A/testOne()"}, {"test": "probe:ui_contrast"}]}

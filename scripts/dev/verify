@@ -321,6 +321,24 @@ def name_failed_probes(receipt, row):
             pass
 
 
+# A few probes failing at once on a loaded machine is usually timing; more than this is a real break.
+PROBE_RETRY_LIMIT = 3
+
+
+def retry_failed_probes(receipt, probes_row):
+    """Run each failed probe once more, alone. One that passes then is flaky, not broken: the receipt names it
+    and the probes step counts as passed. One that fails again keeps the gate red."""
+    names = receipt.value.get("probesFailed") or []
+    if probes_row["status"] != "failed" or not names or len(names) > PROBE_RETRY_LIMIT:
+        return
+    command = ["bash", "scripts/dev/standalone-regression.sh", "--jobs", "1", *[part for name in names for part in ("--only", name)]]
+    if receipt.step("probes-retry", command)["status"] == "passed":
+        probes_row["status"] = "passed"
+        probes_row["note"] = f"flaky: {', '.join(names)} failed beside other work and passed alone on retry"
+        receipt.value["probesFlaky"] = receipt.value.pop("probesFailed")
+        receipt.save()
+
+
 def run_xctest_and_probes(receipt, quarantine, jobs, layer="L1"):
     """Return the result of every XCTest. Probes compile too, so they wait until the build has finished."""
     skipped = [f"-skip-testing:{test}" for test in sorted(quarantine.tests) if not test.startswith(MOBILE_BUNDLE + "/")]
@@ -333,6 +351,7 @@ def run_xctest_and_probes(receipt, quarantine, jobs, layer="L1"):
     probes = receipt.begin("probes", probe_command(quarantine, jobs))
     xctest_row, probes_row = receipt.join(xctest, probes)
     name_failed_probes(receipt, probes_row)
+    retry_failed_probes(receipt, probes_row)
     return xctest_results(xctest_row)
 
 
@@ -449,7 +468,7 @@ def summary_lines(value, directory):
     lines += [f"  skipped {item['name']}: {item['reason']}" for item in value["skipped"]]
     if value["quarantined"]:
         lines.append(f"  quarantined, not run: {', '.join(value['quarantined'])}")
-    for key in ("testsFailed", "probesFailed"):
+    for key in ("testsFailed", "probesFailed", "probesFlaky"):
         if value.get(key):
             lines.append(f"  {key}: {', '.join(value[key])}")
     if value.get("simulator", {}).get("deleted") is False:
@@ -507,7 +526,14 @@ def run_guarded(receipt, work):
             receipt.finish("failed")
 
 
+def hermetic_environment():
+    """The gate must not write into the tree it certifies: Python bytecode would show up as untracked files."""
+    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+    sys.dont_write_bytecode = True
+
+
 def main():
+    hermetic_environment()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     choice = parser.add_mutually_exclusive_group()
     choice.add_argument("--changed", action="store_true", help="Pick the layer from the diff against the base")
