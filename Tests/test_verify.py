@@ -640,6 +640,40 @@ verify.run_guarded(receipt, work)
             (root / "new.txt").write_text("new")
             self.assertEqual(sorted(VERIFY.dirty_paths(root)), ["kept.txt", "new.txt"])
 
+    def test_a_moved_tree_names_only_what_changed_during_the_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = FakeReceipt(Path(temporary), [(0, None)])
+            receipt.step("check", ["true"])
+            before = {"Sources/Kept.swift": "same", "Sources/Edited.swift": "old", "Sources/Reverted.swift": "edit"}
+            now = {"Sources/Kept.swift": "same", "Sources/Edited.swift": "new", "Tests/New.png": "png"}
+            with patch.object(VERIFY, "tree_fingerprint", return_value="after"), \
+                    patch.object(VERIFY, "dirty_state", return_value=now):
+                VERIFY.finish(receipt, None, "before", before)
+            self.assertEqual(receipt.value["result"], "incomplete")
+            self.assertEqual(receipt.value["treeChanges"], ["Sources/Edited.swift", "Sources/Reverted.swift", "Tests/New.png"])
+            self.assertNotIn("treeChangesTotal", receipt.value)
+
+    def test_dirty_state_tells_an_edit_from_a_file_that_was_already_dirty(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / "kept.txt").write_text("one")
+            subprocess.run(["git", "add", "kept.txt"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "c"], cwd=root, check=True)
+            (root / "kept.txt").write_text("two")
+            first = VERIFY.dirty_state(root)
+            self.assertEqual(first, VERIFY.dirty_state(root))
+            (root / "kept.txt").write_text("three")
+            self.assertNotEqual(first["kept.txt"], VERIFY.dirty_state(root)["kept.txt"])
+
+    def test_a_base_this_clone_lacks_is_a_clear_error_without_a_receipt(self):
+        error = subprocess.CalledProcessError(128, ["git", "merge-base"])
+        with patch.object(VERIFY, "changed_paths", side_effect=error), \
+                patch.object(sys, "argv", ["verify", "--layer", "L1", "--base", "f" * 40]), \
+                contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(VERIFY.main(), 2)
+        self.assertIn("cannot compare with " + "f" * 40, stderr.getvalue())
+
     def test_a_still_tree_finishes_on_the_step_results(self):
         with tempfile.TemporaryDirectory() as temporary:
             receipt = FakeReceipt(Path(temporary), [(0, None)])

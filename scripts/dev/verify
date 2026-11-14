@@ -531,13 +531,28 @@ def dirty_paths(root=ROOT):
     return [line[3:] for line in output.splitlines() if line]
 
 
-def finish(receipt, outcome, tree):
-    """A receipt names one tree, so a tree that moved during the run proves nothing."""
+def dirty_state(root=ROOT):
+    """Each changed or untracked path with a hash of its content, so a later look can tell what moved since."""
+    state = {}
+    for path in dirty_paths(root):
+        try:
+            state[path] = hashlib.sha256((root / path).read_bytes()).hexdigest()
+        except OSError:
+            state[path] = "absent"
+    return state
+
+
+def finish(receipt, outcome, tree, dirty_before=None):
+    """A receipt names one tree, so a tree that moved during the run proves nothing. Only paths that changed
+    during the run are named: a file that was already dirty at the start and kept its content is not news."""
     if outcome is None and not receipt.failed() and tree_fingerprint() != tree:
-        paths = dirty_paths()
+        before, now = dirty_before or {}, dirty_state()
+        paths = sorted(path for path in before.keys() | now.keys() if before.get(path) != now.get(path))
         receipt.value["treeChanges"] = paths[:50]
+        if len(paths) > 50:
+            receipt.value["treeChangesTotal"] = len(paths)
         shown = ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
-        receipt.skip("freeze", "the tree changed during the run" + (f"; changed now: {shown}" if paths else ""))
+        receipt.skip("freeze", "the tree changed during the run" + (f"; changed: {shown}" if paths else ""))
         outcome = "incomplete"
     receipt.finish(outcome)
 
@@ -572,19 +587,27 @@ def main():
     parser.add_argument("--base", default="origin/main", help="The diff starts at the merge base with this ref")
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 3) * 2 // 3), help="Standalone probes at once")
     arguments = parser.parse_args()
-    merge_base, paths = changed_paths(arguments.base)
+    try:
+        merge_base, paths = changed_paths(arguments.base)
+    except subprocess.CalledProcessError:
+        # A force push or a shallow clone can leave the base out of this repository.
+        print(f"Verify cannot compare with {arguments.base}: git knows no common commit with HEAD here. "
+              "Pass --base with a commit this clone has.", file=sys.stderr)
+        return 2
     project = (ROOT / "Fluid.xcodeproj/project.pbxproj").read_text()
     layer, reason = choose_layer(paths, project) if arguments.changed else (arguments.layer or "L1", "requested")
     revision = git("rev-parse", "HEAD").strip()
     status = git("status", "--porcelain")
     tree = tree_fingerprint()
+    dirty_before = dirty_state()
     moment = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     directory = ROOT / ".build/verify" / f"{moment}-{revision[:8]}-{os.getpid()}"
     directory.mkdir(parents=True)
     receipt = Receipt(directory, layer=layer, reason=reason, revision=revision, workingTree="dirty" if status.strip() else "clean",
                       tree=tree, base=merge_base, changedFiles=len(paths))
     print(f"Verify {layer}: {reason}", flush=True)
-    run_guarded(receipt, lambda: finish(receipt, execute(receipt, layer, paths, arguments.base, arguments.jobs), tree))
+    run_guarded(receipt, lambda: finish(receipt, execute(receipt, layer, paths, arguments.base, arguments.jobs), tree,
+                                        dirty_before))
     print("\n".join(summary_lines(receipt.value, directory)))
     return {"passed": 0, "failed": 1, "incomplete": 2, "interrupted": 130}[receipt.value["result"]]
 

@@ -94,7 +94,15 @@ jobs:
           base=origin/main
           case "$PUSH_BEFORE" in
             "" | 0000000000000000000000000000000000000000) ;;
-            *) base="$PUSH_BEFORE" ;;
+            *)
+              if git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+                base="$PUSH_BEFORE"
+              else
+                # A force push leaves the previous tip out of the clone: compare with the first parent.
+                echo "The previous tip $PUSH_BEFORE is not in this clone; comparing with HEAD^1."
+                base="HEAD^1"
+              fi
+              ;;
           esac
           # exec: a cancelled or timed-out job signals verify itself, which then stops its steps.
           exec python3 -S scripts/dev/verify --layer L1 --base "$base"
@@ -105,6 +113,7 @@ jobs:
           for receipt in .build/verify/*/receipt.json; do
             [ -f "$receipt" ] || continue
             cat "$receipt"
+            echo
             python3 -S - "$receipt" <<'PY'
           import json, sys
           import glob, os
@@ -118,17 +127,43 @@ jobs:
                       print("".join([line for line in lines if "error: -[" in line][:200]))
                   print(f"--- last lines of {step['name']}")
                   print("".join(lines[-80:]))
-          runs = sorted(glob.glob(".build/standalone-regression/*/"), key=os.path.getmtime)
-          for name in receipt.get("probesFailed", []):
-              path = os.path.join(runs[-1], f"{name}.log") if runs else ""
-              if os.path.exists(path):
-                  print(f"--- last lines of probe {name}")
-                  with open(path, errors="replace") as log:
-                      print("".join(log.readlines()[-60:]))
+          # Every failed attempt of a failed or flaky probe: the first run and the retry keep their own logs.
+          names = set(receipt.get("probesFailed", [])) | set(receipt.get("probesFlaky", []))
+          for run in sorted(glob.glob(".build/standalone-regression/*/"), key=os.path.getmtime):
+              try:
+                  results = json.load(open(os.path.join(run, "summary.json")))["results"]
+              except (OSError, ValueError, KeyError):
+                  continue
+              for row in results:
+                  path = os.path.join(run, f"{row.get('name')}.log")
+                  if row.get("name") in names and row.get("status") == "FAIL" and os.path.exists(path):
+                      print(f"--- last lines of probe {row['name']} in run {os.path.basename(run.rstrip('/'))}")
+                      with open(path, errors="replace") as log:
+                          print("".join(log.readlines()[-60:]))
           PY
           done
           echo "--- files git reports as changed or untracked in the gate worktree"
           git status --porcelain=v1 --untracked-files=all | head -40
+      - name: Collect the evidence of a gate that did not pass
+        if: failure() || cancelled()
+        working-directory: ../pichi-voice-ci
+        run: |
+          # Receipts with every step log, the XCTest run with its result bundles, and the probe runs.
+          # The artifact keeps them for a week, so a red run can be read without rerunning it.
+          evidence="$RUNNER_TEMP/gate-evidence"
+          mkdir -p "$evidence"
+          for source in .build/verify .build/regression .build/standalone-regression; do
+            if [ -d "$source" ]; then cp -R "$source" "$evidence/${source#.build/}"; fi
+          done
+          du -sh "$evidence"/* 2>/dev/null || echo "No evidence was written."
+      - name: Upload the evidence of a gate that did not pass
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gate-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate-evidence
+          if-no-files-found: ignore
+          retention-days: 7
 
   ios:
     name: iOS simulator build
