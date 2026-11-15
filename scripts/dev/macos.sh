@@ -60,6 +60,52 @@ if [[ "$pichi_action" == "regression" ]]; then
                 'If the host hangs, use a worktree outside ~/Documents.' >&2
             ;;
     esac
+    # The per-run home of the test host lives outside the worktree: under ~/Documents the host writes about 1 GB
+    # in a protected folder where macOS can block open(). A run that was killed leaves its home behind, so every
+    # run first removes the homes whose owner process is gone.
+    pichi_homes_root="${PICHI_REGRESSION_HOMES:-$HOME/Library/Caches/pichi-voice-regression-homes}"
+    while [[ "$pichi_homes_root" == */ ]]; do pichi_homes_root="${pichi_homes_root%/}"; done
+    pichi_home_folder="$HOME"
+    while [[ "$pichi_home_folder" == */ ]]; do pichi_home_folder="${pichi_home_folder%/}"; done
+    case "$pichi_homes_root" in
+        /?*) ;;
+        *) printf 'PICHI_REGRESSION_HOMES must be an absolute path other than /, not "%s".\n' "$pichi_homes_root" >&2; exit 1 ;;
+    esac
+    if [[ "$pichi_homes_root" == "$pichi_home_folder" ]]; then
+        printf 'PICHI_REGRESSION_HOMES must be a folder reserved for regression homes, not the home folder.\n' >&2
+        exit 1
+    fi
+    # Remove one run-owned home, and nothing else: the target must be a single folder directly under the homes
+    # root, which was checked above to be an absolute path that is neither / nor the home folder.
+    pichi_remove_home() {
+        local target="${1:-}" name
+        [[ -n "$target" ]] || return 0
+        case "$target" in
+            "$pichi_homes_root"/?*) name="${target#"$pichi_homes_root"/}" ;;
+            *) printf 'Refusing to remove %s: it is not under %s.\n' "$target" "$pichi_homes_root" >&2; return 1 ;;
+        esac
+        case "$name" in
+            */*|.|..) printf 'Refusing to remove %s: it is not a single folder under %s.\n' "$target" "$pichi_homes_root" >&2; return 1 ;;
+        esac
+        rm -rf -- "$target" "$target.owner"
+    }
+    # A home is <run id>/ with <run id>.owner next to it holding the pid of the run that made it. A reused pid
+    # only delays the removal to a later run.
+    pichi_sweep_homes() {
+        local owner_file owner home
+        [[ -d "$pichi_homes_root" ]] || return 0
+        for owner_file in "$pichi_homes_root"/*.owner; do
+            [[ -e "$owner_file" ]] || continue
+            owner="$(cat "$owner_file" 2>/dev/null || true)"
+            [[ "$owner" =~ ^[0-9]+$ ]] || continue
+            if ! kill -0 "$owner" 2>/dev/null; then
+                home="${owner_file%.owner}"
+                printf 'Removing the test home %s of process %s, which ended.\n' "$home" "$owner" >&2
+                pichi_remove_home "$home" || true
+            fi
+        done
+    }
+    pichi_sweep_homes
     touch "$pichi_run/build-start"
     # Debug is required for the existing test-host launch and language overrides.
     pichi_build_status=0
@@ -72,13 +118,13 @@ if [[ "$pichi_action" == "regression" ]]; then
             | tee "$pichi_run/summary.txt"
         exit "$pichi_build_status"
     fi
-    # Each run gets its own home, so Application Support, Caches and model folders start empty and nothing a
-    # run downloads or writes reaches the shared regression identity. PICHI_REGRESSION_SHARED_HOME=1 keeps
-    # the shared identity for a deliberate real-model replay.
+    # Each run gets its own home, outside the worktree (see above), so Application Support, Caches and model
+    # folders start empty and nothing a run downloads or writes reaches the shared regression identity.
+    # PICHI_REGRESSION_SHARED_HOME=1 keeps the shared identity for a deliberate real-model replay.
     pichi_test_home=""
     pichi_home_args=()
     if [[ "${PICHI_REGRESSION_SHARED_HOME:-}" != "1" ]]; then
-        pichi_test_home="$pichi_run/home"
+        pichi_test_home="$pichi_homes_root/$pichi_run_id"
         pichi_home_args=(--home "$pichi_test_home")
     fi
     pichi_xctestrun="$(python3 -S scripts/dev/macos-regression.py configure \
@@ -122,9 +168,12 @@ if [[ "$pichi_action" == "regression" ]]; then
     done
     printf '%s\n' "$$" > "$pichi_lock/pid"
     printf '%s\n' "$pichi_root" > "$pichi_lock/root"
-    # The home belongs to this run alone: it is removed with the lock, also after an interruption.
-    trap 'rm -rf "$pichi_lock" ${pichi_test_home:+"$pichi_test_home"}' EXIT
+    # The home belongs to this run alone: it is removed with the lock, also after an interruption. A kill that
+    # no trap sees is cleaned up by the next run through the owner file.
+    trap 'rm -rf "$pichi_lock"; pichi_remove_home "$pichi_test_home"' EXIT
     if [[ -n "$pichi_test_home" ]]; then
+        mkdir -p "$pichi_homes_root"
+        printf '%s\n' "$$" > "$pichi_test_home.owner"
         mkdir -p "$pichi_test_home/Library/Application Support" "$pichi_test_home/Library/Caches"
     fi
     printf 'Regression lock taken after %s s of waiting.\n' "$pichi_lock_waited" >> "$pichi_run/run.txt"
@@ -137,7 +186,7 @@ if [[ "$pichi_action" == "regression" ]]; then
     rm -rf "$pichi_lock"
     if [[ -n "$pichi_test_home" ]]; then
         printf 'Test home held %s before removal.\n' "$(du -sh "$pichi_test_home" 2>/dev/null | cut -f1)" >> "$pichi_run/run.txt"
-        rm -rf "$pichi_test_home"
+        pichi_remove_home "$pichi_test_home"
     fi
     trap - EXIT
     # Extract the actual report even when xcodebuild failed. Missing results fail closed.

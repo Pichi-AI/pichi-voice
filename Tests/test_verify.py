@@ -948,7 +948,7 @@ class RegressionLockTests(unittest.TestCase):
     """scripts/dev/macos.sh regression with stub tools: the test phase holds the shared lock and always
     releases it."""
 
-    def run_regression(self, lock, test_exit=0):
+    def run_regression(self, lock, test_exit=0, homes=None):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -969,7 +969,9 @@ class RegressionLockTests(unittest.TestCase):
             f"    exit {test_exit} ;;\nesac\n")
         for tool in tools.iterdir():
             tool.chmod(0o755)
-        environment = dict(os.environ, PATH=f"{tools}:{os.environ['PATH']}", PICHI_REGRESSION_LOCK=str(lock))
+        homes = homes or root / "homes"
+        environment = dict(os.environ, PATH=f"{tools}:{os.environ['PATH']}", PICHI_REGRESSION_LOCK=str(lock),
+                           PICHI_REGRESSION_HOMES=str(homes))
         result = subprocess.run(["bash", str(root / "scripts/dev/macos.sh"), "regression", "-only-testing:Bundle/AClass/testOne"],
                                 cwd=root, env=environment, capture_output=True, text=True, timeout=60)
         held = (root / "lock-during-tests.txt").read_text().strip() if (root / "lock-during-tests.txt").exists() else None
@@ -995,6 +997,29 @@ class RegressionLockTests(unittest.TestCase):
             self.assertEqual(result.returncode, 65)
             self.assertNotIn(held, (None, "none"))
             self.assertFalse(lock.exists())
+
+    def test_the_home_of_a_killed_run_goes_with_its_stale_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock, homes = Path(temporary) / "regression.lock", Path(temporary) / "homes"
+            ended = subprocess.Popen(["true"])
+            ended.wait()
+            lock.mkdir()
+            (lock / "pid").write_text(f"{ended.pid}\n")
+            (homes / "killed-run" / "Library").mkdir(parents=True)
+            (homes / "killed-run.owner").write_text(f"{ended.pid}\n")
+            result, held = self.run_regression(lock, homes=homes)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("stale regression lock", result.stderr)
+            self.assertIn("Removing the test home", result.stderr)
+            self.assertEqual(list(homes.iterdir()), [])
+            self.assertFalse(lock.exists())
+
+    def test_a_failing_test_run_still_removes_its_home(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            homes = Path(temporary) / "homes"
+            result, _ = self.run_regression(Path(temporary) / "regression.lock", test_exit=65, homes=homes)
+            self.assertEqual(result.returncode, 65)
+            self.assertEqual(list(homes.iterdir()), [])
 
     def test_the_folder_of_the_lock_is_created(self):
         with tempfile.TemporaryDirectory() as temporary:
