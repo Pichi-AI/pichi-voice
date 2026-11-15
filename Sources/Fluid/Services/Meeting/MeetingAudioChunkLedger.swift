@@ -156,6 +156,21 @@ final nonisolated class MeetingAudioChunkLedgerStore: @unchecked Sendable {
         try self.writeImmutable(self.encode(terminal), to: self.recordURL(chunkID: chunkID, suffix: "terminal"), conflict: .terminalAlreadyExists)
     }
 
+    /// The ledger's ready terminal for a chunk whose capture was independently verified. Intent and
+    /// checkpoint are coalesced per snapshot, so the checkpoint is completed from the verified
+    /// extent. A chunk without a recorded intent has no ledger entry to terminate and is skipped.
+    func publishReadyTerminal(for chunk: MeetingAudioChunk) throws {
+        guard let frames = chunk.captureAnalysisAsset?.frameCount, frames > 0,
+              try self.readIntent(for: chunk.id) != nil,
+              try self.readTerminal(for: chunk.id) == nil else { return }
+        let checkpoint = try self.readCheckpoint(for: chunk.id)
+        if checkpoint?.expectedFrames != frames || checkpoint?.writtenFrames != frames {
+            try self.writeCheckpoint(.init(chunkID: chunk.id, expectedFrames: frames, writtenFrames: frames,
+                lastCanonicalPTS: chunk.presentationEnd, updatedAt: Date()), for: chunk.id)
+        }
+        try self.writeTerminal(.init(chunkID: chunk.id, status: .ready, updatedAt: Date(), detail: nil), for: chunk.id)
+    }
+
     func readIntent(for chunkID: MeetingAudioChunkID) throws -> MeetingAudioChunkLedgerIntent? { try self.read(
         MeetingAudioChunkLedgerIntent.self,
         at: self.recordURL(chunkID: chunkID, suffix: "intent")
@@ -356,6 +371,7 @@ final nonisolated class MeetingAudioRecordingJournal: @unchecked Sendable {
             do {
                 try self.hook?(.capture)
                 try self.ledger.writeCapture(.init(trackID: track.id, kind: track.kind, chunk: chunk))
+                if chunk.finalizationState == .finalized { try self.ledger.publishReadyTerminal(for: chunk) }
                 self.recordedThrough = max(self.recordedThrough, chunk.sequence)
                 if chunk.finalizationState == .writing { self.pendingRecovery.insert(chunk.id) }
                 else { self.pendingRecovery.remove(chunk.id) }
