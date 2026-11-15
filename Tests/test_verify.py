@@ -157,15 +157,46 @@ class ReportTests(unittest.TestCase):
 
 
 class SideBySideTests(unittest.TestCase):
-    def run_script(self, script, quarantine=NOTHING, layer="L1"):
+    def run_script(self, script, quarantine=NOTHING, layer="L1", part="all"):
         with tempfile.TemporaryDirectory() as temporary:
             receipt = FakeReceipt(Path(temporary), script)
             with patch.object(VERIFY, "xctest_results", side_effect=lambda row: VERIFY.report_results(row, "x" if receipt.reports[row["name"]] else None)), \
                     patch.object(VERIFY, "bundle_results", side_effect=lambda _: receipt.reports["xctest"]), \
                     patch.object(VERIFY, "artifact_directory", return_value=None):
-                found = VERIFY.run_xctest_and_probes(receipt, quarantine, 8, layer)
+                found = VERIFY.run_xctest_and_probes(receipt, quarantine, 8, layer, part)
             receipt.finish()
             return receipt, found
+
+    def test_the_probes_part_starts_probes_without_waiting_for_a_build(self):
+        receipt, found = self.run_script([(0, None)], part="probes")
+        self.assertEqual([call[0] for call in receipt.calls], ["probes"])
+        self.assertEqual(found, {})
+        self.assertEqual(receipt.value["result"], "passed")
+
+    def test_the_xctest_part_runs_no_probes(self):
+        receipt, found = self.run_script([(0, {PASSING: "Passed"})], part="xctest")
+        self.assertEqual([call[0] for call in receipt.calls], ["xctest"])
+        self.assertEqual(found, {PASSING: "Passed"})
+
+    def test_a_red_probe_part_stays_red(self):
+        receipt, _ = self.run_script([(1, None)], part="probes")
+        self.assertEqual(receipt.value["result"], "failed")
+
+    def test_a_timeout_after_waiting_for_the_regression_lock_says_so(self):
+        with patch.object(VERIFY, "waited_for_lock", return_value=True):
+            receipt, _ = self.run_script([(None, None)], part="xctest")
+        row = receipt.value["steps"][0]
+        self.assertEqual(row["status"], "timed out")
+        self.assertIn("waiting for the regression tests of another worktree", row["note"])
+
+    def test_the_lock_wait_is_read_from_the_step_log(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "xctest.log"
+            log.write_text("build\nWaiting for the tests of /other/worktree (pid 42) to finish.\n")
+            self.assertTrue(VERIFY.waited_for_lock({"log": str(log)}))
+            log.write_text("build\ntests\n")
+            self.assertFalse(VERIFY.waited_for_lock({"log": str(log)}))
+            self.assertFalse(VERIFY.waited_for_lock({"log": str(Path(temporary) / "missing.log")}))
 
     def test_probes_start_after_the_build_and_both_are_joined(self):
         receipt, found = self.run_script([(0, {PASSING: "Passed"}), (0, None)])
@@ -640,6 +671,40 @@ verify.run_guarded(receipt, work)
             (root / "new.txt").write_text("new")
             self.assertEqual(sorted(VERIFY.dirty_paths(root)), ["kept.txt", "new.txt"])
 
+    def test_a_moved_tree_names_only_what_changed_during_the_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = FakeReceipt(Path(temporary), [(0, None)])
+            receipt.step("check", ["true"])
+            before = {"Sources/Kept.swift": "same", "Sources/Edited.swift": "old", "Sources/Reverted.swift": "edit"}
+            now = {"Sources/Kept.swift": "same", "Sources/Edited.swift": "new", "Tests/New.png": "png"}
+            with patch.object(VERIFY, "tree_fingerprint", return_value="after"), \
+                    patch.object(VERIFY, "dirty_state", return_value=now):
+                VERIFY.finish(receipt, None, "before", before)
+            self.assertEqual(receipt.value["result"], "incomplete")
+            self.assertEqual(receipt.value["treeChanges"], ["Sources/Edited.swift", "Sources/Reverted.swift", "Tests/New.png"])
+            self.assertNotIn("treeChangesTotal", receipt.value)
+
+    def test_dirty_state_tells_an_edit_from_a_file_that_was_already_dirty(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / "kept.txt").write_text("one")
+            subprocess.run(["git", "add", "kept.txt"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "c"], cwd=root, check=True)
+            (root / "kept.txt").write_text("two")
+            first = VERIFY.dirty_state(root)
+            self.assertEqual(first, VERIFY.dirty_state(root))
+            (root / "kept.txt").write_text("three")
+            self.assertNotEqual(first["kept.txt"], VERIFY.dirty_state(root)["kept.txt"])
+
+    def test_a_base_this_clone_lacks_is_a_clear_error_without_a_receipt(self):
+        error = subprocess.CalledProcessError(128, ["git", "merge-base"])
+        with patch.object(VERIFY, "changed_paths", side_effect=error), \
+                patch.object(sys, "argv", ["verify", "--layer", "L1", "--base", "f" * 40]), \
+                contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(VERIFY.main(), 2)
+        self.assertIn("cannot compare with " + "f" * 40, stderr.getvalue())
+
     def test_a_still_tree_finishes_on_the_step_results(self):
         with tempfile.TemporaryDirectory() as temporary:
             receipt = FakeReceipt(Path(temporary), [(0, None)])
@@ -698,7 +763,7 @@ verify.run_guarded(receipt, work)
 
 
 class ExecuteTests(unittest.TestCase):
-    def run_layer(self, layer, paths, quarantine=NOTHING):
+    def run_layer(self, layer, paths, quarantine=NOTHING, part="all"):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         receipt = FakeReceipt(Path(temporary.name), [(0, None), (0, None), (0, None)])
@@ -715,9 +780,46 @@ class ExecuteTests(unittest.TestCase):
                 patch.object(VERIFY, "read_quarantine", return_value=quarantine), patch.object(VERIFY, "run_ios", side_effect=ios), \
                 patch.object(VERIFY, "run_xctest_and_probes", return_value={PASSING: "Passed", BROKEN: "Failed"}) as xctest, \
                 patch.object(VERIFY, "run_vendor") as vendor:
-            outcome = VERIFY.execute(receipt, layer, paths, "origin/main", 4)
+            outcome = VERIFY.execute(receipt, layer, paths, "origin/main", 4, part)
         self.xctest_layers = [call.args[3] for call in xctest.call_args_list]
+        self.xctest_parts = [call.args[4] for call in xctest.call_args_list]
         return receipt, outcome, ran, vendor
+
+    def skipped(self, receipt):
+        return {item["name"]: item["reason"] for item in receipt.value["skipped"]}
+
+    def test_the_ios_part_runs_only_ios_and_checks_its_results(self):
+        receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"], part="ios")
+        self.assertIsNone(outcome)
+        self.assertEqual(ran, [NOTHING])
+        self.assertEqual(self.xctest_parts, [])
+        vendor.assert_not_called()
+        self.assertEqual([call[0] for call in receipt.calls], ["skip-policy"])
+        record = receipt.directory / "results.json"
+        self.assertEqual(set(json.loads(record.read_text())), {f"{VERIFY.MOBILE_BUNDLE}/AClass/testOne()"})
+        for name in ("check", "lint", "xctest", "vendor"):
+            self.assertEqual(self.skipped(receipt)[name], "runs in the xctest part of the gate")
+        self.assertEqual(self.skipped(receipt)["probes"], "runs in the probes part of the gate")
+
+    def test_the_xctest_part_leaves_probes_and_ios_to_their_own_jobs(self):
+        receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"], part="xctest")
+        self.assertIsNone(outcome)
+        self.assertEqual(ran, [])
+        self.assertEqual(self.xctest_parts, ["xctest"])
+        vendor.assert_called_once()
+        self.assertEqual([call[0] for call in receipt.calls], ["check", "lint", "skip-policy"])
+        self.assertEqual(self.skipped(receipt)["ios"], "runs in the ios part of the gate")
+        self.assertEqual(self.skipped(receipt)["probes"], "runs in the probes part of the gate")
+
+    def test_the_probes_part_runs_no_policy_step_of_its_own(self):
+        receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"], part="probes")
+        self.assertIsNone(outcome)
+        self.assertEqual(ran, [])
+        self.assertEqual(self.xctest_parts, ["probes"])
+        vendor.assert_not_called()
+        self.assertEqual(receipt.calls, [])
+        self.assertIn("skip-policy", self.skipped(receipt))
+        self.assertEqual(self.skipped(receipt)["xctest"], "runs in the xctest part of the gate")
 
     def test_the_layer_reaches_the_test_selection(self):
         for layer in ("L1", "L2"):
@@ -773,6 +875,67 @@ class MobileScriptTests(unittest.TestCase):
     def test_plain_actions_are_unchanged(self):
         self.assertTrue(self.run_script("test").endswith('ALLOWED=YES test'))
         self.assertTrue(self.run_script("build").endswith('ALLOWED=YES build'))
+
+
+class RegressionLockTests(unittest.TestCase):
+    """scripts/dev/macos.sh regression with stub tools: the test phase holds the shared lock and always
+    releases it."""
+
+    def run_regression(self, lock, test_exit=0):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        (root / "scripts/dev").mkdir(parents=True)
+        shutil.copyfile(ROOT / "scripts/dev/macos.sh", root / "scripts/dev/macos.sh")
+        (root / "scripts/dev/assert-worktree.sh").write_text("exit 0\n")
+        (root / "scripts/dev/macos-regression.py").write_text(
+            "import sys\nprint('/synthetic/run.xctestrun' if sys.argv[1] == 'configure' else 'summary')\n")
+        tools = root / "tools"
+        tools.mkdir()
+        (tools / "uname").write_text("#!/bin/sh\necho Darwin\n")
+        (tools / "git").write_text(f"#!/bin/sh\ncase \"$*\" in\n  'rev-parse --show-toplevel') echo '{root}' ;;\n"
+                                   "  'rev-parse HEAD') echo 0123456789abcdef0123456789abcdef01234567 ;;\nesac\n")
+        (tools / "xcrun").write_text("#!/bin/sh\necho '{}'\n")
+        (tools / "xcodebuild").write_text(
+            "#!/bin/sh\ncase \" $* \" in\n  *' test-without-building '*)\n"
+            f"    cat '{lock}/pid' > '{root}/lock-during-tests.txt' 2>/dev/null || echo none > '{root}/lock-during-tests.txt'\n"
+            f"    exit {test_exit} ;;\nesac\n")
+        for tool in tools.iterdir():
+            tool.chmod(0o755)
+        environment = dict(os.environ, PATH=f"{tools}:{os.environ['PATH']}", PICHI_REGRESSION_LOCK=str(lock))
+        result = subprocess.run(["bash", str(root / "scripts/dev/macos.sh"), "regression", "-only-testing:Bundle/AClass/testOne"],
+                                cwd=root, env=environment, capture_output=True, text=True, timeout=60)
+        held = (root / "lock-during-tests.txt").read_text().strip() if (root / "lock-during-tests.txt").exists() else None
+        return result, held
+
+    def test_a_stale_lock_is_taken_over_and_released_after_the_tests(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock = Path(temporary) / "regression.lock"
+            ended = subprocess.Popen(["true"])
+            ended.wait()
+            lock.mkdir()
+            (lock / "pid").write_text(f"{ended.pid}\n")
+            result, held = self.run_regression(lock)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("stale regression lock", result.stderr)
+            self.assertNotIn(held, (None, "none", str(ended.pid)))
+            self.assertFalse(lock.exists())
+
+    def test_a_failing_test_run_still_releases_the_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock = Path(temporary) / "regression.lock"
+            result, held = self.run_regression(lock, test_exit=65)
+            self.assertEqual(result.returncode, 65)
+            self.assertNotIn(held, (None, "none"))
+            self.assertFalse(lock.exists())
+
+    def test_the_folder_of_the_lock_is_created(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock = Path(temporary) / "missing" / "folder" / "regression.lock"
+            result, held = self.run_regression(lock)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn(held, (None, "none"))
+            self.assertFalse(lock.exists())
 
 
 if __name__ == "__main__":

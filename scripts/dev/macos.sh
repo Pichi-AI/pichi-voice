@@ -74,12 +74,55 @@ if [[ "$pichi_action" == "regression" ]]; then
     fi
     pichi_xctestrun="$(python3 -S scripts/dev/macos-regression.py configure \
         "$pichi_derived_data/Build/Products" "$pichi_run/build-start" "$pichi_run_id")"
+    # Every worktree tests under the same identity, so its settings, Application Support and
+    # Keychain items are shared. Builds stay parallel; test runs take turns through one lock.
+    # Waiting counts toward the step limit of scripts/dev/verify, so run one gate per machine.
+    pichi_lock="${PICHI_REGRESSION_LOCK:-$HOME/Library/Caches/pichi-voice-regression.lock}"
+    mkdir -p "$(dirname "$pichi_lock")"
+    pichi_lock_waited=0
+    pichi_lock_missing=0
+    while ! mkdir "$pichi_lock" 2>/dev/null; do
+        if [[ ! -d "$pichi_lock" ]]; then
+            # mkdir failed with no lock to wait for: its folder cannot be written. Retry in case the
+            # holder released the lock in between, then stop instead of waiting forever.
+            pichi_lock_missing=$((pichi_lock_missing + 1))
+            if (( pichi_lock_missing >= 3 )); then
+                printf 'Cannot create the regression lock %s.\n' "$pichi_lock" >&2
+                exit 1
+            fi
+            continue
+        fi
+        pichi_lock_missing=0
+        pichi_lock_owner="$(cat "$pichi_lock/pid" 2>/dev/null || true)"
+        # A holder that ended, or one that never wrote its pid within a minute, left the lock behind.
+        # The removal is best effort: two waiters that see the same dead holder within milliseconds
+        # could both run, which is no worse than having no lock.
+        if { [[ -n "$pichi_lock_owner" ]] && ! kill -0 "$pichi_lock_owner" 2>/dev/null \
+                && [[ "$(cat "$pichi_lock/pid" 2>/dev/null || true)" == "$pichi_lock_owner" ]]; } \
+            || { [[ -z "$pichi_lock_owner" ]] && [[ -n "$(find "$pichi_lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]]; }; then
+            printf 'Removing a stale regression lock of process %s.\n' "${pichi_lock_owner:-unknown}" >&2
+            rm -rf "$pichi_lock"
+            continue
+        fi
+        if (( pichi_lock_waited % 60 == 0 )); then
+            printf 'Waiting for the tests of %s (pid %s) to finish.\n' \
+                "$(cat "$pichi_lock/root" 2>/dev/null || printf 'another worktree')" "${pichi_lock_owner:-unknown}" >&2
+        fi
+        sleep 2
+        pichi_lock_waited=$((pichi_lock_waited + 2))
+    done
+    printf '%s\n' "$$" > "$pichi_lock/pid"
+    printf '%s\n' "$pichi_root" > "$pichi_lock/root"
+    trap 'rm -rf "$pichi_lock"' EXIT
+    printf 'Regression lock taken after %s s of waiting.\n' "$pichi_lock_waited" >> "$pichi_run/run.txt"
     pichi_test_status=0
     xcodebuild -xctestrun "$pichi_xctestrun" -destination "$pichi_destination" \
         -derivedDataPath "$pichi_derived_data" \
         -resultBundlePath "$pichi_run/tests.xcresult" -parallel-testing-enabled NO \
         "${pichi_test_args[@]}" test-without-building 2>&1 | tee "$pichi_run/test.log" \
         || pichi_test_status=$?
+    rm -rf "$pichi_lock"
+    trap - EXIT
     # Extract the actual report even when xcodebuild failed. Missing results fail closed.
     pichi_summary_status=0
     xcrun xcresulttool get test-results summary --path "$pichi_run/tests.xcresult" \
