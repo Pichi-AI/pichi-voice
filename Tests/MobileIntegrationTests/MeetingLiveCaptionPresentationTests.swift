@@ -1583,15 +1583,22 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
                 speakerNames: [speaker: "Анна"], language: .russian), "Анна")
             XCTAssertEqual(source, original)
             XCTAssertEqual(try MeetingTranscriptExporter.json(for: source), try MeetingTranscriptExporter.json(for: original))
+            // #115: outside the legacy bridge the unresolved word still reads under the continuing participant,
+            // so the paragraph count no longer proves the bridge boundary. The bridge estimate must not be
+            // admitted, and exact members must be preserved.
             var manual = rows; manual[1].revision += 1
-            XCTAssertEqual(MeetingTranscriptExporter.displayParagraphs(for: manual, in: source).count, 3)
+            let manualParagraphs = MeetingTranscriptExporter.displayParagraphs(for: manual, in: source)
+            XCTAssertFalse(manualParagraphs.contains(where: \.containsLegacySpeakerBridge))
+            XCTAssertEqual(manualParagraphs.flatMap(\.segments), manual)
             var current = source; current.processingAttempts[0].pipelineVersion = 15
-            XCTAssertEqual(MeetingTranscriptExporter.displayParagraphs(for: rows, in: current).count, 3)
+            let currentParagraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: current)
+            XCTAssertFalse(currentParagraphs.contains(where: \.containsLegacySpeakerBridge))
+            XCTAssertEqual(currentParagraphs.flatMap(\.segments), rows)
             var enclosing = legacy("Enclosing envelope", start: before - 0.2, end: after + 1, identified: true)
             enclosing.isLikelyEcho = true
             var hiddenOverlap = source; hiddenOverlap.transcriptSegments.insert(enclosing, at: 0)
             let blocked = MeetingTranscriptExporter.displayParagraphs(for: rows, in: hiddenOverlap)
-            XCTAssertEqual(blocked.count, 3)
+            XCTAssertEqual(blocked.flatMap(\.segments), rows)
             XCTAssertFalse(blocked.contains(where: \.containsLegacySpeakerBridge),
                 "An earlier hidden envelope remains a temporal barrier after echo filtering")
         }
@@ -1662,7 +1669,17 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
                     segment("second", track: track, start: 0.5, speaker: secondID, attribution: .assigned),
                     segment("uncertain", track: track, start: 1, speaker: secondID, attribution: .timingUncertain),
                     segment("unknown", track: track, start: 1.5)]
-        XCTAssertEqual(MeetingTranscriptExporter.displayParagraphs(for: rows, in: source).map(\.segments), rows.map { [$0] })
+        // #115 (609e715e): every readable fragment has a reading participant. Actual speaker IDs still open a
+        // turn even with the same visible name. A timing-uncertain member keeps its known speaker's turn
+        // (uncertainty stays on the member), and the unresolved word reads under a participant while its
+        // canonical speaker stays unresolved.
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: source)
+        XCTAssertEqual(paragraphs.flatMap(\.segments), rows)
+        XCTAssertEqual(paragraphs.first?.segments, [rows[0]])
+        XCTAssertEqual(paragraphs.dropFirst().first?.segments, [rows[1], rows[2]])
+        XCTAssertEqual(paragraphs.last?.segments, [rows[3]])
+        XCTAssertNil(rows[3].speakerID)
+        XCTAssertEqual(rows[2].attributionState, .timingUncertain)
     }
 
     func testSourceStatusAndCompletenessBoundariesRemainExplicit() {
@@ -1694,15 +1711,23 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
 
     func testReturningSpeakerStartsANewTurnAndUnknownWordsDoNotInheritIdentity() {
         let track = UUID(), firstID = UUID(), secondID = UUID()
-        let rows = [segment("First speaker", track: track, start: 0, speaker: firstID, attribution: .assigned),
+        var source = session()
+        source.speakers = [(firstID, "First"), (secondID, "Second")].map {
+            .init(id: $0.0, displayName: $0.1, diarizationClusterID: nil, trackKind: .microphone,
+                  isLocalUser: false, identityCandidates: [])
+        }
+        var rows = [segment("First speaker", track: track, start: 0, speaker: firstID, attribution: .assigned),
                     segment("still speaking", track: track, start: 20, speaker: firstID, attribution: .assigned),
                     segment("Second speaker", track: track, start: 21, speaker: secondID, attribution: .assigned),
                     segment("First speaker returns", track: track, start: 22, speaker: firstID, attribution: .assigned),
                     segment("to", track: track, start: 23),
                     segment("First speaker again", track: track, start: 24, speaker: firstID, attribution: .assigned)]
-        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: session())
-        XCTAssertEqual(paragraphs.map(\.segments), [Array(rows[0...1]), [rows[2]], [rows[3]], [rows[4]], [rows[5]]])
-        XCTAssertNil(paragraphs[3].firstSegment.speakerID)
+        for index in rows.indices { rows[index].revision = 0; rows[index].originalText = nil }
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: source)
+        // #115 (609e715e): the returning speaker still starts a new turn. The unresolved word "to" reads under
+        // the surrounding participant, joining that turn, while its canonical evidence stays unresolved.
+        XCTAssertEqual(paragraphs.map(\.segments), [Array(rows[0...1]), [rows[2]], Array(rows[3...5])])
+        XCTAssertNil(paragraphs[2].segments[1].speakerID)
         XCTAssertEqual(paragraphs.flatMap(\.segments), rows)
     }
 
@@ -1758,8 +1783,17 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
         for ids in [[], [UUID()], [rows[0].id, rows[0].id], rows.map(\.id).reversed().map { $0 }, [rows[0].id, UUID()]] {
             XCTAssertThrowsError(try MeetingSegmentPlaybackPlan.segmentRange(in: source, segmentIDs: ids))
         }
+        // #115: an unresolved word now reads under its neighbour's participant, so the boundary under test must
+        // be a real change between two registered participants.
+        let firstID = UUID(), secondID = UUID()
+        source.speakers = [(firstID, "First"), (secondID, "Second")].map {
+            .init(id: $0.0, displayName: $0.1, diarizationClusterID: nil, trackKind: .microphone,
+                  isLocalUser: false, identityCandidates: [])
+        }
+        source.transcriptSegments[0].attributionState = .assigned
+        source.transcriptSegments[0].speakerID = firstID
         source.transcriptSegments[1].attributionState = .assigned
-        source.transcriptSegments[1].speakerID = UUID()
+        source.transcriptSegments[1].speakerID = secondID
         XCTAssertThrowsError(try MeetingSegmentPlaybackPlan.segmentRange(in: source, segmentIDs: rows.map(\.id)))
         source.transcriptSegments = rows
         source.transcriptSegments[1].sourceTrackID = UUID()
