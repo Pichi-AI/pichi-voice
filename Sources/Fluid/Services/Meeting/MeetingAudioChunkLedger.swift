@@ -267,7 +267,7 @@ final nonisolated class MeetingAudioChunkLedgerStore: @unchecked Sendable {
 /// files, appends per-chunk recovery records, and updates the small track header. The complete
 /// compatibility manifest is written once at Stop. Failure never deletes captured audio.
 final nonisolated class MeetingAudioRecordingJournal: @unchecked Sendable {
-    enum Operation: Sendable { case manifest, intent, checkpoint, capture, finalize }
+    enum Operation: Sendable { case manifest, intent, checkpoint, capture, finalize, terminal }
     typealias Hook = @Sendable (Operation) throws -> Void
     typealias Completion = @Sendable (Result<Void, Error>) -> Void
     struct Snapshot: Sendable {
@@ -368,14 +368,25 @@ final nonisolated class MeetingAudioRecordingJournal: @unchecked Sendable {
             }
             // Even a not-yet-verified partial has an exact recovery extent and clock. It is
             // never admitted to inference until recovery independently validates the container.
+            var captureRecorded = false
             do {
                 try self.hook?(.capture)
                 try self.ledger.writeCapture(.init(trackID: track.id, kind: track.kind, chunk: chunk))
-                if chunk.finalizationState == .finalized { try self.ledger.publishReadyTerminal(for: chunk) }
                 self.recordedThrough = max(self.recordedThrough, chunk.sequence)
                 if chunk.finalizationState == .writing { self.pendingRecovery.insert(chunk.id) }
                 else { self.pendingRecovery.remove(chunk.id) }
+                captureRecorded = true
             } catch { failure = failure ?? error }
+            // The ready terminal is an optional acknowledgement of PCM and a capture record that are
+            // already durable. Its failure is logged once and never fails the journal or keeps the
+            // chunk pending, so later metadata completions and the Stop receipt still succeed.
+            if captureRecorded, chunk.finalizationState == .finalized {
+                do { try self.hook?(.terminal); try self.ledger.publishReadyTerminal(for: chunk) }
+                catch {
+                    DebugLogger.shared.warning("Ready terminal for chunk \(chunk.sequence) was not published: \(error)",
+                                               source: "MeetingAudioRecordingJournal")
+                }
+            }
             track.chunks[index] = chunk
             updates.append(chunk)
         }

@@ -10,8 +10,6 @@ final class MeetingCaptureStorageAdmissionTests: XCTestCase {
     /// live transcription consumer is missing. Audio keeps being retained and transcription is
     /// deferred. Only the strict no-file policy refuses, and it must not silently downgrade.
     func testStreamingWithoutConsumerDefersTranscriptionForFilesAndRefusesStrictMemoryOnly() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
         for storage in [MeetingAudioStorageMode.retainedFiles, .memoryOnly] {
             let configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic streaming admission",
                 languageCode: "ru", microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone"),
@@ -46,7 +44,6 @@ final class MeetingCaptureStorageAdmissionTests: XCTestCase {
                 XCTAssertTrue(deferrals.isEmpty, "A strict no-file recording must not be downgraded to deferral")
             }
         }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path), "Preparation never touches storage")
     }
 
     func testDesktopRefusesMemoryOnlyBeforeAnyAudioFilesOrDirectoriesAreCreated() async throws {
