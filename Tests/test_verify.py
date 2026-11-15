@@ -182,6 +182,22 @@ class SideBySideTests(unittest.TestCase):
         receipt, _ = self.run_script([(1, None)], part="probes")
         self.assertEqual(receipt.value["result"], "failed")
 
+    def test_a_timeout_after_waiting_for_the_regression_lock_says_so(self):
+        with patch.object(VERIFY, "waited_for_lock", return_value=True):
+            receipt, _ = self.run_script([(None, None)], part="xctest")
+        row = receipt.value["steps"][0]
+        self.assertEqual(row["status"], "timed out")
+        self.assertIn("waiting for the regression tests of another worktree", row["note"])
+
+    def test_the_lock_wait_is_read_from_the_step_log(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "xctest.log"
+            log.write_text("build\nWaiting for the tests of /other/worktree (pid 42) to finish.\n")
+            self.assertTrue(VERIFY.waited_for_lock({"log": str(log)}))
+            log.write_text("build\ntests\n")
+            self.assertFalse(VERIFY.waited_for_lock({"log": str(log)}))
+            self.assertFalse(VERIFY.waited_for_lock({"log": str(Path(temporary) / "missing.log")}))
+
     def test_probes_start_after_the_build_and_both_are_joined(self):
         receipt, found = self.run_script([(0, {PASSING: "Passed"}), (0, None)])
         self.assertEqual([call[0] for call in receipt.calls], ["xctest", "wait", "probes"])
@@ -859,6 +875,67 @@ class MobileScriptTests(unittest.TestCase):
     def test_plain_actions_are_unchanged(self):
         self.assertTrue(self.run_script("test").endswith('ALLOWED=YES test'))
         self.assertTrue(self.run_script("build").endswith('ALLOWED=YES build'))
+
+
+class RegressionLockTests(unittest.TestCase):
+    """scripts/dev/macos.sh regression with stub tools: the test phase holds the shared lock and always
+    releases it."""
+
+    def run_regression(self, lock, test_exit=0):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        (root / "scripts/dev").mkdir(parents=True)
+        shutil.copyfile(ROOT / "scripts/dev/macos.sh", root / "scripts/dev/macos.sh")
+        (root / "scripts/dev/assert-worktree.sh").write_text("exit 0\n")
+        (root / "scripts/dev/macos-regression.py").write_text(
+            "import sys\nprint('/synthetic/run.xctestrun' if sys.argv[1] == 'configure' else 'summary')\n")
+        tools = root / "tools"
+        tools.mkdir()
+        (tools / "uname").write_text("#!/bin/sh\necho Darwin\n")
+        (tools / "git").write_text(f"#!/bin/sh\ncase \"$*\" in\n  'rev-parse --show-toplevel') echo '{root}' ;;\n"
+                                   "  'rev-parse HEAD') echo 0123456789abcdef0123456789abcdef01234567 ;;\nesac\n")
+        (tools / "xcrun").write_text("#!/bin/sh\necho '{}'\n")
+        (tools / "xcodebuild").write_text(
+            "#!/bin/sh\ncase \" $* \" in\n  *' test-without-building '*)\n"
+            f"    cat '{lock}/pid' > '{root}/lock-during-tests.txt' 2>/dev/null || echo none > '{root}/lock-during-tests.txt'\n"
+            f"    exit {test_exit} ;;\nesac\n")
+        for tool in tools.iterdir():
+            tool.chmod(0o755)
+        environment = dict(os.environ, PATH=f"{tools}:{os.environ['PATH']}", PICHI_REGRESSION_LOCK=str(lock))
+        result = subprocess.run(["bash", str(root / "scripts/dev/macos.sh"), "regression", "-only-testing:Bundle/AClass/testOne"],
+                                cwd=root, env=environment, capture_output=True, text=True, timeout=60)
+        held = (root / "lock-during-tests.txt").read_text().strip() if (root / "lock-during-tests.txt").exists() else None
+        return result, held
+
+    def test_a_stale_lock_is_taken_over_and_released_after_the_tests(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock = Path(temporary) / "regression.lock"
+            ended = subprocess.Popen(["true"])
+            ended.wait()
+            lock.mkdir()
+            (lock / "pid").write_text(f"{ended.pid}\n")
+            result, held = self.run_regression(lock)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("stale regression lock", result.stderr)
+            self.assertNotIn(held, (None, "none", str(ended.pid)))
+            self.assertFalse(lock.exists())
+
+    def test_a_failing_test_run_still_releases_the_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock = Path(temporary) / "regression.lock"
+            result, held = self.run_regression(lock, test_exit=65)
+            self.assertEqual(result.returncode, 65)
+            self.assertNotIn(held, (None, "none"))
+            self.assertFalse(lock.exists())
+
+    def test_the_folder_of_the_lock_is_created(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock = Path(temporary) / "missing" / "folder" / "regression.lock"
+            result, held = self.run_regression(lock)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn(held, (None, "none"))
+            self.assertFalse(lock.exists())
 
 
 if __name__ == "__main__":

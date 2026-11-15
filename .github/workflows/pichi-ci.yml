@@ -100,20 +100,23 @@ jobs:
           # On a push to main, origin/main is the pushed commit itself: compare with the previous tip
           # instead, so the pushed commits decide whether the iOS step and Vendor packages run.
           base=origin/main
+          layer=L1
           case "$PUSH_BEFORE" in
             "" | 0000000000000000000000000000000000000000) ;;
             *)
               if git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
                 base="$PUSH_BEFORE"
               else
-                # A force push leaves the previous tip out of the clone: compare with the first parent.
-                echo "The previous tip $PUSH_BEFORE is not in this clone; comparing with HEAD^1."
+                # A force push (blocked on main) would leave the previous tip out of the clone. The diff
+                # is then unknown, so run L2, which takes iOS and Vendor packages whatever changed.
+                echo "The previous tip $PUSH_BEFORE is not in this clone; running L2 against HEAD^1."
                 base="HEAD^1"
+                layer=L2
               fi
               ;;
           esac
           # exec: a cancelled or timed-out job signals verify itself, which then stops its steps.
-          exec python3 -S scripts/dev/verify --layer L1 --base "$base" --part "$PART"
+          exec python3 -S scripts/dev/verify --layer "$layer" --base "$base" --part "$PART"
       - name: Show the receipt and the logs of failed steps
         if: always()
         working-directory: ../pichi-voice-ci
