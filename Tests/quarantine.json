@@ -134,51 +134,9 @@
    "expires": "2026-11-26"
   },
   {
-   "test": "FluidDictationIntegrationTests/MeetingAudioChunkLedgerRecoveryTests/testPartialOrEscapingNewAssetIsNeverPromoted()",
-   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "Possible regression: since #157 an unrecoverable or escaping partial capture stays .writing instead of becoming .failed on restore (recoverClosedCapture rejects the path and the store swallows the error). Passes on c66a80fd^1 and fails after #157.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingSummaryInputTests/testLegacyISOManifestStillMatchesSummaryMadeBeforeReload()",
-   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "Possible regression: since #157 the store reconciles a session without track.json on load, rewrites the legacy session.json on read (1561 instead of 1653 bytes) and drops firstPresentationTime of a track without chunks. Passes on c66a80fd^1 and fails after #157.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingSummaryInputTests/testSummaryMadeRightAfterRecordingStillMatchesOnceTheMeetingIsReloaded()",
-   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "Possible regression: since #157 a reload drops firstPresentationTime of a track without chunks, so the reloaded session differs from the one the summary was made from. Passes on c66a80fd^1 and fails after #157.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingVoiceProcessingCaptureTests/testRawRouteResumePersistenceFailureDoesNotOpenAdmission()",
-   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "Possible regression: after #157 a failed durable write during a raw route resume no longer propagates, and echo protection stays unfiltered. Passes on c66a80fd^1 and fails after #157.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingVoiceProcessingCaptureTests/testRawRouteResumeWithoutNewPCMReopensOnlyAfterDurableBoundary()",
-   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "After #157 track.json is not written where this test reads the durable boundary. Passes on c66a80fd^1 and fails after #157.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingMicrophoneCaptureTests/testWriterPublishesPCMCAFMetadataAndReadyLedgerTerminal()",
-   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "After #157 the PCM writer no longer publishes a ready ledger terminal where this test expects it. Passes on c66a80fd^1 and fails after #157.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingCaptureStorageAdmissionTests/testDesktopRefusesStreamingWithoutConsumerBeforeStorageOrPermissionWork()",
-   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "After #157 the refusal path fails with Cocoa error 4 while removing a session directory. Passes on c66a80fd^1 and fails after #157.",
-   "expires": "2026-11-26"
-  },
-  {
    "test": "FluidDictationIntegrationTests/MeetingAudioComparisonProbeTests/testFullComparisonCompletesRequestOnlyAfterReportIsSaved()",
    "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "After #157 the full comparison does not save a usable report within 5 seconds. Passes on c66a80fd^1 and fails after #157.",
+   "reason": "Cause found (2026-11-14): since #157 MeetingAudioChunkWriter admits PCM through MeetingPCMIntakeGate (MeetingCapturePCMTransport.swift: one buffer at most 65536 frames, 16 MB and 10 s queued), so the test's single 1_440_000-frame buffer per stage is dropped, droppedSampleCount > 0 and hasUsefulComparison stays false. Real capture delivers buffers of 10-20 ms, so this is not a product regression. Verified: the same 30 s fed as 60 buffers of 24000 frames per stage with 5 ms pacing passes. The test is identical to upstream FluidVoice v1.6.13, and the owner rule allows editing only expected values of upstream tests, while the fix changes the input. Needs an owner decision (issue #166): allow feeding realistic buffer sizes in this upstream test, or move it to a Pichi test file.",
    "expires": "2026-11-26"
   },
   {
