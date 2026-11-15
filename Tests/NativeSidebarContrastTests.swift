@@ -53,8 +53,9 @@ enum NativeSidebarContrastTests {
     }
 
     @MainActor private static func pixels(_ view: NSView, name: String, ink: Color, iconInk: Color, iconWidth: CGFloat, directory: URL) throws {
-        let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
-        view.cacheDisplay(in: view.bounds, to: bitmap)
+        // Always 2x, like the thresholds below: a runner without a Retina display would otherwise draw icon
+        // strokes one pixel wide and report the ink as absent.
+        let bitmap = FixedScaleSnapshot.bitmap(of: view)!
         try bitmap.representation(using: .png, properties: [:])!.write(to: directory.appendingPathComponent(name + ".png"))
         let image = bitmap.cgImage!
         var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
@@ -105,7 +106,7 @@ enum NativeSidebarContrastTests {
                     for family: Family in [.main, .settings] {
                         let state = State(theme: theme, russian: russian, family: family)
                         let controller = NSHostingController(rootView: Host(state: state, family: family))
-                        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 350),
+                        let window = FixedScaleSnapshot.Window(contentRect: NSRect(x: 0, y: 0, width: 700, height: 350),
                                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
                         window.isReleasedWhenClosed = false
                         window.contentViewController = controller
