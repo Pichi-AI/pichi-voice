@@ -9,8 +9,10 @@ import plistlib
 import sys
 
 
-def configure_targets(value, environment):
-    """Handle format-1 targets and nested format-2 TestConfigurations/TestTargets."""
+def configure_targets(value, environment, fixed=None):
+    """Handle format-1 targets and nested format-2 TestConfigurations/TestTargets.
+
+    `fixed` adds exact variables that are not selected from the caller's environment."""
     # CI markers stay out: an upstream test then switches to a shared model folder and sees folders that earlier
     # tests created. Tests get the same environment on a CI runner as on a developer Mac.
     overrides = {
@@ -19,6 +21,7 @@ def configure_targets(value, environment):
     }
     overrides["FLUIDVOICE_MIC_PHASE1"] = "disabled"
     overrides["PICHI_INTERFACE_LANGUAGE"] = environment.get("PICHI_INTERFACE_LANGUAGE", "en")
+    overrides.update(fixed or {})
 
     def visit(node):
         count = 0
@@ -43,14 +46,18 @@ def configure_targets(value, environment):
     return count
 
 
-def configure(products, marker, run_id):
+def configure(products, marker, run_id, home=None):
     # A fresh build must have emitted this scheme's spec. Never select an older run.
     candidates = [path for path in products.glob("Fluid_*.xctestrun")
                   if path.stat().st_mtime_ns >= marker.stat().st_mtime_ns]
     if len(candidates) != 1:
         raise ValueError(f"Expected one fresh Fluid xctestrun, found {len(candidates)}")
     value = plistlib.loads(candidates[0].read_bytes())
-    count = configure_targets(value, os.environ)
+    # Foundation resolves Application Support, Caches and NSHomeDirectory() from CFFIXED_USER_HOME, so the test
+    # host starts from empty storage and never sees models or sessions left in the shared regression identity.
+    # Preferences and the Keychain stay in their system locations.
+    fixed = {"CFFIXED_USER_HOME": str(home)} if home is not None else None
+    count = configure_targets(value, os.environ, fixed)
     # __TESTROOT__ is relative to the plist, so keep the configured spec beside products.
     destination = products / f"regression-{run_id}.xctestrun"
     destination.write_bytes(plistlib.dumps(value))
@@ -87,13 +94,14 @@ def main():
     config.add_argument("products", type=Path)
     config.add_argument("marker", type=Path)
     config.add_argument("run_id")
+    config.add_argument("--home", type=Path, help="Run-owned directory used as the test host's home")
     summary = actions.add_parser("summarize")
     summary.add_argument("summary", type=Path)
     summary.add_argument("test_status", type=int)
     args = parser.parse_args()
     try:
         if args.action == "configure":
-            configure(args.products, args.marker, args.run_id)
+            configure(args.products, args.marker, args.run_id, args.home)
             return 0
         return summarize(json.loads(args.summary.read_text()), args.test_status)
     except (OSError, ValueError, TypeError, plistlib.InvalidFileException) as error:

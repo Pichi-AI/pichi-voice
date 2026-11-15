@@ -2,36 +2,10 @@
  "version": 1,
  "entries": [
   {
-   "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testDisablingFluidMeetDuringModelPreparationDoesNotStartCapture()",
-   "owner": "test-infra",
-   "reason": "Depends on speech models in the test identity's Application Support: it passes with an empty container and fails once Parakeet models are there, and the suite itself downloads Parakeet v3 from huggingface.co during a run. Remove when regression runs start from an empty container.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "PichiVoiceMobileIntegrationTests/MobileSetupTransactionTests/testBackgroundAndEnrollmentJoinTheCanonicalVoiceInstallation()",
-   "owner": "test-infra",
-   "reason": "Fails on a clean simulator on 2026-11-12. The cause is not analysed yet.",
-   "expires": "2026-11-26"
-  },
-  {
    "test": "FluidDictationIntegrationTests/MeetingAudioComparisonProbeTests/testFullComparisonCompletesRequestOnlyAfterReportIsSaved()",
    "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
    "reason": "Cause found (2026-11-14): since #157 MeetingAudioChunkWriter admits PCM through MeetingPCMIntakeGate (MeetingCapturePCMTransport.swift: one buffer at most 65536 frames, 16 MB and 10 s queued), so the test's single 1_440_000-frame buffer per stage is dropped, droppedSampleCount > 0 and hasUsefulComparison stays false. Real capture delivers buffers of 10-20 ms, so this is not a product regression. Verified: the same 30 s fed as 60 buffers of 24000 frames per stage with 5 ms pacing passes. The test is identical to upstream FluidVoice v1.6.13, and the owner rule allows editing only expected values of upstream tests, while the fix changes the input. Needs an owner decision (issue #166): allow feeding realistic buffer sizes in this upstream test, or move it to a Pichi test file.",
    "expires": "2026-11-26"
-  },
-  {
-   "test": "probe:command_ui_localization",
-   "scope": "ci",
-   "owner": "#176",
-   "reason": "The CI runner draws at 1x. The copy icon has 14 pixels at 3:1 and the copied checkmark 2, against 84 and 26 at 2x; the probe expects 12. Developer Macs keep running it.",
-   "expires": "2026-11-27"
-  },
-  {
-   "test": "probe:ui_contrast",
-   "scope": "ci",
-   "owner": "#176",
-   "reason": "The CI runner draws at 1x: NativeSidebarContrastTests finds no icon ink in a selected sidebar row, and later checks have not run there yet. Developer Macs keep running it.",
-   "expires": "2026-11-27"
   },
   {
    "test": "probe:private_ai_idle_unloader",

@@ -57,14 +57,26 @@ L2_ONLY_TESTS = (
     "FluidDictationIntegrationTests/MeetingAudioChunkSinkTests/testTwoHourMicrophoneAndApplicationCaptureKeepEveryFrameAndBoundedManifests",
     "FluidDictationIntegrationTests/MeetingMicrophoneCaptureTests/testNativeMasterTapKeepsNinetyMinuteDriftOnMeasuredHostClockWithoutPeriodicDiscard",
 )
-HEAVY_STEPS = ("xctest", "skip-policy", "probes", "ios", "vendor")
+# These upstream tests download real models into the run's home (FluidAudio "Downloading ASR models to: <home>",
+# 655 MB at the end of the run that found this). A full L1 run with those models in the home failed
+# MeetingRecoveryTests/testDisablingFluidMeetDuringModelPreparationDoesNotStartCapture ("A stale start must not
+# revive FluidMeet"), which passes with an empty home. So they run in a step of their own after the main suite:
+# the main suite starts and stays with an empty home, and L1 still exercises these tests.
+REAL_MODEL_TESTS = (
+    "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testProfileFreeLongDictationPreservesTextAndWordTimings",
+    "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testTrainingTranscribesSpellingsAcrossPronunciationToggle",
+    "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testAutomaticSpeechEndWorksWithPronunciationOffAndAcrossToggles",
+)
+HEAVY_STEPS = ("xctest", "xctest-models", "skip-policy", "probes", "ios", "vendor")
 # CI runs the parts of one gate side by side on separate machines; "all" runs every step on this one.
 PARTS = ("all", "xctest", "probes", "ios")
-PART_OF = {"check": "xctest", "lint": "xctest", "xctest": "xctest", "vendor": "xctest", "probes": "probes", "ios": "ios"}
+PART_OF = {"check": "xctest", "lint": "xctest", "xctest": "xctest", "xctest-models": "xctest", "vendor": "xctest", "probes": "probes",
+           "ios": "ios"}
 MOBILE_BUNDLE = "PichiVoiceMobileIntegrationTests"
 REGRESSION_PRODUCTS = str(ROOT / ".build/XcodeRegression") + "/"
 BUILD_FINISHED = b"** TEST BUILD SUCCEEDED **"
 LOCK_WAIT = "Waiting for the tests of "  # printed by scripts/dev/macos.sh while it queues
+BUILD_FAILED_NOTE = "the build failed, so no test ran"
 POLL_SECONDS = 0.2
 Quarantine = namedtuple("Quarantine", "tests probes")
 
@@ -302,7 +314,7 @@ def xctest_results(row):
     results = report_results(row, directory / "tests.xcresult" if directory else None)
     summary = directory / "summary.txt" if directory else None
     if not results and summary and summary.is_file() and "Build failed" in summary.read_text(errors="replace"):
-        row["note"] = "the build failed, so no test ran"
+        row["note"] = BUILD_FAILED_NOTE
     return results
 
 
@@ -377,12 +389,33 @@ def retry_failed_probes(receipt, probes_row):
     receipt.save()
 
 
+def real_model_selection(quarantine):
+    """The real-model tests that run in their own step. A quarantined one stays out of both steps."""
+    return [test for test in REAL_MODEL_TESTS if test not in quarantine.tests]
+
+
+def run_real_model_tests(receipt, quarantine, main_row):
+    """Run the real-model tests after the main suite, in a fresh run with a fresh home. Return their results."""
+    selected = real_model_selection(quarantine)
+    if not selected:
+        receipt.skip("xctest-models", "every real-model test is quarantined")
+        return {}
+    if main_row["status"] == "failed" and main_row.get("note") == BUILD_FAILED_NOTE:
+        receipt.skip("xctest-models", "the build failed, so no test ran")
+        return {}
+    command = ["bash", "scripts/dev/macos.sh", "regression", *[f"-only-testing:{test}" for test in selected]]
+    row = receipt.join(receipt.begin("xctest-models", command, hosts=REGRESSION_PRODUCTS))[0]
+    return xctest_results(row)
+
+
 def run_xctest_and_probes(receipt, quarantine, jobs, layer="L1", part="all"):
     """Return the result of every XCTest. Probes compile too, so beside XCTest they wait until the build has
-    finished. A part of the gate on a machine of its own runs only its side."""
+    finished. A part of the gate on a machine of its own runs only its side. The real-model tests follow the
+    main XCTest suite, see REAL_MODEL_TESTS."""
     xctest = probes = None
     if part in ("all", "xctest"):
-        skipped = [f"-skip-testing:{test}" for test in sorted(quarantine.tests) if not test.startswith(MOBILE_BUNDLE + "/")]
+        skipped = [f"-skip-testing:{test}" for test in sorted(set(quarantine.tests) | set(REAL_MODEL_TESTS))
+                   if not test.startswith(MOBILE_BUNDLE + "/")]
         if layer != "L2":
             for test in L2_ONLY_TESTS:
                 skipped.append(f"-skip-testing:{test}")
@@ -402,6 +435,8 @@ def run_xctest_and_probes(receipt, quarantine, jobs, layer="L1", part="all"):
     if xctest_row is not None and xctest_row["status"] == "timed out" and waited_for_lock(xctest_row):
         xctest_row["note"] = "part of the limit went to waiting for the regression tests of another worktree"
         receipt.save()
+    if xctest_row is not None:
+        found = {**found, **run_real_model_tests(receipt, quarantine, xctest_row)}
     return found
 
 
@@ -515,7 +550,7 @@ def execute(receipt, layer, paths, base, jobs, part="all"):
     quarantine = read_quarantine()
     receipt.value["quarantined"] = sorted(quarantine.tests) + sorted(f"probe:{name}" for name in quarantine.probes)
     results = run_xctest_and_probes(receipt, quarantine, jobs, layer, part) if mine("xctest") or mine("probes") else {}
-    for name in ("xctest", "probes"):
+    for name in ("xctest", "xctest-models", "probes"):
         if not mine(name):
             elsewhere(name)
     if not mine("ios"):

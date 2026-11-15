@@ -92,7 +92,10 @@ final class MobileRecordingDeletionTests: XCTestCase {
             let settings = SettingsStore(defaults: defaults)
             settings.meetingAudioRetentionPolicy = .never
             store = MeetingSessionStore(rootDirectory: root)
-            services = AppServices(store: store, settings: settings)
+            // close() shuts these services down, and their termination is final. An owned residency keeps
+            // it from closing model admission of the process-wide coordinator for every later test.
+            services = AppServices(store: store, settings: settings,
+                                   meetingModelResidency: MeetingModelResidencyCoordinator())
         }
 
         func save(_ title: String) async throws -> MeetingSession {
