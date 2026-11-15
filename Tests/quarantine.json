@@ -2,93 +2,9 @@
  "version": 1,
  "entries": [
   {
-   "test": "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testPronunciationDefaultsOnWithoutEnablingDiagnosticsAndPreservesOff()",
-   "owner": "#151 codex/correction-history-unification-20261110-7f3c35b8dc",
-   "reason": "Expectation is out of date after an intended change. Commit 28ef7efe (\"learn from explicit false-positive rejections\") made DictionaryNegativeLearningEnabled/ComparisonEnabled default to true...",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/FluidServeTests/testReaderPrintsTheSameTranscriptAsTheApp()",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Expectation is out of date after an intended change. #115 (609e715e, 'Assign a reading participant to every admitted speech fragment') made the exporter give every readable fragment a participant. The unresolved '[00:30]...",
-   "expires": "2026-11-26"
-  },
-  {
    "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testDisablingFluidMeetDuringModelPreparationDoesNotStartCapture()",
    "owner": "test-infra",
    "reason": "Depends on speech models in the test identity's Application Support: it passes with an empty container and fails once Parakeet models are there, and the suite itself downloads Parakeet v3 from huggingface.co during a run. Remove when regression runs start from an empty container.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testFluidMeetLongTranscriptRendersWithoutSideEffects()",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Expectation is out of date after an intended change. The unresolved anonymous passage now receives a reading participant caption instead of staying '[02:40] text' with no caption; this is exactly the behaviour #115...",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingSessionModelTests/testLegacyNilAttributionStateWithAmbiguousOverlapFallsBackToUnknownSpeaker()",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Expectation is out of date after an intended change. Confirmed same cause as 8-13: the exporter's new reading resolution (MeetingReadingSpeakerResolver, 609e715e) gives unresolved/ambiguous segments a stable 'Speaker 1'...",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingSessionModelTests/testMarkdownExportIncludesTitleAndChronologicalSpeakerTurns()",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Expectation is out of date after an intended change. Unresolved 'Next steps' now gets the continuing reading participant, so it merges into the Speaker 1 turn instead of opening a separate '### [01:05]' turn. This is the...",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingSessionModelTests/testOverlappingEvidenceWithoutReadingContextRemainsUnknown()",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Expectation is out of date after an intended change. Same cause: overlapping evidence with no reading context now falls back to one stable generated 'Speaker 1' participant (fallbackSpeaker in the exporter) rather than an...",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingSessionModelTests/testTextFormatMatchesTimestampFormatAndLegacyUnassignedSpeaker()",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Expectation is out of date after an intended change. The unassigned 'No speaker text' segment is now assigned the same reading participant as the preceding segment, so the two lines merge into one '[00:04] Speaker 1: ...'...",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingSessionModelTests/testTimingUncertainAttributionStateLabel()",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Expectation is out of date after an intended change. timingUncertain segments with no speaker now receive a generated 'Speaker 1' reading participant; #115 docs explicitly say acoustic uncertainty remains evidence but not...",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingSessionModelTests/testUnassignedAttributionStateLabel()",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Expectation is out of date after an intended change. An .unassigned segment with no evidence now gets a generated 'Speaker 1' participant in the export, by design of #115 (complete reading ownership); the test expects the...",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/PichiLocalizationPresentationTests/testUnknownSpeakerSummaryInputAndFingerprintStayStableAcrossUILocalePresentation()",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Expectation is out of date after an intended change. Same cause: the unknown speaker is now a generated reading participant labelled 'Speaker 1' (localized format 'Speaker %lld') rather than 'Unknown speaker'....",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "PichiVoiceMobileIntegrationTests/MeetingSavedTranscriptPresentationTests/testActualSpeakerIDsAndKnownToUnknownStateRemainBoundaries()",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Fails on iOS since reading participants were assigned to every fragment. Not analysed one by one.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "PichiVoiceMobileIntegrationTests/MeetingSavedTranscriptPresentationTests/testLegacyOrphanWordsReadWithinTheirSameSpeakerTurnInBothLanguages()",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Fails on iOS since reading participants were assigned to every fragment. Not analysed one by one.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "PichiVoiceMobileIntegrationTests/MeetingSavedTranscriptPresentationTests/testParagraphPlaybackRefusesStaleOrCrossBoundaryMemberSelections()",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Fails on iOS since reading participants were assigned to every fragment. Not analysed one by one.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "PichiVoiceMobileIntegrationTests/MeetingSavedTranscriptPresentationTests/testReturningSpeakerStartsANewTurnAndUnknownWordsDoNotInheritIdentity()",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Fails on iOS since reading participants were assigned to every fragment. Not analysed one by one.",
    "expires": "2026-11-26"
   },
   {
@@ -101,12 +17,6 @@
    "test": "FluidDictationIntegrationTests/MeetingAudioComparisonProbeTests/testFullComparisonCompletesRequestOnlyAfterReportIsSaved()",
    "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
    "reason": "Cause found (2026-11-14): since #157 MeetingAudioChunkWriter admits PCM through MeetingPCMIntakeGate (MeetingCapturePCMTransport.swift: one buffer at most 65536 frames, 16 MB and 10 s queued), so the test's single 1_440_000-frame buffer per stage is dropped, droppedSampleCount > 0 and hasUsefulComparison stays false. Real capture delivers buffers of 10-20 ms, so this is not a product regression. Verified: the same 30 s fed as 60 buffers of 24000 frames per stage with 5 ms pacing passes. The test is identical to upstream FluidVoice v1.6.13, and the owner rule allows editing only expected values of upstream tests, while the fix changes the input. Needs an owner decision (issue #166): allow feeding realistic buffer sizes in this upstream test, or move it to a Pichi test file.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "probe:fluid_serve",
-   "owner": "#115 codex/speaker-assignment-20261106",
-   "reason": "Behavior changed after 609e715e: an unresolved word joins its neighbour's turn and an ambiguous overlapping fragment reads as \"You\" instead of \"Unknown speaker\". The probe keeps the old expectations until the owner of #115 confirms the new behavior; the same change is quarantined in the XCTest entries owned by #115.",
    "expires": "2026-11-26"
   },
   {

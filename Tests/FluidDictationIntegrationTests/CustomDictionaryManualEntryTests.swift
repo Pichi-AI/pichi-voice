@@ -447,8 +447,17 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         XCTAssertTrue(DictionaryMatcherExperiment.positiveEnabled)
         XCTAssertTrue(DictionaryMatcherExperiment.needsFrames)
         XCTAssertFalse(DictionaryPronunciationExperiment.captureEnabled)
+        // Negative learning and comparison default on since #151 (28ef7efe): explicit rejections must feed negative examples.
+        XCTAssertTrue(DictionaryMatcherExperiment.collectNegatives)
+        XCTAssertTrue(DictionaryMatcherExperiment.compareNegatives)
+
+        // A saved Off choice for either negative preference is preserved over the default.
+        defaults.set(false, forKey: keys[3])
+        defaults.set(false, forKey: keys[4])
         XCTAssertFalse(DictionaryMatcherExperiment.collectNegatives)
         XCTAssertFalse(DictionaryMatcherExperiment.compareNegatives)
+        defaults.removeObject(forKey: keys[3])
+        defaults.removeObject(forKey: keys[4])
 
         let defaultGeneration = DictionaryMatcherExperiment.generation
         DictionaryMatcherExperiment.setEnabled(true)
@@ -468,6 +477,11 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         XCTAssertTrue(DictionaryMatcherExperiment.sharedFeaturesEnabled)
         XCTAssertNotEqual(DictionaryMatcherExperiment.generation, disabledGeneration)
         XCTAssertFalse(DictionaryPronunciationExperiment.captureEnabled)
+        XCTAssertTrue(DictionaryMatcherExperiment.collectNegatives)
+        XCTAssertTrue(DictionaryMatcherExperiment.compareNegatives)
+
+        // Turning pronunciation Off still disables negative collection and comparison.
+        DictionaryMatcherExperiment.setEnabled(false)
         XCTAssertFalse(DictionaryMatcherExperiment.collectNegatives)
         XCTAssertFalse(DictionaryMatcherExperiment.compareNegatives)
     }
