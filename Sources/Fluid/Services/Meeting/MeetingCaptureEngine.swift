@@ -3513,7 +3513,11 @@ nonisolated enum MeetingRawMicrophoneProtection {
     ) async throws -> Bool {
         guard protection.admitsTranscript, observedAtSeconds.isFinite, observedAtSeconds >= 0 else { return false }
         var recorded = false
-        await writer.updateCaptureMetadata { track in
+        // Opening admission needs the durable receipt (docs/development/recording-reliability.md:
+        // metadata receipts control live transcription admission). The track keeps its
+        // conservative era until the journal succeeds; a failure propagates and the gate stays
+        // closed. Capture never waits for this: PCM keeps flowing on its own queue.
+        try await writer.updateTrackMetadata { track in
             guard gate.invalidationEpoch == epoch,
                   var eras = track.captureEras, !eras.isEmpty,
                   observedAtSeconds > (eras.last?.startSeconds ?? -.infinity)
