@@ -6,24 +6,47 @@ import XCTest
 /// This deliberately passes a nonexistent session directory and a synthetic microphone identity.
 @MainActor
 final class MeetingCaptureStorageAdmissionTests: XCTestCase {
-    func testDesktopRefusesStreamingWithoutConsumerBeforeStorageOrPermissionWork() async throws {
+    /// Recording reliability contract (AGENTS.md, #157): file-backed recording never stops because a
+    /// live transcription consumer is missing. Audio keeps being retained and transcription is
+    /// deferred. Only the strict no-file policy refuses, and it must not silently downgrade.
+    func testStreamingWithoutConsumerDefersTranscriptionForFilesAndRefusesStrictMemoryOnly() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic streaming admission",
-            languageCode: "ru", microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone"),
-            audioStorageMode: .retainedFiles, speakerProcessingMode: .streaming)
-        let session = MeetingSession(configuration: configuration,
-            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
-        let engine = MeetingCaptureEngine()
-        do {
-            _ = try await engine.start(session: session, configuration: configuration,
-                sessionDirectory: root, eventHandler: { _ in }, liveAudioHandler: nil)
-            XCTFail("A missing bounded consumer must fail before an audio writer can be made")
-        } catch let error as MeetingCaptureError {
-            guard case .captureStartFailed = error else { return XCTFail("Unexpected admission error: \(error)") }
+        for storage in [MeetingAudioStorageMode.retainedFiles, .memoryOnly] {
+            let configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic streaming admission",
+                languageCode: "ru", microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone"),
+                audioStorageMode: storage, speakerProcessingMode: .streaming)
+            let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+                machTimebaseDenominator: 1, firstPresentationTime: nil)
+            let session = MeetingSession(configuration: configuration, timebase: timebase)
+            let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
+                sourceDisplayName: "Synthetic microphone", format: nil, timebase: timebase, health: .waiting, chunks: [])
+            let events = AdmissionEventRecorder()
+            var deferred: MeetingMultiTrackCaptureTee?
+            var failure: Error?
+            do {
+                deferred = try await MeetingMultiTrackCaptureTee.prepare(
+                    session: session, configuration: configuration, tracks: [track], consumerFactory: nil,
+                    eventHandler: events.record, liveAudioHandler: nil, privacyGate: nil, clockContexts: [:])
+            } catch {
+                failure = error
+            }
+            let deferrals = events.snapshot().filter {
+                if case .interrupted(.liveTranscriptionDeferred, nil, _) = $0 { return true }
+                return false
+            }
+            switch storage {
+            case .retainedFiles:
+                XCTAssertNil(failure, "File-backed recording must not stop for a missing consumer")
+                XCTAssertNil(deferred, "No consumer means no streaming tee, so the files remain the only owner")
+                XCTAssertEqual(deferrals.count, 1, "The deferral is reported once so retained audio can be transcribed later")
+            case .memoryOnly:
+                XCTAssertEqual(failure as? MeetingCapturePCMError, .transcriptionStopped)
+                XCTAssertNil(deferred)
+                XCTAssertTrue(deferrals.isEmpty, "A strict no-file recording must not be downgraded to deferral")
+            }
         }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
-        await engine.shutdownForTermination()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path), "Preparation never touches storage")
     }
 
     func testDesktopRefusesMemoryOnlyBeforeAnyAudioFilesOrDirectoriesAreCreated() async throws {
@@ -56,4 +79,11 @@ final class MeetingCaptureStorageAdmissionTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: scratch.path), [])
         await engine.shutdownForTermination()
     }
+}
+
+private final class AdmissionEventRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [MeetingCaptureEvent] = []
+    func record(_ event: MeetingCaptureEvent) { self.lock.withLock { self.events.append(event) } }
+    func snapshot() -> [MeetingCaptureEvent] { self.lock.withLock { self.events } }
 }

@@ -134,12 +134,6 @@
    "expires": "2026-11-26"
   },
   {
-   "test": "FluidDictationIntegrationTests/MeetingCaptureStorageAdmissionTests/testDesktopRefusesStreamingWithoutConsumerBeforeStorageOrPermissionWork()",
-   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "After #157 the refusal path fails with Cocoa error 4 while removing a session directory. Passes on c66a80fd^1 and fails after #157.",
-   "expires": "2026-11-26"
-  },
-  {
    "test": "FluidDictationIntegrationTests/MeetingAudioComparisonProbeTests/testFullComparisonCompletesRequestOnlyAfterReportIsSaved()",
    "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
    "reason": "After #157 the full comparison does not save a usable report within 5 seconds. Passes on c66a80fd^1 and fails after #157.",
