@@ -8,12 +8,6 @@
    "expires": "2026-11-26"
   },
   {
-   "test": "probe:fluid_serve",
-   "owner": "#166 claude/fv-serve-consent",
-   "reason": "The #115 expectations of this probe are updated. It still stops at 'Argument cannot enable sharing': fv-serve read its own argument domain, so -FluidServeMeetingAccessEnabled '<true/>' switched meeting sharing on although the user had it off. The fix and the removal of this entry come together in the PR of claude/fv-serve-consent.",
-   "expires": "2026-11-26"
-  },
-  {
    "test": "probe:private_ai_idle_unloader",
    "scope": "ci",
    "owner": "#180",
