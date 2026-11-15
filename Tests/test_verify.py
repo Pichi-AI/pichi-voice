@@ -25,6 +25,8 @@ BUNDLE = "FluidDictationIntegrationTests"
 BROKEN = f"{BUNDLE}/AClass/testBroken()"
 SKIPPED = f"{BUNDLE}/AClass/testSkipped()"
 PASSING = f"{BUNDLE}/AClass/testPassing()"
+MODEL = f"{BUNDLE}/CustomDictionaryManualEntryTests/testTrainingTranscribesSpellingsAcrossPronunciationToggle()"
+MODELS = (0, {MODEL: "Passed"})
 NOTHING = VERIFY.Quarantine(tests=set(), probes=set())
 
 
@@ -157,62 +159,94 @@ class ReportTests(unittest.TestCase):
 
 
 class SideBySideTests(unittest.TestCase):
-    def run_script(self, script, quarantine=NOTHING, layer="L1"):
+    def run_script(self, script, quarantine=NOTHING, layer="L1", part="all"):
         with tempfile.TemporaryDirectory() as temporary:
             receipt = FakeReceipt(Path(temporary), script)
-            with patch.object(VERIFY, "xctest_results", side_effect=lambda row: VERIFY.report_results(row, "x" if receipt.reports[row["name"]] else None)), \
-                    patch.object(VERIFY, "bundle_results", side_effect=lambda _: receipt.reports["xctest"]), \
+            with patch.object(VERIFY, "xctest_results", side_effect=lambda row: VERIFY.report_results(row, row["name"] if receipt.reports[row["name"]] else None)), \
+                    patch.object(VERIFY, "bundle_results", side_effect=lambda name: receipt.reports[name]), \
                     patch.object(VERIFY, "artifact_directory", return_value=None):
-                found = VERIFY.run_xctest_and_probes(receipt, quarantine, 8, layer)
+                found = VERIFY.run_xctest_and_probes(receipt, quarantine, 8, layer, part)
             receipt.finish()
             return receipt, found
 
-    def test_probes_start_after_the_build_and_both_are_joined(self):
-        receipt, found = self.run_script([(0, {PASSING: "Passed"}), (0, None)])
-        self.assertEqual([call[0] for call in receipt.calls], ["xctest", "wait", "probes"])
-        self.assertEqual(receipt.calls[1][2], VERIFY.BUILD_FINISHED)
-        self.assertEqual(receipt.hosts, {"xctest": f"{VERIFY.ROOT}/.build/XcodeRegression/", "probes": None})
+    def test_the_probes_part_starts_probes_without_waiting_for_a_build(self):
+        receipt, found = self.run_script([(0, None)], part="probes")
+        self.assertEqual([call[0] for call in receipt.calls], ["probes"])
+        self.assertEqual(found, {})
         self.assertEqual(receipt.value["result"], "passed")
-        self.assertEqual(found, {PASSING: "Passed"})
+
+    def test_the_xctest_part_runs_no_probes(self):
+        receipt, found = self.run_script([(0, {PASSING: "Passed"}), MODELS], part="xctest")
+        self.assertEqual([call[0] for call in receipt.calls], ["xctest", "xctest-models"])
+        self.assertEqual(found, {PASSING: "Passed", MODEL: "Passed"})
+
+    def test_a_red_probe_part_stays_red(self):
+        receipt, _ = self.run_script([(1, None)], part="probes")
+        self.assertEqual(receipt.value["result"], "failed")
+
+    def test_a_timeout_after_waiting_for_the_regression_lock_says_so(self):
+        with patch.object(VERIFY, "waited_for_lock", return_value=True):
+            receipt, _ = self.run_script([(None, None), MODELS], part="xctest")
+        row = receipt.value["steps"][0]
+        self.assertEqual(row["status"], "timed out")
+        self.assertIn("waiting for the regression tests of another worktree", row["note"])
+
+    def test_the_lock_wait_is_read_from_the_step_log(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "xctest.log"
+            log.write_text("build\nWaiting for the tests of /other/worktree (pid 42) to finish.\n")
+            self.assertTrue(VERIFY.waited_for_lock({"log": str(log)}))
+            log.write_text("build\ntests\n")
+            self.assertFalse(VERIFY.waited_for_lock({"log": str(log)}))
+            self.assertFalse(VERIFY.waited_for_lock({"log": str(Path(temporary) / "missing.log")}))
+
+    def test_probes_start_after_the_build_and_both_are_joined(self):
+        receipt, found = self.run_script([(0, {PASSING: "Passed"}), (0, None), MODELS])
+        self.assertEqual([call[0] for call in receipt.calls], ["xctest", "wait", "probes", "xctest-models"])
+        self.assertEqual(receipt.calls[1][2], VERIFY.BUILD_FINISHED)
+        products = f"{VERIFY.ROOT}/.build/XcodeRegression/"
+        self.assertEqual(receipt.hosts, {"xctest": products, "probes": None, "xctest-models": products})
+        self.assertEqual(receipt.value["result"], "passed")
+        self.assertEqual(found, {PASSING: "Passed", MODEL: "Passed"})
 
     def test_xctest_runs_serially(self):
-        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None)])
+        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None), MODELS])
         self.assertIsNone(receipt.calls[0][2])
         self.assertFalse(any("parallel" in argument for argument in receipt.calls[0][1]))
 
     def test_a_red_xctest_stays_red(self):
-        receipt, _ = self.run_script([(65, {BROKEN: "Failed"}), (0, None)])
+        receipt, _ = self.run_script([(65, {BROKEN: "Failed"}), (0, None), MODELS])
         self.assertEqual(receipt.value["result"], "failed")
 
     def test_red_probes_stay_red(self):
-        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (1, None)])
+        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (1, None), MODELS])
         self.assertEqual(receipt.value["result"], "failed")
 
     def test_a_timed_out_run_stays_red(self):
-        receipt, _ = self.run_script([(None, {BROKEN: "Failed"}), (0, None)])
+        receipt, _ = self.run_script([(None, {BROKEN: "Failed"}), (0, None), MODELS])
         self.assertEqual(receipt.value["steps"][0]["status"], "timed out")
         self.assertEqual(receipt.value["result"], "failed")
 
     def test_missing_report_is_red_even_with_exit_zero(self):
-        receipt, _ = self.run_script([(0, None), (0, None)])
+        receipt, _ = self.run_script([(0, None), (0, None), MODELS])
         self.assertEqual(receipt.value["result"], "failed")
 
     def test_quarantined_tests_do_not_run(self):
         name, mobile = BROKEN[:-2], f"{VERIFY.MOBILE_BUNDLE}/AClass/testOne"
-        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None)], VERIFY.Quarantine(tests={name, mobile}, probes=set()))
+        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None), MODELS], VERIFY.Quarantine(tests={name, mobile}, probes=set()))
         self.assertIn(f"-skip-testing:{name}", receipt.calls[0][1])
         self.assertNotIn(f"-skip-testing:{mobile}", receipt.calls[0][1])
 
 
     def test_l1_leaves_the_soak_tests_to_l2_and_says_so(self):
-        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None)])
+        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None), MODELS])
         for test in VERIFY.L2_ONLY_TESTS:
             self.assertIn(f"-skip-testing:{test}", receipt.calls[0][1])
         self.assertEqual([item["name"] for item in receipt.value["skipped"]], [test.split("/", 1)[1] for test in VERIFY.L2_ONLY_TESTS])
         self.assertEqual(receipt.value["result"], "passed")
 
     def test_l2_runs_the_soak_tests(self):
-        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None)], layer="L2")
+        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None), MODELS], layer="L2")
         self.assertFalse(any(test in argument for test in VERIFY.L2_ONLY_TESTS for argument in receipt.calls[0][1]))
         skipped = {item["name"] for item in receipt.value["skipped"]}
         self.assertFalse(skipped & {test.split("/", 1)[1] for test in VERIFY.L2_ONLY_TESTS})
@@ -220,6 +254,70 @@ class SideBySideTests(unittest.TestCase):
     def test_every_soak_test_still_exists(self):
         # xcodebuild ignores a -skip-testing that matches nothing, so a renamed soak test would quietly return to L1.
         for test in VERIFY.L2_ONLY_TESTS:
+            bundle, test_class, name = test.split("/")
+            sources = list((ROOT / "Tests" / bundle).rglob(f"{test_class}*.swift"))
+            self.assertTrue(any(f"func {name}(" in source.read_text() for source in sources), test)
+
+    def test_real_model_tests_leave_the_main_suite_and_run_after_it_in_a_run_of_their_own(self):
+        receipt, found = self.run_script([(0, {PASSING: "Passed"}), (0, None), MODELS])
+        main = receipt.calls[0][1]
+        models = receipt.calls[-1]
+        self.assertEqual(models[0], "xctest-models")
+        for test in VERIFY.REAL_MODEL_TESTS:
+            self.assertIn(f"-skip-testing:{test}", main)
+            self.assertNotIn(f"-only-testing:{test}", main)
+            self.assertIn(f"-only-testing:{test}", models[1])
+            self.assertNotIn(f"-skip-testing:{test}", models[1])
+        self.assertEqual(models[1][:3], ["bash", "scripts/dev/macos.sh", "regression"])
+        self.assertEqual(receipt.hosts["xctest-models"], f"{VERIFY.ROOT}/.build/XcodeRegression/")
+        self.assertEqual(found, {PASSING: "Passed", MODEL: "Passed"})
+        self.assertEqual([row["name"] for row in receipt.value["steps"]], ["xctest", "probes", "xctest-models"])
+
+    def test_a_red_real_model_step_turns_the_gate_red_and_its_results_still_count(self):
+        receipt, found = self.run_script([(0, {PASSING: "Passed"}), (0, None), (65, {MODEL: "Failed"})])
+        self.assertEqual(receipt.value["result"], "failed")
+        self.assertEqual(found, {PASSING: "Passed", MODEL: "Failed"})
+
+    def test_a_real_model_step_without_a_report_is_red(self):
+        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None), (0, None)])
+        self.assertEqual(receipt.value["result"], "failed")
+        self.assertEqual(receipt.value["steps"][-1]["note"], "no readable test report")
+
+    def test_a_red_main_suite_does_not_hide_the_real_model_tests(self):
+        receipt, found = self.run_script([(65, {BROKEN: "Failed"}), (0, None), MODELS])
+        self.assertEqual(found, {BROKEN: "Failed", MODEL: "Passed"})
+
+    def test_a_failed_build_runs_no_second_build_for_the_real_model_tests(self):
+        with patch.object(VERIFY, "artifact_directory", return_value=None):
+            row = {"name": "xctest", "status": "failed", "note": VERIFY.BUILD_FAILED_NOTE}
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = FakeReceipt(Path(temporary), [])
+            self.assertEqual(VERIFY.run_real_model_tests(receipt, NOTHING, row), {})
+        self.assertEqual(receipt.calls, [])
+        self.assertEqual(receipt.value["skipped"], [{"name": "xctest-models", "reason": "the build failed, so no test ran"}])
+
+    def test_a_quarantined_real_model_test_stays_out_of_both_steps(self):
+        quarantined = VERIFY.REAL_MODEL_TESTS[0]
+        receipt, _ = self.run_script([(0, {PASSING: "Passed"}), (0, None), MODELS], VERIFY.Quarantine(tests={quarantined}, probes=set()))
+        self.assertEqual(receipt.calls[0][1].count(f"-skip-testing:{quarantined}"), 1)
+        self.assertNotIn(f"-only-testing:{quarantined}", receipt.calls[-1][1])
+        for test in VERIFY.REAL_MODEL_TESTS[1:]:
+            self.assertIn(f"-only-testing:{test}", receipt.calls[-1][1])
+
+    def test_with_every_real_model_test_quarantined_there_is_no_second_step(self):
+        receipt, found = self.run_script([(0, {PASSING: "Passed"}), (0, None)],
+                                         VERIFY.Quarantine(tests=set(VERIFY.REAL_MODEL_TESTS), probes=set()))
+        self.assertEqual([call[0] for call in receipt.calls], ["xctest", "wait", "probes"])
+        self.assertEqual(found, {PASSING: "Passed"})
+        self.assertIn("xctest-models", {item["name"] for item in receipt.value["skipped"]})
+
+    def test_the_probes_part_runs_no_real_model_test(self):
+        receipt, _ = self.run_script([(0, None)], part="probes")
+        self.assertEqual([call[0] for call in receipt.calls], ["probes"])
+
+    def test_every_real_model_test_still_exists(self):
+        # xcodebuild ignores a -skip-testing and an -only-testing that match nothing: a renamed test would quietly stop running.
+        for test in VERIFY.REAL_MODEL_TESTS:
             bundle, test_class, name = test.split("/")
             sources = list((ROOT / "Tests" / bundle).rglob(f"{test_class}*.swift"))
             self.assertTrue(any(f"func {name}(" in source.read_text() for source in sources), test)
@@ -640,6 +738,40 @@ verify.run_guarded(receipt, work)
             (root / "new.txt").write_text("new")
             self.assertEqual(sorted(VERIFY.dirty_paths(root)), ["kept.txt", "new.txt"])
 
+    def test_a_moved_tree_names_only_what_changed_during_the_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = FakeReceipt(Path(temporary), [(0, None)])
+            receipt.step("check", ["true"])
+            before = {"Sources/Kept.swift": "same", "Sources/Edited.swift": "old", "Sources/Reverted.swift": "edit"}
+            now = {"Sources/Kept.swift": "same", "Sources/Edited.swift": "new", "Tests/New.png": "png"}
+            with patch.object(VERIFY, "tree_fingerprint", return_value="after"), \
+                    patch.object(VERIFY, "dirty_state", return_value=now):
+                VERIFY.finish(receipt, None, "before", before)
+            self.assertEqual(receipt.value["result"], "incomplete")
+            self.assertEqual(receipt.value["treeChanges"], ["Sources/Edited.swift", "Sources/Reverted.swift", "Tests/New.png"])
+            self.assertNotIn("treeChangesTotal", receipt.value)
+
+    def test_dirty_state_tells_an_edit_from_a_file_that_was_already_dirty(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / "kept.txt").write_text("one")
+            subprocess.run(["git", "add", "kept.txt"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "c"], cwd=root, check=True)
+            (root / "kept.txt").write_text("two")
+            first = VERIFY.dirty_state(root)
+            self.assertEqual(first, VERIFY.dirty_state(root))
+            (root / "kept.txt").write_text("three")
+            self.assertNotEqual(first["kept.txt"], VERIFY.dirty_state(root)["kept.txt"])
+
+    def test_a_base_this_clone_lacks_is_a_clear_error_without_a_receipt(self):
+        error = subprocess.CalledProcessError(128, ["git", "merge-base"])
+        with patch.object(VERIFY, "changed_paths", side_effect=error), \
+                patch.object(sys, "argv", ["verify", "--layer", "L1", "--base", "f" * 40]), \
+                contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(VERIFY.main(), 2)
+        self.assertIn("cannot compare with " + "f" * 40, stderr.getvalue())
+
     def test_a_still_tree_finishes_on_the_step_results(self):
         with tempfile.TemporaryDirectory() as temporary:
             receipt = FakeReceipt(Path(temporary), [(0, None)])
@@ -698,7 +830,7 @@ verify.run_guarded(receipt, work)
 
 
 class ExecuteTests(unittest.TestCase):
-    def run_layer(self, layer, paths, quarantine=NOTHING):
+    def run_layer(self, layer, paths, quarantine=NOTHING, part="all"):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         receipt = FakeReceipt(Path(temporary.name), [(0, None), (0, None), (0, None)])
@@ -715,9 +847,46 @@ class ExecuteTests(unittest.TestCase):
                 patch.object(VERIFY, "read_quarantine", return_value=quarantine), patch.object(VERIFY, "run_ios", side_effect=ios), \
                 patch.object(VERIFY, "run_xctest_and_probes", return_value={PASSING: "Passed", BROKEN: "Failed"}) as xctest, \
                 patch.object(VERIFY, "run_vendor") as vendor:
-            outcome = VERIFY.execute(receipt, layer, paths, "origin/main", 4)
+            outcome = VERIFY.execute(receipt, layer, paths, "origin/main", 4, part)
         self.xctest_layers = [call.args[3] for call in xctest.call_args_list]
+        self.xctest_parts = [call.args[4] for call in xctest.call_args_list]
         return receipt, outcome, ran, vendor
+
+    def skipped(self, receipt):
+        return {item["name"]: item["reason"] for item in receipt.value["skipped"]}
+
+    def test_the_ios_part_runs_only_ios_and_checks_its_results(self):
+        receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"], part="ios")
+        self.assertIsNone(outcome)
+        self.assertEqual(ran, [NOTHING])
+        self.assertEqual(self.xctest_parts, [])
+        vendor.assert_not_called()
+        self.assertEqual([call[0] for call in receipt.calls], ["skip-policy"])
+        record = receipt.directory / "results.json"
+        self.assertEqual(set(json.loads(record.read_text())), {f"{VERIFY.MOBILE_BUNDLE}/AClass/testOne()"})
+        for name in ("check", "lint", "xctest", "vendor"):
+            self.assertEqual(self.skipped(receipt)[name], "runs in the xctest part of the gate")
+        self.assertEqual(self.skipped(receipt)["probes"], "runs in the probes part of the gate")
+
+    def test_the_xctest_part_leaves_probes_and_ios_to_their_own_jobs(self):
+        receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"], part="xctest")
+        self.assertIsNone(outcome)
+        self.assertEqual(ran, [])
+        self.assertEqual(self.xctest_parts, ["xctest"])
+        vendor.assert_called_once()
+        self.assertEqual([call[0] for call in receipt.calls], ["check", "lint", "skip-policy"])
+        self.assertEqual(self.skipped(receipt)["ios"], "runs in the ios part of the gate")
+        self.assertEqual(self.skipped(receipt)["probes"], "runs in the probes part of the gate")
+
+    def test_the_probes_part_runs_no_policy_step_of_its_own(self):
+        receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"], part="probes")
+        self.assertIsNone(outcome)
+        self.assertEqual(ran, [])
+        self.assertEqual(self.xctest_parts, ["probes"])
+        vendor.assert_not_called()
+        self.assertEqual(receipt.calls, [])
+        self.assertIn("skip-policy", self.skipped(receipt))
+        self.assertEqual(self.skipped(receipt)["xctest"], "runs in the xctest part of the gate")
 
     def test_the_layer_reaches_the_test_selection(self):
         for layer in ("L1", "L2"):
@@ -773,6 +942,92 @@ class MobileScriptTests(unittest.TestCase):
     def test_plain_actions_are_unchanged(self):
         self.assertTrue(self.run_script("test").endswith('ALLOWED=YES test'))
         self.assertTrue(self.run_script("build").endswith('ALLOWED=YES build'))
+
+
+class RegressionLockTests(unittest.TestCase):
+    """scripts/dev/macos.sh regression with stub tools: the test phase holds the shared lock and always
+    releases it."""
+
+    def run_regression(self, lock, test_exit=0, homes=None):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        (root / "scripts/dev").mkdir(parents=True)
+        shutil.copyfile(ROOT / "scripts/dev/macos.sh", root / "scripts/dev/macos.sh")
+        (root / "scripts/dev/assert-worktree.sh").write_text("exit 0\n")
+        (root / "scripts/dev/macos-regression.py").write_text(
+            "import sys\nprint('/synthetic/run.xctestrun' if sys.argv[1] == 'configure' else 'summary')\n")
+        tools = root / "tools"
+        tools.mkdir()
+        (tools / "uname").write_text("#!/bin/sh\necho Darwin\n")
+        (tools / "git").write_text(f"#!/bin/sh\ncase \"$*\" in\n  'rev-parse --show-toplevel') echo '{root}' ;;\n"
+                                   "  'rev-parse HEAD') echo 0123456789abcdef0123456789abcdef01234567 ;;\nesac\n")
+        (tools / "xcrun").write_text("#!/bin/sh\necho '{}'\n")
+        (tools / "xcodebuild").write_text(
+            "#!/bin/sh\ncase \" $* \" in\n  *' test-without-building '*)\n"
+            f"    cat '{lock}/pid' > '{root}/lock-during-tests.txt' 2>/dev/null || echo none > '{root}/lock-during-tests.txt'\n"
+            f"    exit {test_exit} ;;\nesac\n")
+        for tool in tools.iterdir():
+            tool.chmod(0o755)
+        homes = homes or root / "homes"
+        environment = dict(os.environ, PATH=f"{tools}:{os.environ['PATH']}", PICHI_REGRESSION_LOCK=str(lock),
+                           PICHI_REGRESSION_HOMES=str(homes))
+        result = subprocess.run(["bash", str(root / "scripts/dev/macos.sh"), "regression", "-only-testing:Bundle/AClass/testOne"],
+                                cwd=root, env=environment, capture_output=True, text=True, timeout=60)
+        held = (root / "lock-during-tests.txt").read_text().strip() if (root / "lock-during-tests.txt").exists() else None
+        return result, held
+
+    def test_a_stale_lock_is_taken_over_and_released_after_the_tests(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock = Path(temporary) / "regression.lock"
+            ended = subprocess.Popen(["true"])
+            ended.wait()
+            lock.mkdir()
+            (lock / "pid").write_text(f"{ended.pid}\n")
+            result, held = self.run_regression(lock)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("stale regression lock", result.stderr)
+            self.assertNotIn(held, (None, "none", str(ended.pid)))
+            self.assertFalse(lock.exists())
+
+    def test_a_failing_test_run_still_releases_the_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock = Path(temporary) / "regression.lock"
+            result, held = self.run_regression(lock, test_exit=65)
+            self.assertEqual(result.returncode, 65)
+            self.assertNotIn(held, (None, "none"))
+            self.assertFalse(lock.exists())
+
+    def test_the_home_of_a_killed_run_goes_with_its_stale_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock, homes = Path(temporary) / "regression.lock", Path(temporary) / "homes"
+            ended = subprocess.Popen(["true"])
+            ended.wait()
+            lock.mkdir()
+            (lock / "pid").write_text(f"{ended.pid}\n")
+            (homes / "killed-run" / "Library").mkdir(parents=True)
+            (homes / "killed-run.owner").write_text(f"{ended.pid}\n")
+            result, held = self.run_regression(lock, homes=homes)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("stale regression lock", result.stderr)
+            self.assertIn("Removing the test home", result.stderr)
+            self.assertEqual(list(homes.iterdir()), [])
+            self.assertFalse(lock.exists())
+
+    def test_a_failing_test_run_still_removes_its_home(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            homes = Path(temporary) / "homes"
+            result, _ = self.run_regression(Path(temporary) / "regression.lock", test_exit=65, homes=homes)
+            self.assertEqual(result.returncode, 65)
+            self.assertEqual(list(homes.iterdir()), [])
+
+    def test_the_folder_of_the_lock_is_created(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock = Path(temporary) / "missing" / "folder" / "regression.lock"
+            result, held = self.run_regression(lock)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn(held, (None, "none"))
+            self.assertFalse(lock.exists())
 
 
 if __name__ == "__main__":

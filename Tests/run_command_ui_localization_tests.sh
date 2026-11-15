@@ -96,7 +96,7 @@ xcrun swiftc -default-isolation MainActor -parse-as-library -module-cache-path "
     Tests/Support/StandaloneGuestProfileDefaults.swift \
     "$task_test_dir/CommandMessageModel.swift" "$task_test_dir/ChatModels.swift" \
     "$task_test_dir/CommandSessionProjection.swift" "$task_test_dir/ThemeEnvironment.swift" \
-    Sources/Fluid/Localization/PichiLocalization.swift \
+    Sources/Fluid/Localization/PichiLocalization.swift Tests/Support/FixedScaleSnapshot.swift \
     Sources/Fluid/Branding/AppBrand.swift "$task_test_dir/BrandPackage.swift" \
     Sources/Fluid/Branding/BrandDistribution.swift Tests/Support/StandaloneBrandPackageStore.swift \
     Sources/Fluid/Theme/FluidTypography.swift Sources/Fluid/Theme/AppTheme.swift \

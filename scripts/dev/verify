@@ -9,6 +9,9 @@ XCTest stays serial: its classes change shared settings, and parallel workers sh
 domain, so a parallel run fails at random. XCTest is never retried. When a probe run completes with up to
 three probe failures, those probes run once more, alone: one that passes then is named as flaky and does
 not fail the gate, one that fails again stays red. A probe run that did not complete is never retried.
+
+--part runs one part of the gate on a machine of its own, as CI does: xctest (with the repository checks,
+the vendored packages and the policy check of its results), probes, or ios. Every part must pass.
 """
 
 import argparse
@@ -54,10 +57,26 @@ L2_ONLY_TESTS = (
     "FluidDictationIntegrationTests/MeetingAudioChunkSinkTests/testTwoHourMicrophoneAndApplicationCaptureKeepEveryFrameAndBoundedManifests",
     "FluidDictationIntegrationTests/MeetingMicrophoneCaptureTests/testNativeMasterTapKeepsNinetyMinuteDriftOnMeasuredHostClockWithoutPeriodicDiscard",
 )
-HEAVY_STEPS = ("xctest", "skip-policy", "probes", "ios", "vendor")
+# These upstream tests download real models into the run's home (FluidAudio "Downloading ASR models to: <home>",
+# 655 MB at the end of the run that found this). A full L1 run with those models in the home failed
+# MeetingRecoveryTests/testDisablingFluidMeetDuringModelPreparationDoesNotStartCapture ("A stale start must not
+# revive FluidMeet"), which passes with an empty home. So they run in a step of their own after the main suite:
+# the main suite starts and stays with an empty home, and L1 still exercises these tests.
+REAL_MODEL_TESTS = (
+    "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testProfileFreeLongDictationPreservesTextAndWordTimings",
+    "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testTrainingTranscribesSpellingsAcrossPronunciationToggle",
+    "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testAutomaticSpeechEndWorksWithPronunciationOffAndAcrossToggles",
+)
+HEAVY_STEPS = ("xctest", "xctest-models", "skip-policy", "probes", "ios", "vendor")
+# CI runs the parts of one gate side by side on separate machines; "all" runs every step on this one.
+PARTS = ("all", "xctest", "probes", "ios")
+PART_OF = {"check": "xctest", "lint": "xctest", "xctest": "xctest", "xctest-models": "xctest", "vendor": "xctest", "probes": "probes",
+           "ios": "ios"}
 MOBILE_BUNDLE = "PichiVoiceMobileIntegrationTests"
 REGRESSION_PRODUCTS = str(ROOT / ".build/XcodeRegression") + "/"
 BUILD_FINISHED = b"** TEST BUILD SUCCEEDED **"
+LOCK_WAIT = "Waiting for the tests of "  # printed by scripts/dev/macos.sh while it queues
+BUILD_FAILED_NOTE = "the build failed, so no test ran"
 POLL_SECONDS = 0.2
 Quarantine = namedtuple("Quarantine", "tests probes")
 
@@ -295,7 +314,7 @@ def xctest_results(row):
     results = report_results(row, directory / "tests.xcresult" if directory else None)
     summary = directory / "summary.txt" if directory else None
     if not results and summary and summary.is_file() and "Build failed" in summary.read_text(errors="replace"):
-        row["note"] = "the build failed, so no test ran"
+        row["note"] = BUILD_FAILED_NOTE
     return results
 
 
@@ -370,20 +389,63 @@ def retry_failed_probes(receipt, probes_row):
     receipt.save()
 
 
-def run_xctest_and_probes(receipt, quarantine, jobs, layer="L1"):
-    """Return the result of every XCTest. Probes compile too, so they wait until the build has finished."""
-    skipped = [f"-skip-testing:{test}" for test in sorted(quarantine.tests) if not test.startswith(MOBILE_BUNDLE + "/")]
-    if layer != "L2":
-        for test in L2_ONLY_TESTS:
-            skipped.append(f"-skip-testing:{test}")
-            receipt.skip(test.split("/", 1)[1], "a long soak test that runs in L2")
-    xctest = receipt.begin("xctest", ["bash", "scripts/dev/macos.sh", "regression", *skipped], hosts=REGRESSION_PRODUCTS)
-    receipt.wait_for_text(xctest, BUILD_FINISHED)
-    probes = receipt.begin("probes", probe_command(quarantine, jobs))
-    xctest_row, probes_row = receipt.join(xctest, probes)
-    name_failed_probes(receipt, probes_row)
-    retry_failed_probes(receipt, probes_row)
-    return xctest_results(xctest_row)
+def real_model_selection(quarantine):
+    """The real-model tests that run in their own step. A quarantined one stays out of both steps."""
+    return [test for test in REAL_MODEL_TESTS if test not in quarantine.tests]
+
+
+def run_real_model_tests(receipt, quarantine, main_row):
+    """Run the real-model tests after the main suite, in a fresh run with a fresh home. Return their results."""
+    selected = real_model_selection(quarantine)
+    if not selected:
+        receipt.skip("xctest-models", "every real-model test is quarantined")
+        return {}
+    if main_row["status"] == "failed" and main_row.get("note") == BUILD_FAILED_NOTE:
+        receipt.skip("xctest-models", "the build failed, so no test ran")
+        return {}
+    command = ["bash", "scripts/dev/macos.sh", "regression", *[f"-only-testing:{test}" for test in selected]]
+    row = receipt.join(receipt.begin("xctest-models", command, hosts=REGRESSION_PRODUCTS))[0]
+    return xctest_results(row)
+
+
+def run_xctest_and_probes(receipt, quarantine, jobs, layer="L1", part="all"):
+    """Return the result of every XCTest. Probes compile too, so beside XCTest they wait until the build has
+    finished. A part of the gate on a machine of its own runs only its side. The real-model tests follow the
+    main XCTest suite, see REAL_MODEL_TESTS."""
+    xctest = probes = None
+    if part in ("all", "xctest"):
+        skipped = [f"-skip-testing:{test}" for test in sorted(set(quarantine.tests) | set(REAL_MODEL_TESTS))
+                   if not test.startswith(MOBILE_BUNDLE + "/")]
+        if layer != "L2":
+            for test in L2_ONLY_TESTS:
+                skipped.append(f"-skip-testing:{test}")
+                receipt.skip(test.split("/", 1)[1], "a long soak test that runs in L2")
+        xctest = receipt.begin("xctest", ["bash", "scripts/dev/macos.sh", "regression", *skipped], hosts=REGRESSION_PRODUCTS)
+    if part in ("all", "probes"):
+        if xctest is not None:
+            receipt.wait_for_text(xctest, BUILD_FINISHED)
+        probes = receipt.begin("probes", probe_command(quarantine, jobs))
+    rows = receipt.join(*(entry for entry in (xctest, probes) if entry is not None))
+    xctest_row = rows[0] if xctest is not None else None
+    probes_row = rows[-1] if probes is not None else None
+    if probes_row is not None:
+        name_failed_probes(receipt, probes_row)
+        retry_failed_probes(receipt, probes_row)
+    found = xctest_results(xctest_row) if xctest_row is not None else {}
+    if xctest_row is not None and xctest_row["status"] == "timed out" and waited_for_lock(xctest_row):
+        xctest_row["note"] = "part of the limit went to waiting for the regression tests of another worktree"
+        receipt.save()
+    if xctest_row is not None:
+        found = {**found, **run_real_model_tests(receipt, quarantine, xctest_row)}
+    return found
+
+
+def waited_for_lock(row):
+    """Whether scripts/dev/macos.sh queued for the shared regression lock during this step."""
+    try:
+        return LOCK_WAIT in Path(row["log"]).read_text(errors="replace")
+    except (OSError, KeyError, TypeError):
+        return False
 
 
 def disposable_simulator(name):
@@ -450,14 +512,24 @@ def read_quarantine(ci=None):
                       probes={test.removeprefix("probe:") for test in tests if test.startswith("probe:")})
 
 
-def execute(receipt, layer, paths, base, jobs):
-    receipt.step("check", ["bash", "scripts/dev/check.sh"])
-    if shutil.which("swiftlint"):
-        receipt.step("lint", ["python3", "-S", "scripts/dev/lint-changed.py", "--base", base])
-    elif any(path.endswith(".swift") for path in paths):
-        receipt.unavailable("lint", "swiftlint is not installed here, and Swift files changed")
+def execute(receipt, layer, paths, base, jobs, part="all"):
+    def mine(name):
+        return part == "all" or PART_OF[name] == part
+
+    def elsewhere(name):
+        receipt.skip(name, f"runs in the {PART_OF[name]} part of the gate")
+
+    if mine("check"):
+        receipt.step("check", ["bash", "scripts/dev/check.sh"])
+        if shutil.which("swiftlint"):
+            receipt.step("lint", ["python3", "-S", "scripts/dev/lint-changed.py", "--base", base])
+        elif any(path.endswith(".swift") for path in paths):
+            receipt.unavailable("lint", "swiftlint is not installed here, and Swift files changed")
+        else:
+            receipt.skip("lint", "swiftlint is not installed here, and no Swift file changed")
     else:
-        receipt.skip("lint", "swiftlint is not installed here, and no Swift file changed")
+        elsewhere("check")
+        elsewhere("lint")
     if layer == "L0":
         for name in HEAVY_STEPS:
             receipt.skip(name, "L0 stops at the repository check")
@@ -477,13 +549,24 @@ def execute(receipt, layer, paths, base, jobs):
         return "incomplete"
     quarantine = read_quarantine()
     receipt.value["quarantined"] = sorted(quarantine.tests) + sorted(f"probe:{name}" for name in quarantine.probes)
-    results = run_xctest_and_probes(receipt, quarantine, jobs, layer)
-    if layer == "L2" or touches_mobile(paths, shared_sources()):
+    results = run_xctest_and_probes(receipt, quarantine, jobs, layer, part) if mine("xctest") or mine("probes") else {}
+    for name in ("xctest", "xctest-models", "probes"):
+        if not mine(name):
+            elsewhere(name)
+    if not mine("ios"):
+        elsewhere("ios")
+    elif layer == "L2" or touches_mobile(paths, shared_sources()):
         results = {**results, **run_ios(receipt, quarantine)}
     else:
         receipt.skip("ios", "no mobile or shared source changed")
     receipt.value["testsFailed"] = sorted(test for test, result in results.items() if result == "Failed")
-    run_vendor(receipt, layer, paths)
+    if mine("vendor"):
+        run_vendor(receipt, layer, paths)
+    else:
+        elsewhere("vendor")
+    if part == "probes":
+        receipt.skip("skip-policy", "runs in the xctest and ios parts of the gate, beside their results")
+        return None
     record = receipt.directory / "results.json"
     record.write_text(json.dumps(results, indent=0, sort_keys=True))
     receipt.step("skip-policy", ["python3", "-S", "scripts/dev/check-test-policy.py", "--results", str(record), "--complete"])
@@ -491,7 +574,8 @@ def execute(receipt, layer, paths, base, jobs):
 
 
 def summary_lines(value, directory):
-    lines = [f"Verify {value['layer']}: {value['result']} in {value['seconds']:.0f} s",
+    part = f" ({value['part']} part)" if value.get("part", "all") != "all" else ""
+    lines = [f"Verify {value['layer']}{part}: {value['result']} in {value['seconds']:.0f} s",
              f"Revision {value['revision'][:8]} ({value['workingTree']}), base {value['base'][:8]}",
              f"Why {value['layer']}: {value['reason']}"]
     lines += [f"  {row['status']} {row['name']}: {row['seconds']:.0f} s" + (f" ({row['note']})" if row.get("note") else "")
@@ -531,13 +615,28 @@ def dirty_paths(root=ROOT):
     return [line[3:] for line in output.splitlines() if line]
 
 
-def finish(receipt, outcome, tree):
-    """A receipt names one tree, so a tree that moved during the run proves nothing."""
+def dirty_state(root=ROOT):
+    """Each changed or untracked path with a hash of its content, so a later look can tell what moved since."""
+    state = {}
+    for path in dirty_paths(root):
+        try:
+            state[path] = hashlib.sha256((root / path).read_bytes()).hexdigest()
+        except OSError:
+            state[path] = "absent"
+    return state
+
+
+def finish(receipt, outcome, tree, dirty_before=None):
+    """A receipt names one tree, so a tree that moved during the run proves nothing. Only paths that changed
+    during the run are named: a file that was already dirty at the start and kept its content is not news."""
     if outcome is None and not receipt.failed() and tree_fingerprint() != tree:
-        paths = dirty_paths()
+        before, now = dirty_before or {}, dirty_state()
+        paths = sorted(path for path in before.keys() | now.keys() if before.get(path) != now.get(path))
         receipt.value["treeChanges"] = paths[:50]
+        if len(paths) > 50:
+            receipt.value["treeChangesTotal"] = len(paths)
         shown = ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
-        receipt.skip("freeze", "the tree changed during the run" + (f"; changed now: {shown}" if paths else ""))
+        receipt.skip("freeze", "the tree changed during the run" + (f"; changed: {shown}" if paths else ""))
         outcome = "incomplete"
     receipt.finish(outcome)
 
@@ -571,20 +670,31 @@ def main():
     choice.add_argument("--layer", choices=("L0", "L1", "L2"), help="Run this layer. Without either option: L1")
     parser.add_argument("--base", default="origin/main", help="The diff starts at the merge base with this ref")
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 3) * 2 // 3), help="Standalone probes at once")
+    parser.add_argument("--part", choices=PARTS, default="all",
+                        help="Run one part of the gate, for CI jobs on separate machines: xctest (with the repository "
+                             "checks, Vendor packages and the policy check of its results), probes, or ios")
     arguments = parser.parse_args()
-    merge_base, paths = changed_paths(arguments.base)
+    try:
+        merge_base, paths = changed_paths(arguments.base)
+    except subprocess.CalledProcessError:
+        # A force push or a shallow clone can leave the base out of this repository.
+        print(f"Verify cannot compare with {arguments.base}: git knows no common commit with HEAD here. "
+              "Pass --base with a commit this clone has.", file=sys.stderr)
+        return 2
     project = (ROOT / "Fluid.xcodeproj/project.pbxproj").read_text()
     layer, reason = choose_layer(paths, project) if arguments.changed else (arguments.layer or "L1", "requested")
     revision = git("rev-parse", "HEAD").strip()
     status = git("status", "--porcelain")
     tree = tree_fingerprint()
+    dirty_before = dirty_state()
     moment = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     directory = ROOT / ".build/verify" / f"{moment}-{revision[:8]}-{os.getpid()}"
     directory.mkdir(parents=True)
     receipt = Receipt(directory, layer=layer, reason=reason, revision=revision, workingTree="dirty" if status.strip() else "clean",
-                      tree=tree, base=merge_base, changedFiles=len(paths))
-    print(f"Verify {layer}: {reason}", flush=True)
-    run_guarded(receipt, lambda: finish(receipt, execute(receipt, layer, paths, arguments.base, arguments.jobs), tree))
+                      tree=tree, base=merge_base, changedFiles=len(paths), part=arguments.part)
+    print(f"Verify {layer}" + (f" ({arguments.part} part)" if arguments.part != "all" else "") + f": {reason}", flush=True)
+    run_guarded(receipt, lambda: finish(receipt, execute(receipt, layer, paths, arguments.base, arguments.jobs, arguments.part),
+                                        tree, dirty_before))
     print("\n".join(summary_lines(receipt.value, directory)))
     return {"passed": 0, "failed": 1, "incomplete": 2, "interrupted": 130}[receipt.value["result"]]
 

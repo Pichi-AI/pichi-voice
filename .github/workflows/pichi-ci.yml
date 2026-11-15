@@ -56,7 +56,7 @@ jobs:
             --swiftlint "docker run --rm --volume $PWD:$PWD --workdir $PWD ghcr.io/realm/swiftlint:0.65.1@sha256:f47e083201e47a136cda5ae847595bfe00226c444ca226fa74fa5dc648a9b057"
 
   macos:
-    name: macOS gate L1
+    name: macOS gate L1 (${{ matrix.part }})
     # Pull requests into main and pushes to main. A push to a codex/** branch is checked through its pull
     # request into main; a pull request into another branch gets no macOS gate.
     if: >-
@@ -64,7 +64,13 @@ jobs:
       (vars.PICHI_VOICE_MACOS_CI == 'true' &&
        (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')))
     runs-on: xcode-27
-    # XCTest with probes, then iOS for a mobile change, each up to the step limit below.
+    # The three parts of one gate run side by side on separate runners, so the slowest part sets the
+    # time instead of their sum: XCTest with the repository checks and Vendor packages, the standalone
+    # probes, and iOS for a mobile change. Each part has its own receipt and must pass.
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [xctest, probes, ios]
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -75,12 +81,13 @@ jobs:
       - name: Create isolated build worktree
         run: git worktree add --detach ../pichi-voice-ci HEAD
       - name: Install SwiftLint when the image has none
+        if: matrix.part == 'xctest'
         run: command -v swiftlint >/dev/null || brew install swiftlint
       - name: Show the tools the gate uses
         run: |
           python3 --version
           xcodebuild -version
-          swiftlint version
+          if command -v swiftlint >/dev/null; then swiftlint version; fi
           df -h "$GITHUB_WORKSPACE"
       - name: Run the L1 gate
         working-directory: ../pichi-voice-ci
@@ -88,16 +95,28 @@ jobs:
           # The three-core runner needs longer than the 30 minutes a heavy step gets on a developer Mac.
           PICHI_VERIFY_STEP_LIMIT_SECONDS: "5400"
           PUSH_BEFORE: ${{ github.event_name == 'push' && github.event.before || '' }}
+          PART: ${{ matrix.part }}
         run: |
           # On a push to main, origin/main is the pushed commit itself: compare with the previous tip
           # instead, so the pushed commits decide whether the iOS step and Vendor packages run.
           base=origin/main
+          layer=L1
           case "$PUSH_BEFORE" in
             "" | 0000000000000000000000000000000000000000) ;;
-            *) base="$PUSH_BEFORE" ;;
+            *)
+              if git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+                base="$PUSH_BEFORE"
+              else
+                # A force push (blocked on main) would leave the previous tip out of the clone. The diff
+                # is then unknown, so run L2, which takes iOS and Vendor packages whatever changed.
+                echo "The previous tip $PUSH_BEFORE is not in this clone; running L2 against HEAD^1."
+                base="HEAD^1"
+                layer=L2
+              fi
+              ;;
           esac
           # exec: a cancelled or timed-out job signals verify itself, which then stops its steps.
-          exec python3 -S scripts/dev/verify --layer L1 --base "$base"
+          exec python3 -S scripts/dev/verify --layer "$layer" --base "$base" --part "$PART"
       - name: Show the receipt and the logs of failed steps
         if: always()
         working-directory: ../pichi-voice-ci
@@ -105,6 +124,7 @@ jobs:
           for receipt in .build/verify/*/receipt.json; do
             [ -f "$receipt" ] || continue
             cat "$receipt"
+            echo
             python3 -S - "$receipt" <<'PY'
           import json, sys
           import glob, os
@@ -113,22 +133,48 @@ jobs:
               if step["status"] != "passed" and step.get("log"):
                   with open(step["log"], errors="replace") as log:
                       lines = log.readlines()
-                  if step["name"] in ("xctest", "ios"):
+                  if step["name"] in ("xctest", "xctest-models", "ios"):
                       print(f"--- failures in {step['name']}")
                       print("".join([line for line in lines if "error: -[" in line][:200]))
                   print(f"--- last lines of {step['name']}")
                   print("".join(lines[-80:]))
-          runs = sorted(glob.glob(".build/standalone-regression/*/"), key=os.path.getmtime)
-          for name in receipt.get("probesFailed", []):
-              path = os.path.join(runs[-1], f"{name}.log") if runs else ""
-              if os.path.exists(path):
-                  print(f"--- last lines of probe {name}")
-                  with open(path, errors="replace") as log:
-                      print("".join(log.readlines()[-60:]))
+          # Every failed attempt of a failed or flaky probe: the first run and the retry keep their own logs.
+          names = set(receipt.get("probesFailed", [])) | set(receipt.get("probesFlaky", []))
+          for run in sorted(glob.glob(".build/standalone-regression/*/"), key=os.path.getmtime):
+              try:
+                  results = json.load(open(os.path.join(run, "summary.json")))["results"]
+              except (OSError, ValueError, KeyError):
+                  continue
+              for row in results:
+                  path = os.path.join(run, f"{row.get('name')}.log")
+                  if row.get("name") in names and row.get("status") == "FAIL" and os.path.exists(path):
+                      print(f"--- last lines of probe {row['name']} in run {os.path.basename(run.rstrip('/'))}")
+                      with open(path, errors="replace") as log:
+                          print("".join(log.readlines()[-60:]))
           PY
           done
           echo "--- files git reports as changed or untracked in the gate worktree"
           git status --porcelain=v1 --untracked-files=all | head -40
+      - name: Collect the evidence of a gate that did not pass
+        if: failure() || cancelled()
+        working-directory: ../pichi-voice-ci
+        run: |
+          # Receipts with every step log, the XCTest run with its result bundles, and the probe runs.
+          # The artifact keeps them for a week, so a red run can be read without rerunning it.
+          evidence="$RUNNER_TEMP/gate-evidence"
+          mkdir -p "$evidence"
+          for source in .build/verify .build/regression .build/standalone-regression; do
+            if [ -d "$source" ]; then cp -R "$source" "$evidence/${source#.build/}"; fi
+          done
+          du -sh "$evidence"/* 2>/dev/null || echo "No evidence was written."
+      - name: Upload the evidence of a gate that did not pass
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gate-evidence-${{ matrix.part }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate-evidence
+          if-no-files-found: ignore
+          retention-days: 7
 
   ios:
     name: iOS simulator build

@@ -362,6 +362,93 @@ final class MeetingAudioChunkSinkTests: XCTestCase {
         XCTAssertTrue(events.snapshot().contains { if case .interrupted(.metadataPersistenceRecovered, _, _) = $0 { return true }; return false })
     }
 
+    /// A repeatable failure of the optional ready terminal must not fail the journal: PCM and the capture
+    /// record are already durable, so metadata completions and the Stop receipt keep succeeding and the
+    /// terminal is attempted once per finalized chunk, not on every later snapshot.
+    func testFailingReadyTerminalDoesNotFailTheJournalOrRepeatOnEverySnapshot() async throws {
+        let root = try self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let events = MeetingWriterEventRecorder()
+        let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
+            sourceDisplayName: "Synthetic", format: nil,
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting, chunks: [])
+        let attempts = MeetingPCMFailureCounter()
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root, chunkDuration: 60,
+            eventHandler: events.record, persistenceHook: { operation in
+                if case .terminal = operation {
+                    attempts.increment()
+                    throw MeetingAudioChunkLedgerError.durabilityFailure("synthetic terminal failure")
+                }
+            })
+        for index in 0..<10 {
+            XCTAssertTrue(try writer.enqueue(self.makeRawSampleBuffer(channelCount: 1, layoutTag: nil,
+                frameCount: 480, pts: Double(index) / 100)))
+        }
+        _ = await writer.beginSplice()
+        _ = await writer.snapshot()
+        try await writer.updateTrackMetadata { _ in }
+        _ = await writer.snapshot()
+        try await writer.updateTrackMetadata { _ in }
+        XCTAssertTrue(try writer.enqueue(self.makeRawSampleBuffer(channelCount: 1, layoutTag: nil, frameCount: 480, pts: 1)))
+        let stopped = await writer.stop()
+        XCTAssertEqual(stopped.chunks.compactMap { $0.captureAnalysisAsset?.frameCount }.reduce(0, +), 5_280)
+        XCTAssertTrue(stopped.chunks.allSatisfy { $0.finalizationState == .finalized })
+        let ledger = MeetingAudioChunkLedgerStore(sessionDirectory: root)
+        let recorded = try ledger.readCaptures(trackID: track.id, kind: .microphone)
+        XCTAssertEqual(recorded.map(\.id), stopped.chunks.map(\.id), "Every capture record is durable")
+        XCTAssertTrue(recorded.allSatisfy { $0.finalizationState == .finalized })
+        for chunk in stopped.chunks { XCTAssertNil(try ledger.readTerminal(for: chunk.id)) }
+        XCTAssertEqual(attempts.value(), stopped.chunks.count, "One terminal attempt per finalized chunk")
+        XCTAssertFalse(events.snapshot().contains { if case .interrupted(.metadataPersistenceDelayed, _, _) = $0 { return true }; return false })
+        XCTAssertFalse(events.snapshot().contains { if case .interrupted(.captureStoppedUnexpectedly, _, _) = $0 { return true }; return false })
+    }
+
+    /// Streaming admission without a memory consumer must not stop file-backed recording: the real
+    /// writers in a real session directory keep retaining PCM while the tee reports the deferral once.
+    /// `MeetingCaptureEngine.start` itself needs microphone permission and a capture device, so this
+    /// composes the same writer plus `MeetingMultiTrackCaptureTee.prepare` calls the engine makes.
+    func testRetainedFilesStreamingWithoutConsumerKeepsRecordingAndReportsDeferral() async throws {
+        let root = try self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic deferred streaming",
+            languageCode: "ru", microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone"),
+            audioStorageMode: .retainedFiles, speakerProcessingMode: .streaming)
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+            machTimebaseDenominator: 1, firstPresentationTime: nil)
+        let session = MeetingSession(configuration: configuration, timebase: timebase)
+        let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
+            sourceDisplayName: "Synthetic microphone", format: nil, timebase: timebase, health: .waiting, chunks: [])
+        let events = MeetingWriterEventRecorder()
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root, chunkDuration: 60,
+            eventHandler: events.record)
+        var tee: MeetingMultiTrackCaptureTee?
+        var failure: Error?
+        do {
+            tee = try await MeetingMultiTrackCaptureTee.prepare(session: session, configuration: configuration,
+                tracks: [track], consumerFactory: nil, eventHandler: events.record, liveAudioHandler: nil,
+                privacyGate: nil, clockContexts: [:])
+        } catch { failure = error }
+        XCTAssertNil(failure, "File-backed recording must not stop for a missing consumer")
+        XCTAssertNil(tee, "Without a consumer the files stay the only owner of the audio")
+        for index in 0..<20 {
+            XCTAssertTrue(try writer.enqueue(self.makeRawSampleBuffer(channelCount: 1, layoutTag: nil,
+                frameCount: 480, pts: Double(index) / 100)))
+        }
+        let stopped = await writer.stop()
+        let frames = stopped.chunks.compactMap { $0.captureAnalysisAsset?.frameCount }.reduce(0, +)
+        XCTAssertEqual(frames, 9_600, "Recording keeps every frame after the deferral")
+        XCTAssertTrue(stopped.chunks.allSatisfy { $0.finalizationState == .finalized })
+        let first = try XCTUnwrap(stopped.chunks.first)
+        XCTAssertEqual(try AVAudioFile(forReading: root.appendingPathComponent(first.relativeFilePath)).length, 9_600)
+        let deferrals = events.snapshot().filter {
+            if case .interrupted(.liveTranscriptionDeferred, nil, _) = $0 { return true }
+            return false
+        }
+        XCTAssertEqual(deferrals.count, 1, "The deferral is reported once so retained audio is transcribed later")
+        XCTAssertFalse(events.snapshot().contains { if case .interrupted(.captureStoppedUnexpectedly, _, _) = $0 { return true }; return false })
+    }
+
     func testTwoHourMicrophoneAndApplicationCaptureKeepEveryFrameAndBoundedManifests() async throws {
         for kind in [MeetingAudioTrackKind.microphone, .applicationAudio] {
         let root = try self.makeDirectory()

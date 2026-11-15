@@ -47,8 +47,9 @@ enum NativeInkTransitionTests {
     }
 
     @MainActor private static func raster(_ host: NSView, name: String, theme: AppTheme, directory: URL) throws -> (text: Int, bottom: Int, left: Int, grid: Int) {
-        let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
-        host.cacheDisplay(in: host.bounds, to: bitmap)
+        // Always 2x, like the grid and axis thresholds below: on a runner without a Retina display a one point
+        // grid line would otherwise be one pixel wide and blend into the surface.
+        let bitmap = FixedScaleSnapshot.bitmap(of: host)!
         try bitmap.representation(using: .png, properties: [:])!.write(to: directory.appendingPathComponent(name + ".png"))
         let image = bitmap.cgImage!
         var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
@@ -108,6 +109,11 @@ enum NativeInkTransitionTests {
                     let search = family == "history" || family == "files"
                     let height: CGFloat = search ? (family == "history" ? 34 : 58) : (family == "daily" ? 124 : family == "hours" ? 140 : 150)
                     host.frame = NSRect(x: 0, y: 0, width: 400, height: height)
+                    // The window only fixes the raster scale. It is never shown, so it cannot take focus.
+                    let window = FixedScaleSnapshot.Window(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+                    window.isReleasedWhenClosed = false
+                    window.contentView = host
+                    defer { window.contentView = nil; window.close() }
                     await self.settle(host)
                     let field = self.fields(host).first
                     if search { precondition(field != nil, "Actual native search field must materialize") }
@@ -142,7 +148,7 @@ enum NativeInkTransitionTests {
                                 precondition(pixels.grid >= 30, "\(name): grid ink is absent")
                             }
                         }
-                        precondition(host.window == nil, "The regression never opens a window")
+                        precondition(host.window?.isVisible != true && host.window?.isKeyWindow != true, "The regression never shows a window")
                         checks += 1
                     }
                 }
