@@ -72,10 +72,19 @@ if [[ "$pichi_action" == "regression" ]]; then
             | tee "$pichi_run/summary.txt"
         exit "$pichi_build_status"
     fi
+    # Each run gets its own home, so Application Support, Caches and model folders start empty and nothing a
+    # run downloads or writes reaches the shared regression identity. PICHI_REGRESSION_SHARED_HOME=1 keeps
+    # the shared identity for a deliberate real-model replay.
+    pichi_test_home=""
+    pichi_home_args=()
+    if [[ "${PICHI_REGRESSION_SHARED_HOME:-}" != "1" ]]; then
+        pichi_test_home="$pichi_run/home"
+        pichi_home_args=(--home "$pichi_test_home")
+    fi
     pichi_xctestrun="$(python3 -S scripts/dev/macos-regression.py configure \
-        "$pichi_derived_data/Build/Products" "$pichi_run/build-start" "$pichi_run_id")"
-    # Every worktree tests under the same identity, so its settings, Application Support and
-    # Keychain items are shared. Builds stay parallel; test runs take turns through one lock.
+        "$pichi_derived_data/Build/Products" "$pichi_run/build-start" "$pichi_run_id" ${pichi_home_args[@]+"${pichi_home_args[@]}"})"
+    # Every worktree tests under the same identity, so its preferences and Keychain items are shared
+    # (Application Support is per run, see above). Builds stay parallel; test runs take turns through one lock.
     pichi_lock="${PICHI_REGRESSION_LOCK:-$HOME/Library/Caches/pichi-voice-regression.lock}"
     pichi_lock_waited=0
     while ! mkdir "$pichi_lock" 2>/dev/null; do
@@ -97,7 +106,11 @@ if [[ "$pichi_action" == "regression" ]]; then
     done
     printf '%s\n' "$$" > "$pichi_lock/pid"
     printf '%s\n' "$pichi_root" > "$pichi_lock/root"
-    trap 'rm -rf "$pichi_lock"' EXIT
+    # The home belongs to this run alone: it is removed with the lock, also after an interruption.
+    trap 'rm -rf "$pichi_lock" ${pichi_test_home:+"$pichi_test_home"}' EXIT
+    if [[ -n "$pichi_test_home" ]]; then
+        mkdir -p "$pichi_test_home/Library/Application Support" "$pichi_test_home/Library/Caches"
+    fi
     printf 'Regression lock taken after %s s of waiting.\n' "$pichi_lock_waited" >> "$pichi_run/run.txt"
     pichi_test_status=0
     xcodebuild -xctestrun "$pichi_xctestrun" -destination "$pichi_destination" \
@@ -106,6 +119,10 @@ if [[ "$pichi_action" == "regression" ]]; then
         "${pichi_test_args[@]}" test-without-building 2>&1 | tee "$pichi_run/test.log" \
         || pichi_test_status=$?
     rm -rf "$pichi_lock"
+    if [[ -n "$pichi_test_home" ]]; then
+        printf 'Test home held %s before removal.\n' "$(du -sh "$pichi_test_home" 2>/dev/null | cut -f1)" >> "$pichi_run/run.txt"
+        rm -rf "$pichi_test_home"
+    fi
     trap - EXIT
     # Extract the actual report even when xcodebuild failed. Missing results fail closed.
     pichi_summary_status=0

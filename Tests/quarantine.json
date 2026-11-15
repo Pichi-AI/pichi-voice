@@ -14,12 +14,6 @@
    "expires": "2026-11-26"
   },
   {
-   "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testDisablingFluidMeetDuringModelPreparationDoesNotStartCapture()",
-   "owner": "test-infra",
-   "reason": "Depends on speech models in the test identity's Application Support: it passes with an empty container and fails once Parakeet models are there, and the suite itself downloads Parakeet v3 from huggingface.co during a run. Remove when regression runs start from an empty container.",
-   "expires": "2026-11-26"
-  },
-  {
    "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testFluidMeetLongTranscriptRendersWithoutSideEffects()",
    "owner": "#115 codex/speaker-assignment-20261106",
    "reason": "Expectation is out of date after an intended change. The unresolved anonymous passage now receives a reading participant caption instead of staying '[02:40] text' with no caption; this is exactly the behaviour #115...",

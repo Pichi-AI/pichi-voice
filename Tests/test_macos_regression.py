@@ -59,6 +59,31 @@ class RegressionConfigurationTests(unittest.TestCase):
         self.assertEqual(value["__xctestrun_metadata__"]["EnvironmentVariables"], {"untouched": "1"})
         self.assertEqual(first["TestingEnvironmentVariables"]["XCInjectBundleInto"], "__TESTROOT__/Synthetic.app")
 
+    def test_run_home_reaches_every_target_and_cannot_come_from_the_caller_environment(self):
+        first, second = self.target(), self.target()
+        value = {"TestConfigurations": [{"TestTargets": [first]}, {"TestTargets": [second]}]}
+        # A home inherited from the caller's shell is not a test fixture and must not leak in.
+        self.assertEqual(RUNNER.configure_targets(value, {"CFFIXED_USER_HOME": "/caller"}), 2)
+        self.assertNotIn("CFFIXED_USER_HOME", first["EnvironmentVariables"])
+        self.assertEqual(RUNNER.configure_targets(value, {}, {"CFFIXED_USER_HOME": "/run/home"}), 2)
+        for target in (first, second):
+            self.assertEqual(target["EnvironmentVariables"]["CFFIXED_USER_HOME"], "/run/home")
+
+    def test_configured_spec_carries_the_run_home_only_when_one_is_given(self):
+        with tempfile.TemporaryDirectory() as directory:
+            products = Path(directory)
+            marker = products / "marker"
+            marker.touch()
+            source = products / "Fluid_macosx-synthetic.xctestrun"
+            source.write_bytes(plistlib.dumps({"SyntheticTests": self.target()}))
+            os.utime(source, ns=(marker.stat().st_mtime_ns, marker.stat().st_mtime_ns))
+            for home, expected in ((None, None), (Path(directory) / "home", str(Path(directory) / "home"))):
+                output = io.StringIO()
+                with patch.dict(os.environ, {}, clear=True), contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+                    RUNNER.configure(products, marker, "home-run", home)
+                variables = plistlib.loads(Path(output.getvalue().strip()).read_bytes())["SyntheticTests"]["EnvironmentVariables"]
+                self.assertEqual(variables.get("CFFIXED_USER_HOME"), expected)
+
     def test_missing_targets_and_invalid_environment_fail_closed(self):
         for value in ({"TestConfigurations": []}, {"target": {"TestBundlePath": "a", "EnvironmentVariables": []}}):
             with self.assertRaises(ValueError):
