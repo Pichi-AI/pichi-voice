@@ -516,6 +516,31 @@ final class MobileFirstUseModelTests: XCTestCase {
         XCTAssertTrue(sessions.isEmpty)
         XCTAssertTrue(services.meetingSessionCoordinator.isQuiescent)
     }
+
+    /// Retained audio is authoritative: a failed optional model installation defers speech and admission
+    /// proceeds to the permission preflight, while the failed preparation still releases everything it owned.
+    func testInstallationFailureDefersSpeechAndRetainedAdmissionReachesPermissions() async throws {
+        let (settings, _, name) = try self.settings()
+        settings.meetingSaveAudio = true
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let provider = FirstUseProvider(failing: true)
+        let capture = FirstUsePermissionProbe()
+        let services = self.services(settings: settings, capture: capture, root: root)
+        services.asr.modelProvidersForTesting[.gigaam] = provider
+        let configuration = try await self.configuration(services)
+        XCTAssertEqual(configuration.audioStorageMode, .retainedFiles)
+        do { _ = try await services.meetingSessionCoordinator.startRecording(configuration: configuration); XCTFail("The probe stops at permissions") }
+        catch is FirstUsePermissionProbe.PermissionReached { }
+        XCTAssertEqual(provider.prepareCount, 1)
+        XCTAssertEqual(provider.releaseCount, 1)
+        await self.assertCapture(capture, permissions: 1)
+        XCTAssertNil(services.asr.activeExclusiveActivity)
+        XCTAssertFalse(services.asr.hasActiveModelPreparation)
+        let sessions = try await services.meetingStore.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+        XCTAssertTrue(services.meetingSessionCoordinator.isQuiescent)
+    }
 }
 
 @MainActor
