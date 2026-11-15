@@ -3609,8 +3609,49 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertLessThan(restoreIndex, captureIndex)
     }
 
+    /// Upstream FluidVoice v1.6.13 inputs. Under the #157 contract a missing model no longer blocks a
+    /// retained-audio recording: capture starts, speech is deferred and the start reservation is cleared.
     func testMissingModelBlocksCaptureAndClearsStartReservation() async throws {
         let settingsName = "MissingMeetingModel.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: settingsName))
+        defer { defaults.removePersistentDomain(forName: settingsName) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = StubCaptureController()
+        let microphone = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+        let recorder = EventRecorder()
+        capture.onStart = { await recorder.record("capture.start") }
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: dir),
+            capture: capture,
+            processing: StubProcessingController(),
+            audioArbiter: StubArbiter(),
+            settings: settings,
+            validateRecordingModels: { throw MeetingModelInstaller.InstallError.wrongPackage }
+        )
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        for attempt in 1...2 {
+            let session = try await coordinator.startRecording(configuration: self.makeConfiguration(title: "Missing model"))
+            // Both attempts must reach validation, not a stale recording-already-active gate.
+            XCTAssertEqual(session.state, .recordingDegraded)
+            XCTAssertFalse(coordinator.hasPendingStart)
+            XCTAssertTrue(coordinator.isRecording)
+            XCTAssertEqual(capture.startCount, attempt)
+            capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: session.startedAt.addingTimeInterval(1))
+            _ = try? await coordinator.stopAndTranscribe()
+            XCTAssertFalse(coordinator.isRecording)
+        }
+        let events = await recorder.events
+        XCTAssertEqual(events.filter { $0 == "capture.start" }.count, 2)
+    }
+
+    /// Pichi strict no-file variant of the upstream missing-model test: with no retained audio to
+    /// recover, a missing model still blocks capture and clears the start reservation.
+    func testMissingModelBlocksStrictMemoryOnlyCaptureAndClearsStartReservation() async throws {
+        let settingsName = "MissingMeetingModelStrict.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: settingsName))
         defer { defaults.removePersistentDomain(forName: settingsName) }
         let settings = SettingsStore(defaults: defaults)
@@ -3626,9 +3667,10 @@ final class MeetingRecoveryTests: XCTestCase {
             processing: MemoryCheckpointProcessingController(),
             audioArbiter: StubArbiter(),
             settings: settings,
-            validateRecordingModels: { throw MeetingModelInstaller.InstallError.wrongPackage }
+            validateRecordingModels: { throw MeetingModelInstaller.InstallError.wrongPackage },
+            // Independent of whether this machine's test container happens to hold the Whisper Tiny file.
+            registeredModelsExistOnDisk: { _ in false }
         )
-        // A strict no-file recording has no retained audio to recover, so it still needs the model.
         var strict = self.makeConfiguration(title: "Missing model")
         strict.audioStorageMode = .memoryOnly
         for _ in 0..<2 {
@@ -3661,13 +3703,16 @@ final class MeetingRecoveryTests: XCTestCase {
         capture.onStart = { await recorder.record("capture.start") }
         var validations = 0
         let arbiter = StubArbiter()
+        let store = MeetingSessionStore(rootDirectory: dir)
         let coordinator = MeetingSessionCoordinator(
-            store: MeetingSessionStore(rootDirectory: dir),
+            store: store,
             capture: capture,
             processing: StubProcessingController(),
             audioArbiter: arbiter,
             settings: settings,
-            validateRecordingModels: { validations += 1; throw MeetingModelInstaller.InstallError.wrongPackage }
+            validateRecordingModels: { validations += 1; throw MeetingModelInstaller.InstallError.wrongPackage },
+            // Independent of whether this machine's test container happens to hold the Whisper Tiny file.
+            registeredModelsExistOnDisk: { _ in false }
         )
         self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         for attempt in 1...2 {
@@ -3682,16 +3727,116 @@ final class MeetingRecoveryTests: XCTestCase {
             XCTAssertEqual(capture.startCount, attempt)
             XCTAssertEqual(arbiter.acquireCount, attempt)
             XCTAssertEqual(arbiter.releaseCount, attempt - 1, "The lease stays owned while the recording runs")
-            capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: session.startedAt.addingTimeInterval(1))
+            // The recorder finalized real audio for this attempt; its file is on disk like a real capture.
+            let recorded = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
+            var withAudio = session
+            withAudio.audioTracks = [recorded]
+            try self.writeFinalizedChunkFiles(of: withAudio, inSessionDirectory: try await store.sessionDirectory(for: session.id))
+            capture.stopResult = MeetingCaptureStopResult(tracks: [recorded], stoppedAt: session.startedAt.addingTimeInterval(1))
             // Deferred speech is not a recording failure: Stop releases the lease and keeps the audio for an explicit retry.
+            // The current error and .failed state are pinned behavior, not a settled design: see the open product
+            // question about a distinct retriable state with its own message (transcriptionStopped says in-memory).
             do { _ = try await coordinator.stopAndTranscribe(); XCTFail("Deferred speech is reported at Stop") }
             catch MeetingCapturePCMError.transcriptionStopped { }
             XCTAssertFalse(coordinator.isRecording)
             XCTAssertEqual(coordinator.activeSession?.state, .failed)
+            XCTAssertEqual(coordinator.activeSession?.hasRetryableAudio, true, "The retained audio stays available for an explicit retry")
             XCTAssertEqual(arbiter.releaseCount, attempt)
         }
         let events = await recorder.events
         XCTAssertEqual(events.filter { $0 == "capture.start" }.count, 2)
+    }
+
+    /// Deferred speech must not start the live recognizer: it would begin the very model installation or
+    /// inference whose failure deferred it. A non-English meeting with an unregistered live route makes a
+    /// start visible without loading any engine: the recognizer would replace the deferral availability.
+    /// (A control without deferral is deliberately absent: it would reach real model installation.)
+    func testDeferredSpeechNeverStartsLiveCaptionEngines() async throws {
+        let settingsName = "DeferredLiveCaptions.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: settingsName))
+        defer { defaults.removePersistentDomain(forName: settingsName) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = StubCaptureController()
+        let microphone = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: dir), capture: capture, processing: StubProcessingController(),
+            audioArbiter: StubArbiter(), settings: settings,
+            // A missing recognizer is reported by the injected check and the model is never installed.
+            validateRecordingModels: { throw MeetingModelInstaller.InstallError.wrongPackage },
+            registeredModelsExistOnDisk: { _ in false })
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        // The deferral tears a started recognizer down again, so the final value alone cannot show a start.
+        // Every published value is recorded instead.
+        var availabilities: [MeetingLiveAvailability] = []
+        let observation = coordinator.$liveTranscript.sink { availabilities.append($0.availability) }
+        defer { observation.cancel() }
+        var configuration = self.makeConfiguration(title: "Deferred live captions")
+        configuration.languageCode = "ru"
+        let session = try await coordinator.startRecording(configuration: configuration)
+        XCTAssertTrue(session.events.contains { $0.kind == .liveTranscriptionDeferred })
+        XCTAssertTrue(coordinator.isRecording)
+        // Caption snapshots reach the coordinator through a main run loop hop; give a start time to arrive.
+        try await Task.sleep(nanoseconds: 400_000_000)
+        let allowed: [MeetingLiveAvailability] = [
+            MeetingLiveTranscriptSnapshot.empty.availability,
+            .unavailable(reason: PichiLocalization.text("Audio recording continues. Live transcription will be retried later.")),
+        ]
+        XCTAssertTrue(availabilities.allSatisfy(allowed.contains),
+            "A live recognizer started for deferred speech would publish its own availability: \(availabilities)")
+        XCTAssertEqual(coordinator.liveTranscript.availability,
+            .unavailable(reason: PichiLocalization.text("Audio recording continues. Live transcription will be retried later.")))
+    }
+
+    /// A PCM configuration restriction is a measured limit of live PCM inference. It refuses the strict
+    /// no-file policy before any preparation, but a retained recording keeps capturing with deferred speech.
+    func testPCMConfigurationRestrictionRefusesMemoryOnlyAndDefersRetainedRecording() async throws {
+        let restriction = MeetingPCMAdmissionRestriction(physicalDeviceModel: "fixture-tablet-v1", operatingSystemVersion: "99.4.2",
+            asrArtifactFingerprint: "fixture-asr-export@sha256:exact-identity", speakerLabelsEnabled: true,
+            piiRedactionEnabled: false, modelDisplayName: "Synthetic model", alternativeModelDisplayName: "Synthetic alternative")
+        let backend = MeetingBackendID.whisperTiny
+        let restricted = MeetingBackendError.unsupportedPCMConfiguration(backend: backend, restriction: restriction)
+        for storage in [MeetingAudioStorageMode.memoryOnly, .retainedFiles] {
+            let settingsName = "RestrictedPCM.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: settingsName))
+            defer { defaults.removePersistentDomain(forName: settingsName) }
+            let settings = SettingsStore(defaults: defaults)
+            settings.selectedSpeechModel = .whisperTiny
+            let dir = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let capture = StubCaptureController()
+            let microphone = self.makeMicrophoneTrack(chunks: [])
+            capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+            let arbiter = StubArbiter()
+            let coordinator = MeetingSessionCoordinator(
+                store: MeetingSessionStore(rootDirectory: dir), capture: capture,
+                processing: RestrictedPCMProcessingController(error: restricted), audioArbiter: arbiter, settings: settings,
+                validateRecordingModels: { }, prepareRecordingDependencies: { _ in })
+            self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+            var configuration = self.makeConfiguration(title: "Restricted PCM")
+            configuration.audioStorageMode = storage
+            configuration.transcriptionBackendID = backend.rawValue
+            switch storage {
+            case .memoryOnly:
+                do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Strict policy must refuse the restricted configuration") }
+                catch { XCTAssertEqual(error as? MeetingBackendError, restricted) }
+                XCTAssertEqual(capture.startCount, 0)
+                XCTAssertEqual(capture.preflightCount, 0)
+                XCTAssertEqual(arbiter.acquireCount, 0)
+                XCTAssertFalse(coordinator.isRecording)
+            case .retainedFiles:
+                let session = try await coordinator.startRecording(configuration: configuration)
+                XCTAssertEqual(session.state, .recordingDegraded)
+                XCTAssertTrue(session.events.contains { $0.kind == .liveTranscriptionDeferred })
+                XCTAssertEqual(capture.startCount, 1, "Retained audio keeps recording")
+                XCTAssertTrue(coordinator.isRecording)
+                XCTAssertFalse(coordinator.hasPendingStart)
+            }
+            XCTAssertFalse(coordinator.hasPendingStart)
+        }
     }
 
     // MARK: - Test 6: salvage current behavior pin
@@ -10259,6 +10404,18 @@ private final class StubProcessingController: MeetingProcessingControlling {
 }
 
 @MainActor
+/// Refuses recording input with a fixed backend error, like a backend with a measured PCM restriction.
+private final class RestrictedPCMProcessingController: MeetingProcessingControlling {
+    let error: Error
+    init(error: Error) { self.error = error }
+    func validateRecordingInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor? {
+        throw self.error
+    }
+    func process(session: MeetingSession, sessionDirectory: URL, progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
+        throw MeetingProcessingError.noRecoverableAudio
+    }
+}
+
 private final class RestartCheckingProcessingController: MeetingProcessingControlling {
     var sawCleanWorkingState = false
     func process(session: MeetingSession, sessionDirectory: URL,

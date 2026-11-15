@@ -523,15 +523,19 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     /// Optional recognition may be deferred while retained audio keeps recording. A request that
-    /// explicitly names a backend the app cannot honor (unknown backend, language, input, mode or
-    /// PCM configuration) is a refusal contract, not an inference failure: nothing may start.
+    /// explicitly names a backend the app cannot honor (unknown backend, language, input or mode)
+    /// is a refusal contract, not an inference failure: nothing may start. A PCM configuration
+    /// restriction is a measured limit of live PCM inference, not an inability to record, so it
+    /// refuses only the strict no-file policy and leaves retained recordings to deferred speech.
     private nonisolated static func isExplicitUnsupportedRequest(_ error: Error, _ configuration: MeetingCaptureConfiguration) -> Bool {
         guard configuration.transcriptionBackendID != nil else { return false }
         if let error = error as? MeetingBackendError {
             switch error {
             case .unknownBackend, .unsupportedInput, .unsupportedSpeakerProcessingMode,
-                 .unsupportedPCMConfiguration, .unsupportedLanguage, .unsupportedTrackTopology:
+                 .unsupportedLanguage, .unsupportedTrackTopology:
                 return true
+            case .unsupportedPCMConfiguration:
+                return configuration.audioStorageMode == .memoryOnly
             default:
                 return false
             }
