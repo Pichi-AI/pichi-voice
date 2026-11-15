@@ -2613,8 +2613,19 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertTrue(visibleText.contains("Amelia Richardson"))
         XCTAssertTrue(visibleText.contains("Rafael Moreno"))
         let anonymous = try XCTUnwrap(session.transcriptSegments.first { !$0.isEcho && $0.speakerID == nil })
-        XCTAssertTrue(visibleText.components(separatedBy: "\n\n").contains("[02:40] \(anonymous.text)"),
-                      "The complete unresolved passage remains readable with its timestamp and no invented participant caption")
+        // #115 (609e715e): the unresolved passage gets a reading participant. Amelia is the dominant anchored
+        // participant of its source in the surrounding window, so it joins her turn instead of opening a
+        // caption-less "[02:40]" paragraph. Its text stays complete and its canonical speaker stays unresolved.
+        let previous = try XCTUnwrap(session.transcriptSegments.filter { !$0.isEcho && $0.start < anonymous.start }
+            .max { $0.start < $1.start })
+        XCTAssertEqual(previous.speakerID, session.speakers.first { $0.displayName == "Amelia Richardson" }?.id)
+        let readingTimestamp = MeetingTranscriptExporter.timestampText(previous.start.seconds)
+        XCTAssertTrue(
+            visibleText.components(separatedBy: "\n\n")
+                .contains("[\(readingTimestamp)] Amelia Richardson: \(previous.text) \(anonymous.text)"),
+            "The complete unresolved passage reads under the continuing participant"
+        )
+        XCTAssertFalse(visibleText.contains("[02:40]"), "An unresolved passage no longer opens a caption-less paragraph")
         XCTAssertFalse(visibleText.contains("Unknown speaker"))
         for segment in session.transcriptSegments where !segment.isEcho {
             XCTAssertTrue(visibleText.contains(segment.text), "Reading captions must not remove any protected source text")

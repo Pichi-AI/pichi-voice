@@ -42,9 +42,14 @@ final class FluidServeTests: XCTestCase {
         XCTAssertFalse(FluidServeMeetings.transcript(for: meeting).contains("echo of the far side"))
         XCTAssertTrue(FluidServeMeetings.transcript(for: meeting).contains("[00:20] Priya: merged speaker keeps the name"))
         let paragraphs = FluidServeMeetings.transcript(for: meeting).components(separatedBy: "\n\n")
-        XCTAssertEqual(paragraphs.count, 3)
-        XCTAssertEqual(paragraphs.last, "[00:30] two people at once",
-                       "Unresolved evidence preserves its complete readable text without an invented participant caption")
+        // #115 (609e715e): the overlapping, unresolved passage gets a reading participant. Priya is the only
+        // anchored participant in its window, so it joins her turn instead of opening a caption-less paragraph.
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs.last, "[00:20] Priya: merged speaker keeps the name two people at once",
+                       "Unresolved evidence keeps its complete readable text and reads under the continuing participant")
+        XCTAssertFalse(FluidServeMeetings.transcript(for: meeting).contains("Unknown speaker"))
+        XCTAssertNil(meeting.turns.first { $0.text == "two people at once" }?.speakerID,
+                     "The reading owner never rewrites the canonical unresolved speaker")
     }
 
     func testMeetingsStillRecordingEmptyOrUnreadableAreNotServed() throws {

@@ -612,11 +612,7 @@ extension MeetingSessionModelTests {
 
         ### [00:04] Speaker 1
 
-        Initial provisional text
-
-        ### [01:05]
-
-        Next steps
+        Initial provisional text Next steps
 
         """)
         XCTAssertFalse(MeetingTranscriptExporter.markdown(for: session).contains("Unknown speaker"),
@@ -673,14 +669,15 @@ extension MeetingSessionModelTests {
 
         let lines = MeetingTranscriptExporter.text(for: session).components(separatedBy: "\n\n")
 
+        // #115 (609e715e): the unassigned segment gets the continuing reading participant, so it reads inside
+        // the same turn instead of opening a separate caption-less "[01:05]" line.
         XCTAssertEqual(lines, [
-            "[00:04] Speaker 1: Initial provisional text",
-            "[01:05] No speaker text",
+            "[00:04] Speaker 1: Initial provisional text No speaker text",
         ])
     }
 
-    /// Legacy fallback (no `attributionState`) preserves ambiguous evidence while the
-    /// readable transcript retains the full anonymous text without a participant caption.
+    /// Legacy fallback (no `attributionState`) preserves ambiguous evidence while the readable transcript
+    /// gives the full text one generated reading participant (#115, 609e715e).
     func testLegacyNilAttributionStateWithAmbiguousOverlapFallsBackToUnknownSpeaker() {
         var session = MeetingModelFixture.makeSession()
         var segment = session.transcriptSegments[0]
@@ -691,7 +688,7 @@ extension MeetingSessionModelTests {
         segment.text = "Crosstalk"
         session.transcriptSegments = [segment]
 
-        XCTAssertEqual(MeetingTranscriptExporter.text(for: session), "[00:04] Crosstalk")
+        XCTAssertEqual(MeetingTranscriptExporter.text(for: session), "[00:04] Speaker 1: Crosstalk")
     }
 
     /// Legacy fallback still prefers a resolvable speaker name over any overlap-derived label.
@@ -721,7 +718,7 @@ extension MeetingSessionModelTests {
         segment.text = "Crosstalk"
         session.transcriptSegments = [segment]
 
-        XCTAssertEqual(MeetingTranscriptExporter.text(for: session), "[00:04] Crosstalk")
+        XCTAssertEqual(MeetingTranscriptExporter.text(for: session), "[00:04] Speaker 1: Crosstalk")
     }
 
     func testUnassignedAttributionStateLabel() {
@@ -732,7 +729,7 @@ extension MeetingSessionModelTests {
         segment.text = "No evidence"
         session.transcriptSegments = [segment]
 
-        XCTAssertEqual(MeetingTranscriptExporter.text(for: session), "[00:04] No evidence")
+        XCTAssertEqual(MeetingTranscriptExporter.text(for: session), "[00:04] Speaker 1: No evidence")
     }
 
     func testTimingUncertainAttributionStateLabel() {
@@ -743,7 +740,7 @@ extension MeetingSessionModelTests {
         segment.text = "Late text"
         session.transcriptSegments = [segment]
 
-        XCTAssertEqual(MeetingTranscriptExporter.text(for: session), "[00:04] Late text")
+        XCTAssertEqual(MeetingTranscriptExporter.text(for: session), "[00:04] Speaker 1: Late text")
     }
 
     /// The `assigned` state still walks the alias chain, so a renamed/merged speaker resolves the
