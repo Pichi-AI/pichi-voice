@@ -296,9 +296,18 @@ struct FluidServeGroundedSummaryTests {
         let meeting = entries[0].meeting
         check(FluidServeMeetings.transcript(for: meeting) == MeetingTranscriptExporter.text(for: session),
               "CLI text shares the application's foreground, estimate, multi-speaker and corrected labels")
-        let expectedLabels = ["You", "First", "Unknown speaker", "First"]
+        // #115: the ambiguous "Multiple fixture" reads under the only independently anchored participant in its
+        // window, who is also its native candidate. That participant is the saved owner alias, hence "You".
+        // This is the documented contextual reading heuristic, not a preference for the local user: canonical
+        // evidence stays ambiguous (checked below) and without any anchor the owner is never chosen (checked next).
+        let expectedLabels = ["You", "First", "You", "First"]
         check(meeting.turns.map { FluidServeMeetings.speakerLabel(for: $0, in: meeting) } == expectedLabels,
               "Labels retain unknown/background states and resolved owner/merged aliases")
+        var withoutAnchor = session
+        withoutAnchor.transcriptSegments = [multiple]
+        let anchorlessText = MeetingTranscriptExporter.text(for: withoutAnchor)
+        check(anchorlessText == "[00:04] Speaker 1: Multiple fixture." && !anchorlessText.contains("You"),
+              "Without any anchored participant an ambiguous fragment gets a generated participant, never the local user")
         let show = FluidServeCommand.run(arguments: ["meet", "show", "latest"], root: root, accessEnabled: true)
         check(show.exitCode == 0 && show.output.hasSuffix(MeetingTranscriptExporter.text(for: session)),
               "Actual CLI text uses the shared projection")
@@ -319,6 +328,8 @@ struct FluidServeGroundedSummaryTests {
         let foregroundMetadata = turns[0]["speakerAttribution"] as! [String: Any]
         check(foregroundMetadata["selectedSpeakerID"] as? String == second.uuidString,
               "JSON selected foreground resolves the merged speaker to the active identity")
+        check(turns[2]["speakerID"] == nil && (turns[2]["speakerAttribution"] as? [String: Any])?["rule"] as? String == "ambiguous",
+              "The reading label for an ambiguous fragment does not rewrite its canonical speaker or attribution rule")
         check(turns[3]["speakerAttribution"] == nil && turns[3]["revision"] as? Int == 1,
               "A manual correction is not relabeled by stale automatic provenance")
         check(!json.output.contains("Private initial text"), "CLI JSON does not expose the prior corrected wording")
@@ -435,9 +446,22 @@ struct FluidServeGroundedSummaryTests {
         let after = try MeetingTranscriptExporter.json(for: session)
         check(try JSONSerialization.jsonObject(with: before) as! NSDictionary == JSONSerialization.jsonObject(with: after) as! NSDictionary,
               "Reading projection never changes JSON evidence semantics")
+        // #115 gives the unresolved word a reading participant in every case, so the former "stays split"
+        // result no longer holds. What must still hold for unsafe, manual or nonlegacy evidence: the legacy
+        // bridge estimate is never admitted, exact members are preserved, and source, status, completeness
+        // and echo differences remain paragraph boundaries.
         func staysSplit(_ rows: [MeetingTranscriptSegment], in changed: MeetingSession? = nil, line: UInt = #line) {
-            check(MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed ?? session).count == rows.count,
-                  "Unsafe, manual or nonlegacy evidence must remain a boundary at line \(line)")
+            let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed ?? session)
+            check(!paragraphs.contains(where: \.containsLegacySpeakerBridge),
+                  "Unsafe, manual or nonlegacy evidence must not use the legacy bridge estimate at line \(line)")
+            check(paragraphs.flatMap(\.segments) == rows,
+                  "Unsafe, manual or nonlegacy evidence keeps every exact member at line \(line)")
+            check(paragraphs.allSatisfy { paragraph in
+                paragraph.segments.allSatisfy {
+                    $0.sourceTrackID == paragraph.segments[0].sourceTrackID && $0.status == paragraph.segments[0].status
+                        && $0.completeness == paragraph.segments[0].completeness && $0.isEcho == paragraph.segments[0].isEcho
+                }
+            }, "Source, status and completeness differences remain paragraph boundaries at line \(line)")
         }
         for index in 0..<3 {
             var rows = originals; rows[index].revision = 1; staysSplit(rows)
@@ -612,11 +636,16 @@ struct FluidServeGroundedSummaryTests {
                         segment("to", 43, speaker: nil), segment("First continues.", 44)]
         session.transcriptSegments = dialogue
         let dialogueTurns = MeetingTranscriptExporter.displayParagraphs(for: dialogue, in: session)
-        check(dialogueTurns.map(\.segments) == [Array(dialogue[0...1]), [dialogue[2]], [dialogue[3]], [dialogue[4]], [dialogue[5]]],
-              "Actual speaker switches and unknown attribution remain distinct turns")
-        check(MeetingTranscriptExporter.text(for: session).contains("[00:43] to")
-              && !MeetingTranscriptExporter.text(for: session).contains("Unknown speaker"),
-              "An unresolved word keeps its text and time without an invented participant caption")
+        // #115 (609e715e): every readable fragment has a reading participant. The unresolved "to" sits
+        // between two members of the same speaker, so it joins that turn; real speaker switches stay distinct.
+        check(dialogueTurns.map(\.segments) == [Array(dialogue[0...1]), [dialogue[2]], Array(dialogue[3...5])],
+              "Actual speaker switches remain distinct turns and an unresolved word joins its neighbouring speaker's turn")
+        check(dialogueTurns.flatMap(\.segments) == dialogue && dialogue[4].speakerID == nil,
+              "Reading completion preserves exact members and keeps the word unresolved in canonical evidence")
+        let dialogueText = MeetingTranscriptExporter.text(for: session)
+        check(dialogueText.contains("[00:42] First: First again. to First continues.")
+              && !dialogueText.contains("Unknown speaker"),
+              "An unresolved word keeps its text and reads under the continuing speaker instead of an invented caption")
 
         let changedSource = [segment("Source one.", 0), segment("Source two.", 1, source: UUID())]
         check(MeetingTranscriptExporter.displayParagraphs(for: changedSource, in: session).count == 2,
