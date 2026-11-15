@@ -85,11 +85,27 @@ if [[ "$pichi_action" == "regression" ]]; then
         "$pichi_derived_data/Build/Products" "$pichi_run/build-start" "$pichi_run_id" ${pichi_home_args[@]+"${pichi_home_args[@]}"})"
     # Every worktree tests under the same identity, so its preferences and Keychain items are shared
     # (Application Support is per run, see above). Builds stay parallel; test runs take turns through one lock.
+    # Waiting counts toward the step limit of scripts/dev/verify, so run one gate per machine.
     pichi_lock="${PICHI_REGRESSION_LOCK:-$HOME/Library/Caches/pichi-voice-regression.lock}"
+    mkdir -p "$(dirname "$pichi_lock")"
     pichi_lock_waited=0
+    pichi_lock_missing=0
     while ! mkdir "$pichi_lock" 2>/dev/null; do
+        if [[ ! -d "$pichi_lock" ]]; then
+            # mkdir failed with no lock to wait for: its folder cannot be written. Retry in case the
+            # holder released the lock in between, then stop instead of waiting forever.
+            pichi_lock_missing=$((pichi_lock_missing + 1))
+            if (( pichi_lock_missing >= 3 )); then
+                printf 'Cannot create the regression lock %s.\n' "$pichi_lock" >&2
+                exit 1
+            fi
+            continue
+        fi
+        pichi_lock_missing=0
         pichi_lock_owner="$(cat "$pichi_lock/pid" 2>/dev/null || true)"
         # A holder that ended, or one that never wrote its pid within a minute, left the lock behind.
+        # The removal is best effort: two waiters that see the same dead holder within milliseconds
+        # could both run, which is no worse than having no lock.
         if { [[ -n "$pichi_lock_owner" ]] && ! kill -0 "$pichi_lock_owner" 2>/dev/null \
                 && [[ "$(cat "$pichi_lock/pid" 2>/dev/null || true)" == "$pichi_lock_owner" ]]; } \
             || { [[ -z "$pichi_lock_owner" ]] && [[ -n "$(find "$pichi_lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]]; }; then
