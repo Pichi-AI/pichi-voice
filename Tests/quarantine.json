@@ -92,12 +92,6 @@
    "expires": "2026-11-26"
   },
   {
-   "test": "PichiVoiceMobileIntegrationTests/MobileSetupTransactionTests/testBackgroundAndEnrollmentJoinTheCanonicalVoiceInstallation()",
-   "owner": "test-infra",
-   "reason": "Fails on a clean simulator on 2026-11-12. The cause is not analysed yet.",
-   "expires": "2026-11-26"
-  },
-  {
    "test": "FluidDictationIntegrationTests/MeetingRecoveryTests/testCancellationDuringAdmittedDependencyPreparationJoinsBeforeLeaseRelease()",
    "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
    "reason": "#157 keeps recording when model validation, speaker preparation or input validation fails and defers speech. This test states the opposite contract: cancellation during admitted preparation joins before the lease is released. Needs a decision from the owner of #157: change the contract or restore the refusal. Passes on c66a80fd^1 and fails after #157.",
