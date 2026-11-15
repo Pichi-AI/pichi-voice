@@ -305,6 +305,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private let prepareRegisteredSpeakerResources: @MainActor (MeetingFinalProcessingConfiguration) async throws -> Void
     private let validateRecordingModels: @MainActor () async throws -> Void
     private let validateFrozenRecordingConfiguration: @MainActor (MeetingFinalProcessingConfiguration) throws -> Void
+    private let registeredModelsExistOnDisk: @MainActor (String) -> Bool?
     private let processingLogger: @MainActor (String) -> Void
     private static let correctionUndoStackCap = 50
 
@@ -326,6 +327,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             try await PichiMeetingProviderFactory.prepareSpeakerResources(for: $0)
         },
         validateFrozenRecordingConfiguration: @escaping @MainActor (MeetingFinalProcessingConfiguration) throws -> Void = { _ in },
+        registeredModelsExistOnDisk: @escaping @MainActor (String) -> Bool? = { PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: $0) },
         processingLogger: @escaping @MainActor (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingSessionCoordinator") }
     ) {
         self.store = store
@@ -344,6 +346,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.prepareRecordingDependencies = prepareRecordingDependencies
         self.prepareRegisteredSpeakerResources = prepareRegisteredSpeakerResources
         self.validateFrozenRecordingConfiguration = validateFrozenRecordingConfiguration
+        self.registeredModelsExistOnDisk = registeredModelsExistOnDisk
         self.processingLogger = processingLogger
         self.locationPreferenceObserver = settings.objectWillChange.sink { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -519,6 +522,23 @@ final class MeetingSessionCoordinator: ObservableObject {
         configuration.audioStorageMode == .memoryOnly || configuration.effectiveSpeakerProcessingMode == .streaming
     }
 
+    /// Optional recognition may be deferred while retained audio keeps recording. A request that
+    /// explicitly names a backend the app cannot honor (unknown backend, language, input, mode or
+    /// PCM configuration) is a refusal contract, not an inference failure: nothing may start.
+    private nonisolated static func isExplicitUnsupportedRequest(_ error: Error, _ configuration: MeetingCaptureConfiguration) -> Bool {
+        guard configuration.transcriptionBackendID != nil else { return false }
+        if let error = error as? MeetingBackendError {
+            switch error {
+            case .unknownBackend, .unsupportedInput, .unsupportedSpeakerProcessingMode,
+                 .unsupportedPCMConfiguration, .unsupportedLanguage, .unsupportedTrackTopology:
+                return true
+            default:
+                return false
+            }
+        }
+        return error is MeetingProviderOptionsError
+    }
+
     private nonisolated static func usesPCMProcessing(_ session: MeetingSession) -> Bool {
         session.audioStorageMode == .memoryOnly || session.effectiveSpeakerProcessingMode == .streaming
     }
@@ -626,7 +646,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         let initialDescriptor: MeetingBackendDescriptor?
         do { initialDescriptor = try self.processing.validateRecordingInput(configuration: configuration, backendID: requestedBackendID) }
         catch {
-            if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+            if configuration.audioStorageMode == .memoryOnly || Task.isCancelled
+                || Self.isExplicitUnsupportedRequest(error, configuration) { throw error }
             initialDescriptor = nil; speechDeferredAtStart = true
         }
         var validationSnapshot = PichiMeetingProviderFactory.validationConfiguration(
@@ -637,7 +658,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         validationSnapshot.recordingTimePolicy = self.capture.recordingTimePolicy
         do { try initialDescriptor?.validateSpeakerProcessingMode(configuration: validationSnapshot, mode: configuration.mode) }
         catch {
-            if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+            if configuration.audioStorageMode == .memoryOnly || Task.isCancelled
+                || Self.isExplicitUnsupportedRequest(error, configuration) { throw error }
             speechDeferredAtStart = true
         }
         // Explicit registered requests require a preinstalled artifact. Capture its identity
@@ -657,7 +679,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             try self.validateFrozenRecordingConfiguration(snapshot)
             explicitRecordingConfiguration = snapshot
           } catch {
-            if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+            if configuration.audioStorageMode == .memoryOnly || Task.isCancelled
+                || Self.isExplicitUnsupportedRequest(error, configuration) { throw error }
             explicitRecordingConfiguration = nil; speechDeferredAtStart = true
           }
         } else { explicitRecordingConfiguration = nil }
@@ -671,7 +694,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         // Retained capture writes independently while optional live captions are preparing.
         // A missing installation still uses the existing download owner before admission.
         if configuration.transcriptionBackendID == nil,
-           PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: selectedModelID) != true {
+           self.registeredModelsExistOnDisk(selectedModelID) != true {
             if configuration.audioStorageMode != .memoryOnly, Self.usesPCMProcessing(configuration) {
                 speechDeferredAtStart = true
             } else {
@@ -778,7 +801,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             let admittedPCMDescriptor: MeetingBackendDescriptor?
             do { admittedPCMDescriptor = try self.processing.validateRecordingInput(configuration: configuration, backendID: recordingBackendID) }
             catch {
-                if configuration.audioStorageMode == .memoryOnly || Task.isCancelled { throw error }
+                if configuration.audioStorageMode == .memoryOnly || Task.isCancelled
+                    || Self.isExplicitUnsupportedRequest(error, configuration) { throw error }
                 admittedPCMDescriptor = nil; speechDeferredAtStart = true
             }
             if configuration.audioStorageMode == .memoryOnly, !speechDeferredAtStart, configuration.speakerLabelsEnabled != false,
@@ -950,7 +974,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
         self.liveTranscript = .empty
         self.lastLiveSpeechAt = nil
-        if !Self.usesPCMProcessing(configuration) {
+        // Deferred speech must not start (and immediately tear down) a live recognizer: that would begin
+        // the very model installation or inference whose failure deferred it.
+        if !Self.usesPCMProcessing(configuration), !speechDeferredAtStart {
         liveTranscriptionCoordinator.start(
             mode: configuration.mode,
             languageCode: configuration.languageCode,
