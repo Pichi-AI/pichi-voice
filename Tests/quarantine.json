@@ -152,12 +152,6 @@
    "expires": "2026-11-26"
   },
   {
-   "test": "PichiVoiceMobileIntegrationTests/MobileFirstUseModelTests/testInstallationFailureLeavesNoCaptureAndReleasesPreparation()",
-   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "#157 keeps recording when model validation fails and defers speech. On iOS this test now reaches the permission preflight after a failed model installation, while it states that a failed installation leaves no capture. Needs a decision from the owner of #157 (issue #169). Fails alone on a clean simulator; it passed on the base before #157.",
-   "expires": "2026-11-26"
-  },
-  {
    "test": "probe:command_ui_localization",
    "scope": "ci",
    "owner": "#176",
