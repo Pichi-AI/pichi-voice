@@ -246,7 +246,7 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
         guard let asset = chunk.captureAnalysisAsset, let rate = asset.sampleRate,
               let channels = asset.channelCount, let frames = asset.frameCount,
               rate.isFinite, (8_000...192_000).contains(rate), (1...8).contains(channels), frames > 0
-        else { throw MeetingPCMSinkError.finalizationVerificationFailed("invalid recovery extent") }
+        else { throw MeetingPCMSinkError.invalidRecoveryMetadata("invalid recovery extent") }
         func confined(_ relative: String) throws -> URL {
             let parts = relative.split(separator: "/", omittingEmptySubsequences: false)
             guard !relative.hasPrefix("/"), relative.hasSuffix(".caf"), !parts.isEmpty,

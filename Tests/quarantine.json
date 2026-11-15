@@ -134,24 +134,6 @@
    "expires": "2026-11-26"
   },
   {
-   "test": "FluidDictationIntegrationTests/MeetingAudioChunkLedgerRecoveryTests/testPartialOrEscapingNewAssetIsNeverPromoted()",
-   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "Possible regression: since #157 an unrecoverable or escaping partial capture stays .writing instead of becoming .failed on restore (recoverClosedCapture rejects the path and the store swallows the error). Passes on c66a80fd^1 and fails after #157.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingSummaryInputTests/testLegacyISOManifestStillMatchesSummaryMadeBeforeReload()",
-   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "Possible regression: since #157 the store reconciles a session without track.json on load, rewrites the legacy session.json on read (1561 instead of 1653 bytes) and drops firstPresentationTime of a track without chunks. Passes on c66a80fd^1 and fails after #157.",
-   "expires": "2026-11-26"
-  },
-  {
-   "test": "FluidDictationIntegrationTests/MeetingSummaryInputTests/testSummaryMadeRightAfterRecordingStillMatchesOnceTheMeetingIsReloaded()",
-   "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "Possible regression: since #157 a reload drops firstPresentationTime of a track without chunks, so the reloaded session differs from the one the summary was made from. Passes on c66a80fd^1 and fails after #157.",
-   "expires": "2026-11-26"
-  },
-  {
    "test": "FluidDictationIntegrationTests/MeetingVoiceProcessingCaptureTests/testRawRouteResumePersistenceFailureDoesNotOpenAdmission()",
    "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
    "reason": "Possible regression: after #157 a failed durable write during a raw route resume no longer propagates, and echo protection stays unfiltered. Passes on c66a80fd^1 and fails after #157.",
