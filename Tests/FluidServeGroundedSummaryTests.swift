@@ -296,10 +296,13 @@ struct FluidServeGroundedSummaryTests {
         let meeting = entries[0].meeting
         check(FluidServeMeetings.transcript(for: meeting) == MeetingTranscriptExporter.text(for: session),
               "CLI text shares the application's foreground, estimate, multi-speaker and corrected labels")
-        // #115: the ambiguous "Multiple fixture" reads under the only independently anchored participant in its
-        // window, who is also its native candidate. That participant is the saved owner alias, hence "You".
-        // This is the documented contextual reading heuristic, not a preference for the local user: canonical
-        // evidence stays ambiguous (checked below) and without any anchor the owner is never chosen (checked next).
+        // #115: this fixture has no independent anchor (its rows use briefInterruption and incomingSpeaker, which
+        // are context rules, never anchors; the corrected row is a manual revision). The ambiguous "Multiple
+        // fixture" therefore reads "You" through the step-4 fallback of MeetingReadingSpeakerResolver: with no
+        // admitted participant it takes the track's first published participant, the saved owner alias. This is
+        // a fallback, not an acoustic or contextual preference for the local user: canonical evidence stays
+        // ambiguous (checked below), without any published participant the owner is never chosen (checked next)
+        // and a genuine independent anchor wins over the fallback (checked after that, step 3).
         let expectedLabels = ["You", "First", "You", "First"]
         check(meeting.turns.map { FluidServeMeetings.speakerLabel(for: $0, in: meeting) } == expectedLabels,
               "Labels retain unknown/background states and resolved owner/merged aliases")
@@ -308,6 +311,21 @@ struct FluidServeGroundedSummaryTests {
         let anchorlessText = MeetingTranscriptExporter.text(for: withoutAnchor)
         check(anchorlessText == "[00:04] Speaker 1: Multiple fixture." && !anchorlessText.contains("You"),
               "Without any anchored participant an ambiguous fragment gets a generated participant, never the local user")
+        // Step 3 on its own: an independent acoustic anchor ("First" after the ambiguous fragment, within the
+        // 15-second window) owns the fragment, although the first published participant is the owner alias.
+        let independentAnchor = unit(5, text: "Anchor fixture.", selected: a, raw: .assigned(a),
+                                     relation: .none, rule: .singleAcousticSupport)
+        var withAnchor = session
+        withAnchor.transcriptSegments = [foreground, multiple, independentAnchor]
+        try withAnchor.validateTranscriptStructure()
+        let anchoredTurns = MeetingTranscriptExporter.displayParagraphs(for: withAnchor.transcriptSegments, in: withAnchor)
+        check(anchoredTurns.map { $0.segments.map(\.id) } == [[foreground.id], [multiple.id, independentAnchor.id]],
+              "An ambiguous fragment joins the independently anchored participant that follows it")
+        check(anchoredTurns.map({ MeetingTranscriptExporter.speakerLabel(for: $0, in: withAnchor,
+                  speakerNames: [first: "First", second: "Saved owner alias"]) }) == ["You", "First"],
+              "A genuine independent anchor in the window beats the first-published fallback")
+        check(multiple.speakerID == nil && withAnchor.transcriptSegments[1].speakerID == nil,
+              "The anchor-based reading owner never rewrites the canonical unresolved speaker")
         let show = FluidServeCommand.run(arguments: ["meet", "show", "latest"], root: root, accessEnabled: true)
         check(show.exitCode == 0 && show.output.hasSuffix(MeetingTranscriptExporter.text(for: session)),
               "Actual CLI text uses the shared projection")
@@ -447,11 +465,19 @@ struct FluidServeGroundedSummaryTests {
         check(try JSONSerialization.jsonObject(with: before) as! NSDictionary == JSONSerialization.jsonObject(with: after) as! NSDictionary,
               "Reading projection never changes JSON evidence semantics")
         // #115 gives the unresolved word a reading participant in every case, so the former "stays split"
-        // result no longer holds. What must still hold for unsafe, manual or nonlegacy evidence: the legacy
-        // bridge estimate is never admitted, exact members are preserved, and source, status, completeness
-        // and echo differences remain paragraph boundaries.
-        func staysSplit(_ rows: [MeetingTranscriptSegment], in changed: MeetingSession? = nil, line: UInt = #line) {
+        // result no longer holds: the fixture has one published participant, which owns the bridge word, and
+        // a coverage gap is a context barrier, not a paragraph boundary (two direct same-speaker members across
+        // the same gap already read as one turn, checked below). Each case therefore asserts its exact
+        // partition: members are listed by their index in the input rows. Boundaries remain only where source,
+        // status, completeness or echo differ, or where a member has uncertain timing. The legacy bridge
+        // estimate is never admitted, and every exact member is preserved.
+        func readsAs(_ expected: [[Int]], _ rows: [MeetingTranscriptSegment], in changed: MeetingSession? = nil,
+                     line: UInt = #line) {
             let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed ?? session)
+            let actual = paragraphs.map { paragraph in
+                paragraph.segments.map { member in rows.firstIndex { $0.id == member.id } ?? -1 }
+            }
+            check(actual == expected, "Exact reading partition \(expected), got \(actual), at line \(line)")
             check(!paragraphs.contains(where: \.containsLegacySpeakerBridge),
                   "Unsafe, manual or nonlegacy evidence must not use the legacy bridge estimate at line \(line)")
             check(paragraphs.flatMap(\.segments) == rows,
@@ -463,26 +489,38 @@ struct FluidServeGroundedSummaryTests {
                 }
             }, "Source, status and completeness differences remain paragraph boundaries at line \(line)")
         }
+        var gapSession = session
+        gapSession.transcriptCoverageGaps = [.init(trackID: track, start: 3.1, end: 3.2, reason: .missingOrUnreadableAudio)]
+        readsAs([[0, 1]], [originals[0], originals[2]], in: gapSession)
+        let whole = [[0, 1, 2]]
+        // Expected partition for the mutated member 0, 1 and 2 of [A, bridge, B].
+        let boundaryAfterFirst = [[0], [1, 2]], boundaryBeforeLast = [[0, 1], [2]], isolatedBridge = [[0], [1], [2]]
+        let unsafeMutations: [(name: String, apply: (inout MeetingTranscriptSegment) -> Void, expected: [[[Int]]])] = [
+            ("revision", { $0.revision = 1 }, [whole, whole, whole]),
+            ("original text", { $0.originalText = "Original" }, [whole, whole, whole]),
+            ("provisional status", { $0.status = .provisional }, [boundaryAfterFirst, isolatedBridge, boundaryBeforeLast]),
+            ("incomplete track", { $0.completeness = .incompleteTrack }, [boundaryAfterFirst, isolatedBridge, boundaryBeforeLast]),
+            ("ambiguous overlap", { $0.overlap = .ambiguous }, [whole, whole, whole]),
+            ("other source track", { $0.sourceTrackID = UUID() }, [boundaryAfterFirst, isolatedBridge, boundaryBeforeLast]),
+            ("uncertain timing", { $0.attributionState = .timingUncertain }, [boundaryAfterFirst, whole, boundaryBeforeLast]),
+            ("word precision", { $0.nativePrecision = .word }, [whole, whole, whole]),
+        ]
         for index in 0..<3 {
-            var rows = originals; rows[index].revision = 1; staysSplit(rows)
-            rows = originals; rows[index].originalText = "Original"; staysSplit(rows)
-            rows = originals; rows[index].status = .provisional; staysSplit(rows)
-            rows = originals; rows[index].completeness = .incompleteTrack; staysSplit(rows)
-            rows = originals; rows[index].overlap = .ambiguous
-            if index != 1 { staysSplit(rows) }
-            rows = originals; rows[index].sourceTrackID = UUID(); staysSplit(rows)
-            rows = originals; rows[index].attributionState = .timingUncertain; staysSplit(rows)
-            rows = originals; rows[index].nativePrecision = .word; staysSplit(rows)
+            for mutation in unsafeMutations {
+                var rows = originals
+                mutation.apply(&rows[index])
+                readsAs(mutation.expected[index], rows)
+            }
         }
-        var changed = session; changed.state = .processing; staysSplit(originals, in: changed)
-        changed = session; changed.processingAttempts = []; staysSplit(originals, in: changed)
-        changed = session; changed.processingAttempts[0].pipelineVersion = 15; staysSplit(originals, in: changed)
-        changed = session; changed.speakers = []; staysSplit(originals, in: changed)
-        changed = session; changed.transcriptIsComplete = false; staysSplit(originals, in: changed)
-        changed = session; changed.transcriptCoverageGaps = [.init(trackID: track, start: 3.1, end: 3.2, reason: .missingOrUnreadableAudio)]; staysSplit(originals, in: changed)
+        var changed = session; changed.state = .processing; readsAs(whole, originals, in: changed)
+        changed = session; changed.processingAttempts = []; readsAs(whole, originals, in: changed)
+        changed = session; changed.processingAttempts[0].pipelineVersion = 15; readsAs(whole, originals, in: changed)
+        changed = session; changed.speakers = []; readsAs(whole, originals, in: changed)
+        changed = session; changed.transcriptIsComplete = false; readsAs(whole, originals, in: changed)
+        changed = session; changed.transcriptCoverageGaps = [.init(trackID: track, start: 3.1, end: 3.2, reason: .missingOrUnreadableAudio)]; readsAs(whole, originals, in: changed)
         changed = session
         var hiddenEcho = segment("Echo", 3.1, 3.2); hiddenEcho.isLikelyEcho = true
-        changed.transcriptSegments.insert(hiddenEcho, at: 1); staysSplit(originals, in: changed)
+        changed.transcriptSegments.insert(hiddenEcho, at: 1); readsAs(whole, originals, in: changed)
         var rows = originals; rows[2].speakerID = other
         let incoming = MeetingTranscriptExporter.displayParagraphs(for: rows, in: session)
         check(incoming.count == 2 && incoming[0].segments == [rows[0]] && incoming[1].segments == Array(rows.dropFirst()),
@@ -499,22 +537,25 @@ struct FluidServeGroundedSummaryTests {
         var mixed = rows; mixed[1].attributionState = .overlappingSpeakers
         check(MeetingTranscriptExporter.displayParagraphs(for: mixed, in: session).count == 2,
               "A short historical mixed prefix follows the incoming participant at a real voice change")
-        rows = originals; rows[1].start = .init(value: 2000, timescale: 1000); staysSplit(rows)
-        rows = originals; rows[2].start = .init(value: 8200, timescale: 1000); rows[2].end = .init(value: 8300, timescale: 1000); staysSplit(rows)
-        rows = originals; rows[1].end = .init(value: 7000, timescale: 1000); rows[2].start = .init(value: 7100, timescale: 1000); rows[2].end = .init(value: 7200, timescale: 1000); staysSplit(rows)
+        rows = originals; rows[1].start = .init(value: 2000, timescale: 1000); readsAs(whole, rows)
+        rows = originals; rows[2].start = .init(value: 8200, timescale: 1000); rows[2].end = .init(value: 8300, timescale: 1000); readsAs(whole, rows)
+        rows = originals; rows[1].end = .init(value: 7000, timescale: 1000); rows[2].start = .init(value: 7100, timescale: 1000); rows[2].end = .init(value: 7200, timescale: 1000); readsAs(whole, rows)
 
         let nested = [segment("Enclosing speaker", 0, 10, speakerID: other),
                       segment("Anchor", 1, 2), segment("gap", 2, 2.1, speakerID: nil), segment("Anchor", 2.1, 3)]
         changed = session; changed.transcriptSegments = nested
-        staysSplit(nested, in: changed)
+        // The gap word sits inside the long enclosing speaker's window, which outweighs the short anchors.
+        readsAs([[0], [1], [2], [3]], nested, in: changed)
+        check(MeetingTranscriptExporter.displayParagraphs(for: nested, in: changed)[2].projectedSpeakerID == other,
+              "The nested gap word reads under the enclosing speaker, not under the nearer anchors")
         check(MeetingTranscriptExporter.displayParagraphs(for: nested, in: changed).allSatisfy { !$0.containsLegacySpeakerBridge },
               "An earlier enclosing speaker blocks every nested reading gap despite adjacent end touches")
         var hiddenNested = nested; hiddenNested[0].isLikelyEcho = true
         changed.transcriptSegments = hiddenNested
-        staysSplit(Array(hiddenNested.dropFirst()), in: changed)
+        readsAs(whole, Array(hiddenNested.dropFirst()), in: changed)
         var invalidNested = nested; invalidNested[0].end = .init(value: -1, timescale: 1000)
         changed.transcriptSegments = invalidNested
-        staysSplit(Array(invalidNested.dropFirst()), in: changed)
+        readsAs(whole, Array(invalidNested.dropFirst()), in: changed)
         var touching = nested; touching[0].end = .init(value: 1000, timescale: 1000)
         changed.transcriptSegments = touching
         let touchingParagraphs = MeetingTranscriptExporter.displayParagraphs(for: touching, in: changed)
