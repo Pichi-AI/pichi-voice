@@ -922,7 +922,7 @@ class MobileScriptTests(unittest.TestCase):
     def run_script(self, *arguments):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        root = Path(os.path.realpath(temporary.name))  # the homes root must be its own physical path (/var links to /private/var)
+        root = Path(temporary.name)
         (root / "scripts/dev").mkdir(parents=True)
         shutil.copyfile(ROOT / "scripts/dev/mobile.sh", root / "scripts/dev/mobile.sh")
         tools = root / "tools"
@@ -951,7 +951,7 @@ class RegressionLockTests(unittest.TestCase):
     def run_regression(self, lock, test_exit=0, homes=None):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        root = Path(temporary.name)
+        root = Path(os.path.realpath(temporary.name))  # the homes root must be its own physical path (/var links to /private/var)
         (root / "scripts/dev").mkdir(parents=True)
         shutil.copyfile(ROOT / "scripts/dev/macos.sh", root / "scripts/dev/macos.sh")
         (root / "scripts/dev/assert-worktree.sh").write_text("exit 0\n")
