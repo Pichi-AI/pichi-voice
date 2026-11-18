@@ -153,7 +153,8 @@ class RegressionCommandTests(unittest.TestCase):
         root = Path(temporary.name) / "worktree"
         root.mkdir()
         # The lock and the homes of a test belong to the test, never to the machine it runs on.
-        self.homes = Path(homes) if homes else Path(temporary.name) / "homes"
+        # The homes root must be its own physical path (/var is a link to /private/var on macOS).
+        self.homes = Path(homes) if homes else Path(os.path.realpath(temporary.name)) / "homes"
         self.lock = Path(temporary.name) / "regression.lock"
         self.root = root
         if prepare:
@@ -327,8 +328,39 @@ print(json.dumps(dict(result="Failed" if failed else "Passed", totalTestCount=3,
                 self.assertEqual(calls, "")
                 self.assertEqual((folder / "stale" / "keep").read_text(), "keep")
 
+    def test_a_homes_root_that_leads_to_the_home_folder_through_a_link_or_dots_is_refused_before_any_removal(self):
+        ended = subprocess.Popen(["true"])
+        ended.wait()
+        home = Path(os.path.realpath(tempfile.mkdtemp()))
+        self.addCleanup(shutil.rmtree, home, True)
+        # A stale pair that the sweep would remove if it ever looked inside the home folder.
+        (home / "stale").mkdir()
+        (home / "stale" / "keep").write_text("keep")
+        (home / "stale.owner").write_text(f"{ended.pid}\n")
+        (home / "cache").mkdir()
+        (home / "link-to-home").symlink_to(home)
+        (home / "cache" / "link-to-cache").symlink_to(home / "cache")
+        candidates = {
+            "symlink to the home folder": str(home / "link-to-home"),
+            "dots that resolve to the home folder": f"{home}/cache/..",
+            "dots below the home folder": f"{home}/cache/../cache",
+            "symlink ancestor of a missing root": str(home / "link-to-home" / "missing"),
+            "root folder": "/",
+            "root folder with dots": "/tmp/..",
+        }
+        for name, homes in candidates.items():
+            with self.subTest(case=name):
+                result, _, calls = self.run_command(homes=homes, extra={"HOME": str(home)})
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("PICHI_REGRESSION_HOMES", result.stderr)
+                self.assertEqual(calls, "")
+                self.assertNotIn("Removing the test home", result.stderr)
+                self.assertEqual((home / "stale" / "keep").read_text(), "keep")
+                self.assertTrue((home / "stale.owner").exists())
+                self.assertFalse((home / "missing").exists())
+
     def test_the_homes_folder_is_created_when_it_is_missing(self):
-        parent = Path(tempfile.mkdtemp())
+        parent = Path(os.path.realpath(tempfile.mkdtemp()))
         self.addCleanup(shutil.rmtree, parent, True)
         result, _, _ = self.run_command(homes=str(parent / "missing" / "homes"))
         self.assertEqual(result.returncode, 0, result.stderr)

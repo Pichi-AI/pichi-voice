@@ -75,6 +75,36 @@ if [[ "$pichi_action" == "regression" ]]; then
         printf 'PICHI_REGRESSION_HOMES must be a folder reserved for regression homes, not the home folder.\n' >&2
         exit 1
     fi
+    # The checks above are lexical. A symlink, or a path such as $HOME/cache/.., can still lead to the home folder,
+    # and the sweep below removes folders by name, so the root must be its own physical path before anything runs.
+    pichi_refuse_homes_root() {
+        printf 'PICHI_REGRESSION_HOMES must be a physical path of a folder reserved for regression homes: %s (%s).\n' \
+            "$pichi_homes_root" "$1" >&2
+        exit 1
+    }
+    pichi_check_homes_root() {
+        local probe="$pichi_homes_root" physical physical_home
+        case "/$pichi_homes_root/" in
+            */./*|*/../*) pichi_refuse_homes_root 'it has . or .. components' ;;
+        esac
+        # A root that does not exist yet is created later, so its nearest existing ancestor is checked instead.
+        while [[ ! -e "$probe" && ! -L "$probe" ]]; do
+            probe="${probe%/*}"
+            [[ -n "$probe" ]] || probe=/
+        done
+        [[ ! -L "$probe" ]] || pichi_refuse_homes_root 'it is, or lies under, a symbolic link'
+        [[ -d "$probe" ]] || pichi_refuse_homes_root 'it is not a folder'
+        physical="$(cd -P -- "$probe" 2>/dev/null && pwd -P)" || pichi_refuse_homes_root 'it cannot be resolved'
+        [[ "$physical" == "$probe" ]] || pichi_refuse_homes_root "its physical path is $physical"
+        physical_home="$(cd -P -- "$pichi_home_folder" 2>/dev/null && pwd -P)" || physical_home="$pichi_home_folder"
+        if [[ "$probe" == "$pichi_homes_root" ]]; then
+            [[ "$physical" != / ]] || pichi_refuse_homes_root 'it is the root folder'
+            case "$physical_home/" in
+                "$physical"/*) pichi_refuse_homes_root 'it is, or contains, the home folder' ;;
+            esac
+        fi
+    }
+    pichi_check_homes_root
     # Remove one run-owned home, and nothing else: the target must be a single folder directly under the homes
     # root, which was checked above to be an absolute path that is neither / nor the home folder.
     pichi_remove_home() {
