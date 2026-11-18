@@ -57,15 +57,78 @@ L2_ONLY_TESTS = (
     "FluidDictationIntegrationTests/MeetingAudioChunkSinkTests/testTwoHourMicrophoneAndApplicationCaptureKeepEveryFrameAndBoundedManifests",
     "FluidDictationIntegrationTests/MeetingMicrophoneCaptureTests/testNativeMasterTapKeepsNinetyMinuteDriftOnMeasuredHostClockWithoutPeriodicDiscard",
 )
-# These upstream tests download real models into the run's home (FluidAudio "Downloading ASR models to: <home>",
-# 655 MB at the end of the run that found this). A full L1 run with those models in the home failed
-# MeetingRecoveryTests/testDisablingFluidMeetDuringModelPreparationDoesNotStartCapture ("A stale start must not
-# revive FluidMeet"), which passes with an empty home. So they run in a step of their own after the main suite:
-# the main suite starts and stays with an empty home, and L1 still exercises these tests.
+# These tests download real models into the run's home: FluidAudio "Downloading ASR models to: <home>" (Parakeet TDT v2,
+# about 460 MB), the Nemotron3 diarizer (about 190 MB) and Silero VAD. The main run that found this held 655 MB at its
+# end. A full L1 run with those models in the home failed MeetingRecoveryTests/
+# testDisablingFluidMeetDuringModelPreparationDoesNotStartCapture ("A stale start must not revive FluidMeet"), which
+# passes with an empty home; it passes only while the background downloads have not finished. So every test that
+# starts one runs in a step of its own after the main suite: the main suite starts and stays with an empty home and
+# makes no network request for a model, and L1 still exercises these tests. The list was taken from the log of a full
+# run: the tests of MeetingRecoveryTests and MeetingSessionCoordinatorTests that log "Starting model preparation for
+# Parakeet TDT v2" (the real provider, no fake) and the Silero VAD download of CustomDictionaryManualEntryTests. The
+# stale-start test above stays in the main run on purpose, because it needs the empty home.
+# MeetingRecoveryTests/testFluidMeetSettingsSectionsRenderWithoutSideEffects starts no model but is listed too: its
+# settings sheet leaves the summary admission taken (MeetingSummaryActivityCoordinator.beginOptionalProcessing returns
+# nil; withSummary waits for the meeting audio lease). With the 53 tests out of the main run, OllamaChatTransportTests/
+# testPreloadFailureReleasesAdmissionAndDoesNotRetry, testPreloadCancellationJoinsTransportAndReleasesAdmission and
+# testExplicitSummaryCancelsAndJoinsOptionalNativePreloadBeforeModelAdmission failed with "busy"; the main run with this
+# test also moved passes. Found by bisecting that run to one test; which of the moved tests used to release the
+# admission was not identified, so this test now runs in the same step, where the moved tests still follow it.
 REAL_MODEL_TESTS = (
     "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testProfileFreeLongDictationPreservesTextAndWordTimings",
     "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testTrainingTranscribesSpellingsAcrossPronunciationToggle",
     "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testAutomaticSpeechEndWorksWithPronunciationOffAndAcrossToggles",
+    "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testCancelledSpeechMonitorCannotStopReplacementCapture",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testCaptureStartFailurePersistsStartupWriterEvent",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testConcurrentStartAndRecoveryActionsAreBlockedDuringPermissionPreflight",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testDeniedPermissionPreservesPassiveOfferAndReleasesStartReservation",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testDisabledMeetingLocationNeverStartsLookup",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testDisablingMeetingLocationCancelsAndRejectsPendingLookup",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testEchoWarningDoesNotRestartCaptureOrChangeItsSource",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testEnglishRecoveryFixtureReachesMockCaptureWithCompatibleModel",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testFluidMeetCompletedActionErrorRendersWithoutSideEffects",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testFluidMeetSettingsSectionsRenderWithoutSideEffects",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testHealthStatusDetailAndSilenceRecoveryRemainDurableAcrossTracks",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testLocationLookupWaitsForCaptureAndDoesNotDelayRecordingStart",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testMeetingAudioExportHostClockSpansKeepAnInternalPause",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testOnlineCallNeverRequestsMeetingLocation",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testOrdinaryStartPreservesExpiredInterruptedAudioAndPendingAttempt",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testOrdinaryStartReplacesPassiveFailedOfferWithoutResolvingIt",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testPendingStartPreemptsRetentionSweepAndReArmsIt",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testPermissionPreflightCompletesBeforeMeetingLeaseAcquisition",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testRecordAgainFromPassiveOfferRestoresOnCaptureFailure",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testRecordAgainFromPassiveOfferSucceeds",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testRecoveredWriterDuringStartKeepsHistoryWithoutDegradingRecording",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testRenameWhileRecordingKeepsIncomingEventsAndAllowsStopDuringSave",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testRenameWhileRecordingPreservesCaptureAndFinalTitle",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testRenameWhileRecordingRejectsBlankAndRecoversAfterSaveFailure",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testRetryByIDArbiterFailureDoesNotStrandActiveSession",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testRetryByIDRefusedWhileRecordingAndWhileRetryInFlight",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testSilenceWatchdogStaysOffWhileTheMicrophoneIsMuted",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testSourceRecoveryPreservesSilenceWatchdogRecovery",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testStaleStartupHealthDoesNotClearFailureAndLaterHealthCanRecover",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testStartFailureRestoresPassiveOfferUnchanged",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testStartRecordingAwaitsRestoreBeforeCapturing",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testStartupSourceLossAndWriterFailureRequireBothRecoveries",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testStartupWriterFailureWithoutHealthyTrackRemainsDegraded",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testStartupWriterRecoveryDoesNotClearAnotherInterruption",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testStopJoinsLocationLookupAndRejectsItsCancelledResultBeforeNextSession",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testTerminationJoinsLocationLookupAndRejectsItsCancelledResult",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testUnexpectedStopPublishesQuiescenceAfterDelayedAudioHandback",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testVoiceProcessingFallbackDoesNotDegradeHealthyRecording",
+    "FluidDictationIntegrationTests/MeetingRecoveryTests/testWriterFailureDuringStartPreservesEventAndDegradedHealth",
+    "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testConcurrentStartCreatesExactlyOneSessionAndCapture",
+    "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testConcurrentStopJoinsOneFinalizationAndPersistsLegalStateOrder",
+    "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testConcurrentTerminationFinalizesAndReleasesExactlyOnce",
+    "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testFailedStopPreservesRecoverableAudioAndReleasesLease",
+    "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testHarnessPinsEnglishBackendWhenAmbientSelectionIsRussianOnly",
+    "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testLiveTranscriptionFailureLeavesAudioActiveAndRetainedRetryWorks",
+    "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testMockStartReleasedBeforeEntryDoesNotParkTheOwnedTask",
+    "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testPostStartPersistenceFailureKeepsCaptureUntilUserStop",
+    "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testStaleCaptureEventCannotMutateNewGeneration",
+    "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testStopReceiptPreservesDeferredTranscriptionWhenNotificationHasNotArrived",
+    "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testStoppingContinuesWhenPreStopPersistenceFails",
+    "FluidDictationIntegrationTests/MeetingSessionCoordinatorTests/testUnexpectedCaptureStopFinalizesAndReleasesLease",
 )
 HEAVY_STEPS = ("xctest", "xctest-models", "skip-policy", "probes", "ios", "vendor")
 # CI runs the parts of one gate side by side on separate machines; "all" runs every step on this one.

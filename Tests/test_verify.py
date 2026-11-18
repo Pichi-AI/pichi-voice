@@ -319,8 +319,15 @@ class SideBySideTests(unittest.TestCase):
         # xcodebuild ignores a -skip-testing and an -only-testing that match nothing: a renamed test would quietly stop running.
         for test in VERIFY.REAL_MODEL_TESTS:
             bundle, test_class, name = test.split("/")
-            sources = list((ROOT / "Tests" / bundle).rglob(f"{test_class}*.swift"))
-            self.assertTrue(any(f"func {name}(" in source.read_text() for source in sources), test)
+            # A class can live in a file of another name (MeetingSessionCoordinatorTests is in SpeakerTurnMergingTests.swift).
+            sources = [path.read_text() for path in (ROOT / "Tests" / bundle).rglob("*.swift")]
+            self.assertTrue(any(f"class {test_class}" in source and f"func {name}(" in source for source in sources), test)
+
+    def test_the_main_suite_never_starts_a_real_model_download(self):
+        self.assertEqual(len(VERIFY.REAL_MODEL_TESTS), len(set(VERIFY.REAL_MODEL_TESTS)))
+        # The stale-start test needs the empty home that the real-model tests would fill, so it stays in the main run.
+        stale = "FluidDictationIntegrationTests/MeetingRecoveryTests/testDisablingFluidMeetDuringModelPreparationDoesNotStartCapture"
+        self.assertNotIn(stale, VERIFY.REAL_MODEL_TESTS)
 
     def test_the_receipt_records_the_step_limit(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -951,7 +958,7 @@ class RegressionLockTests(unittest.TestCase):
     def run_regression(self, lock, test_exit=0, homes=None):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        root = Path(temporary.name)
+        root = Path(os.path.realpath(temporary.name))  # the homes root must be its own physical path (/var links to /private/var)
         (root / "scripts/dev").mkdir(parents=True)
         shutil.copyfile(ROOT / "scripts/dev/macos.sh", root / "scripts/dev/macos.sh")
         (root / "scripts/dev/assert-worktree.sh").write_text("exit 0\n")
@@ -1000,7 +1007,7 @@ class RegressionLockTests(unittest.TestCase):
 
     def test_the_home_of_a_killed_run_goes_with_its_stale_lock(self):
         with tempfile.TemporaryDirectory() as temporary:
-            lock, homes = Path(temporary) / "regression.lock", Path(temporary) / "homes"
+            lock, homes = Path(temporary) / "regression.lock", Path(os.path.realpath(temporary)) / "homes"
             ended = subprocess.Popen(["true"])
             ended.wait()
             lock.mkdir()
@@ -1016,7 +1023,7 @@ class RegressionLockTests(unittest.TestCase):
 
     def test_a_failing_test_run_still_removes_its_home(self):
         with tempfile.TemporaryDirectory() as temporary:
-            homes = Path(temporary) / "homes"
+            homes = Path(os.path.realpath(temporary)) / "homes"
             result, _ = self.run_regression(Path(temporary) / "regression.lock", test_exit=65, homes=homes)
             self.assertEqual(result.returncode, 65)
             self.assertEqual(list(homes.iterdir()), [])

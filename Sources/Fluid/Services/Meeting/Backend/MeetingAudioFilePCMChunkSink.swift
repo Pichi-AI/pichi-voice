@@ -258,9 +258,11 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
             return url
         }
         let final = try confined(chunk.relativeFilePath)
-        let partial = try confined(asset.relativeFilePath)
+        // A crash can leave a published final file next to stale partial-path metadata. The partial path is
+        // only an input when no final file exists, so a malformed one must not reject a file that verifies.
         let alreadyPublished = FileManager.default.fileExists(atPath: final.path)
-        let input = alreadyPublished ? final : partial
+        let partial: URL? = alreadyPublished ? nil : try confined(asset.relativeFilePath)
+        let input = partial ?? final
         var info = stat()
         guard lstat(input.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
             throw MeetingPCMSinkError.finalizationVerificationFailed("capture is not a regular file")
@@ -278,7 +280,7 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
         guard identity.dev == after.dev, identity.ino == after.ino, identity.size == after.size else {
             throw MeetingPCMSinkError.finalizationVerificationFailed("capture changed during recovery")
         }
-        if !alreadyPublished {
+        if let partial {
             guard renameatx_np(AT_FDCWD, partial.path, AT_FDCWD, final.path, UInt32(RENAME_EXCL)) == 0 else {
                 throw MeetingPCMSinkError.underlyingFileError("capture publication failed")
             }

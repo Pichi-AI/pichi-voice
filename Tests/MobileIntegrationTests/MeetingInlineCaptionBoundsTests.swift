@@ -42,7 +42,11 @@ final class MeetingInlineCaptionBoundsTests: XCTestCase {
                 + "Изменение \(step)."
             host.model.pending = inlinePending(count)
             let native = try await caption(in: host)
-            try await settle(host) {
+            try await settle(host, describe: {
+                "Step \(step): text width \(native.bounds.width) for \(host.model.width), "
+                    + "marker shown \(native.attributedText.string.contains("Изменение \(step).")), "
+                    + "waves \(self.waves(in: native).count) of \(count)."
+            }) {
                 abs(native.bounds.width - host.model.width) < 1
                     && native.attributedText.string.contains("Изменение \(step).")
                     && self.waves(in: native).count == count
@@ -116,9 +120,11 @@ final class MeetingInlineCaptionBoundsTests: XCTestCase {
             $0.accessibilityIdentifier == "meeting.inlineCaption.text"
         })
     }
-    private func settle(_ host: InlineBoundsHost, predicate: () -> Bool) async throws {
-        // Up to 15 seconds: the shared CI runner lays out the simulator window much more slowly than a Mac.
-        for _ in 0..<300 {
+    private func settle(_ host: InlineBoundsHost, describe: () -> String = { "" }, predicate: () -> Bool) async throws {
+        // A deadline only against a hang: a stable layout returns at once. The shared CI runner lays out the
+        // simulator window several times more slowly than a Mac, and one slow VM needed more than 15 seconds.
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
             host.window.layoutIfNeeded()
             if predicate() {
                 try await Task.sleep(for: .milliseconds(100))
@@ -127,7 +133,7 @@ final class MeetingInlineCaptionBoundsTests: XCTestCase {
             }
             try await Task.sleep(for: .milliseconds(50))
         }
-        XCTFail("The owned caption fixture did not settle")
+        XCTFail("The owned caption fixture did not settle within 60 seconds. \(describe())")
         throw InlineBoundsHost.LayoutTimeout()
     }
     private func capture(_ host: InlineBoundsHost, step: String) {
