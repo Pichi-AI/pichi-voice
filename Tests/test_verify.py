@@ -319,8 +319,15 @@ class SideBySideTests(unittest.TestCase):
         # xcodebuild ignores a -skip-testing and an -only-testing that match nothing: a renamed test would quietly stop running.
         for test in VERIFY.REAL_MODEL_TESTS:
             bundle, test_class, name = test.split("/")
-            sources = list((ROOT / "Tests" / bundle).rglob(f"{test_class}*.swift"))
-            self.assertTrue(any(f"func {name}(" in source.read_text() for source in sources), test)
+            # A class can live in a file of another name (MeetingSessionCoordinatorTests is in SpeakerTurnMergingTests.swift).
+            sources = [path.read_text() for path in (ROOT / "Tests" / bundle).rglob("*.swift")]
+            self.assertTrue(any(f"class {test_class}" in source and f"func {name}(" in source for source in sources), test)
+
+    def test_the_main_suite_never_starts_a_real_model_download(self):
+        self.assertEqual(len(VERIFY.REAL_MODEL_TESTS), len(set(VERIFY.REAL_MODEL_TESTS)))
+        # The stale-start test needs the empty home that the real-model tests would fill, so it stays in the main run.
+        stale = "FluidDictationIntegrationTests/MeetingRecoveryTests/testDisablingFluidMeetDuringModelPreparationDoesNotStartCapture"
+        self.assertNotIn(stale, VERIFY.REAL_MODEL_TESTS)
 
     def test_the_receipt_records_the_step_limit(self):
         with tempfile.TemporaryDirectory() as temporary:
