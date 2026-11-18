@@ -722,6 +722,7 @@
 		C41C41000000000000000007 /* PichiTextPrivacy in Frameworks */ = {isa = PBXBuildFile; productRef = C41C41000000000000000005 /* PichiTextPrivacy */; };
 		EAA100000000000000000002 /* PichiTextModelEvalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA100000000000000000001 /* PichiTextModelEvalTests.swift */; };
 		F9D010000000000000000002 /* PichiMeetingSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */; };
+		F9D0100000000000000000A2 /* PichiMeetingCaptureRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9D0100000000000000000A1 /* PichiMeetingCaptureRecoveryTests.swift */; };
 		5A07E361DE084164A9E5A8C8 /* LocalTextModelDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F470DF4CAAD74253BEE0E6AB /* LocalTextModelDiscoveryTests.swift */; };
 		F1E2026102900000000000002 /* FileExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2026102900000000000001 /* FileExportTests.swift */; };
 		AD1130000000000000000004 /* OverlayCaptionPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */; };
@@ -964,6 +965,7 @@
 		C9F63842B3214A6A8A94B012 /* GigaAMEncoderDictionaryLiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaAMEncoderDictionaryLiveTests.swift; sourceTree = "<group>"; };
 		EAA100000000000000000001 /* PichiTextModelEvalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiTextModelEvalTests.swift; sourceTree = "<group>"; };
 		F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiMeetingSummaryTests.swift; sourceTree = "<group>"; };
+		F9D0100000000000000000A1 /* PichiMeetingCaptureRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiMeetingCaptureRecoveryTests.swift; sourceTree = "<group>"; };
 		F470DF4CAAD74253BEE0E6AB /* LocalTextModelDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalTextModelDiscoveryTests.swift; sourceTree = "<group>"; };
 		B12A00000000000000000001 /* PichiBrand.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Configuration/PichiBrand.xcconfig; sourceTree = SOURCE_ROOT; };
 		F1E2026102900000000000001 /* FileExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileExportTests.swift; sourceTree = "<group>"; };
@@ -1345,6 +1347,7 @@
 				C55E25E8BC76432CBDAE083E /* MeetingTimelineMigrationTests.swift */,
 				5AF7F1D652B24F68848E7820 /* MeetingAgentLocalizationTests.swift */,
 				F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */,
+				F9D0100000000000000000A1 /* PichiMeetingCaptureRecoveryTests.swift */,
 				EAA200000000000000000001 /* CloudTextProviderTests.swift */,
 				C71A40000000000000000001 /* OllamaChatTransportTests.swift */,
 				F470DF4CAAD74253BEE0E6AB /* LocalTextModelDiscoveryTests.swift */,
@@ -1821,6 +1824,7 @@
 				24A860554AB74B359B42E774 /* MeetingTimelineMigrationTests.swift in Sources */,
 				6C21B387644E4A79A2D75D6D /* MeetingAgentLocalizationTests.swift in Sources */,
 				F9D010000000000000000002 /* PichiMeetingSummaryTests.swift in Sources */,
+				F9D0100000000000000000A2 /* PichiMeetingCaptureRecoveryTests.swift in Sources */,
 				EAA200000000000000000002 /* CloudTextProviderTests.swift in Sources */,
 				C71A40000000000000000002 /* OllamaChatTransportTests.swift in Sources */,
 				5A07E361DE084164A9E5A8C8 /* LocalTextModelDiscoveryTests.swift in Sources */,

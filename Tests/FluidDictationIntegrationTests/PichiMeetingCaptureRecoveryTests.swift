@@ -22,7 +22,7 @@ final class PichiMeetingCaptureRecoveryTests: XCTestCase {
             let recovered = try MeetingAudioFilePCMChunkSink.recoverClosedCapture(chunk, in: root)
 
             XCTAssertEqual(recovered.relativeFilePath, self.finalPath, malformed)
-            XCTAssertEqual(recovered.frameCount, self.frames, malformed)
+            XCTAssertEqual(recovered.frameCount, Int64(self.frames), malformed)
             XCTAssertEqual(recovered.byteCount, Int64(before.count), malformed)
             XCTAssertEqual(recovered.sha256, SHA256.hash(data: before).map { String(format: "%02x", $0) }.joined(), malformed)
         }
