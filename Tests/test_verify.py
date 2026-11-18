@@ -922,7 +922,7 @@ class MobileScriptTests(unittest.TestCase):
     def run_script(self, *arguments):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        root = Path(temporary.name)
+        root = Path(os.path.realpath(temporary.name))  # the homes root must be its own physical path (/var links to /private/var)
         (root / "scripts/dev").mkdir(parents=True)
         shutil.copyfile(ROOT / "scripts/dev/mobile.sh", root / "scripts/dev/mobile.sh")
         tools = root / "tools"
@@ -1000,7 +1000,7 @@ class RegressionLockTests(unittest.TestCase):
 
     def test_the_home_of_a_killed_run_goes_with_its_stale_lock(self):
         with tempfile.TemporaryDirectory() as temporary:
-            lock, homes = Path(temporary) / "regression.lock", Path(temporary) / "homes"
+            lock, homes = Path(temporary) / "regression.lock", Path(os.path.realpath(temporary)) / "homes"
             ended = subprocess.Popen(["true"])
             ended.wait()
             lock.mkdir()
@@ -1016,7 +1016,7 @@ class RegressionLockTests(unittest.TestCase):
 
     def test_a_failing_test_run_still_removes_its_home(self):
         with tempfile.TemporaryDirectory() as temporary:
-            homes = Path(temporary) / "homes"
+            homes = Path(os.path.realpath(temporary)) / "homes"
             result, _ = self.run_regression(Path(temporary) / "regression.lock", test_exit=65, homes=homes)
             self.assertEqual(result.returncode, 65)
             self.assertEqual(list(homes.iterdir()), [])
