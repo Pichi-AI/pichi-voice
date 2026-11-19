@@ -4,15 +4,15 @@
   {
    "test": "FluidDictationIntegrationTests/MeetingAudioComparisonProbeTests/testFullComparisonCompletesRequestOnlyAfterReportIsSaved()",
    "owner": "#157 codex/zoom-recording-reliability-20261111-b0a4d02b4c",
-   "reason": "Cause found (2026-11-14): since #157 MeetingAudioChunkWriter admits PCM through MeetingPCMIntakeGate (MeetingCapturePCMTransport.swift: one buffer at most 65536 frames, 16 MB and 10 s queued), so the test's single 1_440_000-frame buffer per stage is dropped, droppedSampleCount > 0 and hasUsefulComparison stays false. Real capture delivers buffers of 10-20 ms, so this is not a product regression. Verified: the same 30 s fed as 60 buffers of 24000 frames per stage with 5 ms pacing passes. The test is identical to upstream FluidVoice v1.6.13, and the owner rule allows editing only expected values of upstream tests, while the fix changes the input. Needs an owner decision (issue #166): allow feeding realistic buffer sizes in this upstream test, or move it to a Pichi test file.",
-   "expires": "2026-11-26"
+   "reason": "Cause found (2026-11-14): since #157 MeetingAudioChunkWriter admits PCM through MeetingPCMIntakeGate (MeetingCapturePCMTransport.swift: one buffer at most 65536 frames, 16 MB and 10 s queued), so the test's single 1_440_000-frame buffer per stage is dropped, droppedSampleCount > 0 and hasUsefulComparison stays false. Real capture delivers buffers of 10-20 ms, so this is not a product regression. Verified: the same 30 s fed as 60 buffers of 24000 frames per stage with 5 ms pacing passes. The test is identical to upstream FluidVoice v1.6.13, and the owner rule allows editing only expected values of upstream tests, while the fix changes the input. Needs an owner decision (issue #166): allow feeding realistic buffer sizes in this upstream test, or move it to a Pichi test file. Renewed once on 2026-11-19 until 2026-12-16: the remaining step is that decision, not more engineering, and an expired entry would fail check.sh for every pull request from 2026-11-27.",
+   "expires": "2026-12-16"
   },
   {
    "test": "probe:private_ai_idle_unloader",
    "scope": "ci",
    "owner": "#180",
-   "reason": "On the CI runner a 60 ms pause of this upstream test can outlast its 150 ms countdown, even when it runs alone after XCTest (run 43518105639). Developer Macs keep running it.",
-   "expires": "2026-11-27"
+   "reason": "On the CI runner a 60 ms pause of this upstream test can outlast its 150 ms countdown, even when it runs alone after XCTest (run 43518105639). Developer Macs keep running it. Renewed once on 2026-11-19 until 2026-12-16: fixing the upstream test or reporting it to FluidVoice waits for the owner (#180).",
+   "expires": "2026-12-16"
   },
   {
    "test": "PichiVoiceMobileIntegrationTests/MeetingInlineCaptionBoundsTests/testGrowingTextAndPendingWordsStayInsideNarrowAndWideCells()",
