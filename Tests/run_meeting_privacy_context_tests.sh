@@ -37,7 +37,7 @@ else
     task_link_args=(-I "$task_products" -L "$task_products" -lPichiTextPrivacy \
         -F "$task_frameworks" -framework onnxruntime -lc++ \
         -Xcc "-fmodule-map-file=$task_build_dir/out/Intermediates.noindex/GeneratedModuleMaps/OnnxRuntimeBindings.modulemap" \
-        -Xcc "-I$task_build_dir/checkouts/onnxruntime-swift-package-manager/objectivec/include" \
+        -Xcc "-I$PWD/Vendor/onnxruntime-swift-package-manager/objectivec/include" \
         -Xcc "-I$task_products/include" -Xlinker -rpath -Xlinker "$task_frameworks")
 fi
 # Compile the owning model types unchanged, excluding unrelated validation/

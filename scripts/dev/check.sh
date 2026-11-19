@@ -35,6 +35,11 @@ for pichi_path in AGENTS.md .codex/config.toml .codex/hooks/session-start.py \
         exit 1
     fi
 done
+# Microsoft removed the ONNX Runtime package repository; while the package is vendored, its record is the
+# only provenance. The repository ignores Markdown by default, so the record is added with git add -f.
+if [[ -d Vendor/onnxruntime-swift-package-manager ]]; then
+    git ls-files --error-unmatch Vendor/onnxruntime-swift-package-manager/PICHI_VENDORING.md >/dev/null
+fi
 python3 -S scripts/dev/check-localization.py
 python3 -S scripts/dev/check-transcribe-sdk.py
 python3 -S scripts/dev/update-mobile-project.py --check

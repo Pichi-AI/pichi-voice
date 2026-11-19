@@ -15,7 +15,9 @@ inputs and whole-meeting split leakage fail before native inference.
 Use a dedicated worktree. Supply these already available dependency artifacts in that worktree:
 
 - `.build/SourcePackages/checkouts/FluidAudio` at `eb1e6628998e47022799d305b52c2680d3576801`.
-- `.build/SourcePackages/checkouts/onnxruntime-swift-package-manager` at the application lockfile version.
+- `Vendor/onnxruntime-swift-package-manager`, the vendored package the application builds. Its
+  `PICHI_VENDORING.md` names the upstream revision, which the build manifest records with the
+  hashes of the vendored bridge headers.
 - `.build/meeting-native-eval/dependencies/onnxruntime.framework`, a native macOS framework.
 - `.build/meeting-native-eval/dependencies/OnnxRuntimeBindings.o`, the matching native bridge.
 
