@@ -24,6 +24,11 @@ struct BrandProfileTests {
         let packageData = try Data(contentsOf: URL(fileURLWithPath: "Sources/Fluid/Branding/brand-package.json"))
         let packaged = try BrandPackage.decode(packageData)
         precondition(packaged.profile.appName == "Pichi Voice")
+        precondition(AppBrand.issueReportURL(for: packaged).absoluteString == "https://github.com/Pichi-AI/pichi-voice/issues/new?template=bug_report.yml")
+        var legacyLinks = packaged
+        legacyLinks.links = nil
+        precondition(AppBrand.issueReportURL(for: legacyLinks).absoluteString == legacyLinks.profile.support)
+        self.reject { try BrandLinks(issueReport: "http://example.invalid/issues").validate() }
         precondition(packaged.logos != nil && packaged.theme != nil)
         precondition(packaged.style?.defaultOnboardingLanguageID == "ru")
         let legacyStyle = try JSONDecoder().decode(BrandStyle.self, from: Data("{\"defaultAppearance\":\"system\",\"cornerRadiusScale\":1,\"spacingScale\":1}".utf8))
@@ -60,7 +65,7 @@ struct BrandProfileTests {
         object["formatVersion"] = 99
         self.reject { _ = try BrandPackage.decode(JSONSerialization.data(withJSONObject: object)) }
         object["formatVersion"] = 1
-        for forbidden in ["bundleIdentifier", "updatesEnabled", "analytics", "remoteLogoURL", "feedbackEndpoint", "privacyPolicyURL"] {
+        for forbidden in ["bundleIdentifier", "updatesEnabled", "analytics", "remoteLogoURL", "feedbackEndpoint", "feedbackEmail", "privacyPolicyURL"] {
             var injected = object
             injected[forbidden] = "https://attacker.invalid"
             self.reject { _ = try BrandPackage.decode(JSONSerialization.data(withJSONObject: injected)) }

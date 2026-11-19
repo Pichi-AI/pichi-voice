@@ -6,5 +6,6 @@
   "menuBarAsset": "PichiMenuBarIcon",
   "localizePackagedTagline": true,
   "updatesEnabled": true,
+  "feedbackEmail": "hello@pichi.ai",
   "expectedSigningTeam": "LU46F7HGJM"
 }

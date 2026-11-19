@@ -67,6 +67,7 @@
     }
   },
   "links": {
-    "repository": "https://github.com/Pichi-AI/pichi-voice"
+    "repository": "https://github.com/Pichi-AI/pichi-voice",
+    "issueReport": "https://github.com/Pichi-AI/pichi-voice/issues/new?template=bug_report.yml"
   }
 }

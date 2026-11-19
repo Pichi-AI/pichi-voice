@@ -30,6 +30,16 @@ enum TranscriptionFeedbackReporter {
 
     private static let endpoint: URL? = nil
 
+    /// A distribution with no example collector opens its blank issue form.
+    /// The public route receives no history entry or prefilled text.
+    static func presentReport(openExample: () -> Void, openIssuePage: (URL) -> Void) {
+        if self.endpoint != nil {
+            openExample()
+        } else {
+            openIssuePage(AppBrand.issueReportURL)
+        }
+    }
+
     static func submit(_ payload: Payload) async throws {
         guard let url = self.endpoint else {
             throw ReporterError.notConfigured

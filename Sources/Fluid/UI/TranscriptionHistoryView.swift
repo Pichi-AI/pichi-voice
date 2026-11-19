@@ -769,7 +769,11 @@ struct TranscriptionHistoryView: View {
     }
 
     private func openFeedbackReport(for entry: TranscriptionHistoryEntry) {
-        self.projection.openReport(entry)
+        guard self.projection.isVisible else { return }
+        TranscriptionFeedbackReporter.presentReport(
+            openExample: { self.projection.openReport(entry) },
+            openIssuePage: { NSWorkspace.shared.open($0) }
+        )
     }
 
     private func combinedText(for entry: TranscriptionHistoryEntry) -> String {

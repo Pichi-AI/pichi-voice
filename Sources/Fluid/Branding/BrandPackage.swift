@@ -58,9 +58,11 @@ nonisolated struct BrandPackage: Codable, Equatable, Sendable {
 
 nonisolated struct BrandLinks: Codable, Equatable, Sendable {
     var repository: String?
+    var issueReport: String?
 
     func validate() throws {
         if let repository { try BrandProfile.validateHTTPS(repository) }
+        if let issueReport { try BrandProfile.validateHTTPS(issueReport) }
     }
 }
 

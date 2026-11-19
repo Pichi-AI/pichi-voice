@@ -1636,8 +1636,7 @@ struct SettingsView: View {
     }
 
     private func openIssueReportingPage() {
-        guard let url = URL(string: AppBrand.supportURL.absoluteString) else { return }
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(AppBrand.issueReportURL)
     }
 
     private func exportBackup() {

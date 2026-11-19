@@ -15338,6 +15338,23 @@
         }
       }
     },
+    "Couldn’t open your mail app. Your draft is still here.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t open your mail app. Your draft is still here."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось открыть почтовое приложение. Ваш черновик сохранён в этой форме."
+          }
+        }
+      }
+    },
     "Couldn’t save this example. It may have expired or the word changed.": {
       "extractionState": "manual",
       "localizations": {
@@ -36818,6 +36835,23 @@
         }
       }
     },
+    "Open email draft": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open email draft"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть черновик письма"
+          }
+        }
+      }
+    },
     "Open support": {
       "extractionState": "manual",
       "localizations": {
@@ -43925,6 +43959,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Показать в Finder"
+          }
+        }
+      }
+    },
+    "Review and send the draft to %@ in your mail app.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review and send the draft to %@ in your mail app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте черновик и отправьте его на %@ в почтовом приложении."
           }
         }
       }

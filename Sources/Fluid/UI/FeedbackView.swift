@@ -14,6 +14,7 @@ struct FeedbackView: View {
     @FocusState private var messageFocused: Bool
 
     private static let starURL: URL? = AppBrand.repositoryURL
+    private let delivery = FeedbackDelivery(distribution: AppBrand.distribution)
     private static let sponsorURL: URL? = nil
 
     private var draft: FeedbackSubmission {
@@ -42,7 +43,7 @@ struct FeedbackView: View {
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }
 
-                if AppBrand.feedbackEndpoint == nil {
+                if self.delivery == .support {
                     ThemedCard {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("Share feedback through the support page for this brand.")
@@ -54,6 +55,9 @@ struct FeedbackView: View {
                 } else {
                     self.categories
                     self.form
+                    if case .email = self.delivery {
+                        Link("Report an issue", destination: AppBrand.issueReportURL)
+                    }
                 }
 
                 self.footer
@@ -104,7 +108,7 @@ struct FeedbackView: View {
                 self.messageField
 
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-                    self.emailRow
+                    if case .endpoint = self.delivery { self.emailRow }
                     self.detailsRow
                 }
             }
@@ -163,21 +167,16 @@ struct FeedbackView: View {
 
     private var emailRow: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-            HStack(spacing: self.theme.metrics.spacing.sm) {
-                Text("Email")
-                    .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.theme.palette.primaryText)
-                Text("optional")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.tertiaryText)
-            }
+            Text("Email")
+                .font(self.theme.typography.bodyStrong)
+                .foregroundStyle(self.theme.palette.primaryText)
             TextField("", text: self.$email, prompt: Text("you@example.com").foregroundColor(self.theme.palette.tertiaryText))
                 .textFieldStyle(.plain)
                 .font(self.theme.typography.body)
                 .padding(.horizontal, self.theme.metrics.spacing.md)
                 .frame(height: 38)
                 .background(self.fieldSurface(focused: false))
-                .accessibilityLabel(PichiLocalization.text("Your email, optional"))
+                .accessibilityLabel(PichiLocalization.text("Email"))
             if self.emailLooksWrong {
                 Text("That doesn’t look like an email address.")
                     .font(self.theme.typography.caption)
@@ -223,28 +222,37 @@ struct FeedbackView: View {
         }
     }
 
-    @ViewBuilder private var deliveryNote: some View {
-        if let error {
-            Label(error, systemImage: "exclamationmark.circle")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.warning)
-                .fixedSize(horizontal: false, vertical: true)
-        } else {
-            Text(self.sending ? PichiLocalization.text("Sending…") : AppBrand.text("Goes straight to the FluidVoice team."))
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.tertiaryText)
+    private var deliveryNote: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+            if let error {
+                Label(error, systemImage: "exclamationmark.circle")
+                    .foregroundStyle(self.theme.palette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if case let .email(recipient) = self.delivery {
+                Text(PichiLocalization.format("Review and send the draft to %@ in your mail app.", recipient))
+                    .textSelection(.enabled)
+            } else if self.error == nil {
+                Text(self.sending ? PichiLocalization.text("Sending…") : AppBrand.text("Goes straight to the FluidVoice team."))
+            }
         }
+        .font(self.theme.typography.caption)
+        .foregroundStyle(self.theme.palette.tertiaryText)
     }
 
     private var sendButton: some View {
         Button { Task { await self.submit() } } label: {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 if self.sending { ProgressView().controlSize(.small) }
-                Text(PichiLocalization.text(self.error == nil ? "Send feedback" : "Try again"))
+                if case .email = self.delivery {
+                    Text("Open email draft")
+                } else {
+                    Text(PichiLocalization.text(self.error == nil ? "Send feedback" : "Try again"))
+                }
             }
         }
         .fluidGlassAction(prominent: true)
-        .disabled(!self.draft.isValid || self.sending)
+        .disabled(!self.delivery.accepts(self.draft) || self.sending)
         .keyboardShortcut(.return, modifiers: .command)
     }
 
@@ -312,13 +320,22 @@ struct FeedbackView: View {
     // MARK: - Submit
 
     @MainActor private func submit() async {
-        guard !self.sending, self.draft.isValid else { return }
+        guard !self.sending, self.delivery.accepts(self.draft) else { return }
         let submission = self.draft
         self.sending = true
         self.error = nil
         defer { self.sending = false }
         do {
-            try await FeedbackClient().send(submission)
+            let result = try await self.delivery.submit(submission) { recipient, subject, body in
+                guard let mail = NSSharingService(named: .composeEmail), mail.canPerform(withItems: [body]) else {
+                    return false
+                }
+                mail.recipients = [recipient]
+                mail.subject = subject
+                mail.perform(withItems: [body])
+                return true
+            }
+            guard result == .received else { return }
             self.sent = true
             self.message = ""
             self.email = ""
