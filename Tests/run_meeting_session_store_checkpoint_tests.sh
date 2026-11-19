@@ -97,6 +97,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \
     Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
     Sources/Fluid/Services/Meeting/MeetingAudioChunkLedger.swift Sources/Fluid/Services/Meeting/MeetingPCMSourceTimeline.swift \
+    Sources/Fluid/Services/Meeting/Backend/MeetingVoiceMask.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingAudioChunkSink.swift Sources/Fluid/Services/Meeting/Backend/MeetingAudioFilePCMChunkSink.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift \
     Sources/Fluid/Services/Meeting/MeetingAutomaticNaming.swift \
