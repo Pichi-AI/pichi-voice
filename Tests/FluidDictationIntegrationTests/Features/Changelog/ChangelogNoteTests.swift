@@ -37,6 +37,8 @@ final class ChangelogNoteTests: XCTestCase {
             "", "Русский", "Что нового", "Новое и <code>",
         ])
         XCTAssertEqual(blocks[0].text.runs.compactMap(\.link).map(\.relativeString), ["#release-en", "#release-ru"])
+        XCTAssertTrue(blocks[0].isSectionNavigation)
+        XCTAssertFalse(blocks[3].isSectionNavigation)
         XCTAssertEqual(blocks[3].text.runs.compactMap(\.link).first?.absoluteString, "https://example.org/download")
         XCTAssertEqual(blocks.compactMap(\.anchor), ["release-en", "release-ru"])
         XCTAssertEqual(blocks[1].anchor, "release-en")

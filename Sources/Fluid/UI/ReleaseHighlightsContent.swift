@@ -32,7 +32,7 @@ struct ReleaseHighlightsContent {
         }
         return Self(
             release: version,
-            title: "Faster dictation and better Russian language support",
+            title: "Dictation and Russian interface updates",
             subtitle: "GigaAM finishes dictation sooner, and more of the Mac interface is available in Russian.",
             features: [
                 Feature(

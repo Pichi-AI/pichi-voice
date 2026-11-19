@@ -13,6 +13,15 @@ nonisolated struct ChangelogNote: Equatable {
     let text: AttributedString
     let anchor: String?
 
+    // GitHub releases can begin with a row of links to sections in the same body.
+    var isSectionNavigation: Bool {
+        guard self.kind == .paragraph, self.text.runs.contains(where: { $0.link != nil }) else { return false }
+        return self.text.runs.allSatisfy { run in
+            if let link = run.link { return link.relativeString.hasPrefix("#") }
+            return self.text[run.range].characters.allSatisfy { $0.isWhitespace || $0.isPunctuation || $0 == "·" }
+        }
+    }
+
     static func make(from notes: String, releaseTitle: String, version: String) -> [Self] {
         let markdown = (try? AttributedString(markdown: notes)) ?? AttributedString(notes)
         var blocks: [Self] = []

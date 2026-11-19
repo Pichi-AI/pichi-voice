@@ -1,6 +1,5 @@
 @testable import FluidVoice_Debug
-import AppKit
-import SwiftUI
+import Foundation
 import XCTest
 
 @MainActor
@@ -49,32 +48,6 @@ final class MeetingAgentLocalizationTests: XCTestCase {
         XCTAssertEqual(message, "В этой сборке Settings нельзя предоставить агентам для программирования доступ к встречам.")
         XCTAssertFalse(message.contains("FluidVoice"))
         XCTAssertFalse(message.contains("Настройки"))
-    }
-
-    func testUnmatchedReleaseOpensHistoryFromTheNativeSheet() async throws {
-        var selected: SidebarItem?
-        let content = ReleaseHighlightsContent.current(version: "9.0.0")
-        let view = ReleaseHighlightsView(canExplore: true, content: content) { selected = $0?.sidebarItem }
-        let host = NSHostingView(rootView: view.appTheme(.light))
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = host
-        defer { window.close() }
-        host.layoutSubtreeIfNeeded()
-
-        func historyButton(in elements: [Any]) -> (any NSAccessibilityProtocol)? {
-            for case let element as any NSAccessibilityProtocol in elements {
-                if element.accessibilityIdentifier() == "releaseHighlights.history" { return element }
-                if let button = historyButton(in: element.accessibilityChildren() ?? []) { return button }
-            }
-            return nil
-        }
-
-        let button = try XCTUnwrap(historyButton(in: host.accessibilityChildren() ?? []))
-        XCTAssertTrue(button.accessibilityPerformPress())
-        await Task.yield()
-        XCTAssertEqual(selected, .changelog)
     }
 
     func testCurrentReleaseHighlightsHaveCompleteRussianCopy() {

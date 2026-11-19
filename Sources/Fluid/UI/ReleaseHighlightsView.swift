@@ -18,6 +18,7 @@ struct ReleaseHighlightsView: View {
                         .font(.fluidSystem(size: 30, weight: .semibold, role: .title))
                         .foregroundStyle(self.theme.palette.primaryText)
                         .accessibilityAddTraits(.isHeader)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(PichiLocalization.text(self.content.subtitle))
                         .font(self.theme.typography.body)
                         .foregroundStyle(self.theme.palette.secondaryText)

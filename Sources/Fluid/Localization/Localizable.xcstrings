@@ -22197,19 +22197,19 @@
         }
       }
     },
-    "Faster dictation and better Russian language support": {
+    "Dictation and Russian interface updates": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Faster dictation and better Russian language support"
+            "value": "Dictation and Russian interface updates"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Диктовка быстрее, больше интерфейса на русском"
+            "value": "Диктовка и русский интерфейс"
           }
         }
       }

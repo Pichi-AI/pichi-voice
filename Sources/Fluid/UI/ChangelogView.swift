@@ -293,10 +293,26 @@ private struct ChangelogNoteBlock: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         case .paragraph:
-            Text(self.block.text)
+            if self.block.isSectionNavigation {
+                HStack(spacing: 0) {
+                    ForEach(Array(self.block.text.runs.enumerated()), id: \.offset) { _, run in
+                        let label = String(self.block.text[run.range].characters)
+                        if let url = run.link {
+                            Link(destination: url) { Text(verbatim: label) }
+                        } else {
+                            Text(verbatim: label)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                }
                 .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(self.block.text)
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         case .divider:
             Divider().accessibilityHidden(true)
         }
