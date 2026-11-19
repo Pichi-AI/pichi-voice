@@ -517,7 +517,7 @@ private struct MobilePrivacySettings: View {
             } footer: {
                 if settings.meetingSaveAudio {
                     MobileSettingsFooter(PichiLocalization.text("Applies to past recordings too. Transcripts are always kept."),
-                        MobileAudioPrivacyControls.retainedAudioExplanation)
+                        MobileAudioPrivacyControls.retainedAudioExplanation(maskSavedVoices: settings.meetingMaskSavedVoices))
                 } else {
                     MobileSettingsFooter(MobileAudioPrivacyControls.memoryOnlyExplanation)
                 }

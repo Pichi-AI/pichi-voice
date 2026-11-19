@@ -18,6 +18,23 @@
         }
       }
     },
+    "All voices are changed before new audio is saved. Names and other details can still be heard.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All voices are changed before new audio is saved. Names and other details can still be heard."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В новых записях голоса всех собеседников меняются до сохранения звука. Имена и другие сведения по-прежнему слышны."
+          }
+        }
+      }
+    },
     "Audio recording continues. Live transcription will be retried later.": {
       "extractionState": "manual",
       "localizations": {
@@ -9921,6 +9938,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Изменить слово и удалить эти записи?"
+          }
+        }
+      }
+    },
+    "Change voices": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Change voices"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменять голоса"
           }
         }
       }
@@ -59140,6 +59174,23 @@
         }
       }
     },
+    "Voices in this recording were changed. Shared audio may still contain sensitive information and is outside app retention controls.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voices in this recording were changed. Shared audio may still contain sensitive information and is outside app retention controls."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Голоса в этой записи изменены. В отправленной копии могут быть слышны личные сведения. Срок хранения в приложении на неё не распространяется."
+          }
+        }
+      }
+    },
     "Volume": {
       "extractionState": "manual",
       "localizations": {
@@ -60007,19 +60058,19 @@
         }
       }
     },
-    "When disabled, audio is never written to files, including temporary files. Only the transcript is saved.": {
+    "With audio saving off, only the transcript is saved. No audio files are created, even temporarily.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "When disabled, audio is never written to files, including temporary files. Only the transcript is saved."
+            "value": "With audio saving off, only the transcript is saved. No audio files are created, even temporarily."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Если выключено, аудио не записывается в файлы, даже временные. Сохраняется только расшифровка."
+            "value": "Если сохранение звука выключено, сохраняется только расшифровка. Даже временные аудиофайлы не создаются."
           }
         }
       }

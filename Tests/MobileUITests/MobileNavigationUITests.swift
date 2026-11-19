@@ -812,6 +812,37 @@ final class MobileNavigationUITests: XCTestCase {
         #endif
     }
 
+    func testVoiceMaskPreferenceIsIndependentOfAudioStorage() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Use an owned simulator to exercise both capture preferences")
+        #else
+        openNavigation("settings", title: "Settings", captureStep: false)
+        app.buttons["settings.privacy"].tap()
+        let saveID = "privacy.saveAudio", maskID = "privacy.maskSavedVoices"
+        let save = app.switches[saveID], mask = app.switches[maskID]
+        XCTAssertTrue(mask.waitForExistence(timeout: 8))
+        let initialSave = try XCTUnwrap(save.value as? String)
+        let initialMask = try XCTUnwrap(mask.value as? String)
+        defer {
+            if mask.value as? String != initialMask { try? tapNativeSwitch(maskID) }
+            if save.value as? String != initialSave { try? tapNativeSwitch(saveID) }
+        }
+        if initialSave == "1" { try tapNativeSwitch(saveID) }
+        XCTAssertTrue(mask.isEnabled && mask.isHittable)
+        try tapNativeSwitch(maskID)
+        let changedMask = initialMask == "1" ? "0" : "1"
+        XCTAssertEqual(mask.value as? String, changedMask)
+        XCTAssertEqual(save.value as? String, "0")
+        capture("voice-mask-storage-off")
+        try tapNativeSwitch(saveID)
+        XCTAssertEqual(mask.value as? String, changedMask)
+        if changedMask == "0" { try tapNativeSwitch(maskID) }
+        XCTAssertEqual(save.value as? String, "1")
+        XCTAssertEqual(mask.value as? String, "1")
+        capture("voice-mask-storage-on")
+        #endif
+    }
+
     func testMVPSettingsAndOrientation() throws {
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
         XCTAssertGreaterThanOrEqual(app.buttons["meeting.start"].frame.height, 44)
