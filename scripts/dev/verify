@@ -67,14 +67,11 @@ L2_ONLY_TESTS = (
 # run: the tests of MeetingRecoveryTests and MeetingSessionCoordinatorTests that log "Starting model preparation for
 # Parakeet TDT v2" (the real provider, no fake) and the Silero VAD download of CustomDictionaryManualEntryTests. The
 # stale-start test above stays in the main run on purpose, because it needs the empty home.
-# MeetingRecoveryTests/testFluidMeetSettingsSectionsRenderWithoutSideEffects starts no model provider but is listed
-# too (issue 191): its settings sheet calls MeetingDiarizationModelStore.prepareInBackground, which in the empty home
-# starts the real download of the Nemotron3 diarizer. That download outlives the test and holds the ordinary model
-# admission until it ends, so in the main run the exclusive attempts of OllamaChatTransportTests/
-# testPreloadFailureReleasesAdmissionAndDoesNotRetry, testPreloadCancellationJoinsTransportAndReleasesAdmission and
-# testExplicitSummaryCancelsAndJoinsOptionalNativePreloadBeforeModelAdmission failed with "busy". This step needs the
-# model anyway. A hosted-test guard in prepareInBackground would let the test return to the main run, but
-# MeetingDiarizationModelStore is an upstream file, so that choice is left to issue 191.
+# MeetingRecoveryTests/testFluidMeetSettingsSectionsRenderWithoutSideEffects starts no model and stays in the main run.
+# Its settings sheet asks MeetingDiarizationModelStore to prepare in the background; before the hosted-test guard in
+# prepareInBackground that started the real Nemotron download and held the ordinary model admission, so the exclusive
+# attempts of OllamaChatTransportTests failed with "busy" (issue 191). HostedSpeakerModelPreparationTests keeps the guard,
+# an owner-approved exception to the upstream-file rule recorded in docs/development/upstream.md.
 REAL_MODEL_TESTS = (
     "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testProfileFreeLongDictationPreservesTextAndWordTimings",
     "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testTrainingTranscribesSpellingsAcrossPronunciationToggle",
@@ -88,7 +85,6 @@ REAL_MODEL_TESTS = (
     "FluidDictationIntegrationTests/MeetingRecoveryTests/testEchoWarningDoesNotRestartCaptureOrChangeItsSource",
     "FluidDictationIntegrationTests/MeetingRecoveryTests/testEnglishRecoveryFixtureReachesMockCaptureWithCompatibleModel",
     "FluidDictationIntegrationTests/MeetingRecoveryTests/testFluidMeetCompletedActionErrorRendersWithoutSideEffects",
-    "FluidDictationIntegrationTests/MeetingRecoveryTests/testFluidMeetSettingsSectionsRenderWithoutSideEffects",
     "FluidDictationIntegrationTests/MeetingRecoveryTests/testHealthStatusDetailAndSilenceRecoveryRemainDurableAcrossTracks",
     "FluidDictationIntegrationTests/MeetingRecoveryTests/testLocationLookupWaitsForCaptureAndDoesNotDelayRecordingStart",
     "FluidDictationIntegrationTests/MeetingRecoveryTests/testMeetingAudioExportHostClockSpansKeepAnInternalPause",

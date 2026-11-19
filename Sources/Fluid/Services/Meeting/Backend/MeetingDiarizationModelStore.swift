@@ -104,6 +104,14 @@ final class MeetingDiarizationModelStore: ObservableObject {
 
     /// Starts a check, and a download when needed, without waiting for it.
     func prepareInBackground() {
+        #if DEBUG
+        // A view that appears in a hosted unit test (the settings sheet, the meetings view) would start the
+        // real download of the pinned model into the test home, and the task outlives the test: it holds the
+        // ordinary model admission until the download ends, so the next test that needs an exclusive attempt
+        // fails with "busy". Hosted tests own their model operations and call prepare/ensureInstalled
+        // themselves. A UI-test application runs in another process, where XCTestCase is not loaded.
+        if NSClassFromString("XCTestCase") != nil { return }
+        #endif
         Task { _ = try? await self.ensureInstalled() }
     }
 
