@@ -9,7 +9,8 @@ let package = Package(
         .library(name: "PichiTextPrivacy", targets: ["PichiTextPrivacy"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", exact: "1.24.2"),
+        // Microsoft removed this repository; the exact revision is vendored (Vendor/onnxruntime-swift-package-manager/PICHI_VENDORING.md).
+        .package(path: "../onnxruntime-swift-package-manager"),
         .package(path: "../TranscribeCpp"),
     ],
     targets: [

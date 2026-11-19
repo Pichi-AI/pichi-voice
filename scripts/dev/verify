@@ -454,14 +454,37 @@ def vendor_packages():
     return sorted(path.parent.name for path in (ROOT / "Vendor").glob("*/Tests"))
 
 
+def vendor_dependents(vendor=None):
+    """Each vendored package mapped to the vendored packages whose manifests use it as a path dependency."""
+    dependents = {}
+    for manifest in (vendor or ROOT / "Vendor").glob("*/Package.swift"):
+        text = re.sub(r"//[^\n]*", "", manifest.read_text())
+        for name in re.findall(r'\.package\(\s*(?:name:\s*"[^"]*",\s*)?path:\s*"\.\./([^"/]+)/?"', text):
+            dependents.setdefault(name, set()).add(manifest.parent.name)
+    return dependents
+
+
+def affected_vendor_packages(changed, dependents):
+    """The changed vendored packages and every vendored package that uses one of them, directly or through
+    another. A package without suites of its own, such as the vendored ONNX Runtime, is tested by its users."""
+    affected, pending = set(changed), list(changed)
+    while pending:
+        for user in dependents.get(pending.pop(), ()):
+            if user not in affected:
+                affected.add(user)
+                pending.append(user)
+    return affected
+
+
 def run_vendor(receipt, layer, paths):
-    changed = {path.split("/")[1] for path in paths if path.startswith("Vendor/")}
+    changed = affected_vendor_packages({path.split("/")[1] for path in paths if path.startswith("Vendor/")},
+                                       vendor_dependents())
     for package in vendor_packages():
         if layer == "L2" or package in changed:
             receipt.step(f"vendor-{package}", ["swift", "test", "--package-path", f"Vendor/{package}",
                                                "--scratch-path", f".build/vendor/{package}"])
         else:
-            receipt.skip(f"vendor-{package}", "this package did not change")
+            receipt.skip(f"vendor-{package}", "neither this package nor a vendored package it uses changed")
 
 
 def on_ci():
