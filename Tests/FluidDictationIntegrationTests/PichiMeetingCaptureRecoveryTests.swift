@@ -90,6 +90,7 @@ final class PichiMeetingCaptureRecoveryTests: XCTestCase {
             timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)
         )
         var chunk = self.chunk(partialPath: self.partialPath)
+        chunk.sequence = 0
         chunk.captureAnalysisAsset?.presence = .partial
         let track = MeetingAudioTrack(
             id: UUID(), kind: .microphone, sourceIdentifier: "m", sourceDisplayName: "M", format: nil,
