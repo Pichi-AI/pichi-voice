@@ -35,7 +35,7 @@ PostHog project ingestion tokens are public client credentials for sending event
 
 ## Payload and consent
 
-- Basic collection remains the existing anonymous daily active-use signal, buffered locally and uploaded weekly. Beta builds retain aggregate timing distributions. The privacy view discloses both.
+- Basic collection remains the existing anonymous daily active-use signal, buffered locally and uploaded weekly. The upstream beta policy also sends aggregate timing distributions if the installed bundle version contains the beta marker. The privacy view discloses both.
 - Detailed collection defaults to off when the legacy `ShareAnonymousAnalytics` preference is absent. Existing explicit saved `true` or `false` choices keep their meaning, including settings backup restores. Enabling detailed collection uses the existing settings consent flow. Disabling it advances the consent generation, cancels uploads and securely removes queued detailed events and aggregates. Basic daily activity and beta aggregates follow the existing policy.
 - Requests use an ephemeral session without shared cookies, credentials or cache. Redirects are refused.
 - [Anonymous events](https://posthog.com/docs/data/anonymous-vs-identified-events) carry a random ID scoped to the local app profile and `$process_person_profile: false`. There are no person updates. Geographic enrichment is disabled and no IP address is added to the payload; the destination necessarily sees the network connection's source address.
@@ -60,7 +60,7 @@ arrive later.
 | `model_download_started`, `model_download_finished` | Model setup completion, cancellations and failures | `download_id`, approved model, source, outcome and duration |
 | `insertion_latency_daily_summary`, `dictation_performance_daily_summary` | Insertion latency and beta recognition or enhancement performance | Local measurement date, app version and applicable delivery or model dimensions |
 
-`meeting_count` keeps its historical meaning of file transcription attempts.
+`meeting_count` keeps its historical meaning of file transcription attempts after provider and format checks.
 `live_meeting_count` counts accepted live recording starts, including a
 successful Record Again. It is a daily aggregate that becomes eligible for
 upload when the local date changes. Rejected starts and duplicate start

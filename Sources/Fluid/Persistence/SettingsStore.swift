@@ -4561,6 +4561,8 @@ final class SettingsStore: ObservableObject {
         case .command:
             providerID = self.commandModeLinkedToGlobal ? self.selectedProviderID : self.commandModeSelectedProviderID
             selectedModel = self.commandModeLinkedToGlobal ? self.modelSelection(for: providerID) : self.commandModeSelectedModel
+        case .liveMeeting:
+            return nil
         case .dictation, .meeting:
             providerID = self.selectedProviderID
             selectedModel = self.modelSelection(for: providerID)
