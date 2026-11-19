@@ -213,6 +213,13 @@
    "owner": "#180",
    "reason": "On the CI runner a 60 ms pause of this upstream test can outlast its 150 ms countdown, even when it runs alone after XCTest (run 43518105639). Developer Macs keep running it.",
    "expires": "2026-11-27"
+  },
+  {
+   "test": "PichiVoiceMobileIntegrationTests/MeetingInlineCaptionBoundsTests/testGrowingTextAndPendingWordsStayInsideNarrowAndWideCells()",
+   "owner": "#189",
+   "reason": "Sometimes fails on the CI runner: the wide-large-type step settles at text width 404 for a 426 cell and stays there for 60 seconds (marker shown, 64 of 64 waves), while the same code passes in other runs and on developer Macs. Developer Macs keep running it.",
+   "expires": "2026-12-16",
+   "scope": "ci"
   }
  ]
 }
