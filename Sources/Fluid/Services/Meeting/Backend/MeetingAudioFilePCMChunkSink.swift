@@ -275,11 +275,17 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
         let alreadyPublished = FileManager.default.fileExists(atPath: final.path)
         let partial: URL? = alreadyPublished ? nil : try confined(asset.relativeFilePath)
         let input = partial ?? final
-        // A missing capture can still appear: a finalizer may be publishing it right now. Something that is not
-        // a regular file, or a capture in another format than its recorded extent, can never become this chunk.
+        // Publication renames the partial atomically, so a partial that vanished is either published by now or
+        // gone for good; only a published one, or a file that cannot be inspected right now, may still recover.
+        // Something that is not a regular file, or a capture in another format than its recorded extent, can
+        // never become this chunk either.
         var info = stat()
         guard lstat(input.path, &info) == 0 else {
-            throw MeetingPCMSinkError.finalizationVerificationFailed("capture is missing")
+            let reason = errno
+            if reason != ENOENT || (partial != nil && FileManager.default.fileExists(atPath: final.path)) {
+                throw MeetingPCMSinkError.finalizationVerificationFailed("capture is not available yet")
+            }
+            throw MeetingPCMSinkError.invalidRecoveryMetadata("capture is missing")
         }
         guard (info.st_mode & S_IFMT) == S_IFREG else {
             throw MeetingPCMSinkError.invalidRecoveryMetadata("capture is not a regular file")

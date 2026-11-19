@@ -56,25 +56,28 @@ final class PichiMeetingCaptureRecoveryTests: XCTestCase {
     }
 
     func testACaptureInAnotherFormatThanItsExtentIsAPermanentRejection() throws {
-        let root = try self.makeDirectory(); defer { try? FileManager.default.removeItem(at: root) }
-        let other = "tracks/microphone/other.caf"
-        try self.publishFinalCapture(in: root, path: other, sampleRate: 16_000)
-        let partial = root.appendingPathComponent(self.partialPath)
-        try FileManager.default.moveItem(at: root.appendingPathComponent(other), to: partial)
-        let before = try Data(contentsOf: partial)
+        // The extent records 48 kHz mono: a different rate and a different channel count are both foreign.
+        for (sampleRate, channels) in [(16_000.0, AVAudioChannelCount(1)), (48_000.0, AVAudioChannelCount(2))] {
+            let root = try self.makeDirectory(); defer { try? FileManager.default.removeItem(at: root) }
+            let other = "tracks/microphone/other.caf"
+            try self.publishFinalCapture(in: root, path: other, sampleRate: sampleRate, channels: channels)
+            let partial = root.appendingPathComponent(self.partialPath)
+            try FileManager.default.moveItem(at: root.appendingPathComponent(other), to: partial)
+            let before = try Data(contentsOf: partial)
 
-        XCTAssertThrowsError(try MeetingAudioFilePCMChunkSink.recoverClosedCapture(self.chunk(partialPath: self.partialPath), in: root)) { error in
-            XCTAssertEqual((error as? MeetingPCMSinkError)?.isPermanentRecoveryRejection, true, "\(error)")
+            XCTAssertThrowsError(try MeetingAudioFilePCMChunkSink.recoverClosedCapture(self.chunk(partialPath: self.partialPath), in: root)) { error in
+                XCTAssertEqual((error as? MeetingPCMSinkError)?.isPermanentRecoveryRejection, true, "\(sampleRate) Hz x \(channels): \(error)")
+            }
+            XCTAssertEqual(try Data(contentsOf: partial), before, "Recovery keeps what it rejects")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(self.finalPath).path))
         }
-        XCTAssertEqual(try Data(contentsOf: partial), before, "Recovery keeps what it rejects")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(self.finalPath).path))
     }
 
-    func testAMissingCaptureStaysATransientFailure() throws {
+    func testACaptureWhosePartialAndFinalFilesAreBothGoneIsAPermanentRejection() throws {
         let root = try self.makeDirectory(); defer { try? FileManager.default.removeItem(at: root) }
-        // A finalizer may be publishing the capture at this moment, so a missing file proves nothing yet.
+        // Publication renames the partial atomically, so with neither file present nothing can bring it back.
         XCTAssertThrowsError(try MeetingAudioFilePCMChunkSink.recoverClosedCapture(self.chunk(partialPath: self.partialPath), in: root)) { error in
-            XCTAssertEqual((error as? MeetingPCMSinkError)?.isPermanentRecoveryRejection, false, "\(error)")
+            XCTAssertEqual((error as? MeetingPCMSinkError)?.isPermanentRecoveryRejection, true, "\(error)")
         }
     }
 
@@ -130,8 +133,13 @@ final class PichiMeetingCaptureRecoveryTests: XCTestCase {
         )
     }
 
-    private func publishFinalCapture(in root: URL, path: String? = nil, sampleRate: Double = 48_000) throws {
-        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: true))
+    private func publishFinalCapture(
+        in root: URL,
+        path: String? = nil,
+        sampleRate: Double = 48_000,
+        channels: AVAudioChannelCount = 1
+    ) throws {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: channels, interleaved: true))
         let sink = MeetingAudioFilePCMChunkSink(sessionDirectory: root)
         try sink.begin(relativeFilePath: path ?? self.finalPath, format: format)
         _ = try sink.append(self.sampleBuffer(format: format))
@@ -139,7 +147,7 @@ final class PichiMeetingCaptureRecoveryTests: XCTestCase {
     }
 
     private func sampleBuffer(format: AVAudioFormat) throws -> CMSampleBuffer {
-        let bytes = (0..<self.frames).map { Float($0 % 100) / 100 }.withUnsafeBytes { Data($0) }
+        let bytes = (0..<self.frames * Int(format.channelCount)).map { Float($0 % 100) / 100 }.withUnsafeBytes { Data($0) }
         var block: CMBlockBuffer?
         XCTAssertEqual(CMBlockBufferCreateWithMemoryBlock(
             allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: bytes.count, blockAllocator: kCFAllocatorDefault,
