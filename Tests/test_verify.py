@@ -352,6 +352,13 @@ class SideBySideTests(unittest.TestCase):
         # The stale-start test needs the empty home that the real-model tests would fill, so it stays in the main run.
         stale = "FluidDictationIntegrationTests/MeetingRecoveryTests/testDisablingFluidMeetDuringModelPreparationDoesNotStartCapture"
         self.assertNotIn(stale, VERIFY.REAL_MODEL_TESTS)
+        # Opening the settings sheet used to start the real speaker model download and leave the model admission held
+        # (issue 191). The hosted-test guard in MeetingDiarizationModelStore.prepareInBackground fixed that, so the test
+        # runs in the main suite again; HostedSpeakerModelPreparationTests fails when the guard goes.
+        settings = "FluidDictationIntegrationTests/MeetingRecoveryTests/testFluidMeetSettingsSectionsRenderWithoutSideEffects"
+        self.assertNotIn(settings, VERIFY.REAL_MODEL_TESTS)
+        guard = (ROOT / "Tests/FluidDictationIntegrationTests/Features/Models/HostedSpeakerModelPreparationTests.swift").read_text()
+        self.assertIn("func testViewTriggeredPreparationNeitherDownloadsNorHoldsModelAdmission(", guard)
 
     def test_the_receipt_records_the_step_limit(self):
         with tempfile.TemporaryDirectory() as temporary:
