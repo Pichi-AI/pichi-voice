@@ -623,7 +623,10 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
 /// The optional source reset shares import's exclusive maintenance and joined native cleanup.
 @MainActor
 final class PichiGigaAMSourceSelectionTests: XCTestCase {
-    private final class Gate {
+    /// The check of `isOpen` and the registration of a waiter must not interleave with `open()`.
+    /// A nonisolated `wait()` runs on the global executor in this test target while the test
+    /// calls `open()` on the main actor, which can lose the wakeup and hang the operation.
+    @MainActor private final class Gate {
         var isOpen: Bool
         private var waiters: [CheckedContinuation<Void, Never>] = []
         init(open: Bool = false) { self.isOpen = open }
