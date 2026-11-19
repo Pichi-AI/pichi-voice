@@ -7,8 +7,9 @@ This command never downloads a model or package, opens the app, or changes prefe
 from pathlib import Path
 import hashlib
 import json
-import re
 import subprocess
+
+from provenance import vendored_inputs, vendored_revision
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / '.build/meeting-native-eval'
@@ -35,10 +36,8 @@ revision = subprocess.check_output(['git', '-C', str(AUDIO), 'rev-parse', 'HEAD'
 assert revision == 'eb1e6628998e47022799d305b52c2680d3576801', revision
 # The vendored copy has no Git metadata. Its tracked record names the one upstream revision it was
 # exported from, and the manifest below also hashes the bridge headers this build compiles against.
-ort_revisions = set(re.findall(r'`([0-9a-f]{40})`', (ORT / 'PICHI_VENDORING.md').read_text()))
-assert len(ort_revisions) == 1, ort_revisions
-ort_revision = ort_revisions.pop()
-ort_inputs = [ORT / 'Package.swift', ORT / 'PICHI_VENDORING.md', *sorted((ORT / 'objectivec/include').glob('*.h'))]
+ort_revision = vendored_revision((ORT / 'PICHI_VENDORING.md').read_text())
+ort_inputs = vendored_inputs(ORT)
 assert (DEPS / 'OnnxRuntimeBindings.o').is_file()
 assert (DEPS / 'onnxruntime.framework').is_dir()
 (DEPS / 'module.modulemap').write_text('module OnnxRuntimeBindings {\numbrella "' + str(ORT / 'objectivec/include') + '"\nexport *\n}\n')

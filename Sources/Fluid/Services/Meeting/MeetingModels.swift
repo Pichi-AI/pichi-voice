@@ -336,6 +336,8 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     var timestampDefaultTitle: Bool? = nil
     /// Optional for existing encoded configuration records. Absence keeps retained audio.
     var audioStorageMode: MeetingAudioStorageMode? = nil
+    /// Only true for recordings that opt into masking before audio reaches storage.
+    var maskSavedVoices: Bool? = nil
     var speakerLabelsEnabled: Bool? = nil
     /// Optional so existing capture snapshots retain after-recording behavior.
     var speakerProcessingMode: MeetingSpeakerProcessingMode? = nil
@@ -357,6 +359,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         chunkDuration: TimeInterval = Self.defaultChunkDuration,
         timestampDefaultTitle: Bool = false,
         audioStorageMode: MeetingAudioStorageMode = .retainedFiles,
+        maskSavedVoices: Bool = false,
         speakerLabelsEnabled: Bool = true,
         speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording,
         piiRedactionEnabled: Bool = false,
@@ -373,6 +376,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         self.chunkDuration = max(60, chunkDuration)
         self.timestampDefaultTitle = timestampDefaultTitle
         self.audioStorageMode = audioStorageMode
+        self.maskSavedVoices = audioStorageMode == .retainedFiles && maskSavedVoices ? true : nil
         self.speakerLabelsEnabled = speakerLabelsEnabled
         self.speakerProcessingMode = speakerLabelsEnabled && speakerProcessingMode == .streaming ? .streaming : nil
         self.piiRedactionEnabled = piiRedactionEnabled
@@ -1338,6 +1342,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     var recordingASRArtifactFingerprint: String? = nil
     /// Immutable privacy/attribution policy captured when the meeting begins.
     var audioStorageMode: MeetingAudioStorageMode? = nil
+    /// Only true for recordings that opt into masking before audio reaches storage.
+    var maskSavedVoices: Bool? = nil
     var speakerLabelsEnabled: Bool? = nil
     var speakerProcessingMode: MeetingSpeakerProcessingMode? = nil
     var piiRedactionEnabled: Bool? = nil
@@ -1376,6 +1382,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.languageCode = configuration.languageCode
         self.mode = configuration.mode
         self.audioStorageMode = configuration.audioStorageMode
+        self.maskSavedVoices = configuration.audioStorageMode == .retainedFiles ? configuration.maskSavedVoices : nil
         self.requiresEncryptedPersistence = configuration.requiresEncryptedPersistence
         self.speakerLabelsEnabled = configuration.speakerLabelsEnabled
         self.speakerProcessingMode = configuration.speakerProcessingMode

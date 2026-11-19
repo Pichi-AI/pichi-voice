@@ -121,6 +121,30 @@ class VendorTests(unittest.TestCase):
     def test_every_package_runs_in_l2(self):
         self.assertEqual(self.names("L2", []), ([f"vendor-{name}" for name in VERIFY.vendor_packages()], 0))
 
+    def test_a_change_in_a_vendored_dependency_runs_the_suites_that_use_it(self):
+        others = len(VERIFY.vendor_packages()) - 2
+        changed = ["Vendor/onnxruntime-swift-package-manager/objectivec/ort_env.mm"]
+        self.assertEqual(self.names("L1", changed),
+                         (["vendor-PichiGigaAM", "vendor-onnxruntime-swift-package-manager"], others))
+
+    def test_dependents_follow_path_dependencies_through_other_packages(self):
+        manifests = {
+            "Leaf": '// .package(url: "https://example.invalid/leaf", from: "1.0.0")\n',
+            "Middle": '        .package(path: "../Leaf"),\n',
+            "Top": '        .package(name: "Middle", path: "../Middle/"),\n',
+            "Other": '        // .package(path: "../Leaf"),\n',
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            vendor = Path(temporary)
+            for name, manifest in manifests.items():
+                (vendor / name).mkdir()
+                (vendor / name / "Package.swift").write_text(manifest)
+            dependents = VERIFY.vendor_dependents(vendor)
+        self.assertEqual(VERIFY.affected_vendor_packages({"Leaf"}, dependents), {"Leaf", "Middle", "Top"})
+        self.assertEqual(VERIFY.affected_vendor_packages({"Middle"}, dependents), {"Middle", "Top"})
+        self.assertEqual(VERIFY.affected_vendor_packages({"Other"}, dependents), {"Other"})
+        self.assertEqual(VERIFY.affected_vendor_packages(set(), dependents), set())
+
     def test_packages_are_the_vendored_ones_with_tests(self):
         packages = VERIFY.vendor_packages()
         self.assertIn("PichiGigaAM", packages)

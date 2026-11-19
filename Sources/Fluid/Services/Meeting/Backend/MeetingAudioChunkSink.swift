@@ -110,8 +110,8 @@ nonisolated protocol MeetingAudioChunkSink: AnyObject, Sendable {
     /// Appends one already-retimed, already-canonical, ready Float32 LPCM `CMSampleBuffer`. Only
     /// buffers with finite samples, a valid numeric presentation timestamp, and a format matching
     /// the one passed to `begin` are accepted; everything else throws without touching durable
-    /// state. No resampling, channel clamping, or sample-value conversion is performed; a sink may
-    /// pack planar channels into canonical interleaved storage without changing order or values.
+    /// state. The sink preserves sample order, frame count and channel topology. By default it
+    /// preserves values too. A configured voice mask changes only the samples being persisted.
     func append(_ sampleBuffer: CMSampleBuffer) throws -> MeetingPCMAppendReceipt
 
     /// Finalizes: closes the underlying container, reopens it read-only, verifies decoded frame

@@ -60,6 +60,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     private let sessionDirectory: URL
     private let trackDirectory: URL
     private let chunkDuration: TimeInterval
+    // The writer queue owns the filter across ordinary file rotations.
+    private let voiceMask: MeetingVoiceMask?
     private let maximumClockSpans: Int
     private let eventHandler: EventHandler
     private let diagnosticSampleObserver: (@Sendable (CMSampleBuffer, UInt64) -> Void)?
@@ -113,8 +115,10 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         sampleAdmission: (@Sendable (CMSampleBuffer) -> Bool)? = nil,
         clockContext: MeetingRecordingClockContext? = nil,
         persistenceHook: MeetingAudioRecordingJournal.Hook? = nil,
-        maximumClockSpans: Int = MeetingAudioClockMapping.maximumSpans
+        maximumClockSpans: Int = MeetingAudioClockMapping.maximumSpans,
+        maskSavedVoices: Bool = false
     ) throws {
+        self.voiceMask = maskSavedVoices ? MeetingVoiceMask() : nil
         self.clockContext = clockContext
         self.trackID = track.id
         self.track = track
@@ -421,6 +425,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                     continuation.resume(returning: self.track.chunks.last?.presentationEnd)
                     return
                 }
+                self.voiceMask?.reset()
                 let boundary = Self.mediaTime(activeChunk.end)
                 self.scheduleActiveChunkFinalization()
                 continuation.resume(returning: boundary)
@@ -530,6 +535,13 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             sampleBuffer = sourceSampleBuffer
         }
 
+        if let voiceMask, let previousEnd,
+           epochChanged || backwardReset || hostMapping?.spans.first?.discontinuityBefore == true
+            || presentationTime - previousEnd > CMTime(value: 1, timescale: 1_000_000) {
+            // Never carry the previous speech envelope across missing input or a new producer.
+            voiceMask.reset()
+        }
+
         if let activeChunk = self.activeChunk {
             let elapsed = CMTimeGetSeconds(presentationTime - activeChunk.start)
             let gap = CMTimeGetSeconds(presentationTime - activeChunk.end)
@@ -622,6 +634,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             self.track.health.detail = nil
             self.emitHealthIfNeeded(force: recoveredFromWriterFailure)
         } catch {
+            self.voiceMask?.reset()
             self.track.health.droppedSampleCount += 1
             // A sink failure poisons the current container. Retire it immediately so the next
             // callback can establish a fresh chunk. Chunk-start failures have no sink to retire,
@@ -671,7 +684,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             channelCount: channelCount,
             bitRate: nil
         )
-        let sink = MeetingAudioFilePCMChunkSink(sessionDirectory: self.sessionDirectory)
+        let sink = MeetingAudioFilePCMChunkSink(sessionDirectory: self.sessionDirectory, voiceMask: self.voiceMask)
         let relativePath = "tracks/\(self.track.kind.rawValue)/\(stem).caf"
         // Temporary, metadata-only diagnostics for the remote capture crash. This runs on
         // the writer queue once per chunk, never on the capture callback or UI thread.

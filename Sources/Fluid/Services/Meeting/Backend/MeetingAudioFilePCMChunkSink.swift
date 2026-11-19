@@ -26,6 +26,7 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
     private struct Paths { let final: URL; let partial: URL }
     private struct Identity { let dev: dev_t; let ino: ino_t; let size: off_t }
     private let sessionDirectory: URL
+    private let voiceMask: MeetingVoiceMask?
     private var state: State = .idle
     private var audioFile: AudioFileID?
     private var paths: Paths?
@@ -41,7 +42,10 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
         return String(partial.path.dropFirst(root.count))
     }
 
-    init(sessionDirectory: URL) { self.sessionDirectory = sessionDirectory.standardizedFileURL }
+    init(sessionDirectory: URL, voiceMask: MeetingVoiceMask? = nil) {
+        self.sessionDirectory = sessionDirectory.standardizedFileURL
+        self.voiceMask = voiceMask
+    }
 
     deinit { if let audioFile { AudioFileClose(audioFile) } }
 
@@ -54,6 +58,9 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
     func begin(relativeFilePath: String, format: AVAudioFormat, contract: MeetingPCMFormatContract) throws {
         guard self.state == .idle else { throw MeetingPCMSinkError.alreadyBegun }
         let inputASBD = format.streamDescription.pointee
+        if self.voiceMask != nil, inputASBD.mSampleRate != 16_000 || inputASBD.mChannelsPerFrame != 1 {
+            throw MeetingPCMSinkError.unsupportedClientFormat("Voice masking requires 16 kHz mono PCM.")
+        }
         let derivedContract: MeetingPCMFormatContract
         do { derivedContract = try MeetingPCMFormatContract(audioFormat: format) } catch { throw MeetingPCMSinkError.unsupportedClientFormat(error.localizedDescription) }
         guard derivedContract == contract else {
@@ -129,12 +136,17 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
         let frames = CMSampleBufferGetNumSamples(sampleBuffer)
         guard frames > 0 else { throw MeetingPCMSinkError.invalidSampleBuffer("zero frames") }
         let list = try AudioList(sampleBuffer: sampleBuffer)
-        let packed = try list.interleavedFloat32(frames: frames, channels: Int(format.channels), inputASBD: incoming)
+        var packed = try list.interleavedFloat32(frames: frames, channels: Int(format.channels), inputASBD: incoming)
         let expectedBytes = try Self.checkedMultiply(Int64(frames), Int64(expectedASBD.mBytesPerFrame))
         guard Int64(packed.count) == expectedBytes else { throw MeetingPCMSinkError.invalidSampleBuffer("packed size mismatch") }
         var packetCount = try Self.checkedUInt32(Int64(frames))
         let packetOffset = try Self.checkedInt64(self.writtenPackets)
         let byteCount = try Self.checkedUInt32(Int64(packed.count))
+        // Process only the writer's copy, before the first byte enters even the recovery file.
+        // The capture buffer is independently consumed by live recognition and speaker labeling.
+        if let voiceMask {
+            packed.withUnsafeMutableBytes { voiceMask.process($0.bindMemory(to: Float.self)) }
+        }
         let status = packed.withUnsafeBytes { bytes in
             // Buffer size and channel topology are validated before this synchronous C call.
             // swiftlint:disable:next force_unwrapping
