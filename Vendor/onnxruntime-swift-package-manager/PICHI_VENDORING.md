@@ -4,7 +4,9 @@
 
 Changes against that revision:
 - The repository infrastructure of the upstream project (`.github`, `.pipelines`, `.config`) is left out.
-- The test targets (`swift/OnnxRuntimeBindingsTests`, `swift/OnnxRuntimeExtensionsTests`) and `objectivec/test` are left out, together with their test model files, the two `testTarget` entries are removed from `Package.swift`, and `test` is dropped from the excluded paths of the `OnnxRuntimeBindings` target because the folder is no longer here.
+- The Objective-C tests (`objectivec/test`) are left out, and `test` is dropped from the excluded paths of the `OnnxRuntimeBindings` target because the folder is no longer here.
+- The Swift binding tests are kept unchanged, moved from `swift/OnnxRuntimeBindingsTests` to `Tests/OnnxRuntimeBindingsTests` so that `scripts/dev/verify` finds this package's suite. Their fixture `single_add.basic.ort` (1296 bytes, SHA-256 `c8808fde5bd08604d1911c27ed1077c8e5a6cb2d9aef0055bc884072cce3b62e`) is a synthetic model with one `Add` operator and no trained weights, made by the upstream `objectivec/test/testdata/single_add_gen.py`.
+- The `onnxruntime_extensions` product, its `OnnxRuntimeExtensions` target, the `extensions` sources, their test target and the ONNX Runtime Extensions binary target are left out. No Pichi target uses them, and without them a clean build no longer downloads that archive.
 - `release_instructions.md` and `objectivec/docs` (the upstream release procedure and API documentation configuration) are not tracked, because this repository ignores Markdown files and `docs` folders by default. They are not used by the build.
 
 This record is itself added with `git add -f` for the same reason, and `scripts/dev/check.sh` fails if it is not tracked while this folder exists.
