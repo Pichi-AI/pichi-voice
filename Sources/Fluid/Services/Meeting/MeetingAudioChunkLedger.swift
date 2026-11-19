@@ -402,6 +402,8 @@ final nonisolated class MeetingAudioRecordingJournal: @unchecked Sendable {
     /// writer that exists also has its header on disk. Capture never depends on the header, so the
     /// caller may ignore a thrown error: the first coalesced snapshot retries the write and reports it.
     func writeInitialHeader(_ track: MeetingAudioTrack) throws {
+        assert(self.lock.withLock { !self.running && self.pending == nil && !self.finishing },
+               "The initial header must be written before the first snapshot is submitted")
         try self.writeManifestFile(track, includeChunks: false)
     }
 

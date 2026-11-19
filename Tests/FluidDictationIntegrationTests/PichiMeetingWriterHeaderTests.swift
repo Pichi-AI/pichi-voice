@@ -22,6 +22,19 @@ final class PichiMeetingWriterHeaderTests: XCTestCase {
         }
     }
 
+    private final class InterruptionRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var kinds: [MeetingInterruptionKind] = []
+        func record(_ event: MeetingCaptureEvent) {
+            guard case let .interrupted(kind, _, _) = event else { return }
+            self.lock.withLock { self.kinds.append(kind) }
+        }
+
+        func recorded() -> [MeetingInterruptionKind] {
+            self.lock.withLock { self.kinds }
+        }
+    }
+
     private func makeTrack() -> MeetingAudioTrack {
         MeetingAudioTrack(
             id: UUID(), kind: .microphone, sourceIdentifier: "test-mic", sourceDisplayName: "Test Microphone", format: nil,
@@ -52,6 +65,7 @@ final class PichiMeetingWriterHeaderTests: XCTestCase {
         let writer = try MeetingAudioChunkWriter(
             track: track, sessionDirectory: session, chunkDuration: 60, eventHandler: { _ in }, persistenceHook: gate.hold
         )
+        self.addTeardownBlock { _ = await writer.stop() }
 
         // The journal queue is parked in its first manifest operation, so only init itself can have written this.
         let data = try Data(contentsOf: self.headerURL(session))
@@ -80,6 +94,7 @@ final class PichiMeetingWriterHeaderTests: XCTestCase {
         let writer = try MeetingAudioChunkWriter(
             track: self.makeTrack(), sessionDirectory: session, chunkDuration: 60, eventHandler: { _ in }
         )
+        self.addTeardownBlock { _ = await writer.stop() }
         let initial = try XCTUnwrap(self.inode(self.headerURL(session)))
 
         // updateTrackMetadata returns after the journal has handled its snapshot.
@@ -96,13 +111,28 @@ final class PichiMeetingWriterHeaderTests: XCTestCase {
     func testAFailedInitialHeaderWriteDoesNotFailTheWriter() async throws {
         let session = self.makeSessionDirectory(); defer { try? FileManager.default.removeItem(at: session) }
         // A directory in the place of the header makes the write fail for as long as it stays.
-        try FileManager.default.createDirectory(
-            at: self.headerURL(session), withIntermediateDirectories: true, attributes: nil
-        )
+        let header = self.headerURL(session)
+        try FileManager.default.createDirectory(at: header, withIntermediateDirectories: true, attributes: nil)
         let track = self.makeTrack()
+        let interruptions = InterruptionRecorder()
         let writer = try MeetingAudioChunkWriter(
-            track: track, sessionDirectory: session, chunkDuration: 60, eventHandler: { _ in }
+            track: track, sessionDirectory: session, chunkDuration: 60, eventHandler: interruptions.record
         )
+        self.addTeardownBlock { _ = await writer.stop() }
+
+        // Nothing is remembered as written, so the journal writes the header again and reports the failure.
+        do {
+            try await writer.updateTrackMetadata { _ in }
+            XCTFail("The header write must keep failing while a directory blocks it")
+        } catch {}
+        XCTAssertTrue(interruptions.recorded().contains(.metadataPersistenceDelayed), "\(interruptions.recorded())")
+
+        try FileManager.default.removeItem(at: header)
+        try await writer.updateTrackMetadata { _ in }
+        var info = stat()
+        XCTAssertEqual(lstat(header.path, &info), 0)
+        XCTAssertEqual(info.st_mode & S_IFMT, S_IFREG, "The retried header must be a regular file")
+        XCTAssertTrue(interruptions.recorded().contains(.metadataPersistenceRecovered), "\(interruptions.recorded())")
         let stopped = await writer.stop()
         XCTAssertEqual(stopped.id, track.id)
     }

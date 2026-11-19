@@ -65,8 +65,15 @@ final class PichiFluidServeReaderTimeoutTests: XCTestCase {
                 "A TERM-resistant helper must consume the two-second grace before joined SIGKILL"
             )
             let pid = try XCTUnwrap(attempt.pid, "A ready helper has recorded its process identifier")
-            XCTAssertEqual(kill(pid, 0), -1, "The owned helper must be reaped before timeout is returned")
-            XCTAssertEqual(errno, ESRCH)
+            let alive = kill(pid, 0)
+            let reason = errno
+            XCTAssertEqual(alive, -1, "The owned helper must be reaped before timeout is returned")
+            XCTAssertEqual(reason, ESRCH)
+            if !discarded.isEmpty {
+                // Not a failure, but a slow drift to the longer deadlines is worth seeing in the log.
+                print("PichiFluidServeReaderTimeoutTests: judged the \(deadline) s attempt after discarding "
+                    + discarded.map { "\($0) s" }.joined(separator: ", "))
+            }
             return
         }
         XCTFail("The fixture shell never installed its TERM handler within the longest deadline "
@@ -83,7 +90,8 @@ final class PichiFluidServeReaderTimeoutTests: XCTestCase {
         let termFile = directory.appendingPathComponent("reader.handled-term")
         let handler = "echo handled > " + FluidServeSkill.shellQuoted(termFile.path)
         // Order matters: the handler first, then the pid, then the marker that tells the test the
-        // handler is in place. A sleeping loop lets the shell run the handler promptly under load.
+        // handler is in place. The loop sleeps instead of spinning so a loaded machine still schedules the
+        // shell; sh runs the handler when the current 50 ms sleep ends, well inside the two-second grace.
         let fixture = "#!/bin/sh\n"
             + "[ \"${1:-}\" = warm-up ] && exit 0\n"
             + "trap " + FluidServeSkill.shellQuoted(handler) + " TERM\n"
