@@ -307,6 +307,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private let validateFrozenRecordingConfiguration: @MainActor (MeetingFinalProcessingConfiguration) throws -> Void
     private let registeredModelsExistOnDisk: @MainActor (String) -> Bool?
     private let processingLogger: @MainActor (String) -> Void
+    private let onRecordingStarted: (@MainActor () -> Void)?
     private static let correctionUndoStackCap = 50
 
     init(
@@ -328,7 +329,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         },
         validateFrozenRecordingConfiguration: @escaping @MainActor (MeetingFinalProcessingConfiguration) throws -> Void = { _ in },
         registeredModelsExistOnDisk: @escaping @MainActor (String) -> Bool? = { PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: $0) },
-        processingLogger: @escaping @MainActor (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingSessionCoordinator") }
+        processingLogger: @escaping @MainActor (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingSessionCoordinator") },
+        onRecordingStarted: (@MainActor () -> Void)? = nil
     ) {
         self.store = store
         self.persistence = MeetingSessionPersistenceQueue(store: store)
@@ -348,6 +350,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.validateFrozenRecordingConfiguration = validateFrozenRecordingConfiguration
         self.registeredModelsExistOnDisk = registeredModelsExistOnDisk
         self.processingLogger = processingLogger
+        self.onRecordingStarted = onRecordingStarted
         self.locationPreferenceObserver = settings.objectWillChange.sink { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, !self.settings.meetingLocationEnabled else { return }
@@ -1163,6 +1166,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             Task { @MainActor [weak self] in await self?.sweepExpiredAudio() }
             self.beginLocationCapture(for: session, generation: generation)
+            self.onRecordingStarted?()
             return session
         } catch {
             MeetingTimelineTrace.shared?.record("meeting_start_failed", fields: ["sessionID": session.id.uuidString])

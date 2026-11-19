@@ -19,7 +19,10 @@ assert len(names) == 26, names
 (out / 'ProfileTypes.swift').write_text('import Foundation; nonisolated struct AccountIdentity: Equatable, Sendable { let issuer: String; let subject: String; let internalUserID: String; var storageComponents: [String] { [issuer, subject, internalUserID] } }; nonisolated struct AccountContext: Equatable, Sendable { let identity: AccountIdentity; let organizationID: String?; let workspaceID: String?; let generation: UUID }; nonisolated enum AccountError: Error { case invalidAccount, isolationRequired }')
 settings = Path('Sources/Fluid/Persistence/SettingsStore.swift').read_text()
 initializer = settings.split('    private func initializeDesktopPreferences(refreshDeviceState: Bool = true) {', 1)[1].split('\n    static func clampPrivateAI', 1)[0]
-assert 'self.initializeDesktopPreferences()' in settings.split('    init(defaults:', 1)[1].split('    #if os(macOS)', 2)[1]
+settings_init = re.search(r'^    init\(\s*defaults:.*?^    \}', settings, re.M | re.S)
+assert settings_init, 'Could not find the SettingsStore defaults initializer'
+assert re.search(r'#if os\(macOS\)\s+if initializeDesktop \{ self\.initializeDesktopPreferences\(\) \}\s*#endif',
+                 settings_init[0]), 'Desktop preferences must initialize from the macOS initializer path'
 assert 'SecItem' not in initializer and 'fetchAllKeys' not in initializer
 assert 'DispatchQueue.main.async { self.refreshProviderAPIKeys() }' in initializer
 assert 'self.keychain.cachedKeys ?? [:]' in settings

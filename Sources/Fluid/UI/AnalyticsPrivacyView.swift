@@ -36,12 +36,12 @@ struct AnalyticsPrivacyView: View {
                     } else {
                     self.bullet(PichiLocalization.format("Analytics destination: %@", AnalyticsConfig.fromBundle().postHogHost))
                     self.sectionTitle("Always collected")
-                    self.bullet("A random installation ID, app version, the operating-system label macOS, and basic hardware info.")
+                    self.bullet("A random ID for the local app profile, app version, the macOS label, and basic hardware information.")
                     self.bullet("One active-use signal per local day after you interact with the app, buffered on this Mac and sent weekly.")
                     self.bullet(AppBrand.text("Beta builds also send one daily aggregate of ASR and Fluid Intelligence timing distributions, including macOS version. No individual timing samples are sent."))
 
                     self.sectionTitle("When detailed analytics is enabled")
-                    self.bullet("Daily totals for Dictation, Command Mode, Edit Mode, and meeting transcription.")
+                    self.bullet("Daily totals for Dictation, Command Mode, Edit Mode, file transcription, and live meeting recordings started.")
                     self.bullet("Onboarding steps viewed and completed, including skips.")
                     self.bullet("Approved public transcription and AI provider/model identifiers, counted as daily totals. Custom names are replaced with generic categories.")
                     self.bullet("Model download source, outcome, and download duration.")
@@ -56,7 +56,7 @@ struct AnalyticsPrivacyView: View {
                     self.bullet("No session replay, automatic UI capture, person profiles or geographic enrichment are enabled.")
 
                     self.sectionTitle("How it’s used")
-                    self.bullet("Daily activity measures active installations and retention without requiring accounts.")
+                    self.bullet("Daily activity measures active app profiles and how often they return.")
                     self.bullet("Optional detailed analytics helps us understand feature adoption, insertion performance, onboarding completion, and model usage.")
                     self.bullet(AppBrand.text("Beta timing summaries help us compare ASR and Fluid Intelligence speed across Mac hardware and macOS versions."))
 
