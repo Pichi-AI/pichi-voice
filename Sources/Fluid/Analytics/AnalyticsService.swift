@@ -683,7 +683,11 @@ private actor AnalyticsCore {
         }
         if let revocation {
             guard PrivateProfileStorage.isReadable(context.profile) else { throw CancellationError() }
-            try self.detailedConsentGate.completeRevocation(revocation, for: context.profile)
+            // Keep the marker if preferences could not confirm persistence. A later
+            // purge can retry, and the marker still protects the queue on restart.
+            if context.detailedAnalyticsEnabled || PrivateProfileDefaults.bound(to: context.profile).synchronize() {
+                try self.detailedConsentGate.completeRevocation(revocation, for: context.profile)
+            }
         }
         self.detailedPurgeGeneration = context.detailedConsentGeneration
     }

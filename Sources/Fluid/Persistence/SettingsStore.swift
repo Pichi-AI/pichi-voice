@@ -1592,12 +1592,18 @@ final class SettingsStore: ObservableObject {
     var shareDetailedAnalytics: Bool {
         get { Self.detailedAnalyticsEnabled(in: self.defaults) }
         set {
+            let changed = self.shareDetailedAnalytics != newValue
             let persist = {
                 self.objectWillChange.send()
                 self.defaults.set(newValue, forKey: Keys.shareAnonymousAnalytics)
+                #if os(macOS)
+                // The opted-out preference is also the restart fallback if the queue's
+                // revocation marker cannot be written.
+                if changed, !newValue { _ = self.defaults.synchronize() }
+                #endif
             }
-            if self.shareDetailedAnalytics == newValue { persist() }
-            else { self.updateDetailedAnalytics(newValue, persist) }
+            if changed { self.updateDetailedAnalytics(newValue, persist) }
+            else { persist() }
         }
     }
 
