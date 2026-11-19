@@ -22,12 +22,13 @@ final class AnalyticsService {
     }
 
     func setDetailedAnalyticsEnabled(_ enabled: Bool) {
-        let consentGeneration = self.detailedConsentGate.advance()
+        let profile = PrivateProfileStorage.current
+        guard !self.suspended, profile.isReadable else { return }
+        let consentGeneration = self.detailedConsentGate.advance(revokingProfileID: enabled ? nil : profile.id)
         let context = Self.context(
             detailedAnalyticsEnabled: enabled,
             detailedConsentGeneration: consentGeneration
         )
-        guard !self.suspended, context.profile.isReadable else { return }
         self.enqueue(context: context) { core, context in
             await core.setDetailedAnalyticsEnabled(context: context)
         }
@@ -274,20 +275,34 @@ private struct AnalyticsContext: Sendable {
 final nonisolated class DetailedAnalyticsConsentGate: @unchecked Sendable {
     private let lock = NSLock()
     private var generation: UInt64 = 0
+    private var pendingRevocations: [String: UInt64] = [:]
 
     var currentGeneration: UInt64 {
         self.lock.withLock { self.generation }
     }
 
-    func advance() -> UInt64 {
+    func advance(revokingProfileID: String? = nil) -> UInt64 {
         self.lock.withLock {
             self.generation &+= 1
+            if let revokingProfileID { self.pendingRevocations[revokingProfileID] = self.generation }
             return self.generation
         }
     }
 
     func accepts(_ generation: UInt64) -> Bool {
         self.lock.withLock { generation == self.generation }
+    }
+
+    func pendingRevocation(for profileID: String) -> UInt64? {
+        self.lock.withLock { self.pendingRevocations[profileID] }
+    }
+
+    func completeRevocation(_ generation: UInt64, for profileID: String) {
+        self.lock.withLock {
+            if self.pendingRevocations[profileID] == generation {
+                self.pendingRevocations.removeValue(forKey: profileID)
+            }
+        }
     }
 }
 
@@ -300,6 +315,7 @@ private actor AnalyticsCore {
     private var flushTask: Task<Void, Never>?
     private var activeUploadTask: Task<Int, Error>?
     private var isFlushing = false
+    private var detailedPurgeGeneration: UInt64?
 
     private let batchSize = 50
 
@@ -319,6 +335,7 @@ private actor AnalyticsCore {
         self.database = nil
         self.databaseProfile = nil
         self.context = nil
+        self.detailedPurgeGeneration = nil
     }
 
     private func accepts(_ context: AnalyticsContext) -> Bool {
@@ -331,9 +348,7 @@ private actor AnalyticsCore {
     func bootstrap(context: AnalyticsContext) async {
         guard self.apply(context) else { return }
         do {
-            if !context.detailedAnalyticsEnabled {
-                try self.purgeStoredDetailedAnalyticsIfPresent(context: context)
-            }
+            try self.purgeStoredDetailedAnalyticsIfNeeded(context: context)
             guard context.config.isConfigured else { return }
             let database = try self.database(for: context)
             try database.finalizeDays(before: Date())
@@ -572,6 +587,7 @@ private actor AnalyticsCore {
             let database = try self.database(for: context)
             let date = Date()
             if mayRecordDetails {
+                try self.purgeStoredDetailedAnalyticsIfNeeded(context: context)
                 try operation(database, date)
             } else if let fallbackActivity {
                 try database.recordActivity(fallbackActivity, at: date)
@@ -609,20 +625,30 @@ private actor AnalyticsCore {
         profile.directory("Analytics").appendingPathComponent("analytics-v2.sqlite3")
     }
 
-    private func purgeStoredDetailedAnalyticsIfPresent(context: AnalyticsContext) throws {
+    private func purgeStoredDetailedAnalyticsIfNeeded(context: AnalyticsContext) throws {
+        let profileID = context.profile.id
+        let revocation = self.detailedConsentGate.pendingRevocation(for: profileID)
+        let disabledNeedsPurge = !context.detailedAnalyticsEnabled
+            && self.detailedPurgeGeneration != context.detailedConsentGeneration
+        // An opt-in that arrives before the opt-out task runs must still clear older details.
+        guard disabledNeedsPurge || revocation != nil else { return }
+
         if let database {
             guard self.databaseProfile == context.profile else { throw CancellationError() }
             try database.purgeDetailedAnalytics()
-            return
+        } else {
+            let url = self.databaseURL(profile: context.profile)
+            if FileManager.default.fileExists(atPath: url.path) {
+                let existingDatabase = try AnalyticsDatabase(
+                    url: url,
+                    distinctID: context.distinctID,
+                    appVersion: context.appVersion
+                )
+                try existingDatabase.purgeDetailedAnalytics()
+            }
         }
-        let url = self.databaseURL(profile: context.profile)
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        let existingDatabase = try AnalyticsDatabase(
-            url: url,
-            distinctID: context.distinctID,
-            appVersion: context.appVersion
-        )
-        try existingDatabase.purgeDetailedAnalytics()
+        if let revocation { self.detailedConsentGate.completeRevocation(revocation, for: profileID) }
+        self.detailedPurgeGeneration = context.detailedConsentGeneration
     }
 
     private func startFlushLoopIfNeeded() {
@@ -664,6 +690,8 @@ private actor AnalyticsCore {
 
         let items: [AnalyticsOutboxItem]
         do {
+            // A basic event may enter the core before the queued consent transition.
+            try self.purgeStoredDetailedAnalyticsIfNeeded(context: context)
             try database.finalizeDays(before: Date())
             items = try database.readyOutbox(limit: self.batchSize, at: Date())
         } catch {

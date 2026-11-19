@@ -1824,7 +1824,6 @@ struct SettingsView: View {
 
     private func applyAnalyticsConsentChange(_ enabled: Bool) {
         SettingsStore.shared.shareDetailedAnalytics = enabled
-        AnalyticsService.shared.setDetailedAnalyticsEnabled(enabled)
     }
 
     // MARK: - Helper Views

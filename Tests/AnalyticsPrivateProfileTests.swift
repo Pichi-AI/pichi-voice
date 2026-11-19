@@ -14,7 +14,11 @@ actor SyntheticUploadGate {
         started = true
         await withCheckedContinuation { continuation = $0 }
     }
-    func release() { continuation?.resume(); continuation = nil }
+    func release() {
+        continuation?.resume()
+        continuation = nil
+        started = false
+    }
 }
 nonisolated enum AnalyticsUploadTransport {
     static func send(items: [AnalyticsOutboxItem], config: AnalyticsConfig) async throws -> Int {
@@ -23,6 +27,9 @@ nonisolated enum AnalyticsUploadTransport {
     }
 }
 @MainActor final class Completion { var finished = false }
+private extension AnalyticsCore {
+    func flushBeforeConsentTransitionCompletes() async { await self.flushIfNeeded() }
+}
 @main struct AnalyticsPrivateProfileTests {
     static func main() async throws {
         let manager = FileManager.default
@@ -48,8 +55,8 @@ nonisolated enum AnalyticsUploadTransport {
         PrivateProfileStorage.select(guest)
         let gate = DetailedAnalyticsConsentGate()
         let core = AnalyticsCore(detailedConsentGate: gate)
-        func context(_ profile: PrivateProfileSnapshot, id: String) -> AnalyticsContext {
-            .init(profile: profile, detailedAnalyticsEnabled: true, detailedConsentGeneration: gate.currentGeneration,
+        func context(_ profile: PrivateProfileSnapshot, id: String, detailed: Bool = true) -> AnalyticsContext {
+            .init(profile: profile, detailedAnalyticsEnabled: detailed, detailedConsentGeneration: gate.currentGeneration,
                 config: .init(postHogApiKey: "phc_synthetic_test", postHogHost: "https://synthetic.invalid"),
                 distinctID: id, appVersion: "1.0", collectsBetaPerformance: false)
         }
@@ -81,14 +88,61 @@ nonisolated enum AnalyticsUploadTransport {
             organizationID: "org", workspaceID: "workspace", generation: UUID())
         let account = try PrivateProfileStorage.proposed(context: identity, generation: UUID(), legacyRootDirectory: root)
         PrivateProfileStorage.select(account)
-        await core.recordActivity(.app, context: context(account, id: "synthetic-account"))
+        let accountContext = context(account, id: "synthetic-account")
+        await core.recordActivity(.app, context: accountContext)
         let newURL = account.directory("Analytics").appendingPathComponent("analytics-v2.sqlite3")
         try require(try rows(newURL) == 1 && rows(oldURL) == expectedRows, "queues-are-not-copied-or-retargeted")
         await core.recordActivity(.coreAction, context: old)
         try require(try rows(newURL) == 1 && rows(oldURL) == expectedRows, "retired-owner-cannot-reopen-database")
+
+        await core.recordOnboardingStarted(origin: .firstRun, context: accountContext)
+        try require(try rows(newURL) == 2, "details-queued-before-opt-out")
+        _ = gate.advance(revokingProfileID: account.id)
+        let optedOut = context(account, id: "synthetic-account", detailed: false)
+        await core.recordActivity(.app, context: optedOut)
+        let earlyFlush = Task { await core.flushBeforeConsentTransitionCompletes() }
+        // Keep this regression bounded even when the stale batch starts an upload.
+        let earlyDeadline = ContinuousClock.now.advanced(by: .seconds(3))
+        let earlyCompleted = Completion()
+        let earlyJoin = Task { await earlyFlush.value; earlyCompleted.finished = true }
+        while !earlyCompleted.finished, !(await SyntheticUploadGate.shared.started), ContinuousClock.now < earlyDeadline {
+            await Task.yield()
+        }
+        let earlyUploadStarted = await SyntheticUploadGate.shared.started
+        await SyntheticUploadGate.shared.release()
+        try require(earlyCompleted.finished && !earlyUploadStarted, "pending-opt-out-blocked-queued-details")
+        await earlyJoin.value
+        try require(try rows(newURL) == 1, "pending-opt-out-purged-queued-details-and-kept-activity")
+
+        _ = gate.advance()
+        let optedBackIn = context(account, id: "synthetic-account")
+        await core.recordOnboardingStarted(origin: .manualRestart, context: optedBackIn)
+        let consentUpload = Task { await core.bootstrap(context: optedBackIn) }
+        let consentDeadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !(await SyntheticUploadGate.shared.started), ContinuousClock.now < consentDeadline { await Task.yield() }
+        let consentUploadStarted = await SyntheticUploadGate.shared.started
+        try require(consentUploadStarted, "detailed-upload-in-flight-before-opt-out")
+        _ = gate.advance(revokingProfileID: account.id)
+        let revoked = context(account, id: "synthetic-account", detailed: false)
+        await core.setDetailedAnalyticsEnabled(context: revoked)
+        await core.recordOnboardingStarted(origin: .firstRun, context: optedBackIn)
+        await SyntheticUploadGate.shared.release()
+        await consentUpload.value
+        try require(try rows(newURL) == 1, "opt-out-cleared-queued-details-and-rejected-stale-write")
+
+        _ = gate.advance()
+        let enabledAgain = context(account, id: "synthetic-account")
+        await core.recordOnboardingStarted(origin: .firstRun, context: enabledAgain)
+        try require(try rows(newURL) == 2, "details-queued-before-quick-opt-out")
+        _ = gate.advance(revokingProfileID: account.id)
+        _ = gate.advance()
+        let quicklyReenabled = context(account, id: "synthetic-account")
+        await core.recordOnboardingStarted(origin: .manualRestart, context: quicklyReenabled)
+        try require(try rows(newURL) == 2, "quick-opt-in-purged-old-details-before-recording-new-ones")
+
         PrivateProfileStorage.conceal(generation: UUID())
         _ = gate.advance()
         await core.suspendForProfileTransition()
-        print("Analytics private profiles: \(checks) synthetic stale-admission/separate-queue/joined-transport checks passed; transport is inert")
+        print("Analytics private profiles: \(checks) synthetic stale-admission, consent and queue checks passed; transport is inert")
     }
 }

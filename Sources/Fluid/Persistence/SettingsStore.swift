@@ -14,13 +14,25 @@ import SwiftUI
 import FluidAudio
 #endif
 final class SettingsStore: ObservableObject {
+    #if os(macOS)
+    static let shared = SettingsStore(onDetailedAnalyticsChange: { enabled in
+        AnalyticsService.shared.setDetailedAnalyticsEnabled(enabled)
+    })
+    #else
     static let shared = SettingsStore()
+    #endif
     let defaults: UserDefaults
+    private let onDetailedAnalyticsChange: (Bool) -> Void
     static let automaticWhisperLanguageCode = "auto"
     static let privateAIBackendPreferenceDefaultsKey = "FluidIntelligenceBackendPreference"
 
-    init(defaults: UserDefaults = PrivateProfileDefaults.shared, initializeDesktop: Bool = true) {
+    init(
+        defaults: UserDefaults = PrivateProfileDefaults.shared,
+        initializeDesktop: Bool = true,
+        onDetailedAnalyticsChange: @escaping (Bool) -> Void = { _ in }
+    ) {
         self.defaults = defaults
+        self.onDetailedAnalyticsChange = onDetailedAnalyticsChange
         #if os(macOS)
         if initializeDesktop { self.initializeDesktopPreferences() }
         #endif
@@ -1580,8 +1592,12 @@ final class SettingsStore: ObservableObject {
     var shareDetailedAnalytics: Bool {
         get { Self.detailedAnalyticsEnabled(in: self.defaults) }
         set {
+            let previous = self.shareDetailedAnalytics
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.shareAnonymousAnalytics)
+            if self.shareDetailedAnalytics != previous {
+                self.onDetailedAnalyticsChange(newValue)
+            }
         }
     }
 
