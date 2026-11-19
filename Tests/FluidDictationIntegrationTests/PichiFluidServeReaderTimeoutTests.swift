@@ -16,7 +16,8 @@ import XCTest
 /// of the same file). The test launches the fixture once before the timed run so that cost is paid
 /// outside the deadline. As a second guard, the fixture writes a marker only after its handler is installed;
 /// an attempt without the marker is discarded and repeated with a longer deadline, so only an attempt that
-/// really reached the TERM-ignoring state is judged.
+/// really reached the TERM-ignoring state is judged. An attempt whose handler did not run before the kill
+/// fallback is checked for the rest of the contract and repeated as well.
 final class PichiFluidServeReaderTimeoutTests: XCTestCase {
     /// Doubling deadlines. The first is the quick path on an idle machine; the last tolerates a shell
     /// that needs several seconds to start. Waiting only grows on a loaded machine.
@@ -47,18 +48,14 @@ final class PichiFluidServeReaderTimeoutTests: XCTestCase {
     }
 
     func testReaderTimeoutJoinsItsOwnedProcessEvenWhenTerminationIsIgnored() async throws {
-        var discarded: [TimeInterval] = []
+        var discarded: [String] = []
         for (index, deadline) in Self.deadlines.enumerated() {
             let attempt = try await self.attempt(number: index, deadline: deadline)
             guard attempt.ready else {
-                discarded.append(deadline)
+                discarded.append("\(deadline) s without the ready marker")
                 continue
             }
             XCTAssertEqual(attempt.outcome, .failed(PichiLocalization.text("The meeting reader did not answer in time.")))
-            XCTAssertTrue(
-                attempt.termHandled,
-                "The reader must send TERM first; the helper handles it and keeps running until the kill fallback"
-            )
             XCTAssertGreaterThanOrEqual(
                 attempt.elapsed,
                 deadline + Self.terminationGrace - 0.1,
@@ -69,15 +66,23 @@ final class PichiFluidServeReaderTimeoutTests: XCTestCase {
             let reason = errno
             XCTAssertEqual(alive, -1, "The owned helper must be reaped before timeout is returned")
             XCTAssertEqual(reason, ESRCH)
+            guard attempt.termHandled else {
+                // The handler runs when the current 50 ms sleep of the helper ends. A heavily loaded machine can
+                // delay that past the grace, and the kill fallback then ends the helper first. Such an attempt
+                // cannot tell a slow handler from a reader that sent no TERM, so it is repeated; a reader that
+                // sends no TERM leaves every attempt without the marker and fails below.
+                discarded.append("\(deadline) s without the handled-TERM marker")
+                continue
+            }
             if !discarded.isEmpty {
                 // Not a failure, but a slow drift to the longer deadlines is worth seeing in the log.
                 print("PichiFluidServeReaderTimeoutTests: judged the \(deadline) s attempt after discarding "
-                    + discarded.map { "\($0) s" }.joined(separator: ", "))
+                    + discarded.joined(separator: ", "))
             }
             return
         }
-        XCTFail("The fixture shell never installed its TERM handler within the longest deadline "
-            + "(\(discarded.map { "\($0) s" }.joined(separator: ", "))); the machine is too loaded to judge the reader")
+        XCTFail("No attempt could be judged (\(discarded.joined(separator: ", "))). Either the machine is too "
+            + "loaded, or the reader no longer sends TERM before the kill fallback")
     }
 
     /// One run of the reader against a fresh fixture in its own directory.
@@ -91,7 +96,7 @@ final class PichiFluidServeReaderTimeoutTests: XCTestCase {
         let handler = "echo handled > " + FluidServeSkill.shellQuoted(termFile.path)
         // Order matters: the handler first, then the pid, then the marker that tells the test the
         // handler is in place. The loop sleeps instead of spinning so a loaded machine still schedules the
-        // shell; sh runs the handler when the current 50 ms sleep ends, well inside the two-second grace.
+        // shell; sh runs the handler when the current 50 ms sleep ends, normally well inside the two-second grace.
         let fixture = "#!/bin/sh\n"
             + "[ \"${1:-}\" = warm-up ] && exit 0\n"
             + "trap " + FluidServeSkill.shellQuoted(handler) + " TERM\n"
