@@ -18,6 +18,20 @@ Cloud speech or text providers process content you send to them under their poli
 
 Optional location or other protected capabilities have their own product settings and OS permissions. Grant only the capabilities you want to use.
 
+## Usage analytics on Mac
+
+A Mac distribution configured for Pichi analytics sends one daily activity
+signal to PostHog with a random local app profile ID, the app version and
+basic system information, buffered until the local week ends. An analytics-enabled app whose bundle version is marked beta also sends
+daily performance summaries. To share usage counts for dictation, files and live recording
+starts, setup progress, model usage and timing, enable **Share Detailed
+Anonymous Analytics** in Settings. Turning it off removes pending detailed
+metrics from this Mac. The daily activity signal and any enabled beta signal continue.
+
+Usage analytics contains no audio, transcripts, prompts, file names, account
+IDs or meeting details. The in-app analytics privacy panel shows whether the
+distribution sends analytics and identifies its configured destination.
+
 ## Meeting microphones
 
 Mac microphone and computer audio are separate sources. Pichi Voice's microphone control governs its local microphone admission. A conferencing app's mute state is a separate control unless a verified observer connects them. Client changes and observation delay can affect automatic mute handling; services do not share a universal timing guarantee.

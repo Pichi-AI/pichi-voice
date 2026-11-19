@@ -15,6 +15,7 @@ nonisolated enum AnalyticsUploadTransport {
         var keys: Set<String> = [
             "distinct_id", "platform", "$os", "app_version", "ram_gb", "chip", "schema_version",
             "activity_kind", "activity_date", "usage_date", "dictation_count", "command_count", "edit_count", "meeting_count",
+            "live_meeting_count",
             "role", "mode", "provider", "model", "use_count", "flow_id", "origin", "step", "outcome",
             "duration_bucket", "attempt_count_bucket", "start_method", "failure_stage", "download_id", "source", "duration_seconds",
             "latency_date", "delivery_path", "request_count", "request_total_ms", "request_average_ms", "request_min_ms", "request_max_ms",

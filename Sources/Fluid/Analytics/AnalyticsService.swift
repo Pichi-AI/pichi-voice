@@ -21,13 +21,16 @@ final class AnalyticsService {
         }
     }
 
-    func setDetailedAnalyticsEnabled(_ enabled: Bool) {
-        let consentGeneration = self.detailedConsentGate.advance()
+    func setDetailedAnalyticsEnabled(_ enabled: Bool, persist: () -> Void) {
+        let profile = PrivateProfileStorage.current
+        guard !self.suspended, profile.isReadable else { return }
+        if enabled, !self.detailedConsentGate.canEnableDetails(for: profile) { return }
+        let consentGeneration = self.detailedConsentGate.advance(revoking: enabled ? nil : profile)
+        persist()
         let context = Self.context(
             detailedAnalyticsEnabled: enabled,
             detailedConsentGeneration: consentGeneration
         )
-        guard !self.suspended, context.profile.isReadable else { return }
         self.enqueue(context: context) { core, context in
             await core.setDetailedAnalyticsEnabled(context: context)
         }
@@ -274,20 +277,66 @@ private struct AnalyticsContext: Sendable {
 final nonisolated class DetailedAnalyticsConsentGate: @unchecked Sendable {
     private let lock = NSLock()
     private var generation: UInt64 = 0
+    private var unpersistedRevocations: [URL: Data] = [:]
 
     var currentGeneration: UInt64 {
         self.lock.withLock { self.generation }
     }
 
-    func advance() -> UInt64 {
+    func advance(revoking profile: PrivateProfileSnapshot? = nil) -> UInt64 {
         self.lock.withLock {
             self.generation &+= 1
+            if let profile {
+                let marker = Self.revocationURL(for: profile)
+                let token = Data(UUID().uuidString.utf8)
+                do {
+                    try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(),
+                                                            withIntermediateDirectories: true)
+                    try token.write(to: marker, options: .atomic)
+                    self.unpersistedRevocations.removeValue(forKey: marker)
+                } catch {
+                    self.unpersistedRevocations[marker] = token
+                }
+            }
             return self.generation
         }
     }
 
     func accepts(_ generation: UInt64) -> Bool {
         self.lock.withLock { generation == self.generation }
+    }
+
+    func canEnableDetails(for profile: PrivateProfileSnapshot) -> Bool {
+        self.lock.withLock { self.unpersistedRevocations[Self.revocationURL(for: profile)] == nil }
+    }
+
+    func pendingRevocation(for profile: PrivateProfileSnapshot) throws -> Data? {
+        let marker = Self.revocationURL(for: profile)
+        return try self.lock.withLock {
+            try self.unpersistedRevocations[marker] ?? Self.readRevocation(at: marker)
+        }
+    }
+
+    func completeRevocation(_ token: Data, for profile: PrivateProfileSnapshot) throws {
+        let marker = Self.revocationURL(for: profile)
+        try self.lock.withLock {
+            let stored = try Self.readRevocation(at: marker)
+            guard (self.unpersistedRevocations[marker] ?? stored) == token else { return }
+            if stored != nil { try FileManager.default.removeItem(at: marker) }
+            self.unpersistedRevocations.removeValue(forKey: marker)
+        }
+    }
+
+    private static func revocationURL(for profile: PrivateProfileSnapshot) -> URL {
+        profile.directory("Analytics").appendingPathComponent("pending-detailed-consent-revocation")
+    }
+
+    private static func readRevocation(at url: URL) throws -> Data? {
+        do {
+            return try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            return nil
+        }
     }
 }
 
@@ -300,6 +349,7 @@ private actor AnalyticsCore {
     private var flushTask: Task<Void, Never>?
     private var activeUploadTask: Task<Int, Error>?
     private var isFlushing = false
+    private var detailedPurgeGeneration: UInt64?
 
     private let batchSize = 50
 
@@ -319,6 +369,7 @@ private actor AnalyticsCore {
         self.database = nil
         self.databaseProfile = nil
         self.context = nil
+        self.detailedPurgeGeneration = nil
     }
 
     private func accepts(_ context: AnalyticsContext) -> Bool {
@@ -331,9 +382,7 @@ private actor AnalyticsCore {
     func bootstrap(context: AnalyticsContext) async {
         guard self.apply(context) else { return }
         do {
-            if !context.detailedAnalyticsEnabled {
-                try self.purgeStoredDetailedAnalyticsIfPresent(context: context)
-            }
+            try self.purgeStoredDetailedAnalyticsIfNeeded(context: context)
             guard context.config.isConfigured else { return }
             let database = try self.database(for: context)
             try database.finalizeDays(before: Date())
@@ -572,6 +621,7 @@ private actor AnalyticsCore {
             let database = try self.database(for: context)
             let date = Date()
             if mayRecordDetails {
+                try self.purgeStoredDetailedAnalyticsIfNeeded(context: context)
                 try operation(database, date)
             } else if let fallbackActivity {
                 try database.recordActivity(fallbackActivity, at: date)
@@ -609,20 +659,37 @@ private actor AnalyticsCore {
         profile.directory("Analytics").appendingPathComponent("analytics-v2.sqlite3")
     }
 
-    private func purgeStoredDetailedAnalyticsIfPresent(context: AnalyticsContext) throws {
+    private func purgeStoredDetailedAnalyticsIfNeeded(context: AnalyticsContext) throws {
+        guard PrivateProfileStorage.isReadable(context.profile) else { throw CancellationError() }
+        let revocation = try self.detailedConsentGate.pendingRevocation(for: context.profile)
+        let disabledNeedsPurge = !context.detailedAnalyticsEnabled
+            && self.detailedPurgeGeneration != context.detailedConsentGeneration
+        // An opt-in that arrives before the opt-out task runs must still clear older details.
+        guard disabledNeedsPurge || revocation != nil else { return }
+
         if let database {
             guard self.databaseProfile == context.profile else { throw CancellationError() }
             try database.purgeDetailedAnalytics()
-            return
+        } else {
+            let url = self.databaseURL(profile: context.profile)
+            if FileManager.default.fileExists(atPath: url.path) {
+                let existingDatabase = try AnalyticsDatabase(
+                    url: url,
+                    distinctID: context.distinctID,
+                    appVersion: context.appVersion
+                )
+                try existingDatabase.purgeDetailedAnalytics()
+            }
         }
-        let url = self.databaseURL(profile: context.profile)
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        let existingDatabase = try AnalyticsDatabase(
-            url: url,
-            distinctID: context.distinctID,
-            appVersion: context.appVersion
-        )
-        try existingDatabase.purgeDetailedAnalytics()
+        if let revocation {
+            guard PrivateProfileStorage.isReadable(context.profile) else { throw CancellationError() }
+            // Keep the marker if preferences could not confirm persistence. A later
+            // purge can retry, and the marker still protects the queue on restart.
+            if context.detailedAnalyticsEnabled || PrivateProfileDefaults.bound(to: context.profile).synchronize() {
+                try self.detailedConsentGate.completeRevocation(revocation, for: context.profile)
+            }
+        }
+        self.detailedPurgeGeneration = context.detailedConsentGeneration
     }
 
     private func startFlushLoopIfNeeded() {
@@ -664,6 +731,8 @@ private actor AnalyticsCore {
 
         let items: [AnalyticsOutboxItem]
         do {
+            // A basic event may enter the core before the queued consent transition.
+            try self.purgeStoredDetailedAnalyticsIfNeeded(context: context)
             try database.finalizeDays(before: Date())
             items = try database.readyOutbox(limit: self.batchSize, at: Date())
         } catch {
