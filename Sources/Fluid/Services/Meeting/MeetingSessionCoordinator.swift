@@ -989,9 +989,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.liveTranscript = .empty
         self.lastLiveSpeechAt = nil
         // Deferred speech must not start (and immediately tear down) a live recognizer: that would begin
-        // the very model installation or inference whose failure deferred it.
-        if !speechDeferredAtStart,
-           let captionStorage = Self.legacyCaptionStorage(for: configuration, speechDeferred: speechDeferredAtStart) {
+        // the very model installation or inference whose failure deferred it. Without one, the capture
+        // tee below offers it nothing.
+        let captionStorage = speechDeferredAtStart
+            ? nil : Self.legacyCaptionStorage(for: configuration, speechDeferred: speechDeferredAtStart)
+        if let captionStorage {
             liveTranscriptionCoordinator.start(
                 mode: configuration.mode,
                 languageCode: configuration.languageCode,
