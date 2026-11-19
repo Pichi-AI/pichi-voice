@@ -123,7 +123,8 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     }
 
     func start(mode: MeetingCaptureMode, languageCode: String = "en", modelID: String? = nil, artifactFingerprint: String? = nil,
-               configuration: MeetingFinalProcessingConfiguration? = nil) {
+               configuration: MeetingFinalProcessingConfiguration? = nil,
+               storage: MeetingLiveAudioFIFO.Storage = .anonymousFile) {
         guard !self.stateLock.withLock({ self.isStopped }) else { return }
         switch Self.captionRoute(languageCode: languageCode, modelID: modelID) {
         case let .buffered(modelID):
@@ -133,7 +134,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
                 self.publish { $0.settingAvailability(.unavailable(reason: "Live captions require a matching recording configuration.")) }
                 return
             }
-            self.startBuffered(mode: mode, configuration: configuration)
+            self.startBuffered(mode: mode, configuration: configuration, storage: storage)
             return
         case let .unavailable(reason):
             self.publish { $0.settingAvailability(.unavailable(reason: reason)) }
@@ -230,7 +231,8 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         #endif
     }
 
-    private func startBuffered(mode: MeetingCaptureMode, configuration: MeetingFinalProcessingConfiguration) {
+    private func startBuffered(mode: MeetingCaptureMode, configuration: MeetingFinalProcessingConfiguration,
+                               storage: MeetingLiveAudioFIFO.Storage) {
         let modelID = configuration.asrModel
         let admission = PichiMeetingProviderFactory.registeredLiveAdmission(for: modelID)
         let requiredMemory = admission?.minimumPhysicalMemoryBytes ?? Self.minimumPhysicalMemoryBytes
@@ -247,9 +249,9 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         // recognizer's existing prepare operation constructs and loads its provider later.
         // There must be no asynchronous no-engine interval at the beginning of a recording.
         let recognizer = PichiMeetingCaptionRecognizer(configuration: configuration)
-        let microphone = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        let microphone = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer, storage: storage)
         let application = mode.capturesComputerAudio
-            ? PichiMeetingBufferedTrackEngine(kind: .applicationAudio, recognizer: recognizer) : nil
+            ? PichiMeetingBufferedTrackEngine(kind: .applicationAudio, recognizer: recognizer, storage: storage) : nil
         let installed = self.stateLock.withLock {
             guard !self.isStopped, self.bufferedStopTask == nil,
                   self.bufferedRecognizer == nil else { return false }

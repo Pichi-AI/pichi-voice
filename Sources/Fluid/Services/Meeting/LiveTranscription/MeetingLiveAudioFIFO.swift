@@ -4,9 +4,8 @@ import CoreMedia
 import Darwin
 import Foundation
 
-/// Growing live-caption backlog for retained-file capture only. This is plaintext disk storage,
-/// even though its private inode is unlinked before the first audio byte is written. It must not
-/// replace a memory-only or encrypted-persistence contract.
+/// Live-caption backlog for retained-file capture. Voice-masked sessions must use bounded RAM:
+/// even an unlinked temporary file would expose the original voice on disk.
 ///
 /// Enqueue transfers immutable ownership of the already copied PCM buffer. The producer must not
 /// mutate it afterwards. Capture performs bounded metadata validation/reservation, never file I/O.
@@ -14,6 +13,10 @@ import Foundation
 /// bounded write backlog and one bounded read batch. Failures reject new input instead of evicting
 /// the oldest speech. Close joins accepted work; deinit also closes the anonymous descriptor.
 final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
+    enum Storage: Sendable {
+        case memoryOnly, anonymousFile
+    }
+
     struct Input: Sendable {
         let sample: MeetingLiveSampleCopy.Sample
         let epoch: UInt64
@@ -68,6 +71,8 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
     private static let maximumChannels = 64
     private let lock = NSLock()
     private let ioQueue: DispatchQueue
+    private let storage: Storage
+    private let maximumStorageBytes: Int
     private let limits: Limits
     private let temporaryDirectory: URL
     // Admission state is protected by lock. Queue submission shares that lock so a close/read
@@ -80,6 +85,7 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
     private var unreportedFailure: Failure?
     // File state belongs exclusively to ioQueue. Queued work retains self, so deinit cannot race it.
     private var descriptor: Int32 = -1
+    private var memoryBacklog = Data()
     private var readOffset = 0
     private var writeOffset = 0
     private var closed = false
@@ -87,12 +93,15 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
     private var unreadPackets = 0
 
     init(limits: Limits = Limits(), temporaryDirectory: URL = FileManager.default.temporaryDirectory,
-         ioQueue: DispatchQueue? = nil) {
+         ioQueue: DispatchQueue? = nil, storage: Storage = .anonymousFile) {
         precondition(limits.maximumPendingPackets > 0 && limits.maximumPendingPackets <= 512)
         precondition(limits.maximumPendingBytes > 0 && limits.maximumPendingBytes <= 8 * 1024 * 1024)
         precondition(limits.maximumDiskBytes > 0 && limits.maximumDiskBytes <= 512 * 1024 * 1024)
         precondition(limits.maximumBatchPackets > 0 && limits.maximumBatchPackets <= 32)
         precondition(limits.maximumBatchBytes > 0 && limits.maximumBatchBytes <= 1024 * 1024)
+        self.storage = storage
+        // Bound the stored backlog separately from the already bounded capture handoff.
+        self.maximumStorageBytes = storage == .memoryOnly ? limits.maximumPendingBytes : limits.maximumDiskBytes
         self.limits = limits
         self.temporaryDirectory = temporaryDirectory
         self.ioQueue = ioQueue ?? DispatchQueue(label: "meeting.live-caption.audio-fifo", qos: .userInitiated)
@@ -170,6 +179,7 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
                 accepting = false
                 ioQueue.async { [self] in
                     if descriptor >= 0 { _ = Darwin.close(descriptor); descriptor = -1 }
+                    memoryBacklog = Data()
                     closed = true; readOffset = 0; writeOffset = 0
                     unreadPackets = 0
                     continuation.resume()
@@ -222,7 +232,7 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
     }
 
     private func openIfNeeded() throws {
-        guard descriptor < 0 else { return }
+        guard storage == .anonymousFile, descriptor < 0 else { return }
         let url = temporaryDirectory.appendingPathComponent(".meeting-live-fifo-\(UUID().uuidString)")
         let fd = Darwin.open(url.path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw Failure.storageUnavailable }
@@ -237,7 +247,9 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
         guard !closed else { throw Failure.storageUnavailable }
         // This bounds physical high-water size, not just unread bytes. Partial draining never
         // permits an unlimited append-only file; a complete drain resets both offsets below.
-        guard packet.recordBytes <= limits.maximumDiskBytes - writeOffset else { throw Failure.diskCapacity }
+        guard packet.recordBytes <= maximumStorageBytes - writeOffset else {
+            throw storage == .memoryOnly ? Failure.pendingCapacity : Failure.diskCapacity
+        }
         try openIfNeeded()
         let buffers = UnsafeMutableAudioBufferListPointer(packet.input.sample.buffer.mutableAudioBufferList)
         var payload = Data(capacity: packet.payloadBytes)
@@ -260,7 +272,7 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
     }
 
     private func readBatch() throws -> [Input] {
-        guard !closed, !readFailed, descriptor >= 0, readOffset < writeOffset else { return [] }
+        guard !closed, !readFailed, readOffset < writeOffset else { return [] }
         var cursor = readOffset, used = 0
         var output: [Input] = []
         while cursor < writeOffset, output.count < limits.maximumBatchPackets {
@@ -278,7 +290,7 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
         }
         // Do not commit any consumed offset until the complete bounded batch has decoded.
         if cursor == writeOffset {
-            guard Darwin.ftruncate(descriptor, 0) == 0 else { throw Failure.storageUnavailable }
+            try truncate(to: 0)
             readOffset = 0; writeOffset = 0
         } else {
             readOffset = cursor
@@ -291,7 +303,7 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
     /// Reclaim a consumed prefix even when a busy recognizer never quite empties the FIFO.
     /// Otherwise a small steady backlog could exhaust the file bound over a long meeting.
     private func reclaimConsumedPrefix() throws {
-        let threshold = min(8 * 1024 * 1024, max(1, limits.maximumDiskBytes / 4))
+        let threshold = min(8 * 1024 * 1024, max(1, maximumStorageBytes / 4))
         guard readOffset >= threshold, readOffset >= writeOffset / 2 else { return }
         let remaining = writeOffset - readOffset
         var copied = 0
@@ -302,7 +314,7 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
             try writeAll(bytes, offset: copied)
             copied += count
         }
-        guard Darwin.ftruncate(descriptor, off_t(remaining)) == 0 else { throw Failure.storageUnavailable }
+        try truncate(to: remaining)
         readOffset = 0
         writeOffset = remaining
     }
@@ -359,7 +371,22 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
         return input
     }
 
+    private func truncate(to count: Int) throws {
+        if storage == .memoryOnly {
+            memoryBacklog.count = count
+        } else if Darwin.ftruncate(descriptor, off_t(count)) != 0 {
+            throw Failure.storageUnavailable
+        }
+    }
+
     private func writeAll(_ data: Data, offset: Int) throws {
+        if storage == .memoryOnly {
+            // The writer appends records or overwrites a consumed prefix during compaction.
+            guard offset >= 0, offset <= memoryBacklog.count,
+                  data.count <= maximumStorageBytes - offset else { throw Failure.pendingCapacity }
+            memoryBacklog.replaceSubrange(offset..<min(memoryBacklog.count, offset + data.count), with: data)
+            return
+        }
         try data.withUnsafeBytes { bytes in
             var written = 0
             while written < data.count {
@@ -372,6 +399,11 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
     }
 
     private func readExact(_ count: Int, offset: Int) throws -> Data {
+        if storage == .memoryOnly {
+            guard offset >= 0, count >= 0, offset <= memoryBacklog.count,
+                  count <= memoryBacklog.count - offset else { throw Failure.corruptRecord }
+            return memoryBacklog.subdata(in: offset..<(offset + count))
+        }
         var data = Data(count: count)
         try data.withUnsafeMutableBytes { bytes in
             var read = 0
@@ -386,7 +418,7 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
     }
 
     #if DEBUG
-    struct TestingState: Sendable { let pendingPackets: Int; let pendingBytes: Int; let diskBytes: Int; let links: UInt16; let permissions: UInt16 }
+    struct TestingState: Sendable { let pendingPackets: Int; let pendingBytes: Int; let diskBytes: Int; let memoryBacklogBytes: Int; let links: UInt16; let permissions: UInt16 }
     func testingState() async -> TestingState {
         await withCheckedContinuation { continuation in
             lock.withLock { ioQueue.async { [self] in
@@ -394,7 +426,7 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
                 let status = descriptor >= 0 ? Darwin.fstat(descriptor, &info) : -1
                 let pending = lock.withLock { (pendingPackets, pendingBytes) }
                 continuation.resume(returning: TestingState(pendingPackets: pending.0, pendingBytes: pending.1,
-                    diskBytes: writeOffset, links: status == 0 ? UInt16(info.st_nlink) : 0,
+                    diskBytes: descriptor >= 0 ? writeOffset : 0, memoryBacklogBytes: memoryBacklog.count, links: status == 0 ? UInt16(info.st_nlink) : 0,
                     permissions: status == 0 ? UInt16(info.st_mode & 0o777) : 0))
             } }
         }

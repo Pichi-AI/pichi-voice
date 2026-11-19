@@ -67,9 +67,10 @@ nonisolated extension MeetingPCMSinkError: LocalizedError {
         }
     }
 
-    /// Recovery metadata that no later attempt can make valid: the extent is missing or the path
-    /// escapes or is not a regular confined capture file. Other failures may be transient, so the
-    /// partial capture stays an owned recovery input.
+    /// Recovery metadata that no later attempt can make valid: the extent is missing, the path
+    /// escapes, or it names no capture or something that is not a regular capture file in the
+    /// recorded format. Other failures, such as a file that changes or cannot be inspected yet, may
+    /// be transient, so the partial capture stays an owned recovery input.
     var isPermanentRecoveryRejection: Bool {
         switch self {
         case .invalidRecoveryMetadata, .invalidRelativePath, .pathEscapesSessionDirectory, .symlinkComponentRejected: return true
@@ -109,8 +110,8 @@ nonisolated protocol MeetingAudioChunkSink: AnyObject, Sendable {
     /// Appends one already-retimed, already-canonical, ready Float32 LPCM `CMSampleBuffer`. Only
     /// buffers with finite samples, a valid numeric presentation timestamp, and a format matching
     /// the one passed to `begin` are accepted; everything else throws without touching durable
-    /// state. No resampling, channel clamping, or sample-value conversion is performed; a sink may
-    /// pack planar channels into canonical interleaved storage without changing order or values.
+    /// state. The sink preserves sample order, frame count and channel topology. By default it
+    /// preserves values too. A configured voice mask changes only the samples being persisted.
     func append(_ sampleBuffer: CMSampleBuffer) throws -> MeetingPCMAppendReceipt
 
     /// Finalizes: closes the underlying container, reopens it read-only, verifies decoded frame

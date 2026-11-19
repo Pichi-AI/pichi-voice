@@ -26,6 +26,7 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
     private struct Paths { let final: URL; let partial: URL }
     private struct Identity { let dev: dev_t; let ino: ino_t; let size: off_t }
     private let sessionDirectory: URL
+    private let voiceMask: MeetingVoiceMask?
     private var state: State = .idle
     private var audioFile: AudioFileID?
     private var paths: Paths?
@@ -41,7 +42,10 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
         return String(partial.path.dropFirst(root.count))
     }
 
-    init(sessionDirectory: URL) { self.sessionDirectory = sessionDirectory.standardizedFileURL }
+    init(sessionDirectory: URL, voiceMask: MeetingVoiceMask? = nil) {
+        self.sessionDirectory = sessionDirectory.standardizedFileURL
+        self.voiceMask = voiceMask
+    }
 
     deinit { if let audioFile { AudioFileClose(audioFile) } }
 
@@ -54,6 +58,9 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
     func begin(relativeFilePath: String, format: AVAudioFormat, contract: MeetingPCMFormatContract) throws {
         guard self.state == .idle else { throw MeetingPCMSinkError.alreadyBegun }
         let inputASBD = format.streamDescription.pointee
+        if self.voiceMask != nil, inputASBD.mSampleRate != 16_000 || inputASBD.mChannelsPerFrame != 1 {
+            throw MeetingPCMSinkError.unsupportedClientFormat("Voice masking requires 16 kHz mono PCM.")
+        }
         let derivedContract: MeetingPCMFormatContract
         do { derivedContract = try MeetingPCMFormatContract(audioFormat: format) } catch { throw MeetingPCMSinkError.unsupportedClientFormat(error.localizedDescription) }
         guard derivedContract == contract else {
@@ -129,12 +136,17 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
         let frames = CMSampleBufferGetNumSamples(sampleBuffer)
         guard frames > 0 else { throw MeetingPCMSinkError.invalidSampleBuffer("zero frames") }
         let list = try AudioList(sampleBuffer: sampleBuffer)
-        let packed = try list.interleavedFloat32(frames: frames, channels: Int(format.channels), inputASBD: incoming)
+        var packed = try list.interleavedFloat32(frames: frames, channels: Int(format.channels), inputASBD: incoming)
         let expectedBytes = try Self.checkedMultiply(Int64(frames), Int64(expectedASBD.mBytesPerFrame))
         guard Int64(packed.count) == expectedBytes else { throw MeetingPCMSinkError.invalidSampleBuffer("packed size mismatch") }
         var packetCount = try Self.checkedUInt32(Int64(frames))
         let packetOffset = try Self.checkedInt64(self.writtenPackets)
         let byteCount = try Self.checkedUInt32(Int64(packed.count))
+        // Process only the writer's copy, before the first byte enters even the recovery file.
+        // The capture buffer is independently consumed by live recognition and speaker labeling.
+        if let voiceMask {
+            packed.withUnsafeMutableBytes { voiceMask.process($0.bindMemory(to: Float.self)) }
+        }
         let status = packed.withUnsafeBytes { bytes in
             // Buffer size and channel topology are validated before this synchronous C call.
             // swiftlint:disable:next force_unwrapping
@@ -263,13 +275,24 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
         let alreadyPublished = FileManager.default.fileExists(atPath: final.path)
         let partial: URL? = alreadyPublished ? nil : try confined(asset.relativeFilePath)
         let input = partial ?? final
+        // Publication renames the partial atomically, so a partial that vanished is either published by now or
+        // gone for good; only a published one, or a file that cannot be inspected right now, may still recover.
+        // Something that is not a regular file, or a capture in another format than its recorded extent, can
+        // never become this chunk either.
         var info = stat()
-        guard lstat(input.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
-            throw MeetingPCMSinkError.finalizationVerificationFailed("capture is not a regular file")
+        guard lstat(input.path, &info) == 0 else {
+            let reason = errno
+            if reason != ENOENT || (partial != nil && FileManager.default.fileExists(atPath: final.path)) {
+                throw MeetingPCMSinkError.finalizationVerificationFailed("capture is not available yet")
+            }
+            throw MeetingPCMSinkError.invalidRecoveryMetadata("capture is missing")
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG else {
+            throw MeetingPCMSinkError.invalidRecoveryMetadata("capture is not a regular file")
         }
         let native = try AVAudioFile(forReading: input).fileFormat
         guard native.sampleRate == rate, Int(native.channelCount) == channels else {
-            throw MeetingPCMSinkError.finalizationVerificationFailed("capture format changed")
+            throw MeetingPCMSinkError.invalidRecoveryMetadata("capture format does not match its recovery extent")
         }
         let format = Format(rate: rate, channels: UInt32(channels), layout: Self.layoutData(native.channelLayout),
                             contract: try MeetingPCMFormatContract(audioFormat: native))

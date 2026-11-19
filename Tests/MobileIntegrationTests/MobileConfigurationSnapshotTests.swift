@@ -123,6 +123,7 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         let settings = SettingsStore(defaults: defaults)
         settings.selectedSpeechModel = .gigaam
         settings.meetingSaveAudio = true
+        settings.meetingMaskSavedVoices = true
         settings.meetingSpeakerLabelsEnabled = true
         settings.meetingSpeakerProcessingMode = .streaming
         settings.meetingPIIRedactionEnabled = false
@@ -133,6 +134,7 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
                 await Task.yield()
                 settings.meetingSpeakerProcessingMode = .afterRecording
                 settings.meetingSaveAudio = false
+                settings.meetingMaskSavedVoices = false
                 return microphone
             })
         let configuration = try await services.meetingSessionCoordinator.defaultConfiguration(mode: .inRoom, title: "Synthetic stream")
@@ -144,6 +146,35 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
             timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
         XCTAssertEqual(session.effectiveSpeakerProcessingMode, .streaming)
         XCTAssertEqual(session.audioStorageMode, .retainedFiles)
+        XCTAssertEqual(configuration.maskSavedVoices, true)
+        XCTAssertEqual(session.maskSavedVoices, true)
+    }
+
+    func testVoiceMaskPreferenceIsIndependentAndOnlyMarksRetainedRecordings() async throws {
+        let suite = "VoiceMaskPreferences.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        let settings = SettingsStore(defaults: defaults)
+        let services = AppServices(store: MeetingSessionStore(rootDirectory: root), settings: settings,
+            microphoneResolver: { _ in .init(captureDeviceID: "synthetic", displayName: "Test") })
+        XCTAssertFalse(settings.meetingMaskSavedVoices)
+        for save in [false, true] {
+            settings.meetingSaveAudio = save
+            for mask in [true, false] {
+                settings.meetingMaskSavedVoices = mask
+                XCTAssertEqual(settings.meetingSaveAudio, save)
+                XCTAssertEqual(SettingsStore(defaults: defaults).meetingMaskSavedVoices, mask)
+                let config = try await services.meetingSessionCoordinator.defaultConfiguration(mode: .inRoom, title: "Test")
+                let session = MeetingSession(configuration: config,
+                    timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+                let saved = try JSONEncoder().encode(session)
+                let decoded = try JSONDecoder().decode(MeetingSession.self, from: saved)
+                XCTAssertEqual(decoded.audioStorageMode, save ? .retainedFiles : .memoryOnly)
+                XCTAssertEqual(decoded.maskSavedVoices, save && mask ? true : nil)
+                if !mask { XCTAssertNil((try JSONSerialization.jsonObject(with: saved) as? [String: Any])?["maskSavedVoices"]) }
+            }
+        }
     }
 
     func testSelectedSpeechModelDoesNotPromoteAmbientBackendToRequestOverride() async throws {
