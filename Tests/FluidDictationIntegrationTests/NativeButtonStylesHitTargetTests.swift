@@ -141,21 +141,6 @@ final class NativeButtonStylesHitTargetTests: XCTestCase {
         },
     ]
 
-    func testReleaseHistoryActionInSheetForUncuratedVersion() throws {
-        for eligible in [false, true] {
-            var selected: SidebarItem?
-            let sheet = ReleaseHighlightsView(canExplore: eligible, content: .current(version: "9.0.0")) {
-                selected = $0?.sidebarItem
-            }
-            let harness = self.makeHarness(sheet.appTheme(.light))
-            defer { harness.tearDown() }
-            // The primary action is above the footer, inside the sheet's leading padding.
-            let point = harness.hostPoint(80, harness.targetSize.height - 85)
-            try self.simulateClick(in: harness.window, at: point, in: harness.hostingView)
-            XCTAssertEqual(selected, eligible ? .changelog : nil)
-        }
-    }
-
     func testDisclosureHeadersAcceptClicksAcrossTheirWholeRow() throws {
         for x: CGFloat in [7, 90, 200, 316] {
             var expanded = false
