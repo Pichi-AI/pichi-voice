@@ -231,7 +231,7 @@ final class PichiTextModelEvalTests: XCTestCase {
                      "Sources/Fluid/Services/DictationPromptRequest.swift",
                      "Sources/Fluid/Services/LLMClient.swift", "Sources/Fluid/Persistence/SettingsStore.swift",
                      "Sources/Fluid/Services/ASRService.swift",
-                     "Tests/FluidDictationIntegrationTests/PichiTextModelEvalTests.swift"]
+                     "Tests/FluidDictationIntegrationTests/Features/TextModels/PichiTextModelEvalTests.swift"]
         var result: [String: String] = [:]
         for file in files {
             let data = try Data(contentsOf: URL(fileURLWithPath: root).appendingPathComponent(file))
