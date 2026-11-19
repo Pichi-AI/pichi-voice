@@ -6373,19 +6373,19 @@
         }
       }
     },
-    "Applies to past recordings too. Transcripts are always kept.": {
+    "The retention period also applies to past recordings. Transcripts are always kept.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Applies to past recordings too. Transcripts are always kept."
+            "value": "The retention period also applies to past recordings. Transcripts are always kept."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Применяется и к прошлым записям. Расшифровки сохраняются всегда."
+            "value": "Срок хранения действует и для прошлых записей. Расшифровки сохраняются всегда."
           }
         }
       }

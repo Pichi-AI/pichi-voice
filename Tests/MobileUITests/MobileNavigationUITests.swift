@@ -72,7 +72,9 @@ final class MobileNavigationUITests: XCTestCase {
             app.launchEnvironment["PICHI_UI_CAPTION_REVIEW"] = "1"
         }
         if !productionDownload {
-            let language = name.contains("testSharedGuestHistoryAcrossAccountProfiles") ? "ru" : "en"
+            let reviewRussianMask = name.contains("testVoiceMaskPreferenceIsIndependentOfAudioStorage")
+                && UIDevice.current.userInterfaceIdiom == .pad
+            let language = name.contains("testSharedGuestHistoryAcrossAccountProfiles") || reviewRussianMask ? "ru" : "en"
             app.launchArguments += ["-PichiInterfaceLanguage", language]
         }
         if !productionSmoke {
@@ -816,11 +818,13 @@ final class MobileNavigationUITests: XCTestCase {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Use an owned simulator to exercise both capture preferences")
         #else
-        openNavigation("settings", title: "Settings", captureStep: false)
+        let russian = UIDevice.current.userInterfaceIdiom == .pad
+        openNavigation("settings", title: russian ? "Настройки" : "Settings", captureStep: false)
         app.buttons["settings.privacy"].tap()
         let saveID = "privacy.saveAudio", maskID = "privacy.maskSavedVoices"
         let save = app.switches[saveID], mask = app.switches[maskID]
         XCTAssertTrue(mask.waitForExistence(timeout: 8))
+        XCTAssertEqual(mask.label, russian ? "Изменять голоса" : "Change voices")
         let initialSave = try XCTUnwrap(save.value as? String)
         let initialMask = try XCTUnwrap(mask.value as? String)
         defer {

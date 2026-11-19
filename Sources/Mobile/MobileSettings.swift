@@ -516,7 +516,7 @@ private struct MobilePrivacySettings: View {
                 Text(PichiLocalization.text("Audio storage"))
             } footer: {
                 if settings.meetingSaveAudio {
-                    MobileSettingsFooter(PichiLocalization.text("Applies to past recordings too. Transcripts are always kept."),
+                    MobileSettingsFooter(PichiLocalization.text("The retention period also applies to past recordings. Transcripts are always kept."),
                         MobileAudioPrivacyControls.retainedAudioExplanation(maskSavedVoices: settings.meetingMaskSavedVoices))
                 } else {
                     MobileSettingsFooter(MobileAudioPrivacyControls.memoryOnlyExplanation)
