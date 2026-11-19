@@ -14,13 +14,25 @@ import SwiftUI
 import FluidAudio
 #endif
 final class SettingsStore: ObservableObject {
+    #if os(macOS)
+    static let shared = SettingsStore(updateDetailedAnalytics: { enabled, persist in
+        AnalyticsService.shared.setDetailedAnalyticsEnabled(enabled, persist: persist)
+    })
+    #else
     static let shared = SettingsStore()
+    #endif
     let defaults: UserDefaults
+    private let updateDetailedAnalytics: (Bool, () -> Void) -> Void
     static let automaticWhisperLanguageCode = "auto"
     static let privateAIBackendPreferenceDefaultsKey = "FluidIntelligenceBackendPreference"
 
-    init(defaults: UserDefaults = PrivateProfileDefaults.shared, initializeDesktop: Bool = true) {
+    init(
+        defaults: UserDefaults = PrivateProfileDefaults.shared,
+        initializeDesktop: Bool = true,
+        updateDetailedAnalytics: @escaping (Bool, () -> Void) -> Void = { _, persist in persist() }
+    ) {
         self.defaults = defaults
+        self.updateDetailedAnalytics = updateDetailedAnalytics
         #if os(macOS)
         if initializeDesktop { self.initializeDesktopPreferences() }
         #endif
@@ -1580,8 +1592,18 @@ final class SettingsStore: ObservableObject {
     var shareDetailedAnalytics: Bool {
         get { Self.detailedAnalyticsEnabled(in: self.defaults) }
         set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.shareAnonymousAnalytics)
+            let changed = self.shareDetailedAnalytics != newValue
+            let persist = {
+                self.objectWillChange.send()
+                self.defaults.set(newValue, forKey: Keys.shareAnonymousAnalytics)
+                #if os(macOS)
+                // The opted-out preference is also the restart fallback if the queue's
+                // revocation marker cannot be written.
+                if changed, !newValue { _ = self.defaults.synchronize() }
+                #endif
+            }
+            if changed { self.updateDetailedAnalytics(newValue, persist) }
+            else { persist() }
         }
     }
 
@@ -4561,6 +4583,8 @@ final class SettingsStore: ObservableObject {
         case .command:
             providerID = self.commandModeLinkedToGlobal ? self.selectedProviderID : self.commandModeSelectedProviderID
             selectedModel = self.commandModeLinkedToGlobal ? self.modelSelection(for: providerID) : self.commandModeSelectedModel
+        case .liveMeeting:
+            return nil
         case .dictation, .meeting:
             providerID = self.selectedProviderID
             selectedModel = self.modelSelection(for: providerID)

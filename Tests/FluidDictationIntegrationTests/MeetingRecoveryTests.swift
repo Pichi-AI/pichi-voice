@@ -2029,8 +2029,13 @@ final class MeetingRecoveryTests: XCTestCase {
         capture.startupEvents = [
             .interrupted(kind: .writerFailure, trackID: trackID, detail: "Unsupported PCM format"),
         ]
+        var acceptedStarts = 0
         let coordinator = MeetingSessionCoordinator(
-            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter()
+            store: store,
+            capture: capture,
+            processing: StubProcessingController(),
+            audioArbiter: StubArbiter(),
+            onRecordingStarted: { acceptedStarts += 1 }
         )
         capture.onStart = { @MainActor in
             for _ in 0..<100 {
@@ -2055,6 +2060,50 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(failed.events.first?.detail, "Unsupported PCM format")
         XCTAssertEqual(failed.failures.last?.domain, .capture)
         XCTAssertNil(coordinator.activeSession)
+        XCTAssertEqual(acceptedStarts, 0)
+    }
+
+    func testCancellationBeforeCaptureStartIsAcceptedDoesNotNotifyObserver() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let suite = "CancelledMeetingStart.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults, initializeDesktop: false)
+        settings.fluidMeetEnabled = true
+        let capture = StubCaptureController()
+        let captureReached = self.expectation(description: "capture start is pending")
+        let releaseStart = PermissionPreflightGate()
+        capture.onStart = {
+            captureReached.fulfill()
+            await releaseStart.wait()
+        }
+        var acceptedStarts = 0
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: dir),
+            capture: capture,
+            processing: StubProcessingController(),
+            audioArbiter: StubArbiter(),
+            settings: settings,
+            onRecordingStarted: { acceptedStarts += 1 }
+        )
+
+        var configuration = self.makeConfiguration()
+        configuration.languageCode = "es"
+        configuration.speakerLabelsEnabled = false
+        let start = Task { try await coordinator.startRecording(configuration: configuration) }
+        await self.fulfillment(of: [captureReached], timeout: 2)
+        XCTAssertEqual(acceptedStarts, 0)
+        start.cancel()
+        await releaseStart.open()
+        do {
+            _ = try await start.value
+            XCTFail("Expected the cancelled start to throw")
+        } catch is CancellationError {}
+
+        XCTAssertEqual(capture.startCount, 1)
+        XCTAssertEqual(capture.stopCount, 1)
+        XCTAssertEqual(acceptedStarts, 0)
     }
 
     func testPersistenceCoalescesSlowStoreAndFlushesNewestSnapshot() async throws {
@@ -4273,14 +4322,17 @@ final class MeetingRecoveryTests: XCTestCase {
 
         let capture = StubCaptureController()
         capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
+        var acceptedStarts = 0
         let coordinator = MeetingSessionCoordinator(
             store: store,
             capture: capture,
             processing: StubProcessingController(),
-            audioArbiter: StubArbiter()
+            audioArbiter: StubArbiter(),
+            onRecordingStarted: { acceptedStarts += 1 }
         )
         await coordinator.ensureRestored()
         XCTAssertEqual(coordinator.activeSession?.id, session.id)
+        XCTAssertEqual(acceptedStarts, 0)
 
         let newSession = try await coordinator.recordAgain(
             from: session.id,
@@ -4288,6 +4340,7 @@ final class MeetingRecoveryTests: XCTestCase {
         )
         XCTAssertNotEqual(newSession.id, session.id)
         XCTAssertEqual(coordinator.activeSession?.id, newSession.id)
+        XCTAssertEqual(acceptedStarts, 1)
         guard case .recording = coordinator.state else {
             return XCTFail("Expected .recording after recordAgain, got \(coordinator.state)")
         }
@@ -4299,6 +4352,7 @@ final class MeetingRecoveryTests: XCTestCase {
             try await Task.sleep(nanoseconds: 5_000_000)
         }
         XCTAssertNotNil(persistedOld?.recoveryResolvedAt)
+        await coordinator.shutdownForTermination()
     }
 
     func testRecordAgainFromPassiveOfferRestoresOnCaptureFailure() async throws {
@@ -4496,8 +4550,13 @@ final class MeetingRecoveryTests: XCTestCase {
             }
         }
         let arbiter = StubArbiter()
+        var acceptedStarts = 0
         let coordinator = MeetingSessionCoordinator(
-            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
+            store: store,
+            capture: capture,
+            processing: StubProcessingController(),
+            audioArbiter: arbiter,
+            onRecordingStarted: { acceptedStarts += 1 }
         )
         let start = Task { try await coordinator.startRecording(configuration: self.makeConfiguration()) }
         await self.fulfillment(of: [preflightReached], timeout: 2)
@@ -4534,9 +4593,12 @@ final class MeetingRecoveryTests: XCTestCase {
                 return XCTFail("expected activityInProgress, got \(error)")
             }
         }
+        XCTAssertEqual(acceptedStarts, 0)
         continuation?.resume()
         _ = try await start.value
         XCTAssertEqual(capture.preflightCount, 1)
+        XCTAssertEqual(acceptedStarts, 1)
+        await coordinator.shutdownForTermination()
     }
 
     func testTerminationInvalidatesSuspendedStartBeforePermissionReturns() async throws {

@@ -1,5 +1,6 @@
 @testable import FluidVoice_Debug
 import Foundation
+import SQLite3
 import XCTest
 
 final class AnalyticsDatabaseTests: XCTestCase {
@@ -278,6 +279,64 @@ final class AnalyticsDatabaseTests: XCTestCase {
         XCTAssertEqual(model.properties["provider"] as? String, "fluid_audio")
         XCTAssertEqual(model.properties["model"] as? String, "parakeet_tdt")
         XCTAssertEqual(model.properties["use_count"] as? Int, 2)
+    }
+
+    func testLiveMeetingCounterMigratesOldUsageAndSurvivesUploadSanitization() throws {
+        let url = self.temporaryDirectory.appendingPathComponent("legacy-analytics.sqlite3")
+        var connection: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &connection), SQLITE_OK)
+        let legacy = try XCTUnwrap(connection)
+        let status = sqlite3_exec(legacy, """
+            CREATE TABLE daily_usage (
+                day TEXT PRIMARY KEY, dictation_count INTEGER NOT NULL DEFAULT 0,
+                command_count INTEGER NOT NULL DEFAULT 0, edit_count INTEGER NOT NULL DEFAULT 0,
+                meeting_count INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO daily_usage (day, dictation_count, meeting_count) VALUES ('2025-01-01', 3, 7);
+            """, nil, nil, nil)
+        sqlite3_close(legacy)
+        XCTAssertEqual(status, SQLITE_OK)
+
+        let day = Date(timeIntervalSince1970: 1_735_689_600)
+        let followingDay = day.addingTimeInterval(86_400)
+        let database = try self.makeDatabase(url: url)
+        try database.recordUsage(mode: .liveMeeting, transcriptionModel: nil, aiModel: nil, at: day)
+        try database.recordUsage(mode: .liveMeeting, transcriptionModel: nil, aiModel: nil, at: day)
+        XCTAssertTrue(try self.events(in: database, at: day).isEmpty)
+
+        // Reopening the migrated database must preserve both counters.
+        let reopened = try self.makeDatabase(url: url)
+        try reopened.finalizeDays(before: followingDay)
+        let items = try reopened.readyOutbox(limit: 100, at: followingDay)
+        XCTAssertEqual(items.count, 1)
+        let request = try AnalyticsUploadTransport.request(
+            items: items, config: AnalyticsConfig(postHogApiKey: "phc_fixture", postHogHost: "https://example.com")
+        )
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let batch = try XCTUnwrap(json["batch"] as? [[String: Any]])
+        let event = try XCTUnwrap(batch.first)
+        XCTAssertEqual(event["event"] as? String, AnalyticsEvent.usageDailySummary.rawValue)
+        let properties = try XCTUnwrap(event["properties"] as? [String: Any])
+        XCTAssertEqual(properties["usage_date"] as? String, "2025-01-01")
+        XCTAssertEqual(properties["dictation_count"] as? Int, 3)
+        XCTAssertEqual(properties["meeting_count"] as? Int, 7)
+        XCTAssertEqual(properties["live_meeting_count"] as? Int, 2)
+    }
+
+    func testDetailedOptOutRemovesBothQueuedAndUnfinalizedLiveMeetingCounts() throws {
+        let database = try self.makeDatabase()
+        let day = Date(timeIntervalSince1970: 1_735_689_600)
+        let followingDay = day.addingTimeInterval(86_400)
+        try database.recordUsage(mode: .liveMeeting, transcriptionModel: nil, aiModel: nil, at: day)
+        try database.recordUsage(mode: .liveMeeting, transcriptionModel: nil, aiModel: nil, at: followingDay)
+        XCTAssertEqual(try self.events(in: database, at: followingDay).map(\.name),
+                       [AnalyticsEvent.usageDailySummary.rawValue])
+
+        try database.purgeDetailedAnalytics()
+        try database.finalizeDays(before: followingDay.addingTimeInterval(86_400))
+        XCTAssertTrue(try self.events(in: database).allSatisfy { $0.name == AnalyticsEvent.activeUser.rawValue })
+        XCTAssertEqual(try self.events(in: database).count, 2)
     }
 
     func testInsertionLatencyIsAggregatedUntilTheDayIsFinalized() throws {

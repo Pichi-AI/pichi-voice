@@ -305,9 +305,11 @@ final class MacUpdaterLifecycleTests: XCTestCase {
         try await wait { context.fixture.downloadCount == 1 }
         context.defaults.set(false, forKey: SettingsStore.UpdateKeys.automaticUpdateDownloads)
         context.updater.automaticDownloadPreferenceDidChange()
+        // URLSession delivers stopLoading asynchronously. Observe it before explicit cleanup
+        // so this test proves that the preference change itself cancels the request.
+        try await wait { context.fixture.cancelCount == 1 }
         await context.updater.cancelPendingUpdate()
         XCTAssertEqual(context.updater.downloadState, .idle)
-        XCTAssertGreaterThanOrEqual(context.fixture.cancelCount, 1)
         await context.cleanup()
     }
 

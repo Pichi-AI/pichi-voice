@@ -3264,19 +3264,19 @@
         }
       }
     },
-    "A random installation ID, app version, the operating-system label macOS, and basic hardware info.": {
+    "A random ID for the local app profile, app version, the macOS label, and basic hardware information.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A random installation ID, app version, the operating-system label macOS, and basic hardware info."
+            "value": "A random ID for the local app profile, app version, the macOS label, and basic hardware information."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Случайный ID установки, версия приложения, название операционной системы macOS и основные сведения об оборудовании."
+            "value": "Случайный идентификатор локального профиля, версия приложения, признак macOS и основные сведения об оборудовании."
           }
         }
       }
@@ -15934,19 +15934,19 @@
         }
       }
     },
-    "Daily activity measures active installations and retention without requiring accounts.": {
+    "Daily activity measures active app profiles and how often they return.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Daily activity measures active installations and retention without requiring accounts."
+            "value": "Daily activity measures active app profiles and how often they return."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ежедневная активность позволяет оценить число активных установок и возвращаемость без создания аккаунтов."
+            "value": "По ежедневной активности можно оценить, сколько профилей пользуется приложением и как часто они возвращаются."
           }
         }
       }
@@ -15968,19 +15968,19 @@
         }
       }
     },
-    "Daily totals for Dictation, Command Mode, Edit Mode, and meeting transcription.": {
+    "Daily totals for Dictation, Command Mode, Edit Mode, file transcription, and live meeting recordings started.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Daily totals for Dictation, Command Mode, Edit Mode, and meeting transcription."
+            "value": "Daily totals for Dictation, Command Mode, Edit Mode, file transcription, and live meeting recordings started."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Суточные суммы использования диктовки, режима команд, редактирования и расшифровки встреч."
+            "value": "Суточное количество диктовок, команд, редактирований, транскрипций файлов и начатых записей встреч."
           }
         }
       }
