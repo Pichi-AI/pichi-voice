@@ -129,9 +129,9 @@ nonisolated enum AppBrand {
             ? PichiLocalization.text(self.profile.tagline) : self.profile.tagline
     }
     static var supportURL: URL { URL(string: self.profile.support)! }
-    static var issueReportURL: URL { self.issueReportURL(for: self.package) }
-    static func issueReportURL(for package: BrandPackage) -> URL {
-        URL(string: package.links?.issueReport ?? package.profile.support)!
+    static var issueReportURL: URL { self.issueReportURL(for: self.package) ?? self.supportURL }
+    static func issueReportURL(for package: BrandPackage) -> URL? {
+        URL(string: package.links?.issueReport ?? package.profile.support)
     }
     static var websiteURL: URL { URL(string: self.profile.website)! }
     static let distribution = BrandDistribution.load(bundle: .main)

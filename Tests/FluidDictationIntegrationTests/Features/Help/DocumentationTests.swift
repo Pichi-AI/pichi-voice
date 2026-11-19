@@ -8,11 +8,11 @@ final class DocumentationTests: XCTestCase {
             "default": "https://example.org/guide", "fr": "https://example.org/fr/guide",
             "fr-CA": "https://example.org/ca/guide",
         ]))
-        XCTAssertEqual(package.documentationURL(for: Locale(identifier: "fr-CA")).path, "/ca/guide")
-        XCTAssertEqual(package.documentationURL(for: Locale(identifier: "fr-FR")).path, "/fr/guide")
-        XCTAssertEqual(package.documentationURL(for: Locale(identifier: "ru")).path, "/guide")
+        XCTAssertEqual(package.documentationURL(for: Locale(identifier: "fr-CA"))?.path, "/ca/guide")
+        XCTAssertEqual(package.documentationURL(for: Locale(identifier: "fr-FR"))?.path, "/fr/guide")
+        XCTAssertEqual(package.documentationURL(for: Locale(identifier: "ru"))?.path, "/guide")
         package.links = nil
-        XCTAssertEqual(package.documentationURL(for: Locale(identifier: "en")).absoluteString, package.profile.website)
+        XCTAssertEqual(package.documentationURL(for: Locale(identifier: "en"))?.absoluteString, package.profile.website)
     }
 
     func testImportedDocumentationURLsUseTheSameHTTPSValidationAsPublicBrandLinks() {

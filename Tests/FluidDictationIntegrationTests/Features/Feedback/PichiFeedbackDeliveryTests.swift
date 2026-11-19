@@ -98,10 +98,10 @@ final class PichiFeedbackDeliveryTests: XCTestCase {
         let profile = BrandProfile(appName: "Example", meetingName: "Meet", assistantName: "AI", tagline: "Example",
                                    accentLight: "#555555", accentDark: "#AAAAAA", website: website, support: help)
         var package = BrandPackage(profile: profile)
-        XCTAssertEqual(AppBrand.issueReportURL(for: package).absoluteString, help)
+        XCTAssertEqual(AppBrand.issueReportURL(for: package)?.absoluteString, help)
         let form = website + "/bugs/new"
         package.links = BrandLinks(issueReport: form)
-        XCTAssertEqual(AppBrand.issueReportURL(for: package).absoluteString, form)
+        XCTAssertEqual(AppBrand.issueReportURL(for: package)?.absoluteString, form)
     }
 }
 

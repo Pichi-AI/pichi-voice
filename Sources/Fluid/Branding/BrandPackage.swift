@@ -47,12 +47,12 @@ nonisolated struct BrandPackage: Codable, Equatable, Sendable {
     }
 
     /// Previously exported profiles use their own website as the help destination.
-    func documentationURL(for locale: Locale) -> URL {
+    func documentationURL(for locale: Locale) -> URL? {
         let routes = self.links?.documentation
         let exact = routes?[locale.identifier.replacingOccurrences(of: "_", with: "-")]
         let base = locale.language.languageCode.flatMap { routes?[$0.identifier] }
         let target = exact ?? base ?? routes?["default"]
-        return URL(string: target ?? self.profile.website)!
+        return URL(string: target ?? self.profile.website)
     }
 
     func encoded() throws -> Data {
