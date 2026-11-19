@@ -67,13 +67,14 @@ L2_ONLY_TESTS = (
 # run: the tests of MeetingRecoveryTests and MeetingSessionCoordinatorTests that log "Starting model preparation for
 # Parakeet TDT v2" (the real provider, no fake) and the Silero VAD download of CustomDictionaryManualEntryTests. The
 # stale-start test above stays in the main run on purpose, because it needs the empty home.
-# MeetingRecoveryTests/testFluidMeetSettingsSectionsRenderWithoutSideEffects starts no model but is listed too: its
-# settings sheet leaves the summary admission taken (MeetingSummaryActivityCoordinator.beginOptionalProcessing returns
-# nil; withSummary waits for the meeting audio lease). With the 53 tests out of the main run, OllamaChatTransportTests/
+# MeetingRecoveryTests/testFluidMeetSettingsSectionsRenderWithoutSideEffects starts no model provider but is listed
+# too (issue 191): its settings sheet calls MeetingDiarizationModelStore.prepareInBackground, which in the empty home
+# starts the real download of the Nemotron3 diarizer. That download outlives the test and holds the ordinary model
+# admission until it ends, so in the main run the exclusive attempts of OllamaChatTransportTests/
 # testPreloadFailureReleasesAdmissionAndDoesNotRetry, testPreloadCancellationJoinsTransportAndReleasesAdmission and
-# testExplicitSummaryCancelsAndJoinsOptionalNativePreloadBeforeModelAdmission failed with "busy"; the main run with this
-# test also moved passes. Found by bisecting that run to one test; which of the moved tests used to release the
-# admission was not identified, so this test now runs in the same step, where the moved tests still follow it.
+# testExplicitSummaryCancelsAndJoinsOptionalNativePreloadBeforeModelAdmission failed with "busy". This step needs the
+# model anyway. A hosted-test guard in prepareInBackground would let the test return to the main run, but
+# MeetingDiarizationModelStore is an upstream file, so that choice is left to issue 191.
 REAL_MODEL_TESTS = (
     "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testProfileFreeLongDictationPreservesTextAndWordTimings",
     "FluidDictationIntegrationTests/CustomDictionaryManualEntryTests/testTrainingTranscribesSpellingsAcrossPronunciationToggle",
