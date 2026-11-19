@@ -47,8 +47,10 @@ struct FeedbackSubmission: Encodable {
         BrandDistribution.isValidFeedbackEmail(value.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    var trimmedMessage: String { self.message.trimmingCharacters(in: .whitespacesAndNewlines) }
+
     var content: String {
-        var text = "[\(self.category.rawValue)]\n\(self.message.trimmingCharacters(in: .whitespacesAndNewlines))"
+        var text = "[\(self.category.rawValue)]\n\(self.trimmedMessage)"
         if let appDetails { text += "\n\n--- App details ---\n\(appDetails)" }
         return text
     }
@@ -56,7 +58,7 @@ struct FeedbackSubmission: Encodable {
     var isValid: Bool { Self.isValidEmail(self.email) && self.hasValidMessage }
 
     var hasValidMessage: Bool {
-        !self.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !self.trimmedMessage.isEmpty
             && self.message.utf16.count <= Self.messageLimit
             && self.content.utf16.count <= 5000
     }
@@ -110,7 +112,8 @@ enum FeedbackDelivery: Equatable {
         case let .email(recipient):
             guard submission.hasValidMessage else { throw FeedbackClient.Failure.invalid }
             let subject = "\(AppBrand.appName): \(PichiLocalization.text(submission.category.rawValue))"
-            guard composeEmail(recipient, subject, submission.content) else {
+            let body = [submission.trimmedMessage, submission.appDetails].compactMap { $0 }.joined(separator: "\n\n")
+            guard composeEmail(recipient, subject, body) else {
                 throw FeedbackClient.Failure.mailUnavailable
             }
             return .handedToMail
