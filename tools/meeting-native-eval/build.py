@@ -7,6 +7,7 @@ This command never downloads a model or package, opens the app, or changes prefe
 from pathlib import Path
 import hashlib
 import json
+import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,7 +15,8 @@ BUILD = ROOT / '.build/meeting-native-eval'
 DEPS = BUILD / 'dependencies'
 SOURCE = ROOT / 'Sources/Fluid/Services/Meeting'
 AUDIO = ROOT / '.build/SourcePackages/checkouts/FluidAudio'
-ORT = ROOT / '.build/SourcePackages/checkouts/onnxruntime-swift-package-manager'
+# Microsoft removed the package repository, so the application builds this vendored copy.
+ORT = ROOT / 'Vendor/onnxruntime-swift-package-manager'
 BASELINE = '448431f01a7941777349ca9370a2d8bf9dead69e'
 
 def run(args):
@@ -31,9 +33,12 @@ run(['bash', 'scripts/dev/assert-worktree.sh'])
 BUILD.mkdir(parents=True, exist_ok=True)
 revision = subprocess.check_output(['git', '-C', str(AUDIO), 'rev-parse', 'HEAD'], text=True).strip()
 assert revision == 'eb1e6628998e47022799d305b52c2680d3576801', revision
-ort_revision = subprocess.check_output(['git', '-C', str(ORT), 'rev-parse', 'HEAD'], text=True).strip()
-ort_pin = next(pin['state']['revision'] for pin in json.loads((ROOT / 'Vendor/PichiGigaAM/Package.resolved').read_text())['pins'] if pin['identity'] == 'onnxruntime-swift-package-manager')
-assert ort_revision == ort_pin, ort_revision
+# The vendored copy has no Git metadata. Its tracked record names the one upstream revision it was
+# exported from, and the manifest below also hashes the bridge headers this build compiles against.
+ort_revisions = set(re.findall(r'`([0-9a-f]{40})`', (ORT / 'PICHI_VENDORING.md').read_text()))
+assert len(ort_revisions) == 1, ort_revisions
+ort_revision = ort_revisions.pop()
+ort_inputs = [ORT / 'Package.swift', ORT / 'PICHI_VENDORING.md', *sorted((ORT / 'objectivec/include').glob('*.h'))]
 assert (DEPS / 'OnnxRuntimeBindings.o').is_file()
 assert (DEPS / 'onnxruntime.framework').is_dir()
 (DEPS / 'module.modulemap').write_text('module OnnxRuntimeBindings {\numbrella "' + str(ORT / 'objectivec/include') + '"\nexport *\n}\n')
@@ -62,6 +67,6 @@ giga_sources = sorted((ROOT / 'Vendor/PichiGigaAM/Sources/PichiGigaAM').glob('*.
 run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-emit-module', '-emit-library', '-module-name', 'PichiGigaAM', '-module-cache-path', BUILD / 'ModuleCache', '-emit-module-path', BUILD / 'PichiGigaAM.swiftmodule', '-I', DEPS, '-F', DEPS, '-profile-generate', '-framework', 'onnxruntime', '-lc++', '-framework', 'Accelerate', '-Xlinker', '-rpath', '-Xlinker', str(DEPS), DEPS / 'OnnxRuntimeBindings.o', *giga_sources, '-o', BUILD / 'libPichiGigaAM.dylib'])
 sources = [BUILD / 'CanonicalContracts.swift', SOURCE / 'Backend/MeetingCanonicalEvidenceTypes.swift', BUILD / 'LegacyAttribution.swift', SOURCE / 'Backend/MeetingResumableNemotronDiarizerSession.swift', *sorted((SOURCE / 'Backend/Nemotron3').glob('*.swift')), SOURCE / 'Backend/MeetingFast32NemotronDiarizer.swift', SOURCE / 'Backend/MeetingSpeakerAttribution.swift', ROOT / 'tools/meeting-native-eval/Runner.swift']
 run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-default-isolation', 'MainActor', '-module-cache-path', BUILD / 'ModuleCache', '-I', BUILD, '-I', DEPS, '-F', DEPS, '-L', BUILD, '-lFluidAudio', '-lPichiGigaAM', '-framework', 'onnxruntime', '-lc++', '-framework', 'Accelerate', '-Xlinker', '-rpath', '-Xlinker', str(BUILD), '-Xlinker', '-rpath', '-Xlinker', str(DEPS), *sources, '-o', BUILD / 'runner'])
-manifest = {'schema_version': 1, 'source_revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(), 'baseline_revision': BASELINE, 'fluid_audio_revision': revision, 'onnx_runtime_revision': ort_revision, 'sources': {str(path.relative_to(ROOT)): sha(path) for path in [*sources, *helpers, *giga_sources, *sorted((ROOT / 'tools/meeting-native-eval').glob('*.py'))]}, 'baseline_original_source_sha256': hashlib.sha256(legacy.encode()).hexdigest(), 'binary_sha256': sha(BUILD / 'runner'), 'onnx_bridge_sha256': sha(DEPS / 'OnnxRuntimeBindings.o'), 'onnx_runtime_sha256': sha(DEPS / 'onnxruntime.framework/Versions/A/onnxruntime')}
+manifest = {'schema_version': 1, 'source_revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(), 'baseline_revision': BASELINE, 'fluid_audio_revision': revision, 'onnx_runtime_revision': ort_revision, 'sources': {str(path.relative_to(ROOT)): sha(path) for path in [*sources, *helpers, *giga_sources, *ort_inputs, *sorted((ROOT / 'tools/meeting-native-eval').glob('*.py'))]}, 'baseline_original_source_sha256': hashlib.sha256(legacy.encode()).hexdigest(), 'binary_sha256': sha(BUILD / 'runner'), 'onnx_bridge_sha256': sha(DEPS / 'OnnxRuntimeBindings.o'), 'onnx_runtime_sha256': sha(DEPS / 'onnxruntime.framework/Versions/A/onnxruntime')}
 (BUILD / 'build-manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
 print('Native evaluation runner built; no inference performed.')
