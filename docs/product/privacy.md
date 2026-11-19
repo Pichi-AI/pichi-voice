@@ -6,6 +6,8 @@ Pichi Voice provides local recording and compatible on-device speech processing.
 
 Core local recording and transcription do not require a Pichi account. Audio, transcript text, meeting metadata, speaker labels, dictionary entries and supported voice-profile data can be stored on the device. Check audio retention and recording settings before recording.
 
+On iPhone and iPad, turn on **Settings > Privacy > Change voices** to change every speaker’s voice before new audio is written to disk. Playback and audio exports use that version. Earlier recordings keep their original audio. You can change the preference while **Save audio recordings** is off. In that mode, only the transcript is saved. Speech recognition can use the microphone signal in memory. Names, speaking habits and details of the conversation can still identify someone.
+
 Download a compatible local speech model before going offline. Model downloads contact their publishers or hosting services, exposing normal request information such as a network address and requested file. A model download does not require uploading meeting audio to that host.
 
 Local processing does not itself encrypt every exported file or prevent system backups and receiving applications from accessing files under their control.

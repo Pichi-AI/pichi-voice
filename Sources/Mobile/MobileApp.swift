@@ -138,6 +138,7 @@ final class AppServices: ObservableObject {
                 let modelID = settings.selectedSpeechModel.rawValue
                 let savedBackendID = settings.meetingTranscriptionBackendID
                 let storageMode: MeetingAudioStorageMode = settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
+                let maskSavedVoices = settings.meetingMaskSavedVoices
                 let speakerLabelsEnabled = settings.meetingSpeakerLabelsEnabled
                 let speakerProcessingMode = settings.meetingSpeakerProcessingMode(for: mode)
                 let piiRedactionEnabled = settings.meetingPIIRedactionRequested
@@ -151,7 +152,7 @@ final class AppServices: ObservableObject {
                       profile.map({ PrivateProfileStorage.isReadable($0) && PrivateProfileStorage.acceptsNewWork }) != false
                 else { throw CancellationError() }
                 let configuration = MeetingCaptureConfiguration(mode: mode, title: title, languageCode: language,
-                    microphone: microphone, timestampDefaultTitle: true, audioStorageMode: storageMode,
+                    microphone: microphone, timestampDefaultTitle: true, audioStorageMode: storageMode, maskSavedVoices: maskSavedVoices,
                     speakerLabelsEnabled: speakerLabelsEnabled, speakerProcessingMode: speakerProcessingMode,
                     piiRedactionEnabled: piiRedactionEnabled)
                 // Deployment admission uses the frozen privacy request. The processing owner

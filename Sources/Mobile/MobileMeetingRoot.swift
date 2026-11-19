@@ -876,7 +876,11 @@ struct MobileMeetingRoot: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."))
                         if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
-                            Text(PichiLocalization.text("Exported audio includes the original voices and sensitive information. It is outside app retention controls."))
+                            if session.maskSavedVoices == true {
+                                Text(PichiLocalization.text("Voices in this recording were changed. Shared audio may still contain sensitive information and is outside app retention controls."))
+                            } else {
+                                Text(PichiLocalization.text("Exported audio includes the original voices and sensitive information. It is outside app retention controls."))
+                            }
                         }
                     }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                         .padding(.top, theme.metrics.spacing.lg)
