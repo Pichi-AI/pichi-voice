@@ -67,9 +67,10 @@ nonisolated extension MeetingPCMSinkError: LocalizedError {
         }
     }
 
-    /// Recovery metadata that no later attempt can make valid: the extent is missing or the path
-    /// escapes or is not a regular confined capture file. Other failures may be transient, so the
-    /// partial capture stays an owned recovery input.
+    /// Recovery metadata that no later attempt can make valid: the extent is missing, the path
+    /// escapes, or it names something that is not a regular capture file in the recorded format.
+    /// Other failures, such as a missing or changing file, may be transient, so the partial capture
+    /// stays an owned recovery input.
     var isPermanentRecoveryRejection: Bool {
         switch self {
         case .invalidRecoveryMetadata, .invalidRelativePath, .pathEscapesSessionDirectory, .symlinkComponentRejected: return true

@@ -263,13 +263,18 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
         let alreadyPublished = FileManager.default.fileExists(atPath: final.path)
         let partial: URL? = alreadyPublished ? nil : try confined(asset.relativeFilePath)
         let input = partial ?? final
+        // A missing capture can still appear: a finalizer may be publishing it right now. Something that is not
+        // a regular file, or a capture in another format than its recorded extent, can never become this chunk.
         var info = stat()
-        guard lstat(input.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
-            throw MeetingPCMSinkError.finalizationVerificationFailed("capture is not a regular file")
+        guard lstat(input.path, &info) == 0 else {
+            throw MeetingPCMSinkError.finalizationVerificationFailed("capture is missing")
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG else {
+            throw MeetingPCMSinkError.invalidRecoveryMetadata("capture is not a regular file")
         }
         let native = try AVAudioFile(forReading: input).fileFormat
         guard native.sampleRate == rate, Int(native.channelCount) == channels else {
-            throw MeetingPCMSinkError.finalizationVerificationFailed("capture format changed")
+            throw MeetingPCMSinkError.invalidRecoveryMetadata("capture format does not match its recovery extent")
         }
         let format = Format(rate: rate, channels: UInt32(channels), layout: Self.layoutData(native.channelLayout),
                             contract: try MeetingPCMFormatContract(audioFormat: native))
