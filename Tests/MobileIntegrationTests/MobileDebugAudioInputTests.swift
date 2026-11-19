@@ -9,6 +9,10 @@ private final nonisolated class DebugAudioPCMProbe: MeetingMemoryAudioConsuming,
     private let lock = NSLock()
     private var count = 0
     private var largest = 0
+    private let collectSamples: Bool
+    private var capturedSamples: [Float] = []
+    init(collectSamples: Bool = false) { self.collectSamples = collectSamples }
+    var samples: [Float] { self.lock.withLock { self.capturedSamples } }
     private var expectedPTS: Double?
     private var continuous = true
     var snapshot: (frames: Int, largest: Int, continuous: Bool) {
@@ -21,6 +25,10 @@ private final nonisolated class DebugAudioPCMProbe: MeetingMemoryAudioConsuming,
             let pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
             if let expectedPTS, abs(expectedPTS - pts) > 0.0001 { self.continuous = false }
             self.expectedPTS = pts + Double(frames) / 16_000
+            if self.collectSamples, let buffer = MeetingLiveSampleCopy.copy(sampleBuffer)?.buffer,
+               let values = buffer.floatChannelData?[0] {
+                self.capturedSamples.append(contentsOf: UnsafeBufferPointer(start: values, count: Int(buffer.frameLength)))
+            }
             self.count += frames; self.largest = max(self.largest, frames)
         }
         return true
@@ -45,12 +53,16 @@ final class MobileDebugAudioInputTests: XCTestCase {
                 AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false],
                 commonFormat: .pcmFormatFloat32, interleaved: false)
             let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096))
-            var remaining = Int(seconds * rate)
+            let total = Int(seconds * rate)
+            var remaining = total
             while remaining > 0 {
                 buffer.frameLength = AVAudioFrameCount(min(remaining, 4096))
                 for channel in 0..<2 {
+                    let data = try XCTUnwrap(buffer.floatChannelData?[channel])
                     for frame in 0..<Int(buffer.frameLength) {
-                        buffer.floatChannelData![channel][frame] = sin(Float(frame) * 0.1) * 0.2
+                        let index = total - remaining + frame
+                        let frequency: Float = index < total / 2 ? 0.1 : 0.16
+                        data[frame] = sin(Float(index) * frequency) * 0.2
                     }
                 }
                 try file.write(from: buffer)
@@ -105,6 +117,62 @@ final class MobileDebugAudioInputTests: XCTestCase {
             XCTAssertEqual(probe.snapshot.frames, stopped)
             XCTAssertEqual(runtime.healthSnapshot().status, .stopped)
         }
+    }
+
+    func testVoiceMaskAppliesToBothTurnsBeforeStorageWhileRecognizerReceivesOriginalPCM() async throws {
+        try await self.withInput(seconds: 0.4) { input in
+            let original = try await self.capture(input, storage: .retainedFiles, masked: false)
+            let masked = try await self.capture(input, storage: .retainedFiles, masked: true)
+            let ephemeral = try await self.capture(input, storage: .memoryOnly, masked: true)
+            XCTAssertEqual(original.live.count, 6400)
+            XCTAssertTrue(original.saved == original.live)
+            XCTAssertTrue(masked.live == original.live)
+            XCTAssertTrue(ephemeral.live == original.live)
+            XCTAssertTrue(ephemeral.saved.isEmpty)
+            let saved = masked.saved
+            XCTAssertEqual(saved.count, original.live.count)
+            guard saved.count == 6400 && original.live.count == saved.count else { return }
+            for range in [0..<3200, 3200..<6400] {
+                let differences = zip(saved[range], original.live[range]).map { abs($0 - $1) }
+                XCTAssertGreaterThan(differences.reduce(0, +) / Float(range.count), 0.015)
+                XCTAssertTrue(saved[range].contains { abs($0) > 0.01 })
+            }
+        }
+    }
+
+    private func capture(_ input: IOSMeetingDebugFileInput, storage: MeetingAudioStorageMode, masked: Bool)
+        async throws -> (live: [Float], saved: [Float]) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let probe = DebugAudioPCMProbe(collectSamples: true)
+        let capture = IOSMeetingCaptureEngine(debugFileInput: input, memoryConsumerFactory: { _, _, _, _ in probe })
+        var configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic turns",
+            microphone: IOSMeetingDebugFileInput.identity, audioStorageMode: storage, speakerProcessingMode: .streaming)
+        configuration.maskSavedVoices = masked
+        let timebase = MeetingTimebaseMetadata(startedHostTime: mach_absolute_time(), machTimebaseNumerator: 1,
+            machTimebaseDenominator: 1, firstPresentationTime: nil)
+        let session = MeetingSession(configuration: configuration, timebase: timebase)
+        _ = try await capture.start(session: session, configuration: configuration,
+            sessionDirectory: dir, eventHandler: { _ in })
+        for _ in 0..<250 where probe.snapshot.frames < 6400 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let stopped = try await capture.stop(sessionID: session.id)
+        if storage == .memoryOnly {
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: dir.path).isEmpty)
+            return (probe.samples, [])
+        }
+        let track = try XCTUnwrap(stopped.tracks.first)
+        XCTAssertEqual(track.chunks.count, 1)
+        let chunk = try XCTUnwrap(track.chunks.first)
+        XCTAssertEqual(chunk.finalizationState, .finalized)
+        let file = try AVAudioFile(forReading: dir.appendingPathComponent(chunk.relativeFilePath))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+            frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: buffer)
+        let values = try XCTUnwrap(buffer.floatChannelData?[0])
+        return (probe.samples, Array(UnsafeBufferPointer(start: values, count: Int(buffer.frameLength))))
     }
 
     func testDebugInputEarlyStopDoesNotContinueReadingLongFixture() async throws {

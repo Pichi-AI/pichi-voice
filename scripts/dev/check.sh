@@ -66,6 +66,7 @@ python3 -S Tests/test_meeting_diarization_eval.py
 python3 -S Tests/test_lint_changed.py
 python3 -B -S -m unittest discover -s tools -p test_meeting_asr_text_eval.py
 python3 -S tools/meeting-native-eval/test_batch_preflight.py
+python3 -B -S tools/meeting-native-eval/test_build_provenance.py
 python3 -B -S Tests/test_file_operation_preferences_cleanup.py
 python3 -B -S Tests/test_sensitive_topic_trainer.py
 python3 -B -S Tests/test_sensitive_topic_version_report.py
