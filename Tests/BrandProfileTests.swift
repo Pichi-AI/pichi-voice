@@ -47,6 +47,8 @@ struct BrandProfileTests {
             precondition(demo.logos != nil && demo.theme != nil)
             precondition(!demo.profile.appName.contains("Pichi"))
         }
+        precondition(packaged.documentationURL(for: Locale(identifier: "en-US")).absoluteString == "https://pichi.ai/voice/docs/")
+        precondition(packaged.documentationURL(for: Locale(identifier: "ru-RU")).absoluteString == "https://pichi.ai/ru/voice/docs/")
         try self.verifyLogoVisibility(packaged)
         try self.verifyPaletteForegroundContrast(packaged)
         try self.require(try BrandPackage.decode(packaged.encoded()) == packaged)

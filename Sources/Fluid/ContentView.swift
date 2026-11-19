@@ -1530,11 +1530,6 @@ struct ContentView: View {
         NSWorkspace.shared.open(AppBrand.issueReportURL)
     }
 
-    private func openHelpDocumentation() {
-        guard let url = URL(string: AppBrand.websiteURL.absoluteString) else { return }
-        NSWorkspace.shared.open(url)
-    }
-
     private var sidebarContent: some View {
         ZStack {
             // Keep both sidebars mounted so navigation feedback never waits on view construction.
@@ -1843,7 +1838,7 @@ struct ContentView: View {
 
     private var helpEntryButton: some View {
         Menu {
-            Button("Documentation", systemImage: "book") { self.openHelpDocumentation() }
+            Button("Documentation", systemImage: "book") { MenuBarManager.openHelpDocumentation() }
             Button("What’s new", systemImage: "gift") { self.showsReleaseHighlights = true }
                 .disabled(self.asr.isRunningOrStarting || self.asr.activeExclusiveActivity != nil || NotchContentState.shared.isProcessing)
             if PrivateAIProviderFeature.shared.isAvailable {

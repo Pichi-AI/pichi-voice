@@ -1745,6 +1745,14 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         }
     }
 
+    static func openHelpDocumentation(
+        package: BrandPackage = AppBrand.package,
+        language: PichiInterfaceLanguage = PichiLocalization.language,
+        open: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) {
+        _ = open(package.documentationURL(for: language.locale))
+    }
+
     /// Public entry-point for non-menu UI surfaces (e.g. overlay controls) to open Preferences.
     func openPreferencesFromUI() {
         self.openPreferences()
