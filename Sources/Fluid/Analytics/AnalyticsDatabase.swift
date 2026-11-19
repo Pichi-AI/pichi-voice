@@ -476,7 +476,7 @@ nonisolated final class AnalyticsDatabase {
     func finalizeDays(before date: Date) throws {
         let today = self.dayString(date)
         let usageRows = try self.query(
-            "SELECT day, dictation_count, command_count, edit_count, meeting_count " +
+            "SELECT day, dictation_count, command_count, edit_count, meeting_count, live_meeting_count " +
                 "FROM daily_usage WHERE day < ? ORDER BY day",
             bindings: [.text(today)]
         )
@@ -508,13 +508,14 @@ nonisolated final class AnalyticsDatabase {
             !insertionRows.isEmpty || !clipboardToggleRows.isEmpty
         else { return }
         try self.transaction {
-            for row in usageRows where row.count == 5 {
+            for row in usageRows where row.count == 6 {
                 try self.enqueue(.usageDailySummary, at: date, properties: [
                     "usage_date": row[0],
                     "dictation_count": Int(row[1]) ?? 0,
                     "command_count": Int(row[2]) ?? 0,
                     "edit_count": Int(row[3]) ?? 0,
                     "meeting_count": Int(row[4]) ?? 0,
+                    "live_meeting_count": Int(row[5]) ?? 0,
                 ])
             }
             for row in modelRows where row.count == 6 {
@@ -704,7 +705,8 @@ nonisolated final class AnalyticsDatabase {
             dictation_count INTEGER NOT NULL DEFAULT 0,
             command_count INTEGER NOT NULL DEFAULT 0,
             edit_count INTEGER NOT NULL DEFAULT 0,
-            meeting_count INTEGER NOT NULL DEFAULT 0
+            meeting_count INTEGER NOT NULL DEFAULT 0,
+            live_meeting_count INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS daily_model_usage (
             day TEXT NOT NULL,
@@ -773,6 +775,16 @@ nonisolated final class AnalyticsDatabase {
             started_at REAL NOT NULL
         );
         """)
+        // Older databases already use meeting_count for file transcription.
+        // Serialize the column check and migration with other database writers.
+        try self.transaction {
+            if try self.integer(
+                "SELECT COUNT(*) FROM pragma_table_info('daily_usage') WHERE name = 'live_meeting_count'",
+                bindings: []
+            ) == 0 {
+                try self.execute("ALTER TABLE daily_usage ADD COLUMN live_meeting_count INTEGER NOT NULL DEFAULT 0")
+            }
+        }
     }
 
     private func enqueue(_ event: AnalyticsEvent, at date: Date, properties: [String: Any]) throws {
@@ -821,6 +833,7 @@ nonisolated final class AnalyticsDatabase {
         case .command: column = "command_count"
         case .edit: column = "edit_count"
         case .meeting: column = "meeting_count"
+        case .liveMeeting: column = "live_meeting_count"
         }
         try self.run(
             "INSERT INTO daily_usage (day, \(column)) VALUES (?, 1) " +

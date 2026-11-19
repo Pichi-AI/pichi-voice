@@ -153,6 +153,16 @@ xcodebuild -project Fluid.xcodeproj -scheme Fluid -configuration Release \
   -allowProvisioningUpdates archive
 ```
 
+For an analytics-enabled Pichi distribution, prepare the trusted configuration
+using [Distribution analytics](analytics.md) before this archive. Include
+`-xcconfig "$PWD/.build/private/pichi-posthog.xcconfig"` in the archive
+command. Check the built app's `PICHI_POSTHOG_ENABLED` and
+`PICHI_POSTHOG_HOST` in its signed `Info.plist`, and validate that the
+project ingestion token is present and well-formed without printing it.
+Confirm the published privacy disclosure matches the enabled collection.
+Use an isolated test build and read the synthetic event back from PostHog
+before distributing an enabled release.
+
 Inspect nested signatures, requirements, entitlements, hardened runtime and UUIDs
 as described in [archive signing preparation](#archive-signing-preparation).
 If that exact nested-signature issue recurs, prepare an independently verified
