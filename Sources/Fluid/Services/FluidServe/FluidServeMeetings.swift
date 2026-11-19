@@ -186,14 +186,15 @@ nonisolated enum FluidServeMeetings {
     }
 
     /// Reads the switch the way the app itself sees it (including a value an administrator has forced),
-    /// but through CFPreferences rather than `UserDefaults`, which would also honour a
-    /// `-FluidServeMeetingAccessEnabled YES` argument and let a caller switch it on.
+    /// never from this helper's own arguments. `UserDefaults`, and `CFPreferencesCopyAppValue` as well when the
+    /// helper runs inside the app bundle, also search the argument domain, so a caller could pass
+    /// `-FluidServeMeetingAccessEnabled '<true/>'` and switch sharing on.
     /// This is a consent switch, not a lock: anything running as the user could read the files anyway.
     /// A missing value cannot distinguish an unset preference from a sandbox-denied read.
     /// Only an explicit true grants access; nil is unknown, not proof that sharing is off.
     static func isAccessEnabled(bundleIdentifier: String) -> Bool? {
         guard (try? self.guestAccessToken(root: self.defaultRoot(storageNamespace: bundleIdentifier))) != nil else { return false }
-        return CFPreferencesCopyAppValue(self.accessDefaultsKey as CFString, bundleIdentifier as CFString) as? Bool
+        return self.appPreference(self.accessDefaultsKey, bundleIdentifier: bundleIdentifier) as? Bool
     }
 
     static let customSummaryPromptDefaultsKey = "MeetingSummaryCustomPrompt"
@@ -201,7 +202,16 @@ nonisolated enum FluidServeMeetings {
     /// The prompt in the app's custom-summary box, needed to tell whether a saved custom summary is still the current one.
     static func customSummaryPrompt(bundleIdentifier: String) -> String {
         guard (try? self.guestAccessToken(root: self.defaultRoot(storageNamespace: bundleIdentifier))) != nil else { return "" }
-        return (CFPreferencesCopyAppValue(self.customSummaryPromptDefaultsKey as CFString, bundleIdentifier as CFString) as? String) ?? ""
+        return (self.appPreference(self.customSummaryPromptDefaultsKey, bundleIdentifier: bundleIdentifier) as? String) ?? ""
+    }
+
+    /// The app's own setting: an administrator's forced value, otherwise the user's persistent value.
+    /// The argument domain of this process is never consulted.
+    private static func appPreference(_ key: String, bundleIdentifier: String) -> CFPropertyList? {
+        if CFPreferencesAppValueIsForced(key as CFString, bundleIdentifier as CFString) {
+            return CFPreferencesCopyAppValue(key as CFString, bundleIdentifier as CFString)
+        }
+        return CFPreferencesCopyValue(key as CFString, bundleIdentifier as CFString, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
     }
 
     /// This Mac's time zone as the app sees it. A `TZ` variable in an agent's shell must not change

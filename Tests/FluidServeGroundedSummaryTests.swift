@@ -150,8 +150,13 @@ struct FluidServeGroundedSummaryTests {
         defaults.set(false, forKey: key); CFPreferencesAppSynchronize(suiteName as CFString)
         let off = try run(["status", "--json"])
         check(off.0 == 0 && off.1.contains("\"access\" : false"), "Isolated helper obeys sharing off")
-        let injected = try run(["status", "-" + key, "YES"])
-        check(injected.1.contains("Meeting access: off"), "Argument cannot enable sharing")
+        // A plist value such as <true/> parses as a real Bool, so the argument domain must never be read.
+        for value in ["YES", "<true/>", "1"] {
+            let injected = try run(["status", "-" + key, value])
+            check(injected.1.contains("Meeting access: off"), "Argument cannot enable sharing")
+            let listed = try run(["meet", "list", "-" + key, value])
+            check(listed.0 == 2, "Argument cannot open meeting data")
+        }
         defaults.set(true, forKey: key); CFPreferencesAppSynchronize(suiteName as CFString)
         let on = try run(["status", "--json"])
         check(on.0 == 0 && on.1.contains("\"meetings\" : 1"), "Isolated helper reads only its synthetic namespace")
