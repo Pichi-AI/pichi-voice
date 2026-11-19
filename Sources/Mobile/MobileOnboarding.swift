@@ -503,22 +503,25 @@ struct MobileAudioPrivacyControls: View {
     @Environment(\.theme) private var theme
 
     static var memoryOnlyExplanation: String {
-        PichiLocalization.text("When disabled, audio is never written to files, including temporary files. Only the transcript is saved.")
+        PichiLocalization.text("With audio saving off, only the transcript is saved. No audio files are created, even temporarily.")
     }
-    static var retainedAudioExplanation: String {
-        PichiLocalization.text("Audio recordings retain the original voices and sensitive information. Text redaction does not change audio.")
+    static func retainedAudioExplanation(maskSavedVoices: Bool) -> String {
+        if maskSavedVoices {
+            return PichiLocalization.text("All voices are changed before new audio is saved. Names and other details can still be heard.")
+        }
+        return PichiLocalization.text("Audio recordings retain the original voices and sensitive information. Text redaction does not change audio.")
     }
 
     var body: some View {
-        if asFormRows { toggle }
+        if asFormRows { controls }
         else {
             VStack(alignment: .leading, spacing: 12) {
-                toggle
+                controls
                 Text(Self.memoryOnlyExplanation)
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
                 if settings.meetingSaveAudio {
-                    Text(Self.retainedAudioExplanation)
+                    Text(Self.retainedAudioExplanation(maskSavedVoices: settings.meetingMaskSavedVoices))
                         .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -526,9 +529,11 @@ struct MobileAudioPrivacyControls: View {
         }
     }
 
-    private var toggle: some View {
+    @ViewBuilder private var controls: some View {
         Toggle(PichiLocalization.text("Save audio recordings"), isOn: $settings.meetingSaveAudio)
             .accessibilityIdentifier("privacy.saveAudio")
+        Toggle(PichiLocalization.text("Change voices"), isOn: $settings.meetingMaskSavedVoices)
+            .accessibilityIdentifier("privacy.maskSavedVoices")
     }
 }
 

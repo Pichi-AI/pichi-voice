@@ -66,6 +66,7 @@ Sources/Fluid/Services/Meeting/Backend/MeetingAnalysisManifest.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingAnalysisManifestBuilder.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingAudioChunkSink.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingAudioFilePCMChunkSink.swift
+Sources/Fluid/Services/Meeting/Backend/MeetingVoiceMask.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingBackendEvidence.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingCanonicalEvidenceTypes.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingChunkAudioObserver.swift

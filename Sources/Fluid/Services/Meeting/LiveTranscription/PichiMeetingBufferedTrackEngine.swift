@@ -208,7 +208,7 @@ final nonisolated class PichiMeetingCaptionInputEpoch: @unchecked Sendable {
 }
 
 /// Buffered captions for the retained-files path. Copied PCM crosses a bounded I/O handoff
-/// into an anonymous disk FIFO, so preparation/inference cannot evict opening speech.
+/// into the recording's selected FIFO, so preparation/inference cannot evict opening speech.
 /// Memory-only/protected streaming recordings use their existing separate PCM owner.
 /// Resampling, inference and endpointing run on this actor.
 actor PichiMeetingBufferedTrackEngine {
@@ -218,7 +218,7 @@ actor PichiMeetingBufferedTrackEngine {
     typealias ReadyHandler = @Sendable (MeetingAudioTrackKind) -> Void
 
     private typealias Input = MeetingLiveAudioFIFO.Input
-    private nonisolated let queue = MeetingLiveAudioFIFO()
+    private nonisolated let queue: MeetingLiveAudioFIFO
     private nonisolated let inputEpoch = PichiMeetingCaptionInputEpoch()
     private var activeInputEpoch: UInt64?
     private static let sampleRate: Double = 16_000
@@ -268,7 +268,9 @@ actor PichiMeetingBufferedTrackEngine {
     private var onDegraded: DegradedHandler?
     private var onReady: ReadyHandler?
 
-    init(kind: MeetingAudioTrackKind, recognizer: any PichiMeetingCaptionRecognizing) {
+    init(kind: MeetingAudioTrackKind, recognizer: any PichiMeetingCaptionRecognizing,
+         storage: MeetingLiveAudioFIFO.Storage = .anonymousFile) {
+        self.queue = MeetingLiveAudioFIFO(storage: storage)
         self.kind = kind
         self.recognizer = recognizer
     }

@@ -28,7 +28,7 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     private let memoryConsumerFactory: MemoryConsumerFactory?
 #if DEBUG
     // The source selection is frozen when the real application composes its capture owner.
-    private let debugFileInput = Result { try IOSMeetingDebugFileInput.requested() }
+    private let debugFileInput: Result<IOSMeetingDebugFileInput?, Error>
 #endif
     private var active: Capture?
     private var starting = false
@@ -38,7 +38,17 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
 
     init(memoryConsumerFactory: MemoryConsumerFactory? = nil) {
         self.memoryConsumerFactory = memoryConsumerFactory
+#if DEBUG
+        self.debugFileInput = Result { try IOSMeetingDebugFileInput.requested() }
+#endif
     }
+
+#if DEBUG
+    init(debugFileInput: IOSMeetingDebugFileInput, memoryConsumerFactory: MemoryConsumerFactory? = nil) {
+        self.debugFileInput = .success(debugFileInput)
+        self.memoryConsumerFactory = memoryConsumerFactory
+    }
+#endif
 
     func preflightPermissions() async throws {
 #if DEBUG
@@ -121,7 +131,8 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
                   available >= MeetingPCMStoragePolicy.requiredFreeBytes(trackCount: 1)
             else { throw MeetingCaptureError.insufficientDiskSpace }
             writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: sessionDirectory,
-                                                chunkDuration: configuration.chunkDuration, eventHandler: eventHandler)
+                                                chunkDuration: configuration.chunkDuration, eventHandler: eventHandler,
+                                                maskSavedVoices: configuration.maskSavedVoices == true)
             if configuration.effectiveSpeakerProcessingMode == .streaming, let memoryConsumerFactory {
                 do { memoryConsumer = try await memoryConsumerFactory(session, configuration, track, eventHandler) }
                 catch { _ = await writer?.stop(); throw error }

@@ -470,6 +470,11 @@ extension SettingsStore {
         set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingSaveAudio) }
     }
 
+    var meetingMaskSavedVoices: Bool {
+        get { self.defaults.bool(forKey: Keys.meetingMaskSavedVoices) }
+        set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingMaskSavedVoices) }
+    }
+
     /// Optional metadata requires an explicit choice, independent of the OS permission.
     var meetingLocationEnabled: Bool {
         get { self.defaults.bool(forKey: Keys.meetingLocationEnabled) }
