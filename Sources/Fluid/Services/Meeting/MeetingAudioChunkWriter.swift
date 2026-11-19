@@ -150,6 +150,10 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 for completion in completions { completion(error.map { .failure($0) } ?? .success(())) }
             }
         }
+        // The header is on disk when init returns, as in the upstream writer, so nothing else touches
+        // the track directory afterwards unless the writer has work for it. A failed write does not fail
+        // capture; the first snapshot below retries it through the journal and reports it.
+        try? self.journal?.writeInitialHeader(track)
         self.publishJournal()
     }
 

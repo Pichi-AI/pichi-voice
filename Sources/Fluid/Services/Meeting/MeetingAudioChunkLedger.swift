@@ -288,6 +288,8 @@ final nonisolated class MeetingAudioRecordingJournal: @unchecked Sendable {
     private var finishing = false
     private var recordedThrough = -1
     private var pendingRecovery = Set<UUID>()
+    /// The last header (a track without chunks) that reached the disk. Guarded by `lock`.
+    private var persistedHeader: MeetingAudioTrack?
 
     init(directory: URL, hook: Hook? = nil,
          delivery: @escaping @Sendable ([MeetingAudioChunk], Error?, [Completion]) -> Void) {
@@ -396,14 +398,32 @@ final nonisolated class MeetingAudioRecordingJournal: @unchecked Sendable {
         return (updates, failure)
     }
 
+    /// Writes the track header on the calling thread, before the first snapshot is submitted, so a
+    /// writer that exists also has its header on disk. Capture never depends on the header, so the
+    /// caller may ignore a thrown error: the first coalesced snapshot retries the write and reports it.
+    func writeInitialHeader(_ track: MeetingAudioTrack) throws {
+        assert(self.lock.withLock { !self.running && self.pending == nil && !self.finishing },
+               "The initial header must be written before the first snapshot is submitted")
+        try self.writeManifestFile(track, includeChunks: false)
+    }
+
     private func writeManifest(_ track: MeetingAudioTrack, includeChunks: Bool) throws {
         try self.hook?(.manifest)
+        try self.writeManifestFile(track, includeChunks: includeChunks)
+    }
+
+    private func writeManifestFile(_ track: MeetingAudioTrack, includeChunks: Bool) throws {
         var value = track
-        if !includeChunks { value.chunks = [] }
+        if !includeChunks {
+            value.chunks = []
+            // A header that is already on disk is not rewritten; nothing changes for readers or recovery.
+            if self.lock.withLock({ self.persistedHeader }) == value { return }
+        }
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(value)
         let url = self.directory.appendingPathComponent("tracks/\(track.kind.rawValue)/track.json")
         try data.write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: NSNumber(value: Int16(0o600))], ofItemAtPath: url.path)
+        self.lock.withLock { self.persistedHeader = includeChunks ? nil : value }
     }
 }
