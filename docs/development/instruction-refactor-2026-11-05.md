@@ -82,7 +82,7 @@ README и формы issues ссылаются на общую политику.
 
 Подтверждение targets: [Fluid.xcscheme:36](../../Fluid.xcodeproj/xcshareddata/xcschemes/Fluid.xcscheme), [PichiVoiceMobile.xcscheme:4](../../Fluid.xcodeproj/xcshareddata/xcschemes/PichiVoiceMobile.xcscheme). Название macOS-target унаследовано: в нём уже есть оба уровня тестирования. Переименование не улучшит покрытие и увеличит downstream-расхождение.
 
-Корневой [Package.swift:23](../../Package.swift) не объявляет test target приложения. Команда `swift test` в корне не заменяет XCTest через Xcode. Примеры реально существующих проверок: [CustomDictionaryManualEntryTests.swift:42](../../Tests/FluidDictationIntegrationTests/CustomDictionaryManualEntryTests.swift), [MeetingPrivacyPublicationTests.swift:28](../../Tests/FluidDictationIntegrationTests/MeetingPrivacyPublicationTests.swift).
+Корневой [Package.swift:23](../../Package.swift) не объявляет test target приложения. Команда `swift test` в корне не заменяет XCTest через Xcode. Примеры реально существующих проверок: [CustomDictionaryManualEntryTests.swift:42](../../Tests/FluidDictationIntegrationTests/CustomDictionaryManualEntryTests.swift), [MeetingPrivacyPublicationTests.swift:28](../../Tests/FluidDictationIntegrationTests/Features/Privacy/MeetingPrivacyPublicationTests.swift).
 
 Старые probes иногда компилируют извлечённые части Swift-кода. Они сохраняются как существующая инфраструктура с узкой областью доказательства. Для нового поведения приложения выбран фактический XCTest target; новые проверки раскладки исходников и копии реализации запрещены этим руководством. Portable Python-тесты инструментов остаются допустимы, что устраняет неоднозначность исторической рекомендации «все тесты в XCTest».
 
