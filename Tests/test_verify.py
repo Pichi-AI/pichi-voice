@@ -126,12 +126,17 @@ class VendorTests(unittest.TestCase):
                          (["vendor-PichiGigaAM", "vendor-onnxruntime-swift-package-manager"], others))
 
     def test_dependents_follow_path_dependencies_through_other_packages(self):
+        manifests = {
+            "Leaf": '// .package(url: "https://example.invalid/leaf", from: "1.0.0")\n',
+            "Middle": '        .package(path: "../Leaf"),\n',
+            "Top": '        .package(name: "Middle", path: "../Middle/"),\n',
+            "Other": '        // .package(path: "../Leaf"),\n',
+        }
         with tempfile.TemporaryDirectory() as temporary:
             vendor = Path(temporary)
-            for name, uses in {"Leaf": [], "Middle": ["Leaf"], "Top": ["Middle"], "Other": []}.items():
+            for name, manifest in manifests.items():
                 (vendor / name).mkdir()
-                manifest = "".join(f'        .package(path: "../{use}"),\n' for use in uses)
-                (vendor / name / "Package.swift").write_text(f'// .package(url: "https://example.invalid/x")\n{manifest}')
+                (vendor / name / "Package.swift").write_text(manifest)
             dependents = VERIFY.vendor_dependents(vendor)
         self.assertEqual(VERIFY.affected_vendor_packages({"Leaf"}, dependents), {"Leaf", "Middle", "Top"})
         self.assertEqual(VERIFY.affected_vendor_packages({"Middle"}, dependents), {"Middle", "Top"})

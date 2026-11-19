@@ -458,7 +458,8 @@ def vendor_dependents(vendor=None):
     """Each vendored package mapped to the vendored packages whose manifests use it as a path dependency."""
     dependents = {}
     for manifest in (vendor or ROOT / "Vendor").glob("*/Package.swift"):
-        for name in re.findall(r'\.package\(\s*path:\s*"\.\./([^"/]+)"', manifest.read_text()):
+        text = re.sub(r"//[^\n]*", "", manifest.read_text())
+        for name in re.findall(r'\.package\(\s*(?:name:\s*"[^"]*",\s*)?path:\s*"\.\./([^"/]+)/?"', text):
             dependents.setdefault(name, set()).add(manifest.parent.name)
     return dependents
 

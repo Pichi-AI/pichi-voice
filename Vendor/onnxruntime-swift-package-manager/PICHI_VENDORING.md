@@ -11,7 +11,7 @@ Changes against that revision:
 
 This record is itself added with `git add -f` for the same reason, and `scripts/dev/check.sh` fails if it is not tracked while this folder exists.
 
-Unchanged: the Objective-C bindings and extension sources, and the binary targets. ONNX Runtime itself is still downloaded from `download.onnxruntime.ai` and verified by the checksum in `Package.swift`, so the linked binary is the same as before.
+Unchanged: the Objective-C binding sources and the `onnxruntime` binary target. ONNX Runtime itself is still downloaded from `download.onnxruntime.ai` and verified by the checksum in `Package.swift`, so the linked binary is the same as before.
 
 License: MIT, see `LICENSE` (Copyright (c) Microsoft Corporation).
 
