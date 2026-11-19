@@ -56,7 +56,7 @@ struct FeedbackView: View {
                     self.categories
                     self.form
                     if case .email = self.delivery {
-                        Link("Report an issue", destination: AppBrand.issueReportURL)
+                        Link("Open bug report form", destination: AppBrand.issueReportURL)
                     }
                 }
 

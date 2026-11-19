@@ -36835,6 +36835,23 @@
         }
       }
     },
+    "Open bug report form": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open bug report form"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть форму сообщения об ошибке"
+          }
+        }
+      }
+    },
     "Open email draft": {
       "extractionState": "manual",
       "localizations": {
