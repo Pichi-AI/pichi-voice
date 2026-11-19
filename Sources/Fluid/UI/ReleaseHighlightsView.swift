@@ -48,7 +48,7 @@ struct ReleaseHighlightsView: View {
                 .accessibilityIdentifier("releaseHighlights.history")
                 .fluidGlassAction(prominent: self.content.features.isEmpty)
                 .disabled(!self.canExplore)
-            Text(PichiLocalization.text("Always here in Help → What’s new."))
+            Text(PichiLocalization.text("Open this again from Help at the bottom of the sidebar."))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.tertiaryText)
                 .frame(maxWidth: .infinity)

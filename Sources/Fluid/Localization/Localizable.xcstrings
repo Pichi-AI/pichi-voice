@@ -5721,19 +5721,19 @@
         }
       }
     },
-    "Always here in Help → What’s new.": {
+    "Open this again from Help at the bottom of the sidebar.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Always here in Help → What’s new."
+            "value": "Open this again from Help at the bottom of the sidebar."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Всегда доступно в меню «Справка» → «Что нового»."
+            "value": "Это окно можно снова открыть в разделе «Помощь» внизу боковой панели."
           }
         }
       }

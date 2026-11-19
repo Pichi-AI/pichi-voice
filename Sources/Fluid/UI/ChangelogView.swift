@@ -299,6 +299,7 @@ private struct ChangelogNoteBlock: View {
                         let label = String(self.block.text[run.range].characters)
                         if let url = run.link {
                             Link(destination: url) { Text(verbatim: label) }
+                                .buttonStyle(.borderless)
                         } else {
                             Text(verbatim: label)
                                 .foregroundStyle(self.theme.palette.secondaryText)
