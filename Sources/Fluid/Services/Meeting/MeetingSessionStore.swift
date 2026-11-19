@@ -723,6 +723,10 @@ actor MeetingSessionStore: MeetingSessionStoring {
                             sha256: recovered.sha256, sampleRate: recovered.sampleRate,
                             channelCount: recovered.channelCount, frameCount: recovered.frameCount)
                         try? ledger.writeCapture(.init(trackID: track.id, kind: kind, chunk: chunk))
+                    } catch let error as MeetingPCMSinkError where error.isPermanentRecoveryRejection {
+                        // Metadata that can never be recovered must not leave the chunk writing
+                        // forever: the shared reconciliation fails it and keeps the partial file.
+                        return self.reconcileChunkFile(chunk, sessionDirectory: sessionDirectory)
                     } catch { return chunk }
                 }
                 return self.reconcileChunkFile(chunk, sessionDirectory: sessionDirectory)
@@ -736,10 +740,11 @@ actor MeetingSessionStore: MeetingSessionStoring {
                 candidate.audioTracks.append(track)
             }
             candidate.audioTracks.sort { $0.kind.rawValue < $1.kind.rawValue }
-            candidate.timebase.firstPresentationTime = candidate.audioTracks
-                .flatMap(\.chunks)
-                .map(\.presentationStart)
-                .min()
+            // A track without chunks (audio deleted after transcription, or not yet captured)
+            // says nothing about the first presentation time; keep the stored value.
+            if let first = candidate.audioTracks.flatMap(\.chunks).map(\.presentationStart).min() {
+                candidate.timebase.firstPresentationTime = first
+            }
             do {
                 try candidate.validateForPersistence()
                 session = candidate

@@ -50,6 +50,7 @@ nonisolated enum MeetingPCMSinkError: Error, Equatable, Sendable {
     case alreadyFinalizedOrCancelled
     case finalizationVerificationFailed(String)
     case underlyingFileError(String)
+    case invalidRecoveryMetadata(String)
 }
 
 nonisolated extension MeetingPCMSinkError: LocalizedError {
@@ -63,6 +64,17 @@ nonisolated extension MeetingPCMSinkError: LocalizedError {
         case let .finalizationVerificationFailed(detail): return "PCM finalization verification failed: \(detail)."
         case let .underlyingFileError(detail): return "PCM file error: \(detail)."
         default: return String(describing: self)
+        }
+    }
+
+    /// Recovery metadata that no later attempt can make valid: the extent is missing, the path
+    /// escapes, or it names no capture or something that is not a regular capture file in the
+    /// recorded format. Other failures, such as a file that changes or cannot be inspected yet, may
+    /// be transient, so the partial capture stays an owned recovery input.
+    var isPermanentRecoveryRejection: Bool {
+        switch self {
+        case .invalidRecoveryMetadata, .invalidRelativePath, .pathEscapesSessionDirectory, .symlinkComponentRejected: return true
+        default: return false
         }
     }
 }

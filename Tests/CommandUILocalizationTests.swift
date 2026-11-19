@@ -121,7 +121,7 @@ private final class FixtureHostingView<Content: View>: NSHostingView<Content> {
     static func host(_ content: some View, width: CGFloat, height: CGFloat, scheme: ColorScheme) -> (NSWindow, NSView) {
         let host = FixtureHostingView(rootView: content)
         host.frame = NSRect(x: 0, y: 0, width: width, height: height)
-        let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        let window = FixedScaleSnapshot.Window(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
         window.contentView = host
@@ -136,9 +136,10 @@ private final class FixtureHostingView<Content: View>: NSHostingView<Content> {
     static func capture(_ view: NSView, _ step: String, verifyCopyGlyph: Bool = false) throws {
         func render() -> NSBitmapImageRep {
             view.layoutSubtreeIfNeeded()
-            guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds),
+            // Always 2x: the glyph thresholds below were calibrated there, and a runner without a Retina
+            // display would otherwise draw the same icon with 1 pixel lines.
+            guard let bitmap = FixedScaleSnapshot.bitmap(of: view),
                   bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0 else { preconditionFailure("Missing native bitmap") }
-            view.cacheDisplay(in: view.bounds, to: bitmap)
             return bitmap
         }
         var bitmap = render()

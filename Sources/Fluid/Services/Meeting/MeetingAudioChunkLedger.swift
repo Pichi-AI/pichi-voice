@@ -156,6 +156,21 @@ final nonisolated class MeetingAudioChunkLedgerStore: @unchecked Sendable {
         try self.writeImmutable(self.encode(terminal), to: self.recordURL(chunkID: chunkID, suffix: "terminal"), conflict: .terminalAlreadyExists)
     }
 
+    /// The ledger's ready terminal for a chunk whose capture was independently verified. Intent and
+    /// checkpoint are coalesced per snapshot, so the checkpoint is completed from the verified
+    /// extent. A chunk without a recorded intent has no ledger entry to terminate and is skipped.
+    func publishReadyTerminal(for chunk: MeetingAudioChunk) throws {
+        guard let frames = chunk.captureAnalysisAsset?.frameCount, frames > 0,
+              try self.readIntent(for: chunk.id) != nil,
+              try self.readTerminal(for: chunk.id) == nil else { return }
+        let checkpoint = try self.readCheckpoint(for: chunk.id)
+        if checkpoint?.expectedFrames != frames || checkpoint?.writtenFrames != frames {
+            try self.writeCheckpoint(.init(chunkID: chunk.id, expectedFrames: frames, writtenFrames: frames,
+                lastCanonicalPTS: chunk.presentationEnd, updatedAt: Date()), for: chunk.id)
+        }
+        try self.writeTerminal(.init(chunkID: chunk.id, status: .ready, updatedAt: Date(), detail: nil), for: chunk.id)
+    }
+
     func readIntent(for chunkID: MeetingAudioChunkID) throws -> MeetingAudioChunkLedgerIntent? { try self.read(
         MeetingAudioChunkLedgerIntent.self,
         at: self.recordURL(chunkID: chunkID, suffix: "intent")
@@ -252,7 +267,7 @@ final nonisolated class MeetingAudioChunkLedgerStore: @unchecked Sendable {
 /// files, appends per-chunk recovery records, and updates the small track header. The complete
 /// compatibility manifest is written once at Stop. Failure never deletes captured audio.
 final nonisolated class MeetingAudioRecordingJournal: @unchecked Sendable {
-    enum Operation: Sendable { case manifest, intent, checkpoint, capture, finalize }
+    enum Operation: Sendable { case manifest, intent, checkpoint, capture, finalize, terminal }
     typealias Hook = @Sendable (Operation) throws -> Void
     typealias Completion = @Sendable (Result<Void, Error>) -> Void
     struct Snapshot: Sendable {
@@ -353,13 +368,25 @@ final nonisolated class MeetingAudioRecordingJournal: @unchecked Sendable {
             }
             // Even a not-yet-verified partial has an exact recovery extent and clock. It is
             // never admitted to inference until recovery independently validates the container.
+            var captureRecorded = false
             do {
                 try self.hook?(.capture)
                 try self.ledger.writeCapture(.init(trackID: track.id, kind: track.kind, chunk: chunk))
                 self.recordedThrough = max(self.recordedThrough, chunk.sequence)
                 if chunk.finalizationState == .writing { self.pendingRecovery.insert(chunk.id) }
                 else { self.pendingRecovery.remove(chunk.id) }
+                captureRecorded = true
             } catch { failure = failure ?? error }
+            // The ready terminal is an optional acknowledgement of PCM and a capture record that are
+            // already durable. Its failure is logged once and never fails the journal or keeps the
+            // chunk pending, so later metadata completions and the Stop receipt still succeed.
+            if captureRecorded, chunk.finalizationState == .finalized {
+                do { try self.hook?(.terminal); try self.ledger.publishReadyTerminal(for: chunk) }
+                catch {
+                    DebugLogger.shared.warning("Ready terminal for chunk \(chunk.sequence) was not published: \(error)",
+                                               source: "MeetingAudioRecordingJournal")
+                }
+            }
             track.chunks[index] = chunk
             updates.append(chunk)
         }

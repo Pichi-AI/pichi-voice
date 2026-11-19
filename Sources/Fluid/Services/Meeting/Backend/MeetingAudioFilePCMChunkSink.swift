@@ -258,7 +258,7 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
         guard let asset = chunk.captureAnalysisAsset, let rate = asset.sampleRate,
               let channels = asset.channelCount, let frames = asset.frameCount,
               rate.isFinite, (8_000...192_000).contains(rate), (1...8).contains(channels), frames > 0
-        else { throw MeetingPCMSinkError.finalizationVerificationFailed("invalid recovery extent") }
+        else { throw MeetingPCMSinkError.invalidRecoveryMetadata("invalid recovery extent") }
         func confined(_ relative: String) throws -> URL {
             let parts = relative.split(separator: "/", omittingEmptySubsequences: false)
             guard !relative.hasPrefix("/"), relative.hasSuffix(".caf"), !parts.isEmpty,
@@ -270,16 +270,29 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
             return url
         }
         let final = try confined(chunk.relativeFilePath)
-        let partial = try confined(asset.relativeFilePath)
+        // A crash can leave a published final file next to stale partial-path metadata. The partial path is
+        // only an input when no final file exists, so a malformed one must not reject a file that verifies.
         let alreadyPublished = FileManager.default.fileExists(atPath: final.path)
-        let input = alreadyPublished ? final : partial
+        let partial: URL? = alreadyPublished ? nil : try confined(asset.relativeFilePath)
+        let input = partial ?? final
+        // Publication renames the partial atomically, so a partial that vanished is either published by now or
+        // gone for good; only a published one, or a file that cannot be inspected right now, may still recover.
+        // Something that is not a regular file, or a capture in another format than its recorded extent, can
+        // never become this chunk either.
         var info = stat()
-        guard lstat(input.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
-            throw MeetingPCMSinkError.finalizationVerificationFailed("capture is not a regular file")
+        guard lstat(input.path, &info) == 0 else {
+            let reason = errno
+            if reason != ENOENT || (partial != nil && FileManager.default.fileExists(atPath: final.path)) {
+                throw MeetingPCMSinkError.finalizationVerificationFailed("capture is not available yet")
+            }
+            throw MeetingPCMSinkError.invalidRecoveryMetadata("capture is missing")
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG else {
+            throw MeetingPCMSinkError.invalidRecoveryMetadata("capture is not a regular file")
         }
         let native = try AVAudioFile(forReading: input).fileFormat
         guard native.sampleRate == rate, Int(native.channelCount) == channels else {
-            throw MeetingPCMSinkError.finalizationVerificationFailed("capture format changed")
+            throw MeetingPCMSinkError.invalidRecoveryMetadata("capture format does not match its recovery extent")
         }
         let format = Format(rate: rate, channels: UInt32(channels), layout: Self.layoutData(native.channelLayout),
                             contract: try MeetingPCMFormatContract(audioFormat: native))
@@ -290,7 +303,7 @@ final nonisolated class MeetingAudioFilePCMChunkSink: MeetingAudioChunkSink, @un
         guard identity.dev == after.dev, identity.ino == after.ino, identity.size == after.size else {
             throw MeetingPCMSinkError.finalizationVerificationFailed("capture changed during recovery")
         }
-        if !alreadyPublished {
+        if let partial {
             guard renameatx_np(AT_FDCWD, partial.path, AT_FDCWD, final.path, UInt32(RENAME_EXCL)) == 0 else {
                 throw MeetingPCMSinkError.underlyingFileError("capture publication failed")
             }

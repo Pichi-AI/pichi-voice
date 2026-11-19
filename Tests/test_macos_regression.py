@@ -59,6 +59,31 @@ class RegressionConfigurationTests(unittest.TestCase):
         self.assertEqual(value["__xctestrun_metadata__"]["EnvironmentVariables"], {"untouched": "1"})
         self.assertEqual(first["TestingEnvironmentVariables"]["XCInjectBundleInto"], "__TESTROOT__/Synthetic.app")
 
+    def test_run_home_reaches_every_target_and_cannot_come_from_the_caller_environment(self):
+        first, second = self.target(), self.target()
+        value = {"TestConfigurations": [{"TestTargets": [first]}, {"TestTargets": [second]}]}
+        # A home inherited from the caller's shell is not a test fixture and must not leak in.
+        self.assertEqual(RUNNER.configure_targets(value, {"CFFIXED_USER_HOME": "/caller"}), 2)
+        self.assertNotIn("CFFIXED_USER_HOME", first["EnvironmentVariables"])
+        self.assertEqual(RUNNER.configure_targets(value, {}, {"CFFIXED_USER_HOME": "/run/home"}), 2)
+        for target in (first, second):
+            self.assertEqual(target["EnvironmentVariables"]["CFFIXED_USER_HOME"], "/run/home")
+
+    def test_configured_spec_carries_the_run_home_only_when_one_is_given(self):
+        with tempfile.TemporaryDirectory() as directory:
+            products = Path(directory)
+            marker = products / "marker"
+            marker.touch()
+            source = products / "Fluid_macosx-synthetic.xctestrun"
+            source.write_bytes(plistlib.dumps({"SyntheticTests": self.target()}))
+            os.utime(source, ns=(marker.stat().st_mtime_ns, marker.stat().st_mtime_ns))
+            for home, expected in ((None, None), (Path(directory) / "home", str(Path(directory) / "home"))):
+                output = io.StringIO()
+                with patch.dict(os.environ, {}, clear=True), contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+                    RUNNER.configure(products, marker, "home-run", home)
+                variables = plistlib.loads(Path(output.getvalue().strip()).read_bytes())["SyntheticTests"]["EnvironmentVariables"]
+                self.assertEqual(variables.get("CFFIXED_USER_HOME"), expected)
+
     def test_missing_targets_and_invalid_environment_fail_closed(self):
         for value in ({"TestConfigurations": []}, {"target": {"TestBundlePath": "a", "EnvironmentVariables": []}}):
             with self.assertRaises(ValueError):
@@ -122,10 +147,18 @@ class RegressionResultTests(unittest.TestCase):
 class RegressionCommandTests(unittest.TestCase):
     """Exercise shell failure propagation using fake tools, never Xcode or app/audio."""
 
-    def run_command(self, build_status=0, test_status=0, report_status=0):
+    def run_command(self, build_status=0, test_status=0, report_status=0, homes=None, prepare=None, extra=None):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        root = Path(temporary.name)
+        root = Path(temporary.name) / "worktree"
+        root.mkdir()
+        # The lock and the homes of a test belong to the test, never to the machine it runs on.
+        # The homes root must be its own physical path (/var is a link to /private/var on macOS).
+        self.homes = Path(homes) if homes else Path(os.path.realpath(temporary.name)) / "homes"
+        self.lock = Path(temporary.name) / "regression.lock"
+        self.root = root
+        if prepare:
+            prepare(self.homes)
         scripts = root / "scripts/dev"
         scripts.mkdir(parents=True)
         for name in ("macos.sh", "macos-regression.py", "assert-worktree.sh"):
@@ -158,6 +191,11 @@ else:
     target = plistlib.loads(spec.read_bytes())["TestConfigurations"][0]["TestTargets"][0]
     assert target["EnvironmentVariables"]["FLUIDVOICE_MIC_PHASE1"] == "disabled"
     assert target["EnvironmentVariables"]["PICHI_GIGAAM_APP_TEST_AUDIO"] == "/synthetic fixture.wav"
+    home = pathlib.Path(target["EnvironmentVariables"].get("CFFIXED_USER_HOME", "none"))
+    owner = pathlib.Path(str(home) + ".owner")
+    (root / "home-during-tests.txt").write_text("\\n".join([
+        str(home), str((home / "Library/Application Support").is_dir()), str((home / "Library/Caches").is_dir()),
+        owner.read_text().strip() if owner.exists() else "no owner"]))
     sys.exit(int(os.environ["SYNTHETIC_TEST_STATUS"]))
 ''',
             "xcrun": '''#!/usr/bin/env python3
@@ -173,13 +211,14 @@ print(json.dumps(dict(result="Failed" if failed else "Passed", totalTestCount=3,
         environment = dict(os.environ, PATH=f"{tools}:{os.environ['PATH']}", SYNTHETIC_ROOT=str(root),
                            SYNTHETIC_BUILD_STATUS=str(build_status), SYNTHETIC_TEST_STATUS=str(test_status),
                            SYNTHETIC_REPORT_STATUS=str(report_status),
-                           PICHI_GIGAAM_APP_TEST_AUDIO="/synthetic fixture.wav")
+                           PICHI_GIGAAM_APP_TEST_AUDIO="/synthetic fixture.wav", PICHI_REGRESSION_HOMES=str(self.homes),
+                           PICHI_REGRESSION_LOCK=str(self.lock), **(extra or {}))
         environment.pop("PICHI_INTERFACE_LANGUAGE", None)
         result = subprocess.run(["bash", "scripts/dev/macos.sh", "regression", "-only-testing:SyntheticTests"],
                                 cwd=root, env=environment, capture_output=True, text=True)
         runs = list((root / ".build/regression").iterdir()) if (root / ".build/regression").exists() else []
         self.assertEqual(len(runs), 1, result.stderr)
-        return result, runs[0], (root / "calls.txt").read_text()
+        return result, runs[0], (root / "calls.txt").read_text() if (root / "calls.txt").exists() else ""
 
     def test_build_failure_does_not_start_tests_and_persists_status(self):
         result, run, calls = self.run_command(build_status=65)
@@ -217,6 +256,115 @@ print(json.dumps(dict(result="Failed" if failed else "Passed", totalTestCount=3,
             result, run, _ = self.run_command(test_status=test_status, report_status=2)
             self.assertEqual(result.returncode, expected, result.stderr)
             self.assertIn("report unavailable", (run / "summary.txt").read_text())
+
+
+    def during_tests(self):
+        return (self.root / "home-during-tests.txt").read_text().split("\n")
+
+    def test_the_home_of_a_run_lives_outside_the_worktree_and_is_removed_with_its_owner_file(self):
+        result, run, _ = self.run_command()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        home, support, caches, owner = self.during_tests()
+        self.assertEqual(Path(home).parent, self.homes)
+        self.assertEqual(Path(home).name, run.name)
+        self.assertEqual((support, caches), ("True", "True"))
+        self.assertTrue(owner.isdigit())
+        self.assertFalse(Path(home).is_relative_to(self.root))
+        self.assertFalse((run / "home").exists())
+        self.assertEqual(list(self.homes.iterdir()), [])
+        self.assertIn("Test home held", (run / "run.txt").read_text())
+
+    def test_a_failing_run_removes_its_home_too(self):
+        result, run, _ = self.run_command(test_status=65)
+        self.assertEqual(result.returncode, 65, result.stderr)
+        self.assertEqual(list(self.homes.iterdir()), [])
+
+    def test_the_shared_home_option_makes_no_run_home(self):
+        result, _, _ = self.run_command(extra={"PICHI_REGRESSION_SHARED_HOME": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.during_tests()[0], "none")
+        self.assertFalse(self.homes.exists())
+
+    def test_homes_of_runs_whose_owner_is_gone_are_removed_and_nothing_else(self):
+        ended = subprocess.Popen(["true"])
+        ended.wait()
+        running = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (running.kill(), running.wait()))
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside, True)
+        (outside / "precious.txt").write_text("keep")
+
+        def prepare(homes):
+            for name, pid in (("killed-run", ended.pid), ("live-run", running.pid), ("not-a-pid", "soon")):
+                (homes / name / "Library").mkdir(parents=True)
+                (homes / name / "Library" / "data").write_text("x" * 10)
+                (homes / f"{name}.owner").write_text(f"{pid}\n")
+            (homes / "unowned").mkdir()
+            (homes / "note.txt").write_text("not a home")
+            # A link that stands where a home should be loses the link and never its target.
+            (homes / "linked").symlink_to(outside)
+            (homes / "linked.owner").write_text(f"{ended.pid}\n")
+
+        result, _, _ = self.run_command(prepare=prepare)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("killed-run", result.stderr)
+        self.assertEqual(sorted(path.name for path in self.homes.iterdir()),
+                         ["live-run", "live-run.owner", "not-a-pid", "not-a-pid.owner", "note.txt", "unowned"])
+        self.assertEqual((outside / "precious.txt").read_text(), "keep")
+
+    def test_a_homes_folder_that_could_hold_other_data_is_refused_before_anything_is_removed(self):
+        ended = subprocess.Popen(["true"])
+        ended.wait()
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, True)
+        (folder / "stale").mkdir()
+        (folder / "stale" / "keep").write_text("keep")
+        (folder / "stale.owner").write_text(f"{ended.pid}\n")
+        for homes in (str(folder), f"{folder}///", "relative/homes", "/"):
+            with self.subTest(homes=homes):
+                result, _, calls = self.run_command(homes=homes, extra={"HOME": str(folder)})
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("PICHI_REGRESSION_HOMES", result.stderr)
+                self.assertEqual(calls, "")
+                self.assertEqual((folder / "stale" / "keep").read_text(), "keep")
+
+    def test_a_homes_root_that_leads_to_the_home_folder_through_a_link_or_dots_is_refused_before_any_removal(self):
+        ended = subprocess.Popen(["true"])
+        ended.wait()
+        home = Path(os.path.realpath(tempfile.mkdtemp()))
+        self.addCleanup(shutil.rmtree, home, True)
+        # A stale pair that the sweep would remove if it ever looked inside the home folder.
+        (home / "stale").mkdir()
+        (home / "stale" / "keep").write_text("keep")
+        (home / "stale.owner").write_text(f"{ended.pid}\n")
+        (home / "cache").mkdir()
+        (home / "link-to-home").symlink_to(home)
+        (home / "cache" / "link-to-cache").symlink_to(home / "cache")
+        candidates = {
+            "symlink to the home folder": str(home / "link-to-home"),
+            "dots that resolve to the home folder": f"{home}/cache/..",
+            "dots below the home folder": f"{home}/cache/../cache",
+            "symlink ancestor of a missing root": str(home / "link-to-home" / "missing"),
+            "root folder": "/",
+            "root folder with dots": "/tmp/..",
+        }
+        for name, homes in candidates.items():
+            with self.subTest(case=name):
+                result, _, calls = self.run_command(homes=homes, extra={"HOME": str(home)})
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("PICHI_REGRESSION_HOMES", result.stderr)
+                self.assertEqual(calls, "")
+                self.assertNotIn("Removing the test home", result.stderr)
+                self.assertEqual((home / "stale" / "keep").read_text(), "keep")
+                self.assertTrue((home / "stale.owner").exists())
+                self.assertFalse((home / "missing").exists())
+
+    def test_the_homes_folder_is_created_when_it_is_missing(self):
+        parent = Path(os.path.realpath(tempfile.mkdtemp()))
+        self.addCleanup(shutil.rmtree, parent, True)
+        result, _, _ = self.run_command(homes=str(parent / "missing" / "homes"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.during_tests()[3].isdigit(), True)
 
 
 if __name__ == "__main__":

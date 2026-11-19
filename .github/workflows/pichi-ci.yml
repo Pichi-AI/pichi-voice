@@ -133,7 +133,7 @@ jobs:
               if step["status"] != "passed" and step.get("log"):
                   with open(step["log"], errors="replace") as log:
                       lines = log.readlines()
-                  if step["name"] in ("xctest", "ios"):
+                  if step["name"] in ("xctest", "xctest-models", "ios"):
                       print(f"--- failures in {step['name']}")
                       print("".join([line for line in lines if "error: -[" in line][:200]))
                   print(f"--- last lines of {step['name']}")
