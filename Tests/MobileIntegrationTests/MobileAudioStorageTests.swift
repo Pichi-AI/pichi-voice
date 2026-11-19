@@ -170,6 +170,8 @@ final class MobileAudioStorageTests: XCTestCase {
         XCTAssertEqual(MeetingSessionCoordinator.legacyCaptionStorage(for: configuration, speechDeferred: false), .memoryOnly)
         configuration.maskSavedVoices = nil
         XCTAssertEqual(MeetingSessionCoordinator.legacyCaptionStorage(for: configuration, speechDeferred: false), .anonymousFile)
+        XCTAssertEqual(MeetingSessionCoordinator.legacyCaptionStorage(for: configuration, speechDeferred: true), .anonymousFile,
+                       "An unmasked recording still admits its existing caption fallback")
     }
 
     func testFullMaskedCaptionBacklogReportsOverflowAndClosesWithoutDiskFallback() async throws {

@@ -520,12 +520,13 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     /// The live caption tee receives the original voice. Its backlog must stay in RAM when
-    /// masked audio is requested. Direct PCM and deferred recognition own no legacy backlog.
+    /// masked audio is requested. Keep ordinary retained recordings on their existing route.
     nonisolated static func legacyCaptionStorage(
         for configuration: MeetingCaptureConfiguration, speechDeferred: Bool
     ) -> MeetingLiveAudioFIFO.Storage? {
-        guard !speechDeferred, !Self.usesPCMProcessing(configuration) else { return nil }
-        return configuration.maskSavedVoices == true ? .memoryOnly : .anonymousFile
+        guard !Self.usesPCMProcessing(configuration) else { return nil }
+        guard configuration.maskSavedVoices == true else { return .anonymousFile }
+        return speechDeferred ? nil : .memoryOnly
     }
 
     private nonisolated static func usesPCMProcessing(_ session: MeetingSession) -> Bool {
