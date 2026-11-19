@@ -4,6 +4,39 @@ import XCTest
 
 @MainActor
 final class MacUpdaterLifecycleTests: XCTestCase {
+    func testFetchedAndCachedReleaseBodyNavigatesToItsOwnNativeHeading() async throws {
+        let context = try Context()
+        defer { context.close() }
+        var release = fixtureRelease(76, tag: "v0.2.3")
+        release["body"] = """
+        [Русский](#release-ru)
+
+        <a name="release-ru"></a>
+
+        ## Русский
+
+        - [Download](https://example.org/installer)
+        """
+        context.fixture.releases = [release]
+        let fetched = try await context.updater.fetchRecentReleaseNotes(owner: "Pichi-AI", repo: "pichi-voice")
+        let cached = try JSONDecoder().decode([SimpleUpdater.ReleaseNote].self, from: JSONEncoder().encode(fetched))
+        for note in [try XCTUnwrap(fetched.first), try XCTUnwrap(cached.first)] {
+            var positions: [ChangelogReleaseCard.Position] = []
+            let card = ChangelogReleaseCard(release: note, isLatest: true, theme: .dark, scrollTo: { positions.append($0) })
+            let blocks = card.noteBlocks
+            let languageLink = try XCTUnwrap(blocks.first?.text.runs.compactMap(\.link).first)
+            _ = card.openLink(languageLink, in: blocks)
+            let target = try XCTUnwrap(positions.first)
+            XCTAssertEqual(target.release, note)
+            XCTAssertEqual(String(blocks[target.index].text.characters), "Русский")
+            XCTAssertEqual(blocks[target.index].kind, .heading(level: 2))
+            let download = try XCTUnwrap(blocks.last?.text.runs.compactMap(\.link).first)
+            _ = card.openLink(download, in: blocks)
+            XCTAssertEqual(positions.count, 1)
+        }
+        await context.cleanup()
+    }
+
     func testModernPrereleaseRollbackUsesSignedOrderingAndCannotInstallANewerBeta() async throws {
         let context = try Context()
         defer { context.close() }
