@@ -22,7 +22,7 @@ Optional location or other protected capabilities have their own product setting
 
 A Mac distribution configured for Pichi analytics sends one daily activity
 signal to PostHog with a random local app profile ID, the app version and
-basic system information. An analytics-enabled app whose bundle version is marked beta also sends
+basic system information, buffered until the local week ends. An analytics-enabled app whose bundle version is marked beta also sends
 daily performance summaries. To share usage counts for dictation, files and live recording
 starts, setup progress, model usage and timing, enable **Share Detailed
 Anonymous Analytics** in Settings. Turning it off removes pending detailed

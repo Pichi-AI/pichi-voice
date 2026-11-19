@@ -12,7 +12,7 @@ Analytics is disabled unless the trusted application bundle contains all three s
 | `PICHI_POSTHOG_PROJECT_TOKEN` | An ingestion project token beginning with `phc_`. Personal/admin tokens are rejected. |
 | `PICHI_POSTHOG_HOST` | Explicit HTTPS ingestion origin, without credentials, query, fragment or path. |
 
-The shared Pichi PostHog project is [Pichi EU](https://eu.posthog.com/project/118685), with ingestion at `https://eu.i.posthog.com`. No upstream key or default cloud-region destination is used. Importing a brand/theme package cannot change these fields, enable telemetry or alter detailed consent. A separately distributed white-label build chooses its own trusted analytics configuration.
+The shared Pichi PostHog project uses the EU ingestion origin `https://eu.i.posthog.com`. No upstream key or default cloud-region destination is used. Importing a brand/theme package cannot change these fields, enable telemetry or alter detailed consent. A separately distributed white-label build chooses its own trusted analytics configuration.
 
 The Pichi application stores secrets in Infisical. Its README documents `https://infisical.int.aspirity.com`, project `a155711f-4926-4edb-bb2f-b2cdb82ed76b`, and the `local` environment. The server uses `POSTHOG_KEY`, `POSTHOG_HOST`, and `POSTHOG_ENABLED`; its optional `POSTHOG_PERSONAL_API_KEY` is an administrative credential and must never enter a client build. Project credentials are not checked into this repository.
 
@@ -49,7 +49,7 @@ In the shared project scope Mac charts to `app_product = desktop_voice` and
 app profile, including across app updates. One person can appear as multiple
 profiles across devices or when switching between a guest and a signed-in
 profile. Use the measurement date below for daily charts because uploads can
-arrive later.
+arrive later. Count distinct `distinct_id` values for active profiles.
 
 | Event | Measures | Date or dimensions |
 | --- | --- | --- |
