@@ -41,7 +41,6 @@ struct ReleaseHighlightsPresenter: ViewModifier {
     @State private var pendingDestination: ReleaseHighlightsContent.Destination?
     private let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
     private let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
-    private let highlights = ReleaseHighlightsContent.current(hasPrivateAI: PrivateAIProviderFeature.shared.isAvailable)
     private let coordinator = ReleaseHighlightsCoordinator.shared
 
     private final class WindowReference {
@@ -60,7 +59,7 @@ struct ReleaseHighlightsPresenter: ViewModifier {
                 self.presentIfNeeded()
             })
             .sheet(isPresented: self.$isPresented, onDismiss: self.didDismiss) {
-                ReleaseHighlightsView(canExplore: self.canExplore, version: self.version, content: self.highlights, onClose: self.close)
+                ReleaseHighlightsView(canExplore: self.canExplore, content: .current(version: self.version), onClose: self.close)
             }
             .onAppear { self.visible = true; self.presentIfNeeded() }
             .onDisappear {
@@ -130,14 +129,21 @@ struct ReleaseHighlightsPresenter: ViewModifier {
         self.session = nil
         self.pendingDestination = nil
         if result == true, self.canExplore, self.visible, let destination {
-            switch destination {
-            case .meetings: self.onExplore(.meetingTranscription)
-            case .dashboard: self.onExplore(.welcome)
-            case .aiProviders: self.onExplore(.aiEnhancements)
-            case .voiceEngine: self.onExplore(.voiceEngine)
-            }
+            self.onExplore(destination.sidebarItem)
         } else if result == false {
             self.presentIfNeeded()
+        }
+    }
+}
+
+extension ReleaseHighlightsContent.Destination {
+    var sidebarItem: SidebarItem {
+        switch self {
+        case .meetings: .meetingTranscription
+        case .dashboard: .welcome
+        case .aiProviders: .aiEnhancements
+        case .voiceEngine: .voiceEngine
+        case .changelog: .changelog
         }
     }
 }

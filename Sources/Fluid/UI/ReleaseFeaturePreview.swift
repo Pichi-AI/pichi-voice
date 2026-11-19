@@ -13,6 +13,10 @@ struct ReleaseFeaturePreview: View {
             case .dashboard: self.dashboard
             case .ripple: self.cleanupModel("Fluid 1.1 Ripple", detail: "Fast & capable", symbol: "bolt")
             case .splash: self.cleanupModel("Fluid 1.1 Splash", detail: "Higher quality", symbol: "sparkles")
+            case .dictation:
+                Label { Text(verbatim: "GigaAM") } icon: { Image(systemName: "waveform") }
+                    .font(self.theme.typography.title)
+                    .foregroundStyle(self.theme.palette.accentText)
             case .speech: self.speech
             }
         }

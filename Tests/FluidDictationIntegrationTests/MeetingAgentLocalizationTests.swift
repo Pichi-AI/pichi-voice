@@ -1,5 +1,6 @@
 @testable import FluidVoice_Debug
-import Foundation
+import AppKit
+import SwiftUI
 import XCTest
 
 @MainActor
@@ -50,20 +51,39 @@ final class MeetingAgentLocalizationTests: XCTestCase {
         XCTAssertFalse(message.contains("Настройки"))
     }
 
-    func testCurrentReleaseHighlightsHaveCompleteRussianCopy() {
-        let content = ReleaseHighlightsContent.current(hasPrivateAI: false)
-        let modelAttributionTitles = ["speech-pro": "Fluid Speech Pro", "qwen": "Qwen3 ASR 1.7B"]
-        var keys = [content.title, content.subtitle]
-        for feature in content.features {
-            keys += [feature.eyebrow, feature.detail, feature.action]
-            if modelAttributionTitles[feature.id] == feature.title {
-                for language in [PichiInterfaceLanguage.english, .russian] {
-                    XCTAssertEqual(PichiLocalization.text(feature.title, language: language, bundle: .main),
-                                   feature.title, "Genuine model attribution must remain verbatim")
-                }
-            } else {
-                keys.append(feature.title)
+    func testUnmatchedReleaseOpensHistoryFromTheNativeSheet() async throws {
+        var selected: SidebarItem?
+        let content = ReleaseHighlightsContent.current(version: "9.0.0")
+        let view = ReleaseHighlightsView(canExplore: true, content: content) { selected = $0?.sidebarItem }
+        let host = NSHostingView(rootView: view.appTheme(.light))
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+
+        func historyButton(in elements: [Any]) -> (any NSAccessibilityProtocol)? {
+            for case let element as any NSAccessibilityProtocol in elements {
+                if element.accessibilityIdentifier() == "releaseHighlights.history" { return element }
+                if let button = historyButton(in: element.accessibilityChildren() ?? []) { return button }
             }
+            return nil
+        }
+
+        let button = try XCTUnwrap(historyButton(in: host.accessibilityChildren() ?? []))
+        XCTAssertTrue(button.accessibilityPerformPress())
+        await Task.yield()
+        XCTAssertEqual(selected, .changelog)
+    }
+
+    func testCurrentReleaseHighlightsHaveCompleteRussianCopy() {
+        var keys = ["View release history"]
+        for version in ["0.2.3", "0.3.0"] {
+            let content = ReleaseHighlightsContent.current(version: version)
+            XCTAssertEqual(content.release, version)
+            keys += [content.title, content.subtitle]
+            keys += content.features.flatMap { [$0.eyebrow, $0.title, $0.detail, $0.action] }
         }
         for key in keys {
             let english = PichiLocalization.text(key, language: .english, bundle: .main)

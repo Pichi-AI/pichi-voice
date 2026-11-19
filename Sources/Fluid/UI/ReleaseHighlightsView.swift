@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ReleaseHighlightsView: View {
     let canExplore: Bool
-    let version: String
     let content: ReleaseHighlightsContent
     let onClose: (ReleaseHighlightsContent.Destination?) -> Void
     @Environment(\.theme) private var theme
@@ -11,7 +10,7 @@ struct ReleaseHighlightsView: View {
         VStack(alignment: .leading, spacing: 28) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(AppBrand.format("FLUIDVOICE %@", self.version))
+                    Text(AppBrand.format("FLUIDVOICE %@", self.content.release))
                         .font(self.theme.typography.captionStrong)
                         .tracking(2)
                         .foregroundStyle(self.theme.palette.secondaryText)
@@ -31,9 +30,11 @@ struct ReleaseHighlightsView: View {
                 .accessibilityLabel(PichiLocalization.text("Close what’s new"))
                 .help(PichiLocalization.text("Close (Esc)"))
             }
-            HStack(alignment: .top, spacing: 18) {
-                ForEach(self.content.features) { feature in
-                    self.feature(feature)
+            if !self.content.features.isEmpty {
+                HStack(alignment: .top, spacing: 18) {
+                    ForEach(self.content.features) { feature in
+                        self.feature(feature)
+                    }
                 }
             }
             if let notice = self.content.officialSiteNotice {
@@ -42,13 +43,17 @@ struct ReleaseHighlightsView: View {
                     .foregroundStyle(self.theme.palette.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            Button(PichiLocalization.text("View release history")) { self.onClose(.changelog) }
+                .accessibilityIdentifier("releaseHighlights.history")
+                .fluidGlassAction(prominent: self.content.features.isEmpty)
+                .disabled(!self.canExplore)
             Text(PichiLocalization.text("Always here in Help → What’s new."))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.tertiaryText)
                 .frame(maxWidth: .infinity)
         }
         .padding(30)
-        .frame(width: 800)
+        .frame(width: self.content.features.isEmpty ? 440 : 760)
         .background(self.theme.palette.contentBackground)
         .onExitCommand { self.onClose(nil) }
     }

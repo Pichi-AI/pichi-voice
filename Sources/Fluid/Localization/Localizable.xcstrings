@@ -22163,6 +22163,142 @@
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
     },
+    "Explore changes and installation notes for published versions.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Explore changes and installation notes for published versions."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Посмотрите, что изменилось в каждой опубликованной версии и как её установить."
+          }
+        }
+      }
+    },
+    "Faster dictation and better Russian language support": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Faster dictation and better Russian language support"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диктовка быстрее, больше интерфейса на русском"
+          }
+        }
+      }
+    },
+    "GigaAM finishes dictation sooner, and more of the Mac interface is available in Russian.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM finishes dictation sooner, and more of the Mac interface is available in Russian."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM быстрее завершает диктовку. Окна обновлений, настройки ИИ и сообщения об ошибках теперь доступны на русском."
+          }
+        }
+      }
+    },
+    "Faster GigaAM dictation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Faster GigaAM dictation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Более быстрая диктовка с GigaAM"
+          }
+        }
+      }
+    },
+    "GigaAM reuses audio it has already processed when you finish dictating.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM reuses audio it has already processed when you finish dictating."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Когда вы заканчиваете диктовать, GigaAM использует уже обработанные фрагменты записи."
+          }
+        }
+      }
+    },
+    "Meeting summaries across languages": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting summaries across languages"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Итоги встреч при смене языка"
+          }
+        }
+      }
+    },
+    "Changing the interface language preserves the meeting data used to create summaries.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changing the interface language preserves the meeting data used to create summaries."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "При смене языка интерфейса сохраняются данные встречи, по которым формируются её итоги."
+          }
+        }
+      }
+    },
+    "View release history": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View release history"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть историю изменений"
+          }
+        }
+      }
+    },
     "Fluid Speech Pro": {
       "extractionState": "manual",
       "comment": "Model name. Preserve this spelling in every language.",
