@@ -21,10 +21,12 @@ final class AnalyticsService {
         }
     }
 
-    func setDetailedAnalyticsEnabled(_ enabled: Bool) {
+    func setDetailedAnalyticsEnabled(_ enabled: Bool, persist: () -> Void) {
         let profile = PrivateProfileStorage.current
         guard !self.suspended, profile.isReadable else { return }
-        let consentGeneration = self.detailedConsentGate.advance(revokingProfileID: enabled ? nil : profile.id)
+        if enabled, !self.detailedConsentGate.canEnableDetails(for: profile) { return }
+        let consentGeneration = self.detailedConsentGate.advance(revoking: enabled ? nil : profile)
+        persist()
         let context = Self.context(
             detailedAnalyticsEnabled: enabled,
             detailedConsentGeneration: consentGeneration
@@ -275,16 +277,27 @@ private struct AnalyticsContext: Sendable {
 final nonisolated class DetailedAnalyticsConsentGate: @unchecked Sendable {
     private let lock = NSLock()
     private var generation: UInt64 = 0
-    private var pendingRevocations: [String: UInt64] = [:]
+    private var unpersistedRevocations: [URL: Data] = [:]
 
     var currentGeneration: UInt64 {
         self.lock.withLock { self.generation }
     }
 
-    func advance(revokingProfileID: String? = nil) -> UInt64 {
+    func advance(revoking profile: PrivateProfileSnapshot? = nil) -> UInt64 {
         self.lock.withLock {
             self.generation &+= 1
-            if let revokingProfileID { self.pendingRevocations[revokingProfileID] = self.generation }
+            if let profile {
+                let marker = Self.revocationURL(for: profile)
+                let token = Data(UUID().uuidString.utf8)
+                do {
+                    try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(),
+                                                            withIntermediateDirectories: true)
+                    try token.write(to: marker, options: .atomic)
+                    self.unpersistedRevocations.removeValue(forKey: marker)
+                } catch {
+                    self.unpersistedRevocations[marker] = token
+                }
+            }
             return self.generation
         }
     }
@@ -293,15 +306,36 @@ final nonisolated class DetailedAnalyticsConsentGate: @unchecked Sendable {
         self.lock.withLock { generation == self.generation }
     }
 
-    func pendingRevocation(for profileID: String) -> UInt64? {
-        self.lock.withLock { self.pendingRevocations[profileID] }
+    func canEnableDetails(for profile: PrivateProfileSnapshot) -> Bool {
+        self.lock.withLock { self.unpersistedRevocations[Self.revocationURL(for: profile)] == nil }
     }
 
-    func completeRevocation(_ generation: UInt64, for profileID: String) {
-        self.lock.withLock {
-            if self.pendingRevocations[profileID] == generation {
-                self.pendingRevocations.removeValue(forKey: profileID)
-            }
+    func pendingRevocation(for profile: PrivateProfileSnapshot) throws -> Data? {
+        let marker = Self.revocationURL(for: profile)
+        return try self.lock.withLock {
+            try self.unpersistedRevocations[marker] ?? Self.readRevocation(at: marker)
+        }
+    }
+
+    func completeRevocation(_ token: Data, for profile: PrivateProfileSnapshot) throws {
+        let marker = Self.revocationURL(for: profile)
+        try self.lock.withLock {
+            let stored = try Self.readRevocation(at: marker)
+            guard (self.unpersistedRevocations[marker] ?? stored) == token else { return }
+            if stored != nil { try FileManager.default.removeItem(at: marker) }
+            self.unpersistedRevocations.removeValue(forKey: marker)
+        }
+    }
+
+    private static func revocationURL(for profile: PrivateProfileSnapshot) -> URL {
+        profile.directory("Analytics").appendingPathComponent("pending-detailed-consent-revocation")
+    }
+
+    private static func readRevocation(at url: URL) throws -> Data? {
+        do {
+            return try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            return nil
         }
     }
 }
@@ -626,8 +660,8 @@ private actor AnalyticsCore {
     }
 
     private func purgeStoredDetailedAnalyticsIfNeeded(context: AnalyticsContext) throws {
-        let profileID = context.profile.id
-        let revocation = self.detailedConsentGate.pendingRevocation(for: profileID)
+        guard PrivateProfileStorage.isReadable(context.profile) else { throw CancellationError() }
+        let revocation = try self.detailedConsentGate.pendingRevocation(for: context.profile)
         let disabledNeedsPurge = !context.detailedAnalyticsEnabled
             && self.detailedPurgeGeneration != context.detailedConsentGeneration
         // An opt-in that arrives before the opt-out task runs must still clear older details.
@@ -647,7 +681,10 @@ private actor AnalyticsCore {
                 try existingDatabase.purgeDetailedAnalytics()
             }
         }
-        if let revocation { self.detailedConsentGate.completeRevocation(revocation, for: profileID) }
+        if let revocation {
+            guard PrivateProfileStorage.isReadable(context.profile) else { throw CancellationError() }
+            try self.detailedConsentGate.completeRevocation(revocation, for: context.profile)
+        }
         self.detailedPurgeGeneration = context.detailedConsentGeneration
     }
 

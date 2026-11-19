@@ -103,7 +103,9 @@ final class SettingsBackupRoundTripTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         var changes: [Bool] = []
-        let settings = SettingsStore(defaults: defaults, initializeDesktop: false, onDetailedAnalyticsChange: { enabled in
+        let settings = SettingsStore(defaults: defaults, initializeDesktop: false, updateDetailedAnalytics: { enabled, persist in
+            XCTAssertNotEqual(SettingsStore.detailedAnalyticsEnabled(in: defaults), enabled)
+            persist()
             XCTAssertEqual(SettingsStore.detailedAnalyticsEnabled(in: defaults), enabled)
             changes.append(enabled)
         })

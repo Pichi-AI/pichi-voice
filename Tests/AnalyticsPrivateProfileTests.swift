@@ -97,7 +97,7 @@ private extension AnalyticsCore {
 
         await core.recordOnboardingStarted(origin: .firstRun, context: accountContext)
         try require(try rows(newURL) == 2, "details-queued-before-opt-out")
-        _ = gate.advance(revokingProfileID: account.id)
+        _ = gate.advance(revoking: account)
         let optedOut = context(account, id: "synthetic-account", detailed: false)
         await core.recordActivity(.app, context: optedOut)
         let earlyFlush = Task { await core.flushBeforeConsentTransitionCompletes() }
@@ -122,7 +122,7 @@ private extension AnalyticsCore {
         while !(await SyntheticUploadGate.shared.started), ContinuousClock.now < consentDeadline { await Task.yield() }
         let consentUploadStarted = await SyntheticUploadGate.shared.started
         try require(consentUploadStarted, "detailed-upload-in-flight-before-opt-out")
-        _ = gate.advance(revokingProfileID: account.id)
+        _ = gate.advance(revoking: account)
         let revoked = context(account, id: "synthetic-account", detailed: false)
         await core.setDetailedAnalyticsEnabled(context: revoked)
         await core.recordOnboardingStarted(origin: .firstRun, context: optedBackIn)
@@ -134,15 +134,43 @@ private extension AnalyticsCore {
         let enabledAgain = context(account, id: "synthetic-account")
         await core.recordOnboardingStarted(origin: .firstRun, context: enabledAgain)
         try require(try rows(newURL) == 2, "details-queued-before-quick-opt-out")
-        _ = gate.advance(revokingProfileID: account.id)
+        _ = gate.advance(revoking: account)
         _ = gate.advance()
         let quicklyReenabled = context(account, id: "synthetic-account")
         await core.recordOnboardingStarted(origin: .manualRestart, context: quicklyReenabled)
         try require(try rows(newURL) == 2, "quick-opt-in-purged-old-details-before-recording-new-ones")
 
+        _ = gate.advance(revoking: account)
+        _ = gate.advance()
         PrivateProfileStorage.conceal(generation: UUID())
         _ = gate.advance()
         await core.suspendForProfileTransition()
+        try require(try rows(newURL) == 2, "restart-fixture-still-has-old-details")
+
+        let reopenedAccount = try PrivateProfileStorage.proposed(context: identity, generation: UUID(), legacyRootDirectory: root)
+        PrivateProfileStorage.select(reopenedAccount)
+        let restartedGate = DetailedAnalyticsConsentGate()
+        let restartedCore = AnalyticsCore(detailedConsentGate: restartedGate)
+        let restarted = AnalyticsContext(profile: reopenedAccount, detailedAnalyticsEnabled: true,
+            detailedConsentGeneration: restartedGate.currentGeneration,
+            config: .init(postHogApiKey: "", postHogHost: ""),
+            distinctID: "synthetic-account", appVersion: "1.0", collectsBetaPerformance: false)
+        try require(try restartedGate.pendingRevocation(for: reopenedAccount) != nil, "pending-revocation-survived-restart")
+        await restartedCore.bootstrap(context: restarted)
+        try require(try rows(newURL) == 1 && rows(oldURL) == expectedRows, "restart-purged-only-recorded-profile-details")
+        try require(try restartedGate.pendingRevocation(for: reopenedAccount) == nil, "restart-cleared-marker-after-purge")
+
+        let marker = reopenedAccount.directory("Analytics").appendingPathComponent("pending-detailed-consent-revocation")
+        try manager.createDirectory(at: marker, withIntermediateDirectories: false)
+        _ = restartedGate.advance(revoking: reopenedAccount)
+        try require(!restartedGate.canEnableDetails(for: reopenedAccount), "failed-marker-write-blocks-quick-opt-in")
+        try manager.removeItem(at: marker)
+        let disabledAfterFailure = AnalyticsContext(profile: reopenedAccount, detailedAnalyticsEnabled: false,
+            detailedConsentGeneration: restartedGate.currentGeneration, config: restarted.config,
+            distinctID: restarted.distinctID, appVersion: restarted.appVersion, collectsBetaPerformance: false)
+        await restartedCore.bootstrap(context: disabledAfterFailure)
+        try require(restartedGate.canEnableDetails(for: reopenedAccount), "successful-purge-unblocks-opt-in")
+
         print("Analytics private profiles: \(checks) synthetic stale-admission, consent and queue checks passed; transport is inert")
     }
 }
