@@ -519,6 +519,15 @@ final class MeetingSessionCoordinator: ObservableObject {
         configuration.audioStorageMode == .memoryOnly || configuration.effectiveSpeakerProcessingMode == .streaming
     }
 
+    /// The live caption tee receives the original voice. Its backlog must stay in RAM when
+    /// masked audio is requested. Direct PCM and deferred recognition own no legacy backlog.
+    nonisolated static func legacyCaptionStorage(
+        for configuration: MeetingCaptureConfiguration, speechDeferred: Bool
+    ) -> MeetingLiveAudioFIFO.Storage? {
+        guard !speechDeferred, !Self.usesPCMProcessing(configuration) else { return nil }
+        return configuration.maskSavedVoices == true ? .memoryOnly : .anonymousFile
+    }
+
     private nonisolated static func usesPCMProcessing(_ session: MeetingSession) -> Bool {
         session.audioStorageMode == .memoryOnly || session.effectiveSpeakerProcessingMode == .streaming
     }
@@ -824,7 +833,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             recordingLiveModelID = PichiMeetingProviderFactory.liveModelID(backendID: recordingBackendID,
                 configuration: recordingASRConfiguration, selectedModelID: recordingModelID)
-            if !Self.usesPCMProcessing(configuration),
+            if Self.legacyCaptionStorage(for: configuration, speechDeferred: speechDeferredAtStart) != nil,
                recordingLiveModelID != recordingASRConfiguration.asrModel,
                case .buffered = MeetingLiveTranscriptionCoordinator.captionRoute(
                    languageCode: configuration.languageCode, modelID: recordingLiveModelID) {
@@ -950,14 +959,16 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
         self.liveTranscript = .empty
         self.lastLiveSpeechAt = nil
-        if !Self.usesPCMProcessing(configuration) {
-        liveTranscriptionCoordinator.start(
-            mode: configuration.mode,
-            languageCode: configuration.languageCode,
-            modelID: recordingLiveModelID,
-            artifactFingerprint: recordingLiveConfiguration.asrArtifactFingerprint,
-            configuration: recordingLiveConfiguration
-        )
+        let captionStorage = Self.legacyCaptionStorage(for: configuration, speechDeferred: speechDeferredAtStart)
+        if let captionStorage {
+            liveTranscriptionCoordinator.start(
+                mode: configuration.mode,
+                languageCode: configuration.languageCode,
+                modelID: recordingLiveModelID,
+                artifactFingerprint: recordingLiveConfiguration.asrArtifactFingerprint,
+                configuration: recordingLiveConfiguration,
+                storage: captionStorage
+            )
         }
 
         do {
@@ -1031,7 +1042,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                     pendingSpeechCapture.offer(kind: kind, sampleBuffer: sampleBuffer)
                     // The strict consumer already owns inference. Its tee supplies only scalar
                     // presentation activity, never another live recognizer or PCM queue.
-                    if !Self.usesPCMProcessing(configuration) {
+                    if captionStorage != nil {
                         liveTranscriptionCoordinator?.offer(kind: kind, sampleBuffer: sampleBuffer)
                     }
                 }

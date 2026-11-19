@@ -129,6 +129,73 @@ final class MobileAudioStorageTests: XCTestCase {
         XCTAssertEqual(finalized.chunks.first?.finalizationState, .finalized)
     }
 
+    func testMaskedCaptionsWithSpeakerLabelsOffKeepOriginalPCMInBoundedMemory() async throws {
+        var configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Fixture",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture"),
+            audioStorageMode: .retainedFiles, speakerLabelsEnabled: false)
+        configuration.maskSavedVoices = true
+        let selected = try XCTUnwrap(MeetingSessionCoordinator.legacyCaptionStorage(for: configuration, speechDeferred: false))
+        XCTAssertEqual(selected, .memoryOnly)
+        // No writable spool directory is available. Falling back to disk would fail this read.
+        let absentDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let fifo = MeetingLiveAudioFIFO(temporaryDirectory: absentDirectory, storage: selected)
+        addTeardownBlock { await fifo.close() }
+        let (_, original) = try self.syntheticSample(rate: 16_000)
+        let input = try XCTUnwrap(MeetingLiveSampleCopy.copy(original))
+        XCTAssertTrue(fifo.enqueue(.init(sample: input, epoch: 7)))
+        let waiting = await fifo.testingState()
+        XCTAssertGreaterThan(waiting.memoryBacklogBytes, 0)
+        XCTAssertEqual(waiting.diskBytes, 0)
+        XCTAssertEqual(waiting.permissions, 0)
+        let batch = try await fifo.drainBatch()
+        let restored = try XCTUnwrap(batch.first)
+        XCTAssertEqual(restored.epoch, 7)
+        XCTAssertEqual(restored.sample.buffer.frameLength, input.buffer.frameLength)
+        let left = try XCTUnwrap(restored.sample.buffer.floatChannelData?[0])
+        let right = try XCTUnwrap(input.buffer.floatChannelData?[0])
+        let frames = Int(input.buffer.frameLength)
+        XCTAssertTrue(UnsafeBufferPointer(start: left, count: frames).elementsEqual(UnsafeBufferPointer(start: right, count: frames)))
+        let drained = await fifo.testingState()
+        XCTAssertEqual(drained.memoryBacklogBytes, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: absentDirectory.path))
+
+        XCTAssertNil(MeetingSessionCoordinator.legacyCaptionStorage(for: configuration, speechDeferred: true))
+        configuration.audioStorageMode = .memoryOnly
+        XCTAssertNil(MeetingSessionCoordinator.legacyCaptionStorage(for: configuration, speechDeferred: false))
+        configuration.audioStorageMode = .retainedFiles
+        configuration.speakerLabelsEnabled = true
+        configuration.speakerProcessingMode = .streaming
+        XCTAssertNil(MeetingSessionCoordinator.legacyCaptionStorage(for: configuration, speechDeferred: false))
+        configuration.speakerProcessingMode = .afterRecording
+        XCTAssertEqual(MeetingSessionCoordinator.legacyCaptionStorage(for: configuration, speechDeferred: false), .memoryOnly)
+        configuration.maskSavedVoices = nil
+        XCTAssertEqual(MeetingSessionCoordinator.legacyCaptionStorage(for: configuration, speechDeferred: false), .anonymousFile)
+    }
+
+    func testFullMaskedCaptionBacklogReportsOverflowAndClosesWithoutDiskFallback() async throws {
+        let (_, original) = try self.syntheticSample(rate: 16_000)
+        let input = try XCTUnwrap(MeetingLiveSampleCopy.copy(original))
+        var limits = MeetingLiveAudioFIFO.Limits()
+        limits.maximumPendingBytes = 20_000 // Holds one serialized 3200-frame packet.
+        let fifo = MeetingLiveAudioFIFO(limits: limits, storage: .memoryOnly)
+        addTeardownBlock { await fifo.close() }
+        XCTAssertTrue(fifo.enqueue(.init(sample: input, epoch: 1)))
+        _ = await fifo.testingState()
+        XCTAssertTrue(fifo.enqueue(.init(sample: input, epoch: 2)))
+        let full = await fifo.testingState()
+        XCTAssertGreaterThan(full.memoryBacklogBytes, 0)
+        XCTAssertLessThanOrEqual(full.memoryBacklogBytes, limits.maximumPendingBytes)
+        XCTAssertEqual(full.diskBytes, 0)
+        XCTAssertEqual(full.permissions, 0)
+        do { _ = try await fifo.drainBatch(); XCTFail("Capacity exhaustion must pause live captions.") }
+        catch { XCTAssertEqual(error as? MeetingLiveAudioFIFO.Failure, .pendingCapacity) }
+        XCTAssertFalse(fifo.enqueue(.init(sample: input, epoch: 3)))
+        await fifo.close()
+        let closed = await fifo.testingState()
+        XCTAssertEqual(closed.memoryBacklogBytes, 0)
+        XCTAssertEqual(closed.diskBytes, 0)
+    }
+
     private func syntheticSample(rate: Double) throws -> (AVAudioPCMBuffer, CMSampleBuffer) {
         let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32,
             sampleRate: rate, channels: 1, interleaved: false))
