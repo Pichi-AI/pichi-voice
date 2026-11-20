@@ -1,4 +1,4 @@
-"""Provenance of the vendored ONNX Runtime package that the native evaluation build compiles against."""
+"""Provenance of the vendored packages (ONNX Runtime, PichiGigaAM, TranscribeCpp) that the native evaluation build compiles against."""
 from pathlib import Path
 import re
 
@@ -24,3 +24,30 @@ def vendored_inputs(package):
     if not headers or missing:
         raise ValueError(f'the vendored package is incomplete: headers {len(headers)}, missing {missing}')
     return inputs
+
+
+def _complete(inputs, what):
+    missing = [str(path) for path in inputs if not path.is_file()]
+    if missing:
+        raise ValueError(f'the {what} is incomplete, missing {missing}')
+    return inputs
+
+
+def gigaam_package_inputs(package):
+    """The manifest that selects PichiGigaAM's packages, resources and linked frameworks."""
+    return _complete([Path(package) / 'Package.swift'], 'vendored PichiGigaAM package')
+
+
+def transcribe_inputs(package):
+    """The vendored TranscribeCpp files whose hashes the build manifest records.
+
+    The Swift bindings are compiled by the package build, and the prebuilt native library is only
+    the xcframework archive, so its recorded pin (`Artifacts/manifest.json`) and archive bytes
+    both belong to the inputs."""
+    package = Path(package)
+    sources = sorted((package / 'Sources/TranscribeCpp').glob('*.swift'))
+    inputs = [package / 'Package.swift', package / 'UPSTREAM.md', package / 'Artifacts/manifest.json',
+              package / 'Artifacts/TranscribeCpp.xcframework.zip', *sources]
+    if not sources:
+        raise ValueError('the vendored TranscribeCpp package has no Swift sources')
+    return _complete(inputs, 'vendored TranscribeCpp package')
