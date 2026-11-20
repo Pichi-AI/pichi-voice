@@ -5,6 +5,9 @@ on:
     branches: [main, 'codex/**']
   pull_request:
     branches: [main]
+  # The merge queue checks main together with the queued pull requests before it merges them.
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
     inputs:
       run_macos:
@@ -59,16 +62,20 @@ jobs:
     name: macOS gate L1 (${{ matrix.part }})
     # Pull requests into main and pushes to main. A push to a codex/** branch is checked through its pull
     # request into main; a pull request into another branch gets no macOS gate.
+    # In the merge queue the same parts run on the queue's commit, main with the queued pull requests, and
+    # compare it with origin/main, so the gate sees exactly what the merge would add.
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.run_macos) ||
       (vars.PICHI_VOICE_MACOS_CI == 'true' &&
-       (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')))
+       (github.event_name == 'pull_request' || github.event_name == 'merge_group' ||
+        (github.event_name == 'push' && github.ref == 'refs/heads/main')))
     runs-on: xcode-27
     # The four parts of one gate run side by side on separate runners, so the slowest part sets the
     # time instead of their sum: XCTest with the repository checks and Vendor packages, the standalone
     # probes in two halves (every other probe of the registry sorted by name, which only roughly evens
     # out their run time), and iOS for a mobile change. Each part has its own receipt and must
-    # pass. The account runs up to five macOS jobs at once, so one pull request fits; the job names
+    # pass. The account runs up to five macOS jobs at once, so one pull request fits, and the merge queue
+    # builds at most two entries at once; the job names
     # "macOS gate L1 (<part>)" are the ones branch protection refers to.
     strategy:
       fail-fast: false
