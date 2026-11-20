@@ -617,7 +617,8 @@ def execute(receipt, layer, paths, base, jobs, part="all"):
         return part == "all" or PART_OF[name] == part or (name == "probes" and part in PROBE_PARTS)
 
     def elsewhere(name):
-        receipt.skip(name, f"runs in the {PART_OF[name]} part of the gate")
+        where = "probes-1 and probes-2 parts" if PART_OF[name] == "probes" else f"{PART_OF[name]} part"
+        receipt.skip(name, f"runs in the {where} of the gate")
 
     if mine("check"):
         receipt.step("check", ["bash", "scripts/dev/check.sh"])

@@ -994,7 +994,7 @@ class ExecuteTests(unittest.TestCase):
         self.assertEqual(set(json.loads(record.read_text())), {f"{VERIFY.MOBILE_BUNDLE}/AClass/testOne()"})
         for name in ("check", "lint", "xctest", "vendor"):
             self.assertEqual(self.skipped(receipt)[name], "runs in the xctest part of the gate")
-        self.assertEqual(self.skipped(receipt)["probes"], "runs in the probes part of the gate")
+        self.assertEqual(self.skipped(receipt)["probes"], "runs in the probes-1 and probes-2 parts of the gate")
 
     def test_the_xctest_part_leaves_probes_and_ios_to_their_own_jobs(self):
         receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"], part="xctest")
@@ -1004,7 +1004,7 @@ class ExecuteTests(unittest.TestCase):
         vendor.assert_called_once()
         self.assertEqual([call[0] for call in receipt.calls], ["check", "lint", "skip-policy"])
         self.assertEqual(self.skipped(receipt)["ios"], "runs in the ios part of the gate")
-        self.assertEqual(self.skipped(receipt)["probes"], "runs in the probes part of the gate")
+        self.assertEqual(self.skipped(receipt)["probes"], "runs in the probes-1 and probes-2 parts of the gate")
 
     def test_the_probes_part_runs_no_policy_step_of_its_own(self):
         receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"], part="probes")
@@ -1034,7 +1034,7 @@ class ExecuteTests(unittest.TestCase):
     def test_the_other_parts_leave_the_probes_to_the_shards(self):
         for part in ("xctest", "ios"):
             receipt, _, _, _ = self.run_layer("L1", [], part=part)
-            self.assertEqual(self.skipped(receipt)["probes"], "runs in the probes part of the gate")
+            self.assertEqual(self.skipped(receipt)["probes"], "runs in the probes-1 and probes-2 parts of the gate")
 
     def test_the_part_names_parse_and_reach_the_receipt(self):
         self.assertEqual(VERIFY.PARTS, ("all", "xctest", "probes", "probes-1", "probes-2", "ios"))
