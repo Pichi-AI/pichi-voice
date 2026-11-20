@@ -64,13 +64,16 @@ jobs:
       (vars.PICHI_VOICE_MACOS_CI == 'true' &&
        (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')))
     runs-on: xcode-27
-    # The three parts of one gate run side by side on separate runners, so the slowest part sets the
+    # The four parts of one gate run side by side on separate runners, so the slowest part sets the
     # time instead of their sum: XCTest with the repository checks and Vendor packages, the standalone
-    # probes, and iOS for a mobile change. Each part has its own receipt and must pass.
+    # probes in two halves (every other probe of the registry sorted by name, balanced to within a few
+    # percent of their run time), and iOS for a mobile change. Each part has its own receipt and must
+    # pass. The account runs up to five macOS jobs at once, so one pull request fits; the job names
+    # "macOS gate L1 (<part>)" are the ones branch protection refers to.
     strategy:
       fail-fast: false
       matrix:
-        part: [xctest, probes, ios]
+        part: [xctest, probes-1, probes-2, ios]
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
