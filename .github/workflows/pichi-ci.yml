@@ -66,8 +66,8 @@ jobs:
     runs-on: xcode-27
     # The four parts of one gate run side by side on separate runners, so the slowest part sets the
     # time instead of their sum: XCTest with the repository checks and Vendor packages, the standalone
-    # probes in two halves (every other probe of the registry sorted by name, balanced to within a few
-    # percent of their run time), and iOS for a mobile change. Each part has its own receipt and must
+    # probes in two halves (every other probe of the registry sorted by name, which only roughly evens
+    # out their run time), and iOS for a mobile change. Each part has its own receipt and must
     # pass. The account runs up to five macOS jobs at once, so one pull request fits; the job names
     # "macOS gate L1 (<part>)" are the ones branch protection refers to.
     strategy:
