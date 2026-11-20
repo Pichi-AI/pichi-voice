@@ -37,6 +37,7 @@ struct ReleaseHighlightsView: View {
                         self.feature(feature)
                     }
                 }
+                .fixedSize(horizontal: false, vertical: true)
             }
             if let notice = self.content.officialSiteNotice {
                 Text(.init(PichiLocalization.text(notice)))
@@ -83,12 +84,12 @@ struct ReleaseHighlightsView: View {
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(minHeight: 68, alignment: .topLeading)
+            Spacer(minLength: 18)
             FluidGlassControlGroup {
                 Button(PichiLocalization.text(feature.action), systemImage: "arrow.up.right") { self.onClose(feature.destination) }
                     .fluidGlassAction(prominent: true)
                     .disabled(!self.canExplore)
             }
-            .padding(.top, 18)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
