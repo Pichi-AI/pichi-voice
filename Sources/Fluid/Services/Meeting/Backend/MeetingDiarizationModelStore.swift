@@ -105,7 +105,7 @@ final class MeetingDiarizationModelStore: ObservableObject {
                 return try MeetingModelInstaller.validate(package, profile: profile)
             },
             stagedInstall: { progress, publication in
-                try await Self.downloadAndInstall(profile: profile, progress: progress, publication: publication)
+                try await Self.downloadAndInstallStaged(profile: profile, progress: progress, publication: publication)
             }
         )
     }
@@ -114,10 +114,9 @@ final class MeetingDiarizationModelStore: ObservableObject {
     func prepareInBackground() {
         #if DEBUG
         // A view that appears in a hosted unit test (the settings sheet, the meetings view) would start the
-        // real download of the pinned model into the test home, and the task outlives the test: it holds the
-        // ordinary model admission until the download ends, so the next test that needs an exclusive attempt
-        // fails with "busy". Hosted tests own their model operations and call prepare/ensureInstalled
-        // themselves. A UI-test application runs in another process, where XCTestCase is not loaded.
+        // real download of the pinned model into the empty test home, and the task outlives the test. Hosted
+        // tests own their model operations and call prepare/ensureInstalled themselves. A UI-test application
+        // runs in another process, where XCTestCase is not loaded.
         if NSClassFromString("XCTestCase") != nil { return }
         #endif
         Task { _ = try? await self.ensureInstalled() }
@@ -236,25 +235,49 @@ final class MeetingDiarizationModelStore: ObservableObject {
     /// Downloads into a stable staging folder, so an interrupted download resumes file by file,
     /// then hands the package to the checksum-pinned installer.
     nonisolated static func downloadAndInstall(
-        progress: @escaping @Sendable (Double) -> Void, publication: MeetingModelPublicationGate = .alreadyAdmitted
+        progress: @escaping @Sendable (Double) -> Void
     ) async throws -> MeetingNemotronModelArtifact {
-        try await self.downloadAndInstall(to: MeetingNemotronModelLocator.defaultPackageURL(),
-                                          progress: progress, publication: publication)
+        try await self.downloadAndInstall(to: MeetingNemotronModelLocator.defaultPackageURL(), progress: progress)
     }
 
     nonisolated static func downloadAndInstall(
-        profile: MeetingNemotronModelProfile, progress: @escaping @Sendable (Double) -> Void,
-        publication: MeetingModelPublicationGate = .alreadyAdmitted
+        profile: MeetingNemotronModelProfile, progress: @escaping @Sendable (Double) -> Void
     ) async throws -> MeetingNemotronModelArtifact {
         try await self.downloadAndInstall(to: MeetingNemotronModelLocator.defaultPackageURL(profile: profile),
-                                          profile: profile, progress: progress, publication: publication)
+                                         profile: profile, progress: progress)
     }
 
     /// The existing install operation can target an explicitly owned store. Test and
     /// mobile preflight use the same pinned download and publication as desktop setup.
+    /// The caller holds the model admission around the whole run, as before the staged form existed.
     nonisolated static func downloadAndInstall(
         to destination: URL, profile: MeetingNemotronModelProfile = .fast32SplitW8A8,
-        progress: @escaping @Sendable (Double) -> Void, publication: MeetingModelPublicationGate = .alreadyAdmitted
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> MeetingNemotronModelArtifact {
+        try await self.downloadAndInstallStaged(to: destination, profile: profile, progress: progress,
+                                                publication: .alreadyAdmitted)
+    }
+
+    /// The same download with admission held only for publication. `publication` is required: a
+    /// caller that mutates installed storage states its admission policy explicitly.
+    nonisolated static func downloadAndInstallStaged(
+        progress: @escaping @Sendable (Double) -> Void, publication: MeetingModelPublicationGate
+    ) async throws -> MeetingNemotronModelArtifact {
+        try await self.downloadAndInstallStaged(to: MeetingNemotronModelLocator.defaultPackageURL(),
+                                                progress: progress, publication: publication)
+    }
+
+    nonisolated static func downloadAndInstallStaged(
+        profile: MeetingNemotronModelProfile, progress: @escaping @Sendable (Double) -> Void,
+        publication: MeetingModelPublicationGate
+    ) async throws -> MeetingNemotronModelArtifact {
+        try await self.downloadAndInstallStaged(to: MeetingNemotronModelLocator.defaultPackageURL(profile: profile),
+                                                profile: profile, progress: progress, publication: publication)
+    }
+
+    nonisolated static func downloadAndInstallStaged(
+        to destination: URL, profile: MeetingNemotronModelProfile = .fast32SplitW8A8,
+        progress: @escaping @Sendable (Double) -> Void, publication: MeetingModelPublicationGate
     ) async throws -> MeetingNemotronModelArtifact {
         let staging = destination.deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("download-\(profile.cacheVersion)", isDirectory: true)

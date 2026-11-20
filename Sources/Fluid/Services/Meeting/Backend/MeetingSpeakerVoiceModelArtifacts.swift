@@ -54,17 +54,26 @@ nonisolated enum MeetingSpeakerVoiceModelArtifacts {
             guard digest == proof.digest else { throw MeetingModelResidencyError.unsupportedProvider }
         }
     }
-    static func ensureInstalled(progress: @escaping @Sendable (Double) -> Void,
-                                publication: MeetingModelPublicationGate = .alreadyAdmitted) async throws {
+    static func ensureInstalled(progress: @escaping @Sendable (Double) -> Void) async throws {
         try self.validateRootContainment()
-        try await self.ensureInstalled(at: self.packageURL(), progress: progress, publication: publication)
+        try await self.ensureInstalled(at: self.packageURL(), progress: progress)
     }
     /// Explicit trusted destinations let native tests and imports use isolated model storage.
     /// The model revision, integrity checks and installation operation stay unchanged.
+    /// The caller holds the model admission around the whole run, as before the staged form existed.
+    static func ensureInstalled(at destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
+        try await self.ensureInstalledStaged(at: destination, progress: progress, publication: .alreadyAdmitted)
+    }
+    static func ensureInstalledStaged(progress: @escaping @Sendable (Double) -> Void,
+                                      publication: MeetingModelPublicationGate) async throws {
+        try self.validateRootContainment()
+        try await self.ensureInstalledStaged(at: self.packageURL(), progress: progress, publication: publication)
+    }
     /// The transfer and the check of the staged package hold no model admission. Only the move into
     /// the installed location runs under the gate; a refused publication keeps the validated stage.
-    static func ensureInstalled(at destination: URL, progress: @escaping @Sendable (Double) -> Void,
-                                publication: MeetingModelPublicationGate = .alreadyAdmitted) async throws {
+    /// `publication` is required: a caller that mutates installed storage states its admission policy.
+    static func ensureInstalledStaged(at destination: URL, progress: @escaping @Sendable (Double) -> Void,
+                                      publication: MeetingModelPublicationGate) async throws {
         guard destination.isFileURL else { throw MeetingModelResidencyError.unsupportedProvider }
         if (try? self.validate(at: destination)) != nil { return }
         let root = destination.deletingLastPathComponent()
@@ -241,14 +250,14 @@ extension MeetingDiarizationModelStore {
     nonisolated static func resolveInstall(staged: StagedInstall?, legacy: Install?) -> StagedInstall {
         if let staged { return staged }
         if let legacy { return { progress, publication in try await publication.holding { try await legacy(progress) } } }
-        return { progress, publication in try await Self.downloadAndInstall(progress: progress, publication: publication) }
+        return { progress, publication in try await Self.downloadAndInstallStaged(progress: progress, publication: publication) }
     }
 
     nonisolated static func resolveInstallVoice(staged: StagedInstallVoice?, legacy: InstallVoice?) -> StagedInstallVoice {
         if let staged { return staged }
         if let legacy { return { progress, publication in try await publication.holding { try await legacy(progress) } } }
         return { progress, publication in
-            try await MeetingSpeakerVoiceModelArtifacts.ensureInstalled(progress: progress, publication: publication)
+            try await MeetingSpeakerVoiceModelArtifacts.ensureInstalledStaged(progress: progress, publication: publication)
         }
     }
 
