@@ -26,7 +26,19 @@ final class MeetingInlineCaptionBoundsTests: XCTestCase {
     }
 
     func testGrowingTextAndPendingWordsStayInsideNarrowAndWideCells() async throws {
-        let host = try InlineBoundsHost()
+        try await verifyGrowingTextInNarrowAndWideCells(horizontalSafeArea: 0)
+    }
+
+    /// The simulator the CI gate picks can have a wide horizontal safe area (the iPhone Duo outer screen
+    /// is 466 points wide). UIKit then narrows the cell content of a table that reaches into that area,
+    /// while the row height is measured at the full table width. Reproduce that on any device so the
+    /// fixture cannot depend on which simulator happens to be first in the runtime's device list.
+    func testGrowingTextAndPendingWordsStayInsideCellsWithAWideHorizontalSafeArea() async throws {
+        try await verifyGrowingTextInNarrowAndWideCells(horizontalSafeArea: 31)
+    }
+
+    private func verifyGrowingTextInNarrowAndWideCells(horizontalSafeArea: CGFloat) async throws {
+        let host = try InlineBoundsHost(horizontalSafeArea: horizontalSafeArea)
         defer { host.close() }
         var firstWave: UIView?
         for (step, width, typeSize, count) in [
@@ -36,7 +48,9 @@ final class MeetingInlineCaptionBoundsTests: XCTestCase {
             ("narrow-largest-type", CGFloat(280), DynamicTypeSize.accessibility5, 31),
             ("wide-updated-text", CGFloat(560), DynamicTypeSize.large, 64)
         ] {
-            host.model.width = min(width, host.window.bounds.width - 40)
+            // A cell stays inside the safe area: a table that reaches it is inset by UIKit and SwiftUI
+            // differently from the width that the table measures its rows at.
+            host.model.width = min(width, host.safeWidth - 40)
             host.model.textSize = typeSize
             host.model.text = String(repeating: "Ёжик обсуждает English [PERSON] и продолжает. ", count: 3)
                 + "Изменение \(step)."
@@ -193,7 +207,13 @@ private final class InlineBoundsHost {
     let controller: UIHostingController<InlineBoundsDocument>
     private weak var previousKeyWindow: UIWindow?
 
-    init() throws {
+    /// The width that is free of horizontal safe areas, such as the rounded outer screen of a foldable.
+    var safeWidth: CGFloat {
+        let insets = controller.view.safeAreaInsets
+        return controller.view.bounds.width - insets.left - insets.right
+    }
+
+    init(horizontalSafeArea: CGFloat = 0) throws {
         guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first(where: {
             $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive
         }) else { throw XCTSkip("Requires the hosted iOS test app's foreground UIWindowScene") }
@@ -202,6 +222,7 @@ private final class InlineBoundsHost {
         window.frame = scene.coordinateSpace.bounds
         controller = UIHostingController(rootView: InlineBoundsDocument(model: model))
         window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1)
+        controller.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: horizontalSafeArea, bottom: 0, right: horizontalSafeArea)
         window.rootViewController = controller
         window.makeKeyAndVisible()
         window.layoutIfNeeded()
