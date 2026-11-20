@@ -110,6 +110,8 @@ owned image detach, mount-state reconciliation and lock cleanup.
 
 Use the bilingual [GitHub release-notes guide](release-notes.md) and its template. The helper's generic draft body is a placeholder; apply the reviewed English/Russian notes before publication. Description-only corrections preserve published assets, tags and Latest selection.
 
+Review the exact version's built-in [post-update cards](../whats-new.md#checking-the-exact-release) before archiving. `prepare` checks the same selection before creating release artifacts. A maintenance release can record an explicit history-only decision.
+
 ### Freeze the reviewed source and archive once
 
 Integrate the updater, signed distribution configuration and release tooling,

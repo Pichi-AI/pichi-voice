@@ -344,8 +344,26 @@ class Release:
     def checksums(self, directory):
         return "".join(f"{digest(directory / name)}  {name}\n" for name in sorted([*self.names, MANIFEST])).encode()
 
+    def review_highlights(self):
+        with tempfile.TemporaryDirectory(prefix="pichi-highlights-") as directory:
+            executable = str(Path(directory) / "read-highlights")
+            catalog = self.source.root / "Sources/Fluid/UI/ReleaseHighlightsContent.swift"
+            reader = Path(__file__).resolve().with_name("ReleaseHighlightSelection.swift")
+            self.commands.run(["xcrun", "swiftc", "-parse-as-library", str(catalog), str(reader), "-o", executable])
+            ids = parse_json(self.commands.run([executable, self.args.version]).stdout)
+        require(isinstance(ids, list) and len(ids) <= 3 and
+                all(isinstance(item, str) and item.strip() for item in ids) and len(set(ids)) == len(ids),
+                "The release needs at most three uniquely identified highlight cards")
+        reason = (self.args.history_only_reason or "").strip()
+        if ids:
+            require(not reason, "This version already has curated cards; omit --history-only-reason")
+        else:
+            require(reason, f"Choose highlights for {self.args.version}, or explain --history-only-reason")
+        return {"version": self.args.version, "cards": ids, "historyOnlyReason": reason or None}
+
     def prepare(self):
         self.source.validate()
+        print(json_bytes(self.review_highlights()).decode(), end="")
         app = Path(self.args.app).absolute()
         frozen = self.app(app)
         output = Path(self.args.output).absolute()
@@ -656,7 +674,7 @@ def validate_evidence(path, source, manifest_sha, now=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=("plan", "prepare", "draft", "publish", "verify"))
+    parser.add_argument("stage", choices=("plan", "review-highlights", "prepare", "draft", "publish", "verify"))
     parser.add_argument("--repo", default=".", help="Clean checkout of the exact reviewed source on origin/main")
     parser.add_argument("--source", required=True)
     parser.add_argument("--version", required=True)
@@ -667,8 +685,15 @@ def main(argv=None):
     parser.add_argument("--output", help="New artifact directory (prepare only)")
     parser.add_argument("--artifacts", help="Prepared artifact directory (draft/publish/verify)")
     parser.add_argument("--evidence", help="Private review/test/native acceptance context JSON (publish only)")
+    parser.add_argument("--history-only-reason", help="Editorial reason this version only links to release history (review-highlights or prepare)")
     args = parser.parse_args(argv)
+    require(args.history_only_reason is None or args.stage in ("review-highlights", "prepare"),
+            "--history-only-reason is only used when reviewing or preparing highlights")
     release = Release(args)
+    if args.stage == "review-highlights":
+        release.source.clean()
+        print(json_bytes(release.review_highlights()).decode(), end="")
+        return
     if args.stage == "plan":
         print(json_bytes({"tag": release.tag, "sourceRevision": args.source,
                           "artifacts": [*release.names, MANIFEST, CHECKSUMS],

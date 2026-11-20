@@ -36,6 +36,7 @@ class Boundaries(m.Commands):
     def __init__(self, app, revision):
         self.app, self.revision = app, revision
         self.calls, self.mounts = [], set()
+        self.highlight_ids = ["synthetic-change"]
         self.native_failure = None
         self.detach_failure = False
         self.architecture = b"arm64\n"
@@ -62,6 +63,8 @@ class Boundaries(m.Commands):
     def run(self, args, **kwargs):
         self.calls.append(args)
         command = args[0]
+        if Path(command).name == "read-highlights":
+            return self.result(args, json.dumps(self.highlight_ids).encode())
         if command == "git":
             if args[1] == "fetch":
                 return self.result(args)
@@ -217,12 +220,32 @@ class ReleaseTests(unittest.TestCase):
         self.image = self.root / "frozen.dmg"
         self.image.write_bytes(b"synthetic dmg payload")
         self.args = argparse.Namespace(source=self.revision, version="0.1.0", build="71", tag=None, repo=str(self.repo),
-                                       app=str(self.app), dmg=str(self.image), output=str(self.root / "output"), evidence=None)
+                                       app=str(self.app), dmg=str(self.image), output=str(self.root / "output"), evidence=None, history_only_reason=None)
         self.boundaries = Boundaries(self.app, self.revision)
         self.release = m.Release(self.args, self.boundaries)
         self.boundaries.tag = self.release.tag
         self.github = m.GitHub(self.release)
         self.output = Path(self.args.output)
+
+    def test_prepare_checks_the_requested_version_before_packaging(self):
+        self.boundaries.highlight_ids = []
+        with self.assertRaisesRegex(m.ReleaseError, "Choose highlights"):
+            self.release.prepare()
+        self.assertFalse(self.output.exists())
+        self.assertTrue(any(Path(call[0]).name == "read-highlights" and call[1:] == [self.args.version]
+                            for call in self.boundaries.calls))
+        self.args.history_only_reason = "Small maintenance update with no user action."
+        self.prepared()
+
+    def test_curated_cards_cannot_be_suppressed_or_malformed(self):
+        self.args.history_only_reason = "Skip"
+        with self.assertRaisesRegex(m.ReleaseError, "already has curated"):
+            self.release.review_highlights()
+        self.args.history_only_reason = None
+        for ids in [["a", "a"], ["a", "b", "c", "d"], [42], ["  "]]:
+            with self.subTest(ids=ids), self.assertRaises(m.ReleaseError):
+                self.boundaries.highlight_ids = ids
+                self.release.review_highlights()
 
     def save_info(self):
         (self.app / "Contents/Info.plist").write_bytes(plistlib.dumps(self.info))

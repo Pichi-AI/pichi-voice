@@ -321,6 +321,7 @@ builds/
 !/scripts/dev/verify
 !/scripts/dev/local-api-live.py
 !/scripts/dev/verify-published-upstream-release.py
+!/scripts/dev/ReleaseHighlightSelection.swift
 !/scripts/dev/package-macos-dmg.py
 !/scripts/dev/package-macos-pkg.py
 !/scripts/dev/macos-pkg-resources/
