@@ -55,7 +55,7 @@ nonisolated enum MeetingSpeakerVoiceModelArtifacts {
         }
     }
     static func ensureInstalled(progress: @escaping @Sendable (Double) -> Void,
-                                publication: MeetingModelPublicationGate) async throws {
+                                publication: MeetingModelPublicationGate = .alreadyAdmitted) async throws {
         try self.validateRootContainment()
         try await self.ensureInstalled(at: self.packageURL(), progress: progress, publication: publication)
     }
@@ -64,7 +64,7 @@ nonisolated enum MeetingSpeakerVoiceModelArtifacts {
     /// The transfer and the check of the staged package hold no model admission. Only the move into
     /// the installed location runs under the gate; a refused publication keeps the validated stage.
     static func ensureInstalled(at destination: URL, progress: @escaping @Sendable (Double) -> Void,
-                                publication: MeetingModelPublicationGate) async throws {
+                                publication: MeetingModelPublicationGate = .alreadyAdmitted) async throws {
         guard destination.isFileURL else { throw MeetingModelResidencyError.unsupportedProvider }
         if (try? self.validate(at: destination)) != nil { return }
         let root = destination.deletingLastPathComponent()
@@ -178,5 +178,113 @@ extension MeetingNemotronModelProfile {
 
     nonisolated func preservesStreamingOwnerEvidenceOnInconclusiveRefresh(implementationFingerprint value: String) -> Bool {
         self.supportsOwnerVoiceVerification && value == self.streamingImplementationFingerprint
+    }
+}
+
+// MARK: - Speaker model publication
+
+/// The one step of a model installation that needs ordinary model admission: changing installed
+/// storage. A transfer into a staging folder reads and writes nothing a running model uses, so it
+/// holds no admission; local summaries, processing and dictation restoration stay possible while it
+/// runs. Publication retires an idle preload, then holds the admission until the step has joined.
+/// A meeting attempt that started during the transfer makes publication fail with the coordinator's
+/// existing busy error, and the staged files stay for the retry.
+nonisolated struct MeetingModelPublicationGate: Sendable {
+    let owner: String
+    let modelID: String
+    /// `nil` when the caller already holds the admission around the whole install (the legacy
+    /// one-argument install shape), so publication takes none and nothing is held twice.
+    let residency: MeetingModelResidencyCoordinator?
+
+    static let alreadyAdmitted = MeetingModelPublicationGate(owner: "", modelID: "", residency: nil)
+
+    static func speakerResources(modelID: String, residency: MeetingModelResidencyCoordinator) -> MeetingModelPublicationGate {
+        MeetingModelPublicationGate(owner: "speaker-resources", modelID: modelID, residency: residency)
+    }
+
+    /// Runs `step` off the main actor under admission. Cancellation reaches the step, and the
+    /// admission is released only after it has returned or thrown.
+    func publish<T: Sendable>(_ step: @escaping @Sendable () throws -> T) async throws -> T {
+        try await self.holding {
+            let work = Task.detached(priority: .utility) { try step() }
+            return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+        }
+    }
+
+    /// Holds the admission for the whole `operation`: the behavior of an install that does not
+    /// stage its transfer.
+    func holding<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> T {
+        guard let residency = self.residency else { return try await operation() }
+        let admission = try await residency.beginOperationRetiringIdle(owner: self.owner, modelID: self.modelID)
+        do {
+            let value = try await operation()
+            await residency.endOperation(admission)
+            return value
+        } catch {
+            await residency.endOperation(admission)
+            throw error
+        }
+    }
+}
+
+extension MeetingDiarizationModelStore {
+    /// An install that transfers files without admission and calls `publication.publish` around the
+    /// code that changes installed storage. The legacy `Install` shape keeps the whole run under
+    /// admission; the store accepts either and runs both through this one shape.
+    typealias StagedInstall = @Sendable (_ progress: @escaping @Sendable (Double) -> Void,
+                                         _ publication: MeetingModelPublicationGate) async throws -> MeetingNemotronModelArtifact
+    typealias StagedInstallVoice = @Sendable (_ progress: @escaping @Sendable (Double) -> Void,
+                                              _ publication: MeetingModelPublicationGate) async throws -> Void
+
+    /// Explicit staged install wins; a legacy install keeps its whole run under admission; the
+    /// default is the staged production download.
+    nonisolated static func resolveInstall(staged: StagedInstall?, legacy: Install?) -> StagedInstall {
+        if let staged { return staged }
+        if let legacy { return { progress, publication in try await publication.holding { try await legacy(progress) } } }
+        return { progress, publication in try await Self.downloadAndInstall(progress: progress, publication: publication) }
+    }
+
+    nonisolated static func resolveInstallVoice(staged: StagedInstallVoice?, legacy: InstallVoice?) -> StagedInstallVoice {
+        if let staged { return staged }
+        if let legacy { return { progress, publication in try await publication.holding { try await legacy(progress) } } }
+        return { progress, publication in
+            try await MeetingSpeakerVoiceModelArtifacts.ensureInstalled(progress: progress, publication: publication)
+        }
+    }
+
+    /// Everything before the installer reads and writes only the staging folder. Only the installer,
+    /// which copies beside the installed package and swaps it in, runs under the gate's admission.
+    /// A damaged download is discarded. After a busy refusal, a cancellation or a local failure the
+    /// transferred files stay in staging, so the retry transfers nothing again.
+    nonisolated static func publishStaged(
+        from staging: URL, to destination: URL, profile: MeetingNemotronModelProfile,
+        publication: MeetingModelPublicationGate
+    ) async throws -> MeetingNemotronModelArtifact {
+        let downloaded = staging.appendingPathComponent(profile.packageFileName, isDirectory: true)
+        do {
+            try await Task.detached(priority: .utility) {
+                // Publish weights and both host assets in one immutable atomic directory swap.
+                try? FileManager.default.removeItem(at: downloaded)
+                try FileManager.default.createDirectory(at: downloaded, withIntermediateDirectories: false)
+                try FileManager.default.copyItem(
+                    at: staging.appendingPathComponent(profile.remoteModelPath),
+                    to: downloaded.appendingPathComponent(profile.compiledModelFileName))
+                for name in profile.hostFileNames {
+                    try FileManager.default.copyItem(at: staging.appendingPathComponent(name), to: downloaded.appendingPathComponent(name))
+                }
+            }.value
+            let installed = try await publication.publish {
+                try MeetingModelInstaller.install(from: downloaded, to: destination, profile: profile)
+            }
+            try? FileManager.default.removeItem(at: staging)
+            return installed
+        } catch MeetingModelInstaller.InstallError.wrongPackage {
+            // A damaged download would otherwise be "resumed" forever; start clean next time.
+            try? FileManager.default.removeItem(at: staging)
+            throw MeetingModelInstaller.InstallError.wrongPackage
+        } catch {
+            try? FileManager.default.removeItem(at: downloaded)
+            throw error
+        }
     }
 }

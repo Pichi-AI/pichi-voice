@@ -116,7 +116,7 @@ final class MobileSetupTransactionTests: XCTestCase {
         var speechContinuation: CheckedContinuation<Void, Never>?
         let store = MeetingDiarizationModelStore(supportsOwnerVoiceVerification: false,
             validate: { throw URLError(.notConnectedToInternet) },
-            install: { _, _ in throw URLError(.notConnectedToInternet) })
+            install: { _ in throw URLError(.notConnectedToInternet) })
         let resources = MobileRequiredResources(prepareSpeech: {
             speechCalls += 1
             await withCheckedContinuation { speechContinuation = $0 }
@@ -148,10 +148,10 @@ final class MobileSetupTransactionTests: XCTestCase {
             profile: .experimentalFast128FP16CPU)
         let selected = MeetingDiarizationModelStore(validate: { artifact },
             validateVoice: { throw URLError(.unsupportedURL) },
-            installVoice: { _, _ in throw URLError(.unsupportedURL) })
+            installVoice: { _ in throw URLError(.unsupportedURL) })
         let canonical = MeetingDiarizationModelStore(validate: { artifact }, validateVoice: {
             if !voice.isReady { throw URLError(.fileDoesNotExist) }
-        }, installVoice: { _, _ in
+        }, installVoice: { _ in
             voice.begin()
             started.fulfill()
             for await _ in release { break }

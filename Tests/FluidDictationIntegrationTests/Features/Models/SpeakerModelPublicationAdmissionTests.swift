@@ -79,7 +79,7 @@ final class SpeakerModelPublicationAdmissionTests: XCTestCase {
         let store = MeetingDiarizationModelStore(
             canDownload: { true },
             validate: { if installed.value { return Self.artifact }; throw Missing() },
-            install: { _, publication in
+            stagedInstall: { _, publication in
                 await transferStarted.open()
                 await transferRelease.wait()
                 return try await publication.publish {
@@ -124,7 +124,7 @@ final class SpeakerModelPublicationAdmissionTests: XCTestCase {
         let store = MeetingDiarizationModelStore(
             canDownload: { true },
             validate: { if installed.value { return Self.artifact }; throw Missing() },
-            install: { _, publication in
+            stagedInstall: { _, publication in
                 await transferStarted.open()
                 await transferRelease.wait()
                 return try await publication.publish { installed.set(); return Self.artifact }
@@ -148,7 +148,7 @@ final class SpeakerModelPublicationAdmissionTests: XCTestCase {
         let store = MeetingDiarizationModelStore(
             canDownload: { true },
             validate: { if installed.value { return Self.artifact }; throw Missing() },
-            install: { _, publication in
+            stagedInstall: { _, publication in
                 installs.set()
                 if installs.total == 1 {
                     await transferStarted.open()
@@ -191,7 +191,7 @@ final class SpeakerModelPublicationAdmissionTests: XCTestCase {
         let store = MeetingDiarizationModelStore(
             canDownload: { true },
             validate: { if installed.value { return Self.artifact }; throw Missing() },
-            install: { _, publication in
+            stagedInstall: { _, publication in
                 installs.set()
                 if installs.total == 1 {
                     await transferStarted.open()
@@ -209,6 +209,58 @@ final class SpeakerModelPublicationAdmissionTests: XCTestCase {
 
         _ = try await store.ensureInstalled()
         XCTAssertEqual(installs.total, 2)
+        XCTAssertFalse(coordinator.hasOrdinaryOperations)
+    }
+
+    // MARK: Legacy one-argument install (the upstream shape)
+
+    func testLegacyInstallStillHoldsAdmissionForItsWholeRun() async throws {
+        let coordinator = MeetingModelResidencyCoordinator()
+        let started = Latch(), release = Latch()
+        let installed = Flag()
+        let store = MeetingDiarizationModelStore(
+            canDownload: { true },
+            validate: { if installed.value { return Self.artifact }; throw Missing() },
+            install: { _ in
+                await started.open()
+                await release.wait()
+                installed.set()
+                return Self.artifact
+            },
+            residency: coordinator)
+
+        let attempt = Task { @MainActor in try await store.ensureInstalled() }
+        await started.wait()
+        XCTAssertTrue(coordinator.hasOrdinaryOperations, "a legacy install is not staged, so it runs under admission")
+        await self.assertBusy(coordinator, "during a legacy install")
+        await release.open()
+        _ = try await attempt.value
+        XCTAssertEqual(store.state, .ready(Self.artifact))
+        XCTAssertFalse(coordinator.hasOrdinaryOperations, "admission is released when the legacy install ends")
+        _ = try await coordinator.withExclusive(attemptID: UUID(), participants: []) {}
+    }
+
+    func testLegacyVoiceInstallStillHoldsAdmissionForItsWholeRun() async throws {
+        let coordinator = MeetingModelResidencyCoordinator()
+        let started = Latch(), release = Latch()
+        let installed = Flag()
+        let store = MeetingDiarizationModelStore(
+            validate: { Self.artifact },
+            validateVoice: { if !installed.value { throw Missing() } },
+            installVoice: { _ in
+                await started.open()
+                await release.wait()
+                installed.set()
+            },
+            residency: coordinator)
+
+        let attempt = Task { @MainActor in try await store.ensureInstalled(includingVoiceEncoder: true) }
+        await started.wait()
+        XCTAssertTrue(coordinator.hasOrdinaryOperations)
+        await self.assertBusy(coordinator, "during a legacy voice install")
+        await release.open()
+        _ = try await attempt.value
+        XCTAssertTrue(store.voiceMatchingReady)
         XCTAssertFalse(coordinator.hasOrdinaryOperations)
     }
 
@@ -313,7 +365,7 @@ final class SpeakerModelPublicationAdmissionTests: XCTestCase {
         let store = MeetingDiarizationModelStore(
             validate: { Self.artifact },
             validateVoice: { if !installed.value { throw Missing() } },
-            installVoice: { _, publication in
+            stagedInstallVoice: { _, publication in
                 installs.set()
                 if installs.total == 1 {
                     await transferStarted.open()
