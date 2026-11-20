@@ -675,7 +675,7 @@ def validate_evidence(path, source, manifest_sha, now=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stage", choices=("plan", "review-highlights", "prepare", "draft", "publish", "verify"))
-    parser.add_argument("--repo", default=".", help="Clean checkout of the exact reviewed source on origin/main")
+    parser.add_argument("--repo", default=".", help="Clean checkout of the exact source; artifact stages require reviewed source on origin/main")
     parser.add_argument("--source", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--build", required=True)

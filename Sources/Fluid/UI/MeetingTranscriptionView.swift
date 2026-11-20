@@ -437,7 +437,7 @@ struct MeetingTranscriptionView: View {
     @State private var modelReadinessRevision = 0
     @State private var cachedStorageStatus: MeetingStorageStatus = .checking
     @State private var cachedStorageReady = false
-    @Binding private var requestedMeetingSources: Bool
+    @Binding private var recordingSettingsRequest: ReleaseHighlightsNavigation.RecordingSettingsRequest
     @ObservedObject var historySnapshot: MeetingHistorySnapshot
     // Reopen history on each visit; narrow-window selection must not hide it permanently.
     @State private var isMeetingHistoryVisible = true
@@ -446,13 +446,13 @@ struct MeetingTranscriptionView: View {
         coordinator: MeetingSessionCoordinator,
         asrService: ASRService,
         historySnapshot: MeetingHistorySnapshot,
-        requestedMeetingSources: Binding<Bool> = .constant(false),
+        recordingSettingsRequest: Binding<ReleaseHighlightsNavigation.RecordingSettingsRequest> = .constant(.init()),
         onOpenVoiceEngine: @escaping () -> Void
     ) {
         self.coordinator = coordinator
         self.asrService = asrService
         self.historySnapshot = historySnapshot
-        self._requestedMeetingSources = requestedMeetingSources
+        self._recordingSettingsRequest = recordingSettingsRequest
         self.onOpenVoiceEngine = onOpenVoiceEngine
     }
 
@@ -460,10 +460,10 @@ struct MeetingTranscriptionView: View {
         let projection = self.privateState.capture()
         let activeSessionID = self.coordinator.activeSession?.id
         self.meetingPresentation(projection: projection, activeSessionID: activeSessionID)
-        .onChange(of: self.requestedMeetingSources, initial: true) { _, requested in
-            guard requested else { return }
-            self.requestedMeetingSources = false
-            self.openMeetingSettings()
+        .onChange(of: self.recordingSettingsRequest.profileRevision, initial: true) { _, requestedRevision in
+            if requestedRevision != nil, self.recordingSettingsRequest.consume(for: self.privateState.capture()?.revision) {
+                self.openMeetingSettings()
+            }
         }
         .sheet(isPresented: self.$privateState.isShowingMeetingSettings) {
             self.recordingSettingsSheet(projection: projection)

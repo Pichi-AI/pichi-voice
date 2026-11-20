@@ -12,7 +12,7 @@ For example, [Pichi Voice 0.3.0](https://github.com/Pichi-AI/pichi-voice/release
 
 ## Checking the exact release
 
-Run the following from the clean candidate worktree before building the archive, using its actual release version, build and source. The review compiles the app's offline card definition and prints its selected IDs.
+Run the following from the clean candidate worktree before building the archive, using its actual release version, build and source. The offline review compiles the app’s card definition and prints its selected IDs. It can run on a clean candidate branch before merge. The separate packaging stage verifies the source against origin/main.
 
 ```sh
 python3 scripts/dev/macos-release.py review-highlights --source "$pichi_source" \

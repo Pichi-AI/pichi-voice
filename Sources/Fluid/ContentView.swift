@@ -348,8 +348,7 @@ struct ContentView: View {
     @State private var playgroundUsed: Bool = SettingsStore.shared.playgroundUsed
     @State private var showsFluidIntelligenceDemo = false
     @State private var showsReleaseHighlights = false
-    @State private var requestedMeetingSources = false
-    @State private var showsReleaseAnalyticsPrivacy = false
+    @State private var releaseNavigation = ReleaseHighlightsNavigation()
     @State private var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)? = nil
     @State private var recordingPrecedingText: String = ""
     @State private var dictationContextCapture: DictationContextCapture?
@@ -592,7 +591,7 @@ struct ContentView: View {
                     !self.asr.showError && !self.showRestartPrompt,
                 onExplore: self.exploreReleaseFeature
             ))
-            .sheet(isPresented: self.$showsReleaseAnalyticsPrivacy) { AnalyticsPrivacyView() }
+            .sheet(isPresented: self.$releaseNavigation.showsAnalyticsPrivacy) { AnalyticsPrivacyView() }
             .sheet(isPresented: self.$showsFluidIntelligenceDemo) {
                 FluidIntelligenceDemoView(
                     asr: self.asr,
@@ -1312,14 +1311,12 @@ struct ContentView: View {
     }
 
     private func exploreReleaseFeature(_ destination: ReleaseHighlightsContent.Destination) {
-        switch destination {
-        case .meetings: self.navigateToApp(.meetingTranscription)
-        case .voiceEngine: self.navigateToApp(.voiceEngine)
-        case .changelog: self.navigateToApp(.changelog)
-        case .analyticsPrivacy: self.showsReleaseAnalyticsPrivacy = true
-        case .meetingSources:
-            self.requestedMeetingSources = self.settings.fluidMeetEnabled
-            self.navigateToApp(.meetingTranscription)
+        if let page = self.releaseNavigation.open(
+            destination,
+            profileRevision: self.appServices.privateProfiles.projectionRevision,
+            meetingsEnabled: self.settings.fluidMeetEnabled
+        ) {
+            self.navigateToApp(page)
         }
     }
 
@@ -2407,7 +2404,7 @@ struct ContentView: View {
             coordinator: self.appServices.meetingSessionCoordinator,
             asrService: self.asr,
             historySnapshot: self.meetingHistorySnapshot,
-            requestedMeetingSources: self.$requestedMeetingSources,
+            recordingSettingsRequest: self.$releaseNavigation.recordingSettings,
             onOpenVoiceEngine: { self.selectedSidebarItem = .voiceEngine }
         )
     }
