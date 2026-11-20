@@ -23,6 +23,20 @@ final class PichiHighlightsLayoutTests: XCTestCase {
         try await self.checkActions(in: .current(version: "0.3.0"), expected: [.meetingSources, .analyticsPrivacy])
     }
 
+    func testDismissalAfterProfileSwitchRejectsTheOldSheetAction() throws {
+        let owner = UUID()
+        let firstProfile = UUID()
+        let nextProfile = UUID()
+        var policy = ReleaseHighlightsPolicy()
+        let original = try XCTUnwrap(policy.request(owner: owner, version: "0.3.0", eligible: true, profileRevision: firstProfile))
+        XCTAssertTrue(policy.beginDismiss(id: original.id, acknowledge: true))
+        XCTAssertEqual(policy.finishDismiss(id: original.id, eligible: true, profileRevision: nextProfile), false)
+        XCTAssertTrue(policy.seenVersions.isEmpty)
+        let fresh = try XCTUnwrap(policy.request(owner: owner, version: "0.3.0", eligible: true, profileRevision: nextProfile))
+        XCTAssertTrue(policy.beginDismiss(id: fresh.id, acknowledge: true))
+        XCTAssertEqual(policy.finishDismiss(id: fresh.id, eligible: true, profileRevision: nextProfile), true)
+    }
+
     func testRecordingSettingsRequestCannotCrossProfilesOrEnableMeetings() {
         let owner = UUID()
         var navigation = ReleaseHighlightsNavigation()

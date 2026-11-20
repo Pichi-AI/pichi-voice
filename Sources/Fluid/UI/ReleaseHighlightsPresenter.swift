@@ -8,7 +8,8 @@ private final class ReleaseHighlightsCoordinator {
     private var policy = ReleaseHighlightsPolicy(seenVersions: UserDefaults.standard.stringArray(forKey: ReleaseHighlightsPolicy.seenKey) ?? [])
 
     func request(owner: UUID, version: String, build: String, eligible: Bool, manual: Bool) -> ReleaseHighlightsPolicy.Session? {
-        self.policy.request(owner: owner, version: version, build: build, eligible: eligible, manual: manual)
+        self.policy.request(owner: owner, version: version, build: build, eligible: eligible, manual: manual,
+                            profileRevision: PrivateProfileService.shared.projectionRevision)
     }
 
     func requestManual(owner: UUID) { self.policy.requestManual(owner: owner) }
@@ -18,7 +19,7 @@ private final class ReleaseHighlightsCoordinator {
     func abandon(owner: UUID) { self.policy.abandon(owner: owner) }
 
     func finishDismiss(id: UUID, eligible: Bool) -> Bool? {
-        let result = self.policy.finishDismiss(id: id, eligible: eligible)
+        let result = self.policy.finishDismiss(id: id, eligible: eligible, profileRevision: PrivateProfileService.shared.projectionRevision)
         if result == true {
             UserDefaults.standard.set(self.policy.seenVersions, forKey: ReleaseHighlightsPolicy.seenKey)
         }
@@ -38,7 +39,7 @@ struct ReleaseHighlightsPresenter: ViewModifier {
     @State private var refining = false
     @State private var isPresented = false
     @State private var session: ReleaseHighlightsPolicy.Session?
-    @State private var pendingDestination: (feature: ReleaseHighlightsContent.Destination, profileRevision: UUID)?
+    @State private var pendingDestination: ReleaseHighlightsContent.Destination?
     private let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
     private let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
     private let coordinator = ReleaseHighlightsCoordinator.shared
@@ -118,7 +119,7 @@ struct ReleaseHighlightsPresenter: ViewModifier {
 
     private func close(_ destination: ReleaseHighlightsContent.Destination?) {
         guard let session = self.session, self.coordinator.beginDismiss(id: session.id) else { return }
-        self.pendingDestination = self.canExplore ? destination.map { ($0, PrivateProfileService.shared.projectionRevision) } : nil
+        self.pendingDestination = self.canExplore ? destination : nil
         self.isPresented = false
     }
 
@@ -128,9 +129,8 @@ struct ReleaseHighlightsPresenter: ViewModifier {
         let destination = self.pendingDestination
         self.session = nil
         self.pendingDestination = nil
-        if result == true, self.canExplore, self.visible, let destination,
-           destination.profileRevision == PrivateProfileService.shared.projectionRevision {
-            self.onExplore(destination.feature)
+        if result == true, self.canExplore, self.visible, let destination {
+            self.onExplore(destination)
         } else if result == false {
             self.presentIfNeeded()
         }

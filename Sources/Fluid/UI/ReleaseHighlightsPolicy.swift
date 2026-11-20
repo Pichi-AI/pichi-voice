@@ -11,6 +11,7 @@ struct ReleaseHighlightsPolicy {
         let version: String
         let build: String
         let manual: Bool
+        let profileRevision: UUID?
         var dismissing = false
         var acknowledge = false
     }
@@ -38,13 +39,14 @@ struct ReleaseHighlightsPolicy {
         self.manualRequests.insert(owner)
     }
 
-    mutating func request(owner: UUID, version: String, build: String = "", eligible: Bool, manual: Bool = false) -> Session? {
+    mutating func request(owner: UUID, version: String, build: String = "", eligible: Bool, manual: Bool = false, profileRevision: UUID? = nil) -> Session? {
         if manual { self.requestManual(owner: owner) }
         // Content may describe an earlier release. Every newly installed version/build
         // still gets a presentation, without interrupting an ineligible activity.
         guard eligible, self.session == nil, !version.isEmpty,
               self.manualRequests.contains(owner) || !self.seenVersions.contains(Self.updateID(version: version, build: build)) else { return nil }
-        let session = Session(owner: owner, version: version, build: build, manual: self.manualRequests.contains(owner))
+        let session = Session(owner: owner, version: version, build: build,
+                              manual: self.manualRequests.contains(owner), profileRevision: profileRevision)
         self.manualRequests.remove(owner)
         self.session = session
         return session
@@ -66,10 +68,10 @@ struct ReleaseHighlightsPolicy {
     }
 
     /// Returns nil for stale callbacks. A system dismissal counts as a close only if still eligible.
-    mutating func finishDismiss(id: UUID, eligible: Bool) -> Bool? {
+    mutating func finishDismiss(id: UUID, eligible: Bool, profileRevision: UUID? = nil) -> Bool? {
         guard let session = self.session, session.id == id else { return nil }
         self.session = nil
-        let acknowledged = eligible && (!session.dismissing || session.acknowledge)
+        let acknowledged = eligible && session.profileRevision == profileRevision && (!session.dismissing || session.acknowledge)
         if !acknowledged, session.manual { self.manualRequests.insert(session.owner) }
         if acknowledged {
             let updateID = Self.updateID(version: session.version, build: session.build)
