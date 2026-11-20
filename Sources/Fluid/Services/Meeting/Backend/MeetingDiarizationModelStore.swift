@@ -108,9 +108,9 @@ final class MeetingDiarizationModelStore: ObservableObject {
         install: @escaping Install = MeetingDiarizationModelStore.downloadAndInstall,
         validateVoice: @escaping @Sendable () throws -> Void = MeetingSpeakerVoiceModelArtifacts.validate,
         installVoice: @escaping InstallVoice = MeetingSpeakerVoiceModelArtifacts.ensureInstalled,
-        residency: MeetingModelResidencyCoordinator = .shared
+        residency: MeetingModelResidencyCoordinator? = nil
     ) {
-        self.residency = residency
+        self.residency = residency ?? .shared
         self.supportsOwnerVoiceVerification = supportsOwnerVoiceVerification
         self.canDownload = canDownload
         self.validate = validate

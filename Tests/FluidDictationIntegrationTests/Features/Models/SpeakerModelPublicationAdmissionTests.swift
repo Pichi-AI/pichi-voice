@@ -9,11 +9,11 @@ import XCTest
 final class SpeakerModelPublicationAdmissionTests: XCTestCase {
     private struct Missing: Error {}
 
-    private static let artifact = MeetingNemotronModelArtifact(
+    private nonisolated static let artifact = MeetingNemotronModelArtifact(
         packageURL: URL(fileURLWithPath: "/synthetic-unused"), totalByteCount: 1, fileCount: 1,
         manifestSHA256: "synthetic", entryMetadataSHA256: "synthetic", profile: .fast32SplitW8A8)
 
-    private static let busyMessage = MeetingModelResidencyError.busy.localizedDescription
+    private nonisolated static let busyMessage = MeetingModelResidencyError.busy.localizedDescription
 
     private actor Latch {
         private var opened = false
