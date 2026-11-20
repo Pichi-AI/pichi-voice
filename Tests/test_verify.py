@@ -199,6 +199,39 @@ class SideBySideTests(unittest.TestCase):
         self.assertEqual(found, {})
         self.assertEqual(receipt.value["result"], "passed")
 
+    def test_a_probe_shard_starts_only_its_own_probes_and_records_them(self):
+        names = {}
+        for part in ("probes-1", "probes-2"):
+            receipt, found = self.run_script([(0, None)], part=part)
+            self.assertEqual([call[0] for call in receipt.calls], ["probes"])
+            command = receipt.calls[0][1]
+            names[part] = [command[index + 1] for index, item in enumerate(command) if item == "--only"]
+            self.assertEqual(receipt.value["probesSelected"], names[part])
+            self.assertEqual(found, {})
+            self.assertEqual(receipt.value["result"], "passed")
+        self.assertFalse(set(names["probes-1"]) & set(names["probes-2"]))
+        self.assertEqual(sorted(names["probes-1"] + names["probes-2"]), VERIFY.probe_selection(NOTHING))
+
+    def test_the_whole_probes_part_records_every_probe_it_runs(self):
+        receipt, _ = self.run_script([(0, None)], part="probes")
+        self.assertEqual(receipt.value["probesSelected"], VERIFY.probe_selection(NOTHING))
+
+    def test_a_shard_does_not_run_the_probes_of_the_other_one_when_quarantine_applies(self):
+        victim = VERIFY.probe_selection(NOTHING, "probes-1")[0]
+        receipt, _ = self.run_script([(0, None)], VERIFY.Quarantine(tests=set(), probes={victim}), part="probes-1")
+        self.assertNotIn(victim, receipt.calls[0][1])
+        self.assertNotIn(victim, receipt.value["probesSelected"])
+
+    def test_a_shard_whose_probes_are_all_quarantined_runs_nothing_instead_of_every_probe(self):
+        everything = {probe.name for probe in VERIFY.RUNNER.PROBES}
+        receipt, _ = self.run_script([], VERIFY.Quarantine(tests=set(), probes=everything), part="probes-2")
+        self.assertEqual(receipt.calls, [])
+        self.assertEqual({item["name"] for item in receipt.value["skipped"]}, {"probes"})
+
+    def test_a_red_probe_shard_stays_red(self):
+        receipt, _ = self.run_script([(1, None)], part="probes-2")
+        self.assertEqual(receipt.value["result"], "failed")
+
     def test_the_xctest_part_runs_no_probes(self):
         receipt, found = self.run_script([(0, {PASSING: "Passed"}), MODELS], part="xctest")
         self.assertEqual([call[0] for call in receipt.calls], ["xctest", "xctest-models"])
@@ -392,6 +425,63 @@ class ProbeTests(unittest.TestCase):
         self.assertNotIn(name, command)
         self.assertNotIn("update_prompt", command)
         self.assertIn(VERIFY.RUNNER.PROBES[1].name, command)
+
+    def shard(self, quarantine=NOTHING, part="probes-1"):
+        return VERIFY.probe_selection(quarantine, part)
+
+    def test_a_shard_keeps_every_other_probe_of_the_sorted_registry(self):
+        whole = VERIFY.probe_selection(NOTHING)
+        self.assertEqual(whole, sorted(whole))
+        self.assertEqual(self.shard(part="probes-1"), whole[0::2])
+        self.assertEqual(self.shard(part="probes-2"), whole[1::2])
+
+    def test_the_two_shards_are_disjoint_and_together_equal_the_whole_selection(self):
+        whole = VERIFY.probe_selection(NOTHING)
+        first, second = self.shard(part="probes-1"), self.shard(part="probes-2")
+        self.assertFalse(set(first) & set(second))
+        self.assertEqual(sorted(first + second), whole)
+        self.assertEqual(len(whole), len(set(whole)))
+        registered = {probe.name for probe in VERIFY.RUNNER.PROBES if not probe.requires_ui}
+        self.assertEqual(set(whole), registered)
+
+    def test_the_shards_differ_in_size_by_at_most_one_probe(self):
+        for quarantined in (set(), {VERIFY.RUNNER.PROBES[0].name}, {probe.name for probe in VERIFY.RUNNER.PROBES[:7]}):
+            with self.subTest(quarantined=len(quarantined)):
+                quarantine = VERIFY.Quarantine(tests=set(), probes=quarantined)
+                sizes = [len(self.shard(quarantine, part)) for part in ("probes-1", "probes-2")]
+                self.assertLessEqual(abs(sizes[0] - sizes[1]), 1)
+                self.assertGreaterEqual(sizes[0], sizes[1])
+
+    def test_a_quarantined_probe_runs_in_no_shard_and_the_rest_still_split_evenly(self):
+        victim = VERIFY.probe_selection(NOTHING)[3]
+        quarantine = VERIFY.Quarantine(tests=set(), probes={victim})
+        first, second = self.shard(quarantine, "probes-1"), self.shard(quarantine, "probes-2")
+        self.assertNotIn(victim, first + second)
+        self.assertEqual(sorted(first + second), [name for name in VERIFY.probe_selection(NOTHING) if name != victim])
+        self.assertLessEqual(abs(len(first) - len(second)), 1)
+
+    def test_the_opt_in_ui_probe_runs_in_no_shard(self):
+        ui = [probe.name for probe in VERIFY.RUNNER.PROBES if probe.requires_ui]
+        self.assertTrue(ui)
+        for part in ("probes", "probes-1", "probes-2"):
+            self.assertFalse(set(ui) & set(VERIFY.probe_selection(NOTHING, part)), part)
+
+    def test_a_shard_always_names_its_probes_because_no_name_means_every_probe(self):
+        for part in ("probes-1", "probes-2"):
+            command = VERIFY.probe_command(NOTHING, 8, part)
+            named = [command[index + 1] for index, item in enumerate(command) if item == "--only"]
+            self.assertEqual(named, self.shard(part=part))
+            self.assertEqual(command[:4], ["bash", "scripts/dev/standalone-regression.sh", "--jobs", "8"])
+
+    def test_the_whole_probes_part_is_unchanged_by_the_shards(self):
+        self.assertEqual(VERIFY.probe_command(NOTHING, 8), VERIFY.probe_command(NOTHING, 8, "probes"))
+        self.assertNotIn("--only", VERIFY.probe_command(NOTHING, 8, "all"))
+
+    def test_the_shard_command_selects_exactly_the_probes_the_runner_lists(self):
+        command = VERIFY.probe_command(NOTHING, 2, "probes-2")
+        listing = subprocess.run([sys.executable, "-S", str(ROOT / "scripts/dev/standalone-regression.py"), "--list",
+                                  *command[command.index("--only"):]], capture_output=True, text=True, check=True).stdout
+        self.assertEqual([line.split("\t")[0] for line in listing.splitlines()], self.shard(part="probes-2"))
 
     def test_failed_probes_are_named(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -925,6 +1015,62 @@ class ExecuteTests(unittest.TestCase):
         self.assertEqual(receipt.calls, [])
         self.assertIn("skip-policy", self.skipped(receipt))
         self.assertEqual(self.skipped(receipt)["xctest"], "runs in the xctest part of the gate")
+
+    def test_a_probe_shard_is_the_probes_part_for_every_other_step(self):
+        for part in ("probes-1", "probes-2"):
+            with self.subTest(part=part):
+                receipt, outcome, ran, vendor = self.run_layer("L1", ["Sources/Mobile/App.swift"], part=part)
+                self.assertIsNone(outcome)
+                self.assertEqual(ran, [])
+                self.assertEqual(self.xctest_parts, [part])
+                vendor.assert_not_called()
+                self.assertEqual(receipt.calls, [])
+                self.assertIn("skip-policy", self.skipped(receipt))
+                for name in ("check", "lint", "xctest", "xctest-models", "vendor"):
+                    self.assertEqual(self.skipped(receipt)[name], "runs in the xctest part of the gate")
+                self.assertEqual(self.skipped(receipt)["ios"], "runs in the ios part of the gate")
+                self.assertNotIn("probes", self.skipped(receipt))
+
+    def test_the_other_parts_leave_the_probes_to_the_shards(self):
+        for part in ("xctest", "ios"):
+            receipt, _, _, _ = self.run_layer("L1", [], part=part)
+            self.assertEqual(self.skipped(receipt)["probes"], "runs in the probes part of the gate")
+
+    def test_the_part_names_parse_and_reach_the_receipt(self):
+        self.assertEqual(VERIFY.PARTS, ("all", "xctest", "probes", "probes-1", "probes-2", "ios"))
+        for part in ("probes-1", "probes-2"):
+            with self.subTest(part=part), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "Fluid.xcodeproj").mkdir()
+                (root / "Fluid.xcodeproj/project.pbxproj").write_text("")
+                made = []
+                real = VERIFY.Receipt
+
+                def make(directory, **facts):
+                    made.append(real(directory, **facts))
+                    return made[0]
+
+                with patch.object(VERIFY, "ROOT", root), patch.object(VERIFY, "git", return_value="a" * 40 + "\n"), \
+                        patch.object(VERIFY, "changed_paths", return_value=("b" * 40, [])), \
+                        patch.object(VERIFY, "tree_fingerprint", return_value="tree"), patch.object(VERIFY, "dirty_state", return_value={}), \
+                        patch.object(VERIFY, "Receipt", side_effect=make), patch.object(VERIFY, "execute", return_value=None) as execute, \
+                        patch.object(sys, "argv", ["verify", "--layer", "L1", "--part", part]), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(VERIFY.main(), 0)
+                self.assertEqual(made[0].value["part"], part)
+                self.assertEqual(execute.call_args.args[-1], part)
+                receipt = json.loads((made[0].directory / "receipt.json").read_text())
+                self.assertEqual(receipt["part"], part)
+
+    def test_an_unknown_part_is_refused(self):
+        with patch.object(sys, "argv", ["verify", "--part", "probes-3"]), contextlib.redirect_stderr(io.StringIO()), \
+                self.assertRaises(SystemExit) as stopped:
+            VERIFY.main()
+        self.assertEqual(stopped.exception.code, 2)
+
+    def test_the_summary_names_the_shard(self):
+        value = {"layer": "L1", "result": "passed", "seconds": 5, "workingTree": "clean", "revision": "a" * 40, "base": "b" * 40,
+                 "reason": "requested", "skipped": [], "steps": [], "quarantined": [], "part": "probes-2"}
+        self.assertIn("Verify L1 (probes-2 part): passed", "\n".join(VERIFY.summary_lines(value, Path("/tmp/run"))))
 
     def test_the_layer_reaches_the_test_selection(self):
         for layer in ("L1", "L2"):
