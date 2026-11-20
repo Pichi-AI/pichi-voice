@@ -16,10 +16,12 @@ def vendored_revision(record):
 
 
 def vendored_inputs(package):
-    """The vendored files whose hashes the build manifest records: the manifest, the record and every bridge header."""
+    """The vendored files whose hashes the build manifest records: the manifest, the record, every public bridge
+    header and the bridge sources (Objective-C++ files and internal headers) that the package build compiles."""
     package = Path(package)
     headers = sorted((package / 'objectivec/include').glob('*.h'))
-    inputs = [package / 'Package.swift', package / 'PICHI_VENDORING.md', *headers]
+    bridge = sorted([*(package / 'objectivec').glob('*.h'), *(package / 'objectivec').glob('*.mm')])
+    inputs = [package / 'Package.swift', package / 'PICHI_VENDORING.md', *headers, *bridge]
     missing = [str(path) for path in inputs if not path.is_file()]
     if not headers or missing:
         raise ValueError(f'the vendored package is incomplete: headers {len(headers)}, missing {missing}')

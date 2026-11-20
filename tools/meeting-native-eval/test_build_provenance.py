@@ -43,13 +43,16 @@ class InputTests(unittest.TestCase):
             (root / 'PICHI_VENDORING.md').write_text(f'`{PIN}`\n')
         for name in headers:
             (root / 'objectivec/include' / name).write_text('// header\n')
+        for name in ('ort_value.mm', 'cxx_api.h', 'ort_env.mm'):
+            (root / 'objectivec' / name).write_text('// bridge\n')
         return root
 
     def test_inputs_are_the_manifest_the_record_and_sorted_headers(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = self.package(Path(temporary))
             self.assertEqual([path.relative_to(root).as_posix() for path in vendored_inputs(root)],
-                             ['Package.swift', 'PICHI_VENDORING.md', 'objectivec/include/a.h', 'objectivec/include/b.h'])
+                             ['Package.swift', 'PICHI_VENDORING.md', 'objectivec/include/a.h', 'objectivec/include/b.h',
+                              'objectivec/cxx_api.h', 'objectivec/ort_env.mm', 'objectivec/ort_value.mm'])
 
     def test_a_package_without_headers_or_record_is_refused(self):
         for headers, record in (((), True), (('a.h',), False)):
@@ -61,6 +64,7 @@ class InputTests(unittest.TestCase):
     def test_the_vendored_package_is_complete(self):
         inputs = vendored_inputs(ROOT / 'Vendor/onnxruntime-swift-package-manager')
         self.assertIn('onnxruntime.h', [path.name for path in inputs])
+        self.assertIn('ort_session.mm', [path.name for path in inputs])
 
 
 class TranscribeInputTests(unittest.TestCase):

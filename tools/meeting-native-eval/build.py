@@ -10,6 +10,7 @@ package artifact only when its shared cache lacks it.
 from pathlib import Path
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 
@@ -27,8 +28,8 @@ TRANSCRIBE = ROOT / 'Vendor/TranscribeCpp'
 PACKAGE_SCRATCH = BUILD / 'giga-package'
 BASELINE = '448431f01a7941777349ca9370a2d8bf9dead69e'
 
-def run(args):
-    subprocess.run([str(x) for x in args], cwd=ROOT, check=True)
+def run(args, env=None):
+    subprocess.run([str(x) for x in args], cwd=ROOT, check=True, env=env)
 
 def sha(path):
     digest = hashlib.sha256()
@@ -47,14 +48,18 @@ ort_revision = vendored_revision((ORT / 'PICHI_VENDORING.md').read_text())
 ort_inputs = vendored_inputs(ORT)
 # Build the packages PichiGigaAM imports exactly as the application resolves them, then stage their
 # products. The bin path is asked from SwiftPM because it differs between build systems.
-package_command = ['swift', 'build', '-c', 'release', '--package-path', GIGAAM, '--scratch-path', PACKAGE_SCRATCH]
-run([*package_command, '--product', 'PichiGigaAM'])
-products = Path(subprocess.check_output([str(x) for x in [*package_command, '--show-bin-path']], cwd=ROOT, text=True).strip())
+# xcrun selects the same toolchain as every swiftc call below. ORT_POD_LOCAL_PATH would make the vendored
+# package take a local ONNX Runtime archive instead of the checksum-pinned release, so it never reaches SwiftPM.
+package_env = {key: value for key, value in os.environ.items() if key != 'ORT_POD_LOCAL_PATH'}
+package_command = ['xcrun', 'swift', 'build', '-c', 'release', '--package-path', GIGAAM, '--scratch-path', PACKAGE_SCRATCH]
+run([*package_command, '--product', 'PichiGigaAM'], env=package_env)
+products = Path(subprocess.check_output([str(x) for x in [*package_command, '--show-bin-path']], cwd=ROOT, text=True, env=package_env).strip())
 if DEPS.exists():
     shutil.rmtree(DEPS)
 DEPS.mkdir(parents=True)
 for name in ['OnnxRuntimeBindings.o', 'TranscribeCpp.o', 'TranscribeCpp.swiftmodule', 'onnxruntime.framework', 'CTranscribe.framework']:
-    assert (products / name).exists(), str(products / name)
+    if not (products / name).exists():
+        raise SystemExit(f'swift build did not produce {name} in {products}; the SwiftPM product layout may have changed')
     # Frameworks keep their Versions symlinks; copying them as plain directories would break loading.
     run(['ditto', products / name, DEPS / name])
 (DEPS / 'module.modulemap').write_text('module OnnxRuntimeBindings {\numbrella "' + str(ORT / 'objectivec/include') + '"\nexport *\n}\n')
@@ -87,6 +92,7 @@ giga_sources = sorted((ROOT / 'Vendor/PichiGigaAM/Sources/PichiGigaAM').glob('*.
 run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-emit-module', '-emit-library', '-module-name', 'PichiGigaAM', '-module-cache-path', BUILD / 'ModuleCache', '-emit-module-path', BUILD / 'PichiGigaAM.swiftmodule', '-I', DEPS, '-F', DEPS, '-profile-generate', '-framework', 'onnxruntime', '-framework', 'CTranscribe', '-lc++', '-lz', '-framework', 'Accelerate', '-framework', 'CoreML', '-framework', 'Metal', '-framework', 'MetalKit', '-Xlinker', '-rpath', '-Xlinker', str(DEPS), DEPS / 'OnnxRuntimeBindings.o', DEPS / 'TranscribeCpp.o', *giga_sources, '-o', BUILD / 'libPichiGigaAM.dylib'])
 sources = [BUILD / 'CanonicalContracts.swift', SOURCE / 'Backend/MeetingCanonicalEvidenceTypes.swift', BUILD / 'LegacyAttribution.swift', SOURCE / 'Backend/MeetingResumableNemotronDiarizerSession.swift', SOURCE / 'Backend/MeetingIncrementalNemotronDiarizerSession.swift', *sorted((SOURCE / 'Backend/Nemotron3').glob('*.swift')), SOURCE / 'Backend/MeetingFast32NemotronDiarizer.swift', SOURCE / 'Backend/MeetingSpeakerAttribution.swift', ROOT / 'tools/meeting-native-eval/Runner.swift']
 run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-default-isolation', 'MainActor', '-module-cache-path', BUILD / 'ModuleCache', '-I', BUILD, '-I', DEPS, '-F', DEPS, '-L', BUILD, '-lFluidAudio', '-lPichiGigaAM', '-framework', 'onnxruntime', '-lc++', '-framework', 'Accelerate', '-Xlinker', '-rpath', '-Xlinker', str(BUILD), '-Xlinker', '-rpath', '-Xlinker', str(DEPS), *sources, '-o', BUILD / 'runner'])
-manifest = {'schema_version': 1, 'source_revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(), 'baseline_revision': BASELINE, 'fluid_audio_revision': revision, 'onnx_runtime_revision': ort_revision, 'sources': {str(path.relative_to(ROOT)): sha(path) for path in [*sources, SOURCE / 'MeetingPersistedMetadata.swift', *helpers, *giga_sources, *gigaam_package_inputs(GIGAAM), *ort_inputs, *transcribe_inputs(TRANSCRIBE), *sorted((ROOT / 'tools/meeting-native-eval').glob('*.py'))]}, 'baseline_original_source_sha256': hashlib.sha256(legacy.encode()).hexdigest(), 'binary_sha256': sha(BUILD / 'runner'), 'onnx_bridge_sha256': sha(DEPS / 'OnnxRuntimeBindings.o'), 'onnx_runtime_sha256': sha(DEPS / 'onnxruntime.framework/Versions/A/onnxruntime'), 'transcribe_cpp_bridge_sha256': sha(DEPS / 'TranscribeCpp.o'), 'transcribe_cpp_native_sha256': sha(DEPS / 'CTranscribe.framework/Versions/A/CTranscribe')}
+swift_version = subprocess.check_output(['xcrun', 'swift', '--version'], text=True, stderr=subprocess.STDOUT).strip()
+manifest = {'schema_version': 1, 'swift_version': swift_version, 'source_revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(), 'baseline_revision': BASELINE, 'fluid_audio_revision': revision, 'onnx_runtime_revision': ort_revision, 'sources': {str(path.relative_to(ROOT)): sha(path) for path in [*sources, SOURCE / 'MeetingPersistedMetadata.swift', *helpers, *giga_sources, *gigaam_package_inputs(GIGAAM), *ort_inputs, *transcribe_inputs(TRANSCRIBE), *sorted((ROOT / 'tools/meeting-native-eval').glob('*.py'))]}, 'baseline_original_source_sha256': hashlib.sha256(legacy.encode()).hexdigest(), 'binary_sha256': sha(BUILD / 'runner'), 'onnx_bridge_sha256': sha(DEPS / 'OnnxRuntimeBindings.o'), 'onnx_runtime_sha256': sha(DEPS / 'onnxruntime.framework/Versions/A/onnxruntime'), 'transcribe_cpp_bridge_sha256': sha(DEPS / 'TranscribeCpp.o'), 'transcribe_cpp_native_sha256': sha(DEPS / 'CTranscribe.framework/Versions/A/CTranscribe')}
 (BUILD / 'build-manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
 print('Native evaluation runner built; no inference performed.')
