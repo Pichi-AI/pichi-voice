@@ -11,7 +11,9 @@ three probe failures, those probes run once more, alone: one that passes then is
 not fail the gate, one that fails again stays red. A probe run that did not complete is never retried.
 
 --part runs one part of the gate on a machine of its own, as CI does: xctest (with the repository checks,
-the vendored packages and the policy check of its results), probes, or ios. Every part must pass.
+the vendored packages and the policy check of its results), probes, or ios. Every part must pass. The probes can
+also run as two halves, probes-1 and probes-2, on machines of their own: each takes every other probe of the
+registry sorted by name, after the quarantine, so the halves are disjoint and together equal the probes part.
 """
 
 import argparse
@@ -129,7 +131,9 @@ REAL_MODEL_TESTS = (
 )
 HEAVY_STEPS = ("xctest", "xctest-models", "skip-policy", "probes", "ios", "vendor")
 # CI runs the parts of one gate side by side on separate machines; "all" runs every step on this one.
-PARTS = ("all", "xctest", "probes", "ios")
+PARTS = ("all", "xctest", "probes", "probes-1", "probes-2", "ios")
+# "probes" runs every probe; a shard runs every other one of the sorted registry, the first (1) or the second (2) half.
+PROBE_PARTS = ("probes", "probes-1", "probes-2")
 PART_OF = {"check": "xctest", "lint": "xctest", "xctest": "xctest", "xctest-models": "xctest", "vendor": "xctest", "probes": "probes",
            "ios": "ios"}
 MOBILE_BUNDLE = "PichiVoiceMobileIntegrationTests"
@@ -382,11 +386,20 @@ def plain(test):
     return test[:-2] if test.endswith("()") else test
 
 
-def probe_command(quarantine, jobs):
+def probe_selection(quarantine, part="probes"):
+    """Names of the probes this part runs: the registry by name, without the quarantined ones and the opt-in
+    UI probe. The first shard keeps the even positions of that list and the second the odd ones."""
+    names = sorted(probe.name for probe in RUNNER.PROBES if probe.name not in quarantine.probes and not probe.requires_ui)
+    if part in ("probes-1", "probes-2"):
+        return names[int(part[-1]) - 1::2]
+    return names
+
+
+def probe_command(quarantine, jobs, part="probes"):
+    # With no probe named the runner takes the whole registry, so only the whole part may leave the list out.
     selection = []
-    if quarantine.probes:
-        selection = [argument for probe in RUNNER.PROBES if probe.name not in quarantine.probes and not probe.requires_ui
-                     for argument in ("--only", probe.name)]
+    if quarantine.probes or part in ("probes-1", "probes-2"):
+        selection = [argument for name in probe_selection(quarantine, part) for argument in ("--only", name)]
     return ["bash", "scripts/dev/standalone-regression.sh", "--jobs", str(jobs), *selection]
 
 
@@ -481,10 +494,14 @@ def run_xctest_and_probes(receipt, quarantine, jobs, layer="L1", part="all"):
                 skipped.append(f"-skip-testing:{test}")
                 receipt.skip(test.split("/", 1)[1], "a long soak test that runs in L2")
         xctest = receipt.begin("xctest", ["bash", "scripts/dev/macos.sh", "regression", *skipped], hosts=REGRESSION_PRODUCTS)
-    if part in ("all", "probes"):
-        if xctest is not None:
-            receipt.wait_for_text(xctest, BUILD_FINISHED)
-        probes = receipt.begin("probes", probe_command(quarantine, jobs))
+    if part == "all" or part in PROBE_PARTS:
+        receipt.value["probesSelected"] = probe_selection(quarantine, part)
+        if not receipt.value["probesSelected"]:
+            receipt.skip("probes", "every probe of this part is quarantined")
+        else:
+            if xctest is not None:
+                receipt.wait_for_text(xctest, BUILD_FINISHED)
+            probes = receipt.begin("probes", probe_command(quarantine, jobs, part))
     rows = receipt.join(*(entry for entry in (xctest, probes) if entry is not None))
     xctest_row = rows[0] if xctest is not None else None
     probes_row = rows[-1] if probes is not None else None
@@ -597,10 +614,11 @@ def read_quarantine(ci=None):
 
 def execute(receipt, layer, paths, base, jobs, part="all"):
     def mine(name):
-        return part == "all" or PART_OF[name] == part
+        return part == "all" or PART_OF[name] == part or (name == "probes" and part in PROBE_PARTS)
 
     def elsewhere(name):
-        receipt.skip(name, f"runs in the {PART_OF[name]} part of the gate")
+        where = "probes-1 and probes-2 parts" if PART_OF[name] == "probes" else f"{PART_OF[name]} part"
+        receipt.skip(name, f"runs in the {where} of the gate")
 
     if mine("check"):
         receipt.step("check", ["bash", "scripts/dev/check.sh"])
@@ -647,7 +665,7 @@ def execute(receipt, layer, paths, base, jobs, part="all"):
         run_vendor(receipt, layer, paths)
     else:
         elsewhere("vendor")
-    if part == "probes":
+    if part in PROBE_PARTS:
         receipt.skip("skip-policy", "runs in the xctest and ios parts of the gate, beside their results")
         return None
     record = receipt.directory / "results.json"
@@ -755,7 +773,8 @@ def main():
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 3) * 2 // 3), help="Standalone probes at once")
     parser.add_argument("--part", choices=PARTS, default="all",
                         help="Run one part of the gate, for CI jobs on separate machines: xctest (with the repository "
-                             "checks, Vendor packages and the policy check of its results), probes, or ios")
+                             "checks, Vendor packages and the policy check of its results), probes (all of them), "
+                             "probes-1 and probes-2 (every other probe of the sorted registry each), or ios")
     arguments = parser.parse_args()
     try:
         merge_base, paths = changed_paths(arguments.base)
