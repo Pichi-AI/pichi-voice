@@ -59,7 +59,8 @@ final class MeetingInlineCaptionBoundsTests: XCTestCase {
             try await settle(host, describe: {
                 "Step \(step): text width \(native.bounds.width) for \(host.model.width), "
                     + "marker shown \(native.attributedText.string.contains("Изменение \(step).")), "
-                    + "waves \(self.waves(in: native).count) of \(count)."
+                    + "waves \(self.waves(in: native).count) of \(count); "
+                    + "window \(host.window.bounds.width), safe area \(host.controller.view.safeAreaInsets)."
             }) {
                 abs(native.bounds.width - host.model.width) < 1
                     && native.attributedText.string.contains("Изменение \(step).")
