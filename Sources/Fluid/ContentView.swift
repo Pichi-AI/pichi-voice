@@ -348,6 +348,8 @@ struct ContentView: View {
     @State private var playgroundUsed: Bool = SettingsStore.shared.playgroundUsed
     @State private var showsFluidIntelligenceDemo = false
     @State private var showsReleaseHighlights = false
+    @State private var requestedMeetingSources = false
+    @State private var showsReleaseAnalyticsPrivacy = false
     @State private var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)? = nil
     @State private var recordingPrecedingText: String = ""
     @State private var dictationContextCapture: DictationContextCapture?
@@ -588,8 +590,9 @@ struct ContentView: View {
                 isEligible: !self.settings.shouldShowOnboarding && !self.showsFluidIntelligenceDemo &&
                     !self.asr.isRunningOrStarting && self.asr.activeExclusiveActivity == nil &&
                     !self.asr.showError && !self.showRestartPrompt,
-                onExplore: self.navigateToApp
+                onExplore: self.exploreReleaseFeature
             ))
+            .sheet(isPresented: self.$showsReleaseAnalyticsPrivacy) { AnalyticsPrivacyView() }
             .sheet(isPresented: self.$showsFluidIntelligenceDemo) {
                 FluidIntelligenceDemoView(
                     asr: self.asr,
@@ -1306,6 +1309,18 @@ struct ContentView: View {
               let request = self.menuBarManager.consumeDictionaryWordTrainingRequest(), request.isCurrent else { return }
         self.dictionaryWordTrainingRequest = request
         self.navigateToApp(.customDictionary)
+    }
+
+    private func exploreReleaseFeature(_ destination: ReleaseHighlightsContent.Destination) {
+        switch destination {
+        case .meetings: self.navigateToApp(.meetingTranscription)
+        case .voiceEngine: self.navigateToApp(.voiceEngine)
+        case .changelog: self.navigateToApp(.changelog)
+        case .analyticsPrivacy: self.showsReleaseAnalyticsPrivacy = true
+        case .meetingSources:
+            self.requestedMeetingSources = self.settings.fluidMeetEnabled
+            self.navigateToApp(.meetingTranscription)
+        }
     }
 
     private func navigateToApp(_ destination: SidebarItem) {
@@ -2392,6 +2407,7 @@ struct ContentView: View {
             coordinator: self.appServices.meetingSessionCoordinator,
             asrService: self.asr,
             historySnapshot: self.meetingHistorySnapshot,
+            requestedMeetingSources: self.$requestedMeetingSources,
             onOpenVoiceEngine: { self.selectedSidebarItem = .voiceEngine }
         )
     }

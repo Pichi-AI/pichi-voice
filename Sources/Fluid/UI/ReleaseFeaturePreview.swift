@@ -4,20 +4,27 @@ import SwiftUI
 struct ReleaseFeaturePreview: View {
     let kind: ReleaseHighlightsContent.Preview
     @Environment(\.theme) private var theme
-    @Environment(\.locale) private var locale
 
     var body: some View {
         Group {
             switch self.kind {
             case .meeting: self.meeting
-            case .dashboard: self.dashboard
-            case .ripple: self.cleanupModel("Fluid 1.1 Ripple", detail: "Fast & capable", symbol: "bolt")
-            case .splash: self.cleanupModel("Fluid 1.1 Splash", detail: "Higher quality", symbol: "sparkles")
+            case .sources:
+                self.options([
+                    ("mic", "Microphone only"),
+                    ("macwindow", "One application"),
+                    ("speaker.wave.2", "All computer audio"),
+                ])
+            case .analytics:
+                self.options([
+                    ("calendar", "Daily activity"),
+                    ("chart.bar", "Optional detailed metrics"),
+                    ("waveform.slash", "No audio or transcripts"),
+                ])
             case .dictation:
                 Label { Text(verbatim: "GigaAM") } icon: { Image(systemName: "waveform") }
                     .font(self.theme.typography.title)
                     .foregroundStyle(self.theme.palette.accentText)
-            case .speech: self.speech
             }
         }
         .padding(16)
@@ -66,64 +73,18 @@ struct ReleaseFeaturePreview: View {
         }
     }
 
-    private var dashboard: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            Text("Good morning.").font(.fluidSystem(size: 16, weight: .semibold, role: .title))
-            HStack(spacing: 8) {
-                self.stat(1240.formatted(.number.locale(self.locale)), label: "WORDS DICTATED", symbol: "waveform")
-                self.stat(String(format: PichiLocalization.text("%lld min", locale: self.locale), locale: self.locale, arguments: [Int64(24)]), label: "TIME SAVED", symbol: "clock")
+    private func options(_ rows: [(symbol: String, title: String)]) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            ForEach(rows, id: \.symbol) { row in
+                HStack(spacing: 10) {
+                    Image(systemName: row.symbol)
+                        .foregroundStyle(self.theme.palette.accentText)
+                        .frame(width: 20)
+                    Text(PichiLocalization.text(row.title))
+                        .font(self.theme.typography.bodySmall)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                Text(AppBrand.text("Search across FluidVoice"))
-                Spacer(minLength: 0)
-            }
-            .font(.fluidSystem(size: 9))
-            .foregroundStyle(self.theme.palette.secondaryText)
-            .padding(8)
-            .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 7))
-        }
-    }
-
-    private func stat(_ value: String, label: String, symbol: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Image(systemName: symbol).font(.fluidSystem(size: 10)).foregroundStyle(self.theme.palette.accentText)
-            Text(value).font(.fluidSystem(size: 16, weight: .semibold, design: .rounded))
-            Text(PichiLocalization.text(label)).font(.fluidSystem(size: 6, weight: .medium)).foregroundStyle(self.theme.palette.secondaryText)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func cleanupModel(_ name: String, detail: String, symbol: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label(PrivateAIProviderFeature.shared.isAvailable ? AppBrand.text("Fluid Intelligence") : PichiLocalization.text("AI Settings"), systemImage: "sparkles")
-                .font(.fluidSystem(size: 11, weight: .semibold))
-            self.model(name, detail: detail, symbol: symbol)
-            self.model("On-device", detail: "Private", symbol: "lock")
-            self.model("Research preview", detail: "Review text", symbol: "text.magnifyingglass")
-        }
-    }
-
-    private var speech: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Voice Engine", systemImage: "waveform")
-                .font(.fluidSystem(size: 11, weight: .semibold))
-            self.model("Fluid Speech Pro", detail: "Most accurate", symbol: "star")
-            self.model("Fluid Speech Mini", detail: "Half the size", symbol: "waveform")
-            self.model("Fluid Speech Pico", detail: "Smallest", symbol: "bolt")
-        }
-    }
-
-    private func model(_ name: String, detail: String, symbol: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: symbol)
-                .font(.fluidSystem(size: 11)).foregroundStyle(self.theme.palette.accentText)
-                .frame(width: 23, height: 23)
-                .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(self.theme.palette.accent.opacity(0.1), lineWidth: 1))
-            Text(PichiLocalization.text(name)).font(.fluidSystem(size: 10, weight: .medium))
-            Spacer(minLength: 0)
-            Text(PichiLocalization.text(detail)).font(.fluidSystem(size: 8)).foregroundStyle(self.theme.palette.secondaryText)
         }
     }
 }

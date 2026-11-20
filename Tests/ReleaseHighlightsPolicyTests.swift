@@ -100,6 +100,9 @@ struct ReleaseHighlightsPolicyTests {
             precondition(content.release == version)
             if version == "0.2.3" {
                 precondition(content.features.map(\.destination) == [.voiceEngine, .meetings])
+            } else if version == "0.3.0" {
+                precondition(content.features.map(\.preview) == [.sources, .analytics])
+                precondition(content.features.map(\.destination) == [.meetingSources, .analyticsPrivacy])
             } else {
                 precondition(content.features.isEmpty, "An unmatched version must not claim another version’s changes")
             }
@@ -111,7 +114,6 @@ struct ReleaseHighlightsPolicyTests {
             let manual = shippedVersionPolicy.request(owner: owner, version: version, eligible: true, manual: true)
             precondition(manual?.version == version && manual?.manual == true, "Help must open the shipped release highlights after acknowledgment")
             precondition(Set(content.features.map(\.id)).count == content.features.count)
-            precondition(content.features.allSatisfy { $0.destination != .aiProviders }, "Pichi release notes must not claim the upstream private cleanup runtime is bundled")
             for feature in content.features {
                 precondition(!feature.title.isEmpty && !feature.detail.isEmpty && !feature.action.isEmpty)
             }

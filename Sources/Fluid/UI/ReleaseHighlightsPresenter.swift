@@ -29,7 +29,7 @@ private final class ReleaseHighlightsCoordinator {
 struct ReleaseHighlightsPresenter: ViewModifier {
     @Binding var requested: Bool
     let isEligible: Bool
-    let onExplore: (SidebarItem) -> Void
+    let onExplore: (ReleaseHighlightsContent.Destination) -> Void
     @Environment(\.scenePhase) private var scenePhase
     @State private var owner = UUID()
     @State private var host = WindowReference()
@@ -129,21 +129,9 @@ struct ReleaseHighlightsPresenter: ViewModifier {
         self.session = nil
         self.pendingDestination = nil
         if result == true, self.canExplore, self.visible, let destination {
-            self.onExplore(destination.sidebarItem)
+            self.onExplore(destination)
         } else if result == false {
             self.presentIfNeeded()
-        }
-    }
-}
-
-extension ReleaseHighlightsContent.Destination {
-    var sidebarItem: SidebarItem {
-        switch self {
-        case .meetings: .meetingTranscription
-        case .dashboard: .welcome
-        case .aiProviders: .aiEnhancements
-        case .voiceEngine: .voiceEngine
-        case .changelog: .changelog
         }
     }
 }

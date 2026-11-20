@@ -7,9 +7,9 @@ import XCTest
 final class PichiReleaseHighlightsTests: XCTestCase {
     func testReleaseHistoryActionInSheetForUncuratedVersion() async throws {
         for eligible in [false, true] {
-            var selected: SidebarItem?
+            var selected: ReleaseHighlightsContent.Destination?
             let sheet = ReleaseHighlightsView(canExplore: eligible, content: .current(version: "9.0.0")) {
-                selected = $0?.sidebarItem
+                selected = $0
             }
             let host = NSHostingView(rootView: sheet.appTheme(.light).fixedSize())
             let frame = NSRect(origin: NSPoint(x: -10000, y: -10000), size: host.fittingSize)

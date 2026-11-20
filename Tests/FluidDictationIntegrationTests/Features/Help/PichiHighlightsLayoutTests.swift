@@ -16,6 +16,14 @@ final class PichiHighlightsLayoutTests: XCTestCase {
                       action: "Open Voice Engine", destination: .voiceEngine),
             ]
         )
+        try await self.checkActions(in: content, expected: [.meetings, .voiceEngine])
+    }
+
+    func testPublishedMeetingAndPrivacyActionsOpenTheirOwnDestinations() async throws {
+        try await self.checkActions(in: .current(version: "0.3.0"), expected: [.meetingSources, .analyticsPrivacy])
+    }
+
+    private func checkActions(in content: ReleaseHighlightsContent, expected: [ReleaseHighlightsContent.Destination]) async throws {
         var actions: [ReleaseHighlightsContent.Destination] = []
         let sheet = ReleaseHighlightsView(canExplore: true, content: content) {
             if let action = $0 { actions.append(action) }
@@ -43,9 +51,9 @@ final class PichiHighlightsLayoutTests: XCTestCase {
         for y in stride(from: 110.0, through: frame.height - 70, by: 8) {
             actions.removeAll()
             try await click(at: NSPoint(x: 65, y: y))
-            if actions == [.meetings] {
+            if actions == [expected[0]] {
                 try await click(at: NSPoint(x: frame.width / 2 + 55, y: y))
-                XCTAssertEqual(actions, [.meetings, .voiceEngine])
+                XCTAssertEqual(actions, expected)
                 return
             }
         }

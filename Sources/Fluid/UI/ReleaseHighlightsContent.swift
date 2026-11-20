@@ -2,8 +2,8 @@ import Foundation
 
 /// Edit this definition for each release. The renderer and acknowledgement logic stay unchanged.
 struct ReleaseHighlightsContent {
-    enum Destination { case meetings, dashboard, aiProviders, voiceEngine, changelog }
-    enum Preview { case meeting, dashboard, ripple, splash, speech, dictation }
+    enum Destination { case meetings, meetingSources, analyticsPrivacy, voiceEngine, changelog }
+    enum Preview { case meeting, sources, analytics, dictation }
 
     struct Feature: Identifiable {
         let id: String
@@ -22,7 +22,36 @@ struct ReleaseHighlightsContent {
     let features: [Feature]
 
     static func current(version: String) -> Self {
-        guard version == "0.2.3" else {
+        switch version {
+        case "0.3.0":
+            return Self(
+                release: version,
+                title: "More control over meeting audio and privacy",
+                subtitle: "Choose the audio for your next meeting and see how usage reporting works on your Mac.",
+                features: [
+                    Feature(
+                        id: "meeting-audio",
+                        preview: .sources,
+                        eyebrow: "Meetings",
+                        title: "Choose what you record",
+                        detail: "Record just your microphone, add audio from one app, or include all computer audio. You can save your choice for next time.",
+                        action: "Open recording settings",
+                        destination: .meetingSources
+                    ),
+                    Feature(
+                        id: "usage-privacy",
+                        preview: .analytics,
+                        eyebrow: "Privacy",
+                        title: "See what usage data is shared",
+                        detail: "The public Mac release reports daily activity. Detailed metrics are optional. Audio and transcript text stay out of analytics.",
+                        action: "See what is collected",
+                        destination: .analyticsPrivacy
+                    ),
+                ]
+            )
+        case "0.2.3":
+            return self.dictationHighlights(version: version)
+        default:
             return Self(
                 release: version,
                 title: "What’s new",
@@ -30,6 +59,9 @@ struct ReleaseHighlightsContent {
                 features: []
             )
         }
+    }
+
+    private static func dictationHighlights(version: String) -> Self {
         return Self(
             release: version,
             title: "Dictation and Russian interface updates",
