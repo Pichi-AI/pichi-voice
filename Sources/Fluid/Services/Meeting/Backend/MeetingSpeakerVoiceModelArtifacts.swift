@@ -54,13 +54,17 @@ nonisolated enum MeetingSpeakerVoiceModelArtifacts {
             guard digest == proof.digest else { throw MeetingModelResidencyError.unsupportedProvider }
         }
     }
-    static func ensureInstalled(progress: @escaping @Sendable (Double) -> Void) async throws {
+    static func ensureInstalled(progress: @escaping @Sendable (Double) -> Void,
+                                publication: MeetingModelPublicationGate) async throws {
         try self.validateRootContainment()
-        try await self.ensureInstalled(at: self.packageURL(), progress: progress)
+        try await self.ensureInstalled(at: self.packageURL(), progress: progress, publication: publication)
     }
     /// Explicit trusted destinations let native tests and imports use isolated model storage.
     /// The model revision, integrity checks and installation operation stay unchanged.
-    static func ensureInstalled(at destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
+    /// The transfer and the check of the staged package hold no model admission. Only the move into
+    /// the installed location runs under the gate; a refused publication keeps the validated stage.
+    static func ensureInstalled(at destination: URL, progress: @escaping @Sendable (Double) -> Void,
+                                publication: MeetingModelPublicationGate) async throws {
         guard destination.isFileURL else { throw MeetingModelResidencyError.unsupportedProvider }
         if (try? self.validate(at: destination)) != nil { return }
         let root = destination.deletingLastPathComponent()
@@ -75,12 +79,14 @@ nonisolated enum MeetingSpeakerVoiceModelArtifacts {
             try? FileManager.default.removeItem(at: stage)
             throw error
         }
-        try Task.checkCancellation()
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        if FileManager.default.fileExists(atPath: destination.path) {
-            _ = try FileManager.default.replaceItemAt(destination, withItemAt: source)
-        } else { try FileManager.default.moveItem(at: source, to: destination) }
-        try self.validate(at: destination)
+        try await publication.publish {
+            try Task.checkCancellation()
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: destination.path) {
+                _ = try FileManager.default.replaceItemAt(destination, withItemAt: source)
+            } else { try FileManager.default.moveItem(at: source, to: destination) }
+            try self.validate(at: destination)
+        }
         try? FileManager.default.removeItem(at: stage)
     }
 }

@@ -218,7 +218,7 @@ final class MobileKioskRecordingTests: XCTestCase {
             let artifact = MeetingNemotronModelArtifact(packageURL: root.appendingPathComponent("invented-artifact"),
                 totalByteCount: 1, fileCount: 1, manifestSHA256: "synthetic", entryMetadataSHA256: "synthetic")
             let speakerStore = MeetingDiarizationModelStore(supportsOwnerVoiceVerification: false,
-                validate: { artifact }, install: { _ in throw SyntheticFailure.preparation })
+                validate: { artifact }, install: { _, _ in throw SyntheticFailure.preparation })
             required = MobileRequiredResources(prepareSpeech: {
                 if failPreparation { throw SyntheticFailure.preparation }
                 afterSpeechPreparation()

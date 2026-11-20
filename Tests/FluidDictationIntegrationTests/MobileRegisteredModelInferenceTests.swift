@@ -559,9 +559,9 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
                 _ = try MeetingModelInstaller.validatedSilenceEmbedding(at: MeetingModelInstaller.silenceEmbeddingURL(besides: package))
                 return try MeetingModelInstaller.validate(package)
             },
-            install: { progress in try await MeetingDiarizationModelStore.downloadAndInstall(to: package, progress: progress) },
+            install: { progress, publication in try await MeetingDiarizationModelStore.downloadAndInstall(to: package, progress: progress, publication: publication) },
             validateVoice: { try MeetingSpeakerVoiceModelArtifacts.validate(at: voicePackage) },
-            installVoice: { progress in try await MeetingSpeakerVoiceModelArtifacts.ensureInstalled(at: voicePackage, progress: progress) }
+            installVoice: { progress, publication in try await MeetingSpeakerVoiceModelArtifacts.ensureInstalled(at: voicePackage, progress: progress, publication: publication) }
         )
         // Same common resource preflight used by the mobile settings/start owner.
         try await store.prepare(dependencies: [.speakerSeparation, .voiceMatching])
@@ -643,9 +643,9 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
         let voicePackage = speakerRoot.appendingPathComponent("voice/\(MeetingSpeakerVoiceModelArtifacts.packageName)", isDirectory: true)
         let store = MeetingDiarizationModelStore(
             canDownload: { true }, validate: { try MeetingModelInstaller.validate(package) },
-            install: { try await MeetingDiarizationModelStore.downloadAndInstall(to: package, progress: $0) },
+            install: { try await MeetingDiarizationModelStore.downloadAndInstall(to: package, progress: $0, publication: $1) },
             validateVoice: { try MeetingSpeakerVoiceModelArtifacts.validate(at: voicePackage) },
-            installVoice: { try await MeetingSpeakerVoiceModelArtifacts.ensureInstalled(at: voicePackage, progress: $0) }
+            installVoice: { try await MeetingSpeakerVoiceModelArtifacts.ensureInstalled(at: voicePackage, progress: $0, publication: $1) }
         )
         try await store.prepare(dependencies: [.speakerSeparation, .voiceMatching])
         var report: [[String: Any]] = []

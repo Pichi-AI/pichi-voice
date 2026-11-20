@@ -3,8 +3,8 @@ import XCTest
 
 /// A view that appears in a hosted unit test (the FluidMeet settings sheet, the meetings view) asks the speaker
 /// model store to prepare itself in the background. In the empty test home that would download the pinned
-/// model from the network, and the task outlives the test: it holds the ordinary model admission until the
-/// download ends, so a later test that needs an exclusive model attempt fails with "busy" (issue 191).
+/// model from the network, and the task outlives the test: its publication would take the ordinary model
+/// admission, so a later test that needs an exclusive model attempt fails with "busy" (issue 191, 197).
 @MainActor
 final class HostedSpeakerModelPreparationTests: XCTestCase {
     func testViewTriggeredPreparationNeitherDownloadsNorHoldsModelAdmission() async throws {

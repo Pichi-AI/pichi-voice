@@ -417,7 +417,7 @@ final class MeetingDiarizationModelStoreTests: XCTestCase {
         let store = MeetingDiarizationModelStore(
             canDownload: { true },
             validate: { Self.artifact },
-            install: { _ in
+            install: { _, _ in
                 _ = installs.increment()
                 return Self.artifact
             }
@@ -435,7 +435,7 @@ final class MeetingDiarizationModelStoreTests: XCTestCase {
         let store = MeetingDiarizationModelStore(
             canDownload: { true },
             validate: { throw Missing() },
-            install: { progress in
+            install: { progress, _ in
                 _ = installs.increment()
                 progress(0.5)
                 try await Task.sleep(nanoseconds: 50_000_000)
@@ -457,7 +457,7 @@ final class MeetingDiarizationModelStoreTests: XCTestCase {
         let store = MeetingDiarizationModelStore(
             canDownload: { true },
             validate: { throw Missing() },
-            install: { _ in
+            install: { _, _ in
                 if installs.increment() == 1 {
                     throw NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
                 }
@@ -488,7 +488,7 @@ final class MeetingDiarizationModelStoreTests: XCTestCase {
         let store = MeetingDiarizationModelStore(
             canDownload: { false },
             validate: { throw Missing() },
-            install: { _ in
+            install: { _, _ in
                 _ = installs.increment()
                 return Self.artifact
             }
@@ -508,7 +508,7 @@ final class MeetingDiarizationModelStoreTests: XCTestCase {
         let store = MeetingDiarizationModelStore(
             validate: { Self.artifact },
             validateVoice: { if installs.count == 0 { throw Missing() } },
-            installVoice: { progress in
+            installVoice: { progress, _ in
                 progress(0.5)
                 try await Task.sleep(nanoseconds: 30_000_000)
                 _ = installs.increment()
@@ -523,7 +523,7 @@ final class MeetingDiarizationModelStoreTests: XCTestCase {
     }
 
     func testInstalledSeparationAloneCannotClaimCompleteSpeakerReadiness() async throws {
-        let store = MeetingDiarizationModelStore(validate: { Self.artifact }, validateVoice: { throw Missing() }, installVoice: { _ in throw Missing() })
+        let store = MeetingDiarizationModelStore(validate: { Self.artifact }, validateVoice: { throw Missing() }, installVoice: { _, _ in throw Missing() })
         _ = try await store.ensureInstalled()
         XCTAssertFalse(store.allSpeakerResourcesReady)
         do {
@@ -537,7 +537,7 @@ final class MeetingDiarizationModelStoreTests: XCTestCase {
 
     func testAlreadyInstalledVoiceEncoderIsNotDownloadedAgain() async throws {
         let installs = Counter()
-        let store = MeetingDiarizationModelStore(validate: { Self.artifact }, validateVoice: {}, installVoice: { _ in _ = installs.increment() })
+        let store = MeetingDiarizationModelStore(validate: { Self.artifact }, validateVoice: {}, installVoice: { _, _ in _ = installs.increment() })
         _ = try await store.ensureInstalled(includingVoiceEncoder: true)
         XCTAssertEqual(installs.count, 0)
         XCTAssertTrue(store.allSpeakerResourcesReady)
