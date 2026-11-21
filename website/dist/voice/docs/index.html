@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Pichi Voice user guide</title>
+  <link rel="canonical" href="https://pichi.ai/voice/docs">
+  <link rel="alternate" hreflang="en" href="https://pichi.ai/voice/docs">
+  <link rel="alternate" hreflang="ru" href="https://pichi.ai/ru/voice/docs">
+  <link rel="alternate" hreflang="x-default" href="https://pichi.ai/voice/docs">
+  <link rel="icon" href="/voice/assets/pichi.png">
+  <link rel="stylesheet" href="/voice/assets/site.css">
+  <link rel="stylesheet" href="/voice/assets/guide.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the guide</a>
+  <header class="header">
+    <div class="wrap header-inner">
+      <a class="brand" href="/voice/"><img src="/voice/assets/pichi.png" alt="" width="36" height="36">Pichi Voice</a>
+      <nav class="guide-links"><a href="/ru/voice/docs/" lang="ru">Русский</a> · <a href="/voice">Website</a> · <a href="https://github.com/Pichi-AI/pichi-voice/blob/main/SUPPORT.md">Support</a></nav>
+    </div>
+  </header>
+  <main class="wrap guide" id="main">
+    <h1>Pichi Voice user guide</h1>
+    <div class="guide-layout">
+      <nav class="guide-contents" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+        <li><a href="#prepare" id="toc-prepare">Prepare</a></li>
+        <li><a href="#voice-typing-on-mac" id="toc-voice-typing-on-mac">Voice typing on Mac</a></li>
+        <li><a href="#meetings-on-mac" id="toc-meetings-on-mac">Meetings on Mac</a></li>
+        <li><a href="#in-person-recording-on-iphone-and-ipad" id="toc-in-person-recording-on-iphone-and-ipad">In-person recording on iPhone and iPad</a></li>
+        <li><a href="#version-and-updates-on-mac" id="toc-version-and-updates-on-mac">Version and updates on Mac</a></li>
+        <li><a href="#review-and-export" id="toc-review-and-export">Review and export</a></li>
+        <li><a href="#troubleshooting" id="toc-troubleshooting">Troubleshooting</a></li>
+        <li><a href="#feedback-and-analytics" id="toc-feedback-and-analytics">Feedback and analytics</a></li>
+        <li><a href="#repeat-the-initial-setup" id="toc-repeat-the-initial-setup">Repeat the initial setup</a></li>
+        </ul>
+      </nav>
+      <article>
+<h2 id="prepare">Prepare</h2>
+<p><a href="/voice#download">Download Pichi Voice for Mac</a>, open the disk image, and drag Pichi Voice to Applications. Open it from Applications to start guided setup. Existing recordings and settings are preserved.</p>
+<p>The current Mac package targets Apple Silicon and macOS 15 or later. Mobile builds target iOS/iPadOS 17 or later. Models have additional memory, storage and language requirements. Complete model downloads while online and try a short recording before relying on offline use.</p>
+<h2 id="voice-typing-on-mac">Voice typing on Mac</h2>
+<ol type="1">
+<li>Grant microphone and Accessibility access.</li>
+<li>Select a speech model and global dictation shortcut in Settings.</li>
+<li>Focus the destination field, start dictation and speak.</li>
+<li>Finish with the configured shortcut and review the text.</li>
+</ol>
+<p>Use the personal dictionary for names and terminology. Review learned corrections. Optional text enhancement uses the local or cloud provider you choose.</p>
+<p>While correction tracking is active, editing dictated text in its destination field also updates that dictation's History entry. History marks your edits separately from actual dictionary substitutions. Choose <strong>Use model version</strong> beside a substitution to restore only that occurrence to the original recognized wording.</p>
+<p>Rejecting a substitution provides negative feedback without deleting the dictionary word or its good pronunciation samples. History reports whether the negative example was saved. Acoustic feedback needs available matching evidence; text-rule feedback prevents the rejected spelling from triggering that rule again. Older entries without recorded substitution details cannot show this origin.</p>
+<h2 id="meetings-on-mac">Meetings on Mac</h2>
+<p>Open <strong>Pichi Meet</strong> in the sidebar, choose your audio sources and start recording. Grant screen/system-audio access for computer-audio recording.</p>
+<p>Microphone capture is separately controlled. Pausing, switching off Pichi's microphone and muting inside a conferencing app have different meanings. Automatic conference mute observation depends on client support and permissions. Use Pichi Voice's own control for direct microphone admission.</p>
+<p>After Stop, review the saved transcript and speaker labels. Processing may refine results after capture stops. Correct participant labels and check generated summaries before sharing.</p>
+<h2 id="in-person-recording-on-iphone-and-ipad">In-person recording on iPhone and iPad</h2>
+<p>Grant microphone access, select a downloaded compatible model and start recording. This records the device microphone, not another iOS application's call audio.</p>
+<p>Finish setup and downloads before going offline. Core local recording and compatible local transcription work without a Pichi account. Before an important meeting, try the intended foreground, background and lock-screen use on your actual device and released build.</p>
+<h2 id="version-and-updates-on-mac">Version and updates on Mac</h2>
+<p>Open <strong>Settings &gt; General</strong> and look for <strong>Updates</strong>. The installed version appears beside <strong>Check for Updates</strong>. You can control automatic checks and background downloads separately. Installation and restart require your confirmation.</p>
+<p>Choose <strong>Change logs</strong> in the sidebar to read release notes. Published versions are also available in <a href="https://github.com/Pichi-AI/pichi-voice/releases">Pichi Voice releases on GitHub</a>.</p>
+<h2 id="review-and-export">Review and export</h2>
+<p>Open a saved meeting in Pichi Meet to read its transcript and play retained audio. Correct automatic speaker labels and verify generated summaries against the transcript. Review which content you export; destination apps and services have their own access and retention controls. See <a href="https://github.com/Pichi-AI/pichi-voice/blob/main/docs/product/privacy.md">data handling</a>.</p>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No microphone audio</td>
+<td>OS permission, selected input and Pichi microphone control</td>
+</tr>
+<tr>
+<td>No computer audio</td>
+<td>Screen/system-audio permission and selected source</td>
+</tr>
+<tr>
+<td>Dictation does not insert</td>
+<td>Accessibility permission and destination focus</td>
+</tr>
+<tr>
+<td>Local processing fails to start</td>
+<td>Model download, language compatibility, memory and storage</td>
+</tr>
+<tr>
+<td>No network</td>
+<td>Fully downloaded local model and local processing settings</td>
+</tr>
+<tr>
+<td>Wrong word or speaker</td>
+<td>Correct the result and check model/language selection</td>
+</tr>
+</tbody>
+</table>
+<p>Follow the <a href="https://github.com/Pichi-AI/pichi-voice/blob/main/SUPPORT.md">support guide</a> if the problem remains. Do not post private audio or unredacted diagnostics.</p>
+<h2 id="feedback-and-analytics">Feedback and analytics</h2>
+<p>Send an idea or a private question to <a href="mailto:hello@pichi.ai">Pichi support</a>. To report a problem publicly, open <a href="https://github.com/Pichi-AI/pichi-voice/issues/new/choose">Pichi Voice issues</a>. Include the app version, macOS version, steps to reproduce and what you expected. Check screenshots for private content before attaching them.</p>
+<p>In Settings, choose <strong>What we collect</strong> to see whether your build sends analytics and which events it records. In builds with analytics enabled, the detailed metrics switch controls feature and performance statistics. Basic activity is collected separately. Audio and transcript text are excluded from analytics.</p>
+<h2 id="repeat-the-initial-setup">Repeat the initial setup</h2>
+<p>Open Help at the bottom of the sidebar and choose Replay onboarding. The setup steps appear again. Recordings, dictionary, voice profile, downloaded models and other preferences stay in place. Existing macOS permissions remain granted.</p>
+<p>To check reinstallation, quit the app, drag it from the DMG to Applications again, and open it. Then replay onboarding from Help. You do not need to remove data folders or run a cleanup script. Keep a backup of your data before this check.</p>
+      </article>
+    </div>
+  </main>
+</body>
+</html>

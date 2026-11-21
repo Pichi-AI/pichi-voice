@@ -348,6 +348,7 @@ struct ContentView: View {
     @State private var playgroundUsed: Bool = SettingsStore.shared.playgroundUsed
     @State private var showsFluidIntelligenceDemo = false
     @State private var showsReleaseHighlights = false
+    @State private var releaseNavigation = ReleaseHighlightsNavigation()
     @State private var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)? = nil
     @State private var recordingPrecedingText: String = ""
     @State private var dictationContextCapture: DictationContextCapture?
@@ -588,8 +589,9 @@ struct ContentView: View {
                 isEligible: !self.settings.shouldShowOnboarding && !self.showsFluidIntelligenceDemo &&
                     !self.asr.isRunningOrStarting && self.asr.activeExclusiveActivity == nil &&
                     !self.asr.showError && !self.showRestartPrompt,
-                onExplore: self.navigateToApp
+                onExplore: self.exploreReleaseFeature
             ))
+            .sheet(isPresented: self.$releaseNavigation.showsAnalyticsPrivacy) { AnalyticsPrivacyView() }
             .sheet(isPresented: self.$showsFluidIntelligenceDemo) {
                 FluidIntelligenceDemoView(
                     asr: self.asr,
@@ -1308,6 +1310,16 @@ struct ContentView: View {
         self.navigateToApp(.customDictionary)
     }
 
+    private func exploreReleaseFeature(_ destination: ReleaseHighlightsContent.Destination) {
+        if let page = self.releaseNavigation.open(
+            destination,
+            profileRevision: self.appServices.privateProfiles.projectionRevision,
+            meetingsEnabled: self.settings.fluidMeetEnabled
+        ) {
+            self.navigateToApp(page)
+        }
+    }
+
     private func navigateToApp(_ destination: SidebarItem) {
         guard destination != .meetingTranscription || self.settings.fluidMeetEnabled else {
             self.openSettings(.fluidMeet)
@@ -1527,13 +1539,7 @@ struct ContentView: View {
     }
 
     private func openIssueReportingPage() {
-        guard let url = URL(string: AppBrand.supportURL.absoluteString) else { return }
-        NSWorkspace.shared.open(url)
-    }
-
-    private func openHelpDocumentation() {
-        guard let url = URL(string: AppBrand.websiteURL.absoluteString) else { return }
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(AppBrand.issueReportURL)
     }
 
     private var sidebarContent: some View {
@@ -1844,7 +1850,7 @@ struct ContentView: View {
 
     private var helpEntryButton: some View {
         Menu {
-            Button("Documentation", systemImage: "book") { self.openHelpDocumentation() }
+            Button("Documentation", systemImage: "book") { MenuBarManager.openHelpDocumentation() }
             Button("What’s new", systemImage: "gift") { self.showsReleaseHighlights = true }
                 .disabled(self.asr.isRunningOrStarting || self.asr.activeExclusiveActivity != nil || NotchContentState.shared.isProcessing)
             if PrivateAIProviderFeature.shared.isAvailable {
@@ -2398,6 +2404,7 @@ struct ContentView: View {
             coordinator: self.appServices.meetingSessionCoordinator,
             asrService: self.asr,
             historySnapshot: self.meetingHistorySnapshot,
+            recordingSettingsRequest: self.$releaseNavigation.recordingSettings,
             onOpenVoiceEngine: { self.selectedSidebarItem = .voiceEngine }
         )
     }

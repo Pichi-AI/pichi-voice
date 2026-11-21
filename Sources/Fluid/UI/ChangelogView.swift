@@ -13,33 +13,36 @@ struct ChangelogView: View {
     private let releaseLimit = 3
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: true) {
-            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-                if let errorMessage {
-                    Label(PichiLocalization.text(errorMessage), systemImage: "wifi.exclamationmark")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.warning)
-                }
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
+                    if let errorMessage {
+                        Label(PichiLocalization.text(errorMessage), systemImage: "wifi.exclamationmark")
+                            .font(self.theme.typography.caption)
+                            .foregroundStyle(self.theme.palette.warning)
+                    }
 
-                if self.releases.isEmpty, self.isRefreshing {
-                    self.loadingCard
-                } else if self.releases.isEmpty {
-                    self.emptyCard
-                } else {
-                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-                        ForEach(Array(self.releases.enumerated()), id: \.element) { index, release in
-                            ChangelogReleaseCard(
-                                release: release,
-                                isLatest: index == 0,
-                                theme: self.theme
-                            )
+                    if self.releases.isEmpty, self.isRefreshing {
+                        self.loadingCard
+                    } else if self.releases.isEmpty {
+                        self.emptyCard
+                    } else {
+                        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                            ForEach(Array(self.releases.enumerated()), id: \.element) { index, release in
+                                ChangelogReleaseCard(
+                                    release: release,
+                                    isLatest: index == 0,
+                                    theme: self.theme,
+                                    scrollTo: { proxy.scrollTo($0, anchor: .top) }
+                                )
+                            }
                         }
                     }
-                }
 
-                self.footer
+                    self.footer
+                }
+                .fluidPageContent(width: .reading)
             }
-            .fluidPageContent(width: .reading)
         }
         .fluidPageActions {
             Button {
@@ -160,11 +163,17 @@ private struct ChangelogCache: Codable {
     let savedAt: Date
 }
 
-private struct ChangelogReleaseCard: View {
+struct ChangelogReleaseCard: View {
     @Environment(\.locale) private var interfaceLocale
     let release: SimpleUpdater.ReleaseNote
     let isLatest: Bool
     let theme: AppTheme
+    let scrollTo: (Position) -> Void
+
+    struct Position: Hashable {
+        let release: SimpleUpdater.ReleaseNote
+        let index: Int
+    }
 
     var body: some View {
         ThemedCard(style: self.isLatest ? .prominent : .standard, hoverEffect: false) {
@@ -220,11 +229,14 @@ private struct ChangelogReleaseCard: View {
                     }
                 }
 
+                let blocks = self.noteBlocks
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                    ForEach(self.noteBlocks, id: \.self) { block in
+                    ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                         ChangelogNoteBlock(block: block, theme: self.theme)
+                            .id(Position(release: self.release, index: index))
                     }
                 }
+                .environment(\.openURL, OpenURLAction { self.openLink($0, in: blocks) })
             }
         }
     }
@@ -236,105 +248,74 @@ private struct ChangelogReleaseCard: View {
         return self.release.version
     }
 
-    private var noteBlocks: [ChangelogNoteBlock.Model] {
-        ChangelogNoteBlock.Model.make(
+    var noteBlocks: [ChangelogNote] {
+        ChangelogNote.make(
             from: self.release.notes,
             releaseTitle: self.release.title,
             version: self.release.version
         )
     }
+
+    func openLink(_ url: URL, in blocks: [ChangelogNote]) -> OpenURLAction.Result {
+        guard url.relativeString.hasPrefix("#"), let fragment = url.fragment(percentEncoded: false) else {
+            return .systemAction
+        }
+        if let index = blocks.firstIndex(where: { $0.anchor == fragment }) {
+            self.scrollTo(Position(release: self.release, index: index))
+            return .handled
+        }
+        guard let releaseURL = self.release.url,
+              let target = URL(string: url.relativeString, relativeTo: releaseURL) else { return .discarded }
+        return .systemAction(target.absoluteURL)
+    }
 }
 
 private struct ChangelogNoteBlock: View {
-    enum Kind: Hashable {
-        case heading
-        case bullet
-        case paragraph
-    }
-
-    struct Model: Hashable {
-        let kind: Kind
-        let text: String
-
-        static func make(from notes: String, releaseTitle: String, version: String) -> [Model] {
-            var blocks: [Model] = []
-
-            for rawLine in notes.components(separatedBy: .newlines) {
-                let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !line.isEmpty else { continue }
-
-                if line.hasPrefix("#") {
-                    let heading = String(line.drop { $0 == "#" })
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !self.shouldStop(atHeading: heading) else { break }
-                    guard heading != releaseTitle, heading != version else { continue }
-
-                    blocks.append(Model(kind: .heading, text: heading))
-                    continue
-                }
-
-                guard !self.isBoilerplateLine(line) else { continue }
-
-                if line.hasPrefix("- ") || line.hasPrefix("* ") {
-                    blocks.append(Model(kind: .bullet, text: String(line.dropFirst(2))))
-                    continue
-                }
-
-                blocks.append(Model(kind: .paragraph, text: line))
-            }
-
-            return blocks
-        }
-
-        private static func shouldStop(atHeading heading: String) -> Bool {
-            heading.localizedCaseInsensitiveContains("contributors") ||
-                heading.localizedCaseInsensitiveContains("need help")
-        }
-
-        private static func isBoilerplateLine(_ line: String) -> Bool {
-            let lowercased = line.lowercased()
-            return lowercased.contains("report issues:") ||
-                lowercased.contains("github.com/altic-dev/fluidvoice/issues") ||
-                lowercased.contains("github.com/altic-dev/fluid-oss/issues")
-        }
-    }
-
-    let block: Model
+    let block: ChangelogNote
     let theme: AppTheme
 
     var body: some View {
         switch self.block.kind {
-        case .heading:
+        case let .heading(level):
             Text(self.block.text)
-                .font(self.theme.typography.bodySmallStrong)
+                .font(level <= 2 ? self.theme.typography.bodyStrong : self.theme.typography.bodySmallStrong)
                 .foregroundStyle(self.theme.palette.primaryText)
+                .accessibilityAddTraits(.isHeader)
                 .padding(.top, 2)
         case .bullet:
             HStack(alignment: .firstTextBaseline, spacing: self.theme.metrics.spacing.sm) {
                 Circle()
                     .fill(self.theme.palette.accent.opacity(0.75))
                     .frame(width: 4, height: 4)
-                Text(self.markdownAttributedString(from: self.block.text))
+                Text(self.block.text)
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
         case .paragraph:
-            Text(self.markdownAttributedString(from: self.block.text))
+            if self.block.isSectionNavigation {
+                HStack(spacing: 0) {
+                    ForEach(Array(self.block.text.runs.enumerated()), id: \.offset) { _, run in
+                        let label = String(self.block.text[run.range].characters)
+                        if let url = run.link {
+                            Link(destination: url) { Text(verbatim: label) }
+                                .buttonStyle(.borderless)
+                        } else {
+                            Text(verbatim: label)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                }
                 .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private func markdownAttributedString(from text: String) -> AttributedString {
-        do {
-            return try AttributedString(
-                markdown: text,
-                options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-            )
-        } catch {
-            return AttributedString(text)
+            } else {
+                Text(self.block.text)
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case .divider:
+            Divider().accessibilityHidden(true)
         }
     }
 }

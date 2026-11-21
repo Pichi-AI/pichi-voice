@@ -8,7 +8,8 @@ private final class ReleaseHighlightsCoordinator {
     private var policy = ReleaseHighlightsPolicy(seenVersions: UserDefaults.standard.stringArray(forKey: ReleaseHighlightsPolicy.seenKey) ?? [])
 
     func request(owner: UUID, version: String, build: String, eligible: Bool, manual: Bool) -> ReleaseHighlightsPolicy.Session? {
-        self.policy.request(owner: owner, version: version, build: build, eligible: eligible, manual: manual)
+        self.policy.request(owner: owner, version: version, build: build, eligible: eligible, manual: manual,
+                            profileRevision: PrivateProfileService.shared.projectionRevision)
     }
 
     func requestManual(owner: UUID) { self.policy.requestManual(owner: owner) }
@@ -18,7 +19,7 @@ private final class ReleaseHighlightsCoordinator {
     func abandon(owner: UUID) { self.policy.abandon(owner: owner) }
 
     func finishDismiss(id: UUID, eligible: Bool) -> Bool? {
-        let result = self.policy.finishDismiss(id: id, eligible: eligible)
+        let result = self.policy.finishDismiss(id: id, eligible: eligible, profileRevision: PrivateProfileService.shared.projectionRevision)
         if result == true {
             UserDefaults.standard.set(self.policy.seenVersions, forKey: ReleaseHighlightsPolicy.seenKey)
         }
@@ -29,7 +30,7 @@ private final class ReleaseHighlightsCoordinator {
 struct ReleaseHighlightsPresenter: ViewModifier {
     @Binding var requested: Bool
     let isEligible: Bool
-    let onExplore: (SidebarItem) -> Void
+    let onExplore: (ReleaseHighlightsContent.Destination) -> Void
     @Environment(\.scenePhase) private var scenePhase
     @State private var owner = UUID()
     @State private var host = WindowReference()
@@ -41,7 +42,6 @@ struct ReleaseHighlightsPresenter: ViewModifier {
     @State private var pendingDestination: ReleaseHighlightsContent.Destination?
     private let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
     private let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
-    private let highlights = ReleaseHighlightsContent.current(hasPrivateAI: PrivateAIProviderFeature.shared.isAvailable)
     private let coordinator = ReleaseHighlightsCoordinator.shared
 
     private final class WindowReference {
@@ -60,7 +60,7 @@ struct ReleaseHighlightsPresenter: ViewModifier {
                 self.presentIfNeeded()
             })
             .sheet(isPresented: self.$isPresented, onDismiss: self.didDismiss) {
-                ReleaseHighlightsView(canExplore: self.canExplore, version: self.version, content: self.highlights, onClose: self.close)
+                ReleaseHighlightsView(canExplore: self.canExplore, content: .current(version: self.version), onClose: self.close)
             }
             .onAppear { self.visible = true; self.presentIfNeeded() }
             .onDisappear {
@@ -130,14 +130,40 @@ struct ReleaseHighlightsPresenter: ViewModifier {
         self.session = nil
         self.pendingDestination = nil
         if result == true, self.canExplore, self.visible, let destination {
-            switch destination {
-            case .meetings: self.onExplore(.meetingTranscription)
-            case .dashboard: self.onExplore(.welcome)
-            case .aiProviders: self.onExplore(.aiEnhancements)
-            case .voiceEngine: self.onExplore(.voiceEngine)
-            }
+            self.onExplore(destination)
         } else if result == false {
             self.presentIfNeeded()
+        }
+    }
+}
+
+/// UI navigation only. Opening a release card must never admit capture or write a privacy preference.
+struct ReleaseHighlightsNavigation {
+    struct RecordingSettingsRequest: Equatable {
+        var profileRevision: UUID?
+
+        mutating func consume(for visibleRevision: UUID?) -> Bool {
+            defer { self.profileRevision = nil }
+            guard let visibleRevision else { return false }
+            return self.profileRevision == visibleRevision
+        }
+    }
+
+    var recordingSettings = RecordingSettingsRequest()
+    var showsAnalyticsPrivacy = false
+
+    mutating func open(_ feature: ReleaseHighlightsContent.Destination, profileRevision: UUID,
+                       meetingsEnabled: Bool) -> SidebarItem? {
+        switch feature {
+        case .meetings: return .meetingTranscription
+        case .voiceEngine: return .voiceEngine
+        case .changelog: return .changelog
+        case .analyticsPrivacy:
+            self.showsAnalyticsPrivacy = true
+            return nil
+        case .meetingSources:
+            self.recordingSettings.profileRevision = meetingsEnabled ? profileRevision : nil
+            return .meetingTranscription
         }
     }
 }

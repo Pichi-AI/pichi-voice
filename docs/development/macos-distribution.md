@@ -110,14 +110,14 @@ owned image detach, mount-state reconciliation and lock cleanup.
 
 Use the bilingual [GitHub release-notes guide](release-notes.md) and its template. The helper's generic draft body is a placeholder; apply the reviewed English/Russian notes before publication. Description-only corrections preserve published assets, tags and Latest selection.
 
+Review the exact version's built-in [post-update cards](../whats-new.md#checking-the-exact-release) before archiving. `prepare` checks the same selection before creating release artifacts. A maintenance release can record an explicit history-only decision.
+
 ### Freeze the reviewed source and archive once
 
 Integrate the updater, signed distribution configuration and release tooling,
 complete independent review and required unit/integration tests, then pin the
 full combined commit on `origin/main`. Use a clean checkout of exactly that
-commit, with no untracked files. The release helper checks HEAD, origin identity,
-a freshly fetched main ancestry and source cleanliness on every non-plan command.
-It does not switch branches, merge, build, sign or install anything.
+commit, with no untracked files. The offline `review-highlights` command checks HEAD, origin identity and source cleanliness, and compiles the card definition. The artifact stages (`prepare`, `draft`, `publish` and `verify`) also fetch `origin/main` and check the pinned commit’s ancestry before proceeding. They use the operator’s existing repository access. The release helper never builds, signs or installs the application.
 
 The signed `Contents/Resources/brand-distribution.json` must contain
 `formatVersion: 1`, `updatesEnabled: true`,

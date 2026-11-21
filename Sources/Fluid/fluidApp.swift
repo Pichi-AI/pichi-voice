@@ -70,6 +70,10 @@ struct FluidApp: App {
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+            CommandGroup(replacing: .help) {
+                Button(PichiLocalization.text("Documentation")) { MenuBarManager.openHelpDocumentation() }
+                    .keyboardShortcut("?", modifiers: .command)
+            }
             CommandGroup(after: .textEditing) {
                 Button(PichiLocalization.text("Find")) {
                     NotificationCenter.default.post(name: .sidebarSearchFocusRequested, object: nil)

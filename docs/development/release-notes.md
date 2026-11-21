@@ -52,6 +52,8 @@ State the supported platform and installation or update steps.
 **Changes / Изменения:** links to the relevant pull requests.
 ```
 
+A release also has a short native [What’s New selection](../whats-new.md#selecting-highlights-for-a-pichi-voice-release). Choose its cards from the same verified changes and link each action to the corresponding screen.
+
 ## Publication and corrections
 
 The release helper's generic draft description is a placeholder. Prepare the bilingual body in a private operator file outside the four public release assets, then apply it to the owned draft before publication, for example with `gh release edit TAG --repo Pichi-AI/pichi-voice --notes-file /absolute/path/notes.md`. Continue publishing through the existing helper and its publication lock. This convention adds no parallel release mechanism.

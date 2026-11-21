@@ -46,6 +46,15 @@ nonisolated struct BrandPackage: Codable, Equatable, Sendable {
         try self.links?.validate()
     }
 
+    /// Previously exported profiles use their own website as the help destination.
+    func documentationURL(for locale: Locale) -> URL? {
+        let routes = self.links?.documentation
+        let exact = routes?[locale.identifier.replacingOccurrences(of: "_", with: "-")]
+        let base = locale.language.languageCode.flatMap { routes?[$0.identifier] }
+        let target = exact ?? base ?? routes?["default"]
+        return URL(string: target ?? self.profile.website)
+    }
+
     func encoded() throws -> Data {
         try self.validate()
         let encoder = JSONEncoder()
@@ -58,9 +67,15 @@ nonisolated struct BrandPackage: Codable, Equatable, Sendable {
 
 nonisolated struct BrandLinks: Codable, Equatable, Sendable {
     var repository: String?
+    var issueReport: String?
+    var documentation: [String: String]?
 
     func validate() throws {
         if let repository { try BrandProfile.validateHTTPS(repository) }
+        if let issueReport { try BrandProfile.validateHTTPS(issueReport) }
+        if let documentation {
+            for url in documentation.values { try BrandProfile.validateHTTPS(url) }
+        }
     }
 }
 

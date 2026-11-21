@@ -23,7 +23,7 @@ Rejecting a substitution provides negative feedback without deleting the diction
 
 ## Meetings on Mac
 
-Start a recording from Recordings. Grant screen/system-audio access for computer-audio recording and check your selected sources.
+Open **Pichi Meet** in the sidebar, choose your audio sources and start recording. Grant screen/system-audio access for computer-audio recording.
 
 Microphone capture is separately controlled. Pausing, switching off Pichi's microphone and muting inside a conferencing app have different meanings. Automatic conference mute observation depends on client support and permissions. Use Pichi Voice's own control for direct microphone admission.
 
@@ -35,9 +35,15 @@ Grant microphone access, select a downloaded compatible model and start recordin
 
 Finish setup and downloads before going offline. Core local recording and compatible local transcription work without a Pichi account. Before an important meeting, try the intended foreground, background and lock-screen use on your actual device and released build.
 
+## Version and updates on Mac
+
+Open **Settings > General** and look for **Updates**. The installed version appears beside **Check for Updates**. You can control automatic checks and background downloads separately. Installation and restart require your confirmation.
+
+Choose **Change logs** in the sidebar to read release notes. Published versions are also available in [Pichi Voice releases on GitHub](https://github.com/Pichi-AI/pichi-voice/releases).
+
 ## Review and export
 
-Open a saved session in Recordings to read its transcript and play retained audio. Correct automatic speaker labels and verify generated summaries against the transcript. Review which content you export; destination apps and services have their own access and retention controls. See [data handling](privacy.md).
+Open a saved meeting in Pichi Meet to read its transcript and play retained audio. Correct automatic speaker labels and verify generated summaries against the transcript. Review which content you export; destination apps and services have their own access and retention controls. See [data handling](privacy.md).
 
 ## Troubleshooting
 
@@ -51,6 +57,12 @@ Open a saved session in Recordings to read its transcript and play retained audi
 | Wrong word or speaker | Correct the result and check model/language selection |
 
 Follow the [support guide](../../SUPPORT.md) if the problem remains. Do not post private audio or unredacted diagnostics.
+
+## Feedback and analytics
+
+Send an idea or a private question to [Pichi support](mailto:hello@pichi.ai). To report a problem publicly, open [Pichi Voice issues](https://github.com/Pichi-AI/pichi-voice/issues/new/choose). Include the app version, macOS version, steps to reproduce and what you expected. Check screenshots for private content before attaching them.
+
+In Settings, choose **What we collect** to see whether your build sends analytics and which events it records. In builds with analytics enabled, the detailed metrics switch controls feature and performance statistics. Basic activity is collected separately. Audio and transcript text are excluded from analytics.
 
 ## Repeat the initial setup
 
