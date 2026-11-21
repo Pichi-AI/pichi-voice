@@ -238,6 +238,60 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertEqual(changed.inheritedFont, Font.system(.body, design: .rounded))
     }
 
+    func testThemePickerAppliesAndPersistsAppearance() throws {
+        let settings = SettingsStore.shared
+        let themeKey = SettingsStore.Keys.themePreference
+        let previousValue = settings.defaults.object(forKey: themeKey)
+        let previousAppearance = NSApp.appearance
+        defer {
+            settings.defaults.set(previousValue, forKey: themeKey)
+            NSApp.appearance = previousAppearance
+        }
+        settings.themePreference = .system
+
+        let locale = Locale(identifier: "en")
+        let host = NSHostingView(rootView: BrandSettingsSection().environment(\.locale, locale))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+
+        let control = try XCTUnwrap(self.descendants(of: NSSegmentedControl.self, in: host).first)
+        XCTAssertEqual(control.accessibilityLabel(), PichiLocalization.text("Theme", locale: locale))
+        let cell = try XCTUnwrap(control.cell as? NSSegmentedCell)
+        let segments = try XCTUnwrap(cell.accessibilityChildren()).compactMap { $0 as? NSAccessibilityProtocol }
+
+        func checkSelection(_ expected: SettingsStore.ThemePreference, appearance: NSAppearance.Name?,
+                            line: UInt = #line) {
+            XCTAssertEqual(settings.themePreference, expected, line: line)
+            XCTAssertEqual(settings.defaults.string(forKey: themeKey), expected.rawValue, line: line)
+            XCTAssertEqual(NSApp.appearance?.name, appearance, line: line)
+            let selectedLabel = (0..<control.segmentCount).contains(control.selectedSegment)
+                ? control.label(forSegment: control.selectedSegment) : nil
+            XCTAssertEqual(selectedLabel, PichiLocalization.text(expected.displayName, locale: locale), line: line)
+        }
+
+        // AppKit moves focus with Right Arrow and commits the selection with Space.
+        XCTAssertTrue(window.makeFirstResponder(control))
+        for (keyCode, characters): (UInt16, String) in [(124, "\u{F703}"), (49, " ")] {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                                       timestamp: ProcessInfo.processInfo.systemUptime,
+                                                       windowNumber: window.windowNumber, context: nil, characters: characters,
+                                                       charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode))
+            window.firstResponder?.keyDown(with: event)
+        }
+        checkSelection(.light, appearance: .aqua)
+
+        for (preference, appearance): (SettingsStore.ThemePreference, NSAppearance.Name?) in [(.dark, .darkAqua), (.system, nil)] {
+            let label = PichiLocalization.text(preference.displayName, locale: locale)
+            let segment = try XCTUnwrap(segments.first { $0.accessibilityLabel() == label })
+            _ = segment.accessibilityPerformPress()
+            checkSelection(preference, appearance: appearance)
+        }
+    }
+
     func testBrandPackageExplanationWrapsUnderConstrainedSettingsLayout() {
         let originalLanguage = getenv("PICHI_INTERFACE_LANGUAGE").map { String(cString: $0) }
         defer {
