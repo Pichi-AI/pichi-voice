@@ -51,6 +51,7 @@ final class MeetingDiarizationModelStore: ObservableObject {
     typealias Validate = @Sendable () throws -> MeetingNemotronModelArtifact
     typealias Install = @Sendable (_ progress: @escaping @Sendable (Double) -> Void) async throws
         -> MeetingNemotronModelArtifact
+    typealias InstallVoice = @Sendable (@escaping @Sendable (Double) -> Void) async throws -> Void
 
     @Published private(set) var state: State = .idle
     @Published private(set) var voiceMatchingReady = false
@@ -58,10 +59,11 @@ final class MeetingDiarizationModelStore: ObservableObject {
     private var attempt: Task<MeetingNemotronModelArtifact, Error>?
     private var voiceAttempt: Task<Void, Error>?
     private let validateVoice: @Sendable () throws -> Void
-    private let installVoice: @Sendable (@escaping @Sendable (Double) -> Void) async throws -> Void
+    private let installVoice: StagedInstallVoice
+    private let residency: MeetingModelResidencyCoordinator
     private let canDownload: @Sendable () -> Bool
     private let validate: Validate
-    private let install: Install
+    private let install: StagedInstall
 
     init(
         supportsOwnerVoiceVerification: Bool = true,
@@ -73,16 +75,20 @@ final class MeetingDiarizationModelStore: ObservableObject {
             )
             return try MeetingModelInstaller.validate(package)
         },
-        install: @escaping Install = MeetingDiarizationModelStore.downloadAndInstall,
+        install: Install? = nil,
         validateVoice: @escaping @Sendable () throws -> Void = MeetingSpeakerVoiceModelArtifacts.validate,
-        installVoice: @escaping @Sendable (@escaping @Sendable (Double) -> Void) async throws -> Void = MeetingSpeakerVoiceModelArtifacts.ensureInstalled
+        installVoice: InstallVoice? = nil,
+        stagedInstall: StagedInstall? = nil,
+        stagedInstallVoice: StagedInstallVoice? = nil,
+        residency: MeetingModelResidencyCoordinator? = nil
     ) {
+        self.residency = residency ?? .shared
         self.supportsOwnerVoiceVerification = supportsOwnerVoiceVerification
         self.canDownload = canDownload
         self.validate = validate
-        self.install = install
+        self.install = Self.resolveInstall(staged: stagedInstall, legacy: install)
         self.validateVoice = validateVoice
-        self.installVoice = installVoice
+        self.installVoice = Self.resolveInstallVoice(staged: stagedInstallVoice, legacy: installVoice)
     }
 
     /// Explicit candidate stores share validation, progress, cancellation and publication
@@ -98,7 +104,9 @@ final class MeetingDiarizationModelStore: ObservableObject {
                     at: MeetingModelInstaller.silenceEmbeddingURL(besides: package))
                 return try MeetingModelInstaller.validate(package, profile: profile)
             },
-            install: { progress in try await Self.downloadAndInstall(profile: profile, progress: progress) }
+            stagedInstall: { progress, publication in
+                try await Self.downloadAndInstallStaged(profile: profile, progress: progress, publication: publication)
+            }
         )
     }
 
@@ -106,10 +114,9 @@ final class MeetingDiarizationModelStore: ObservableObject {
     func prepareInBackground() {
         #if DEBUG
         // A view that appears in a hosted unit test (the settings sheet, the meetings view) would start the
-        // real download of the pinned model into the test home, and the task outlives the test: it holds the
-        // ordinary model admission until the download ends, so the next test that needs an exclusive attempt
-        // fails with "busy". Hosted tests own their model operations and call prepare/ensureInstalled
-        // themselves. A UI-test application runs in another process, where XCTestCase is not loaded.
+        // real download of the pinned model into the empty test home, and the task outlives the test. Hosted
+        // tests own their model operations and call prepare/ensureInstalled themselves. A UI-test application
+        // runs in another process, where XCTestCase is not loaded.
         if NSClassFromString("XCTestCase") != nil { return }
         #endif
         Task { _ = try? await self.ensureInstalled() }
@@ -148,15 +155,13 @@ final class MeetingDiarizationModelStore: ObservableObject {
             let prior = self.state
             self.state = .downloading(fraction: 0)
             do {
-                let admission = try await MeetingModelResidencyCoordinator.shared.beginOperationRetiringIdle(owner: "speaker-resources", modelID: "voice-matching")
-                defer { MeetingModelResidencyCoordinator.shared.endOperation(admission) }
-                try await self.installVoice { fraction in
+                try await self.installVoice({ fraction in
                     Task { @MainActor [weak self] in
                         guard let self, self.voiceAttempt != nil, !self.voiceMatchingReady,
                               case .downloading = self.state else { return }
                         self.state = .downloading(fraction: fraction)
                     }
-                }
+                }, .speakerResources(modelID: "voice-matching", residency: self.residency))
                 try await Task.detached(priority: .utility, operation: validate).value
                 self.voiceMatchingReady = true
                 self.state = prior
@@ -199,17 +204,16 @@ final class MeetingDiarizationModelStore: ObservableObject {
         }
 
         self.state = .downloading(fraction: 0)
-        // A valid installed readiness check never retires a matching recording preload.
-        // Actual artifact mutation yields the idle lease before touching installed storage.
+        // A valid installed readiness check never retires a matching recording preload. The staged
+        // install transfers without admission; publication, the actual artifact mutation, yields the
+        // idle lease and holds admission only while it changes installed storage (see the gate).
         do {
-            let admission = try await MeetingModelResidencyCoordinator.shared.beginOperationRetiringIdle(owner: "speaker-resources", modelID: "speaker-separation")
-            defer { MeetingModelResidencyCoordinator.shared.endOperation(admission) }
-            let installed = try await self.install { fraction in
+            let installed = try await self.install({ fraction in
                 Task { @MainActor [weak self] in
                     guard let self, case .downloading = self.state else { return }
                     self.state = .downloading(fraction: fraction)
                 }
-            }
+            }, .speakerResources(modelID: "speaker-separation", residency: self.residency))
             self.state = .ready(installed)
             return installed
         } catch {
@@ -245,9 +249,35 @@ final class MeetingDiarizationModelStore: ObservableObject {
 
     /// The existing install operation can target an explicitly owned store. Test and
     /// mobile preflight use the same pinned download and publication as desktop setup.
+    /// The caller holds the model admission around the whole run, as before the staged form existed.
     nonisolated static func downloadAndInstall(
         to destination: URL, profile: MeetingNemotronModelProfile = .fast32SplitW8A8,
         progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> MeetingNemotronModelArtifact {
+        try await self.downloadAndInstallStaged(to: destination, profile: profile, progress: progress,
+                                                publication: .alreadyAdmitted)
+    }
+
+    /// The same download with admission held only for publication. `publication` is required: a
+    /// caller that mutates installed storage states its admission policy explicitly.
+    nonisolated static func downloadAndInstallStaged(
+        progress: @escaping @Sendable (Double) -> Void, publication: MeetingModelPublicationGate
+    ) async throws -> MeetingNemotronModelArtifact {
+        try await self.downloadAndInstallStaged(to: MeetingNemotronModelLocator.defaultPackageURL(),
+                                                progress: progress, publication: publication)
+    }
+
+    nonisolated static func downloadAndInstallStaged(
+        profile: MeetingNemotronModelProfile, progress: @escaping @Sendable (Double) -> Void,
+        publication: MeetingModelPublicationGate
+    ) async throws -> MeetingNemotronModelArtifact {
+        try await self.downloadAndInstallStaged(to: MeetingNemotronModelLocator.defaultPackageURL(profile: profile),
+                                                profile: profile, progress: progress, publication: publication)
+    }
+
+    nonisolated static func downloadAndInstallStaged(
+        to destination: URL, profile: MeetingNemotronModelProfile = .fast32SplitW8A8,
+        progress: @escaping @Sendable (Double) -> Void, publication: MeetingModelPublicationGate
     ) async throws -> MeetingNemotronModelArtifact {
         let staging = destination.deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("download-\(profile.cacheVersion)", isDirectory: true)
@@ -258,30 +288,13 @@ final class MeetingDiarizationModelStore: ObservableObject {
             requiredItems: Self.requiredDownloadItems(for: profile)
         )
         try await downloader.ensureModelsPresent(at: staging) { fraction, _ in progress(fraction) }
-        let downloaded = staging.appendingPathComponent(profile.packageFileName, isDirectory: true)
-        do {
-            let installed = try await Task.detached(priority: .utility) {
-                // Publish weights and both host assets in one immutable atomic directory swap.
-                try? FileManager.default.removeItem(at: downloaded)
-                try FileManager.default.createDirectory(at: downloaded, withIntermediateDirectories: false)
-                try FileManager.default.copyItem(
-                    at: staging.appendingPathComponent(profile.remoteModelPath),
-                    to: downloaded.appendingPathComponent(profile.compiledModelFileName))
-                for name in profile.hostFileNames {
-                    try FileManager.default.copyItem(at: staging.appendingPathComponent(name), to: downloaded.appendingPathComponent(name))
-                }
-                return try MeetingModelInstaller.install(from: downloaded, to: destination, profile: profile)
-            }.value
-            try? FileManager.default.removeItem(at: staging)
-            return installed
-        } catch MeetingModelInstaller.InstallError.wrongPackage {
-            // A damaged download would otherwise be "resumed" forever; start clean next time.
-            try? FileManager.default.removeItem(at: staging)
-            throw MeetingModelInstaller.InstallError.wrongPackage
-        }
+        return try await self.publishStaged(from: staging, to: destination, profile: profile, publication: publication)
     }
 
     nonisolated static func userMessage(for error: Error) -> String {
+        // A meeting attempt started while the files were transferring: the download is fine and the
+        // retry reuses it. Show the coordinator's existing retriable message.
+        if let busy = error as? MeetingModelResidencyError, case .busy = busy { return busy.localizedDescription }
         if error is MeetingModelInstaller.InstallError {
             return PichiLocalization.text("The downloaded speaker model was damaged. Try again.")
         }
