@@ -77,10 +77,12 @@ if let pod_archive_path = ProcessInfo.processInfo.environment["ORT_POD_LOCAL_PAT
     package.targets.append(Target.binaryTarget(name: "onnxruntime", path: pod_archive_path))
 
 } else {
-    // ORT release
+    // ORT release. Pichi hosts the identical archive (see PICHI_VENDORING.md): the former
+    // https://download.onnxruntime.ai/pod-archive-onnxruntime-c-1.24.2.zip stopped serving it.
+    // SwiftPM verifies the SHA-256 checksum below on every download.
     package.targets.append(
        Target.binaryTarget(name: "onnxruntime",
-                           url: "https://download.onnxruntime.ai/pod-archive-onnxruntime-c-1.24.2.zip",
+                           url: "https://github.com/Pichi-AI/pichi-voice/releases/download/deps-onnxruntime-c-1.24.2/pod-archive-onnxruntime-c-1.24.2.zip",
                            // SHA256 checksum
                            checksum: "f7100a992d2a8135168c8afd831e6a58b465349101982aa58b3e11d36e600b54")
     )
