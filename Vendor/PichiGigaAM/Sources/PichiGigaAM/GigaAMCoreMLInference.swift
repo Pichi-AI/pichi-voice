@@ -32,9 +32,12 @@ final class GigaAMCoreMLInference {
     private var logitsName: String?
     private var lengthName: String?
     var isLoaded: Bool { self.model != nil }
+    var capacity: Int { self.featureFrameCount }
 
     init(packageURL: URL, featureFrameCount: Int) throws {
-        guard (2_199...8_000).contains(featureFrameCount) else { throw GigaAMError.incompatibleModel }
+        guard featureFrameCount == 599 || (2_199...8_000).contains(featureFrameCount) else {
+            throw GigaAMError.incompatibleModel
+        }
         self.featureFrameCount = featureFrameCount
         self.compiledURL = try MLModel.compileModel(at: packageURL)
     }
@@ -45,12 +48,16 @@ final class GigaAMCoreMLInference {
     }
 
     func load(gpu: Bool) throws {
+        try self.load(computeUnits: gpu ? .cpuAndGPU : .cpuOnly)
+    }
+
+    func load(computeUnits: MLComputeUnits) throws {
         self.model = nil
         self.logitsName = nil
         self.lengthName = nil
         try Task.checkCancellation()
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = gpu ? .cpuAndGPU : .cpuOnly
+        configuration.computeUnits = computeUnits
         let model = try MLModel(contentsOf: self.compiledURL, configuration: configuration)
         let inputs = model.modelDescription.inputDescriptionsByName
         guard inputs["features"]?.multiArrayConstraint?.shape.map(\.intValue) == [1, GigaAMFrontend.melCount, self.featureFrameCount],

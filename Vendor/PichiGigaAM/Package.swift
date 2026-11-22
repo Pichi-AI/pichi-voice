@@ -20,6 +20,7 @@ let package = Package(
                 .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
                 .product(name: "TranscribeCpp", package: "TranscribeCpp"),
             ],
+            resources: [.copy("Resources/gigaam-599.recipe")],
             linkerSettings: [.linkedFramework("Accelerate"), .linkedFramework("CoreML"), .linkedFramework("Metal")]
         ),
         .testTarget(name: "PichiGigaAMTests", dependencies: ["PichiGigaAM"]),
