@@ -229,6 +229,9 @@ protocol TranscriptionProvider {
     /// Current prepared execution policy, or nil when the provider does not report it.
     var executionStatus: TranscriptionExecutionStatus? { get }
 
+    /// Keep preview starts on the capture clock when the admitted backend can sustain it.
+    @MainActor var usesFixedPreviewCadence: Bool { get }
+
     /// Download/prepare models for transcription.
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws
 
@@ -303,6 +306,7 @@ protocol TranscriptionProvider {
 
 // Default implementation for optional methods
 extension TranscriptionProvider {
+    @MainActor var usesFixedPreviewCadence: Bool { false }
     var pronunciationProfileModelKey: String? { nil }
     var executionStatus: TranscriptionExecutionStatus? { nil }
     @MainActor func beginAdmittedTranscription(leaseID: UUID) throws {}

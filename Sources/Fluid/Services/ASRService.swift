@@ -219,6 +219,12 @@ final class StreamingTaskLifecycle {
     private var active: (sessionID: Int, operationID: UUID, task: Task<Void, Never>)?
     private var drainWaiters: [UUID: (operationID: UUID, continuation: CheckedContinuation<Bool, Never>, timer: Task<Void, Never>)] = [:]
 
+    /// The next future tick. An overrun skips expired ticks instead of queueing previews.
+    static func nextPreviewDelay(interval: UInt64, origin: UInt64?, now: UInt64) -> UInt64 {
+        guard let origin, now >= origin, interval > 0 else { return interval }
+        return interval - (now - origin) % interval
+    }
+
     var hasScheduledIdleWork: Bool { self.scheduler != nil }
     var hasActiveWork: Bool { self.active != nil }
     var pendingDrainCount: Int { self.drainWaiters.count }
@@ -2372,6 +2378,7 @@ final class ASRService: ObservableObject {
     // Streaming transcription state (no VAD)
     private let streamingTaskLifecycle = StreamingTaskLifecycle()
     private var streamingWorkState = StreamingTranscriptionWorkState()
+    private var streamingClockOrigin: UInt64 = 0
     private var streamingSchedulingSessionID: Int?
     private let recordingBufferHandoffGate = RecordingBufferHandoffGate()
     private var timedOutStreamingHandoff: (sessionID: Int, token: RecordingBufferHandoffGate.Token, lease: ASRActivityLease?)?
@@ -7688,6 +7695,7 @@ final class ASRService: ObservableObject {
         _ = self.streamingTaskLifecycle.cancelScheduler()
         guard self.isAsrReady else { return }
         self.streamingSchedulingSessionID = self.benchmarkSessionID
+        self.streamingClockOrigin = DispatchTime.now().uptimeNanoseconds
 
         DebugLogger.shared.debug(
             "Starting streaming transcription task (interval: \(self.streamingChunkDurationSeconds)s, minSamples: \(self.minimumStreamingPreviewSamples))",
@@ -7754,10 +7762,13 @@ final class ASRService: ObservableObject {
             self.streamingHealthCheckCount = 0
         }
 
-        self.scheduleNextStreamingChunk(
-            sessionID: sessionID,
-            delayNanoseconds: UInt64(self.streamingChunkDurationSeconds * 1_000_000_000)
+        let interval = UInt64(self.streamingChunkDurationSeconds * 1_000_000_000)
+        let delay = StreamingTaskLifecycle.nextPreviewDelay(
+            interval: interval,
+            origin: self.transcriptionProvider.usesFixedPreviewCadence ? self.streamingClockOrigin : nil,
+            now: DispatchTime.now().uptimeNanoseconds
         )
+        self.scheduleNextStreamingChunk(sessionID: sessionID, delayNanoseconds: delay)
     }
 
     private func processStreamingChunk(sessionID: Int, operationID: UUID) async {
@@ -7979,7 +7990,7 @@ final class ASRService: ObservableObject {
 
             // If transcription takes longer than the interval, skip next to prevent queue buildup
             // This allows slower machines to still work without overwhelming the system
-            if duration > self.streamingChunkDurationSeconds {
+            if duration > self.streamingChunkDurationSeconds, !self.transcriptionProvider.usesFixedPreviewCadence {
                 DebugLogger.shared.debug(
                     "⚠️ Transcription slow (\(String(format: "%.2f", duration))s > \(self.streamingChunkDurationSeconds)s), skipping next chunk",
                     source: "ASRService"
