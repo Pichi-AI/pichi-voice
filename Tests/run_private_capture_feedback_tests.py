@@ -112,6 +112,11 @@ def main():
     real_verify_body = real_verifier[real_verify_start:real_verifier.index("\n    }\n", real_verify_start) + len("\n    }")]
     recovery_policy = "\n".join("@MainActor\n" + declaration(real_verifier, marker) for marker in (
         "final class PasteRecoveryEvidence {", "final class PasteRecoveryInbox {", "final class PasteRecoverySequence {"))
+    # The probe drives cancellation through verify's own `wait` seam; fail if the real signature or guard drifts.
+    assert real_verify_body.count("wait: (TimeInterval) async -> Bool") == 1, \
+        "PasteVerifier.verify no longer takes the wait seam; update PasteWaitGate in Tests/PrivateCaptureFeedbackTests.swift"
+    assert real_verify_body.count('guard await wait(delay), !Task.isCancelled else { return .unknown(reason: "cancelled") }') == 1, \
+        "PasteVerifier.verify changed its cancellation guard after a pause; re-check the cancellation cases of the probe"
     real_timing = "\n".join(line for line in real_verifier.splitlines() if line.startswith((
         "    nonisolated static let firstCheckDelay:", "    nonisolated static let secondCheckDelay:", "    nonisolated static let finalCheckDelay:"
     )))
