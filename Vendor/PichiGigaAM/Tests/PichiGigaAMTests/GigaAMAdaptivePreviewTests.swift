@@ -56,6 +56,48 @@ final class GigaAMAdaptivePreviewTests: XCTestCase {
         XCTAssertEqual(valid.stats.shortCalls, 1)
     }
 
+    func testDeltasAgreeWithFullPrefixesAndClosingRetiresTheLease() async throws {
+        let decoder: GigaAMAdaptivePreview.Decoder = { samples, _ in
+            [.init(text: "слово", start: 0, end: min(0.25, Double(samples.count) / 16_000), confidence: 1)]
+        }
+        let direct = GigaAMAdaptivePreview(decode: decoder)
+        let delta = GigaAMAdaptivePreview(decode: decoder)
+        let audio = self.audio(25)
+        var previous = 0
+        for end in stride(from: 8_000, through: audio.count, by: 8_000) {
+            let full = try await direct.preview(growingSamples: Array(audio[..<end]))
+            let appended = try await delta.preview(appendingSamples: Array(audio[previous..<end]), totalSampleCount: end)
+            XCTAssertEqual(full.words, appended.words)
+            previous = end
+        }
+        do {
+            _ = try await delta.preview(appendingSamples: [1], totalSampleCount: previous + 2)
+            XCTFail("An input gap must switch to the canonical engine")
+        } catch GigaAMError.invalidAudio {}
+        await delta.close()
+        do {
+            _ = try await delta.preview(growingSamples: [])
+            XCTFail("Retired lease returned text")
+        } catch {}
+    }
+
+    func testPhraseCheckpointIsVerifiedOnceAfterItSettlesAndTheMicrophoneCanContinue() async throws {
+        let word = GigaAMWordTiming(text: "голос", start: 0, end: 0.2, confidence: 1)
+        let stream = GigaAMAdaptivePreview { _,_ in [word] }
+        let loud = [Float](repeating: 0.1, count: 8_000), quiet = [Float](repeating: 0, count: 8_000)
+        _ = try await stream.preview(growingSamples: loud)
+        for n in [16_000, 24_000] {
+            let atPause = try await stream.preview(appendingSamples: quiet, totalSampleCount: n)
+            XCTAssertTrue(atPause.needsCanonicalCheckpoint)
+            try await stream.acceptCanonicalCheckpoint([word], sampleCount: n)
+        }
+        let settled = try await stream.preview(appendingSamples: quiet, totalSampleCount: 32_000)
+        XCTAssertFalse(settled.needsCanonicalCheckpoint)
+        let resumed = try await stream.preview(appendingSamples: loud, totalSampleCount: 40_000)
+        XCTAssertEqual(resumed.stats.shortCalls, 1)
+        XCTAssertFalse(resumed.needsCanonicalCheckpoint)
+    }
+
     func testCancelledDecoderDoesNotCommitItsResult() async throws {
         actor Decoder {
             var calls = 0

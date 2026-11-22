@@ -304,6 +304,17 @@ protocol TranscriptionProvider {
     var shouldClearCacheAfterCancellation: Bool { get }
 }
 
+enum IncrementalPreviewRequest: Error {
+    case needsFullAudio
+}
+
+/// Providers using the existing append-only microphone route. A failed delta retries the
+/// full PCM prefix through the same admitted provider and executor.
+nonisolated protocol IncrementalDictationPreviewProviding: AnyObject {
+    @MainActor func incrementalPreviewDeltaStart(totalSampleCount: Int) -> Int?
+    func transcribeStreamingDelta(_ newSamples: [Float], totalSampleCount: Int) async throws -> ASRTranscriptionResult
+}
+
 // Default implementation for optional methods
 extension TranscriptionProvider {
     @MainActor var usesFixedPreviewCadence: Bool { false }

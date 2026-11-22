@@ -7828,10 +7828,10 @@ final class ASRService: ObservableObject {
             return
         }
 
-        // Once FluidAudio has an incremental session, copy only newly captured PCM.
+        // An admitted incremental session can consume only newly captured PCM.
         // Other providers and the first incremental preview still receive the full prefix.
         #if arch(arm64)
-        let incrementalProvider = self.transcriptionProvider as? FluidAudioProvider
+        let incrementalProvider = self.transcriptionProvider as? any IncrementalDictationPreviewProviding
         let incrementalDeltaStart = incrementalProvider?.incrementalPreviewDeltaStart(
             totalSampleCount: currentSampleCount
         )
@@ -7897,10 +7897,9 @@ final class ASRService: ObservableObject {
                         isRunning: self.isRunning,
                         schedulingSessionID: self.streamingSchedulingSessionID
                     ) else { return }
-                    DebugLogger.shared.warning(
-                        "Incremental delta preview failed; retrying with the full prefix",
-                        source: "ASRService"
-                    )
+                    if !(error is IncrementalPreviewRequest) {
+                        DebugLogger.shared.warning("Incremental delta preview failed; retrying with the full prefix", source: "ASRService")
+                    }
                     let fullPrefix = self.audioBuffer.getPrefix(currentSampleCount)
                     result = try await self.transcriptionExecutor.run { [provider = self.transcriptionProvider] in
                         let result = try await provider.transcribeStreaming(fullPrefix)
