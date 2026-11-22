@@ -10,7 +10,6 @@ enum GigaAMShortGraph {
 
     /// The caller verifies the model catalog descriptor and owns the staging directory.
     static func materialize(from verifiedLongPackage: URL, into destination: URL) throws {
-        let manager = FileManager.default
         let spec = "Data/com.apple.CoreML/model.mlmodel"
         let weights = "Data/com.apple.CoreML/weights/weight.bin"
         let original = try Data(contentsOf: verifiedLongPackage.appendingPathComponent(spec))
@@ -26,13 +25,20 @@ enum GigaAMShortGraph {
         guard SHA256.hash(data: derivative).map({ String(format: "%02x", $0) }).joined() == specSHA256 else {
             throw GigaAMError.checksumMismatch(spec)
         }
+        try self.stage(specification: derivative, from: verifiedLongPackage, into: destination)
+    }
+
+    static func stage(specification: Data, from package: URL, into destination: URL) throws {
+        let manager = FileManager.default
+        let spec = "Data/com.apple.CoreML/model.mlmodel"
+        let weights = "Data/com.apple.CoreML/weights/weight.bin"
         let toWeights = destination.appendingPathComponent(weights)
         try manager.createDirectory(at: toWeights.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try manager.copyItem(at: verifiedLongPackage.appendingPathComponent("Manifest.json"),
+        try manager.copyItem(at: package.appendingPathComponent("Manifest.json"),
                              to: destination.appendingPathComponent("Manifest.json"))
         // Foundation uses clonefile where possible; this also works across volumes.
-        try manager.copyItem(at: verifiedLongPackage.appendingPathComponent(weights), to: toWeights)
-        try derivative.write(to: destination.appendingPathComponent(spec), options: .atomic)
+        try manager.copyItem(at: package.appendingPathComponent(weights), to: toWeights)
+        try specification.write(to: destination.appendingPathComponent(spec), options: .atomic)
     }
 
     /// Records are an opcode (copy spec, literal, copy positional table) followed by
