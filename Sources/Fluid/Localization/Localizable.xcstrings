@@ -9040,6 +9040,57 @@
         }
       }
     },
+    "CPU is in use because accelerated recognition failed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU is in use because accelerated recognition failed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание продолжилось на CPU после ошибки ускорителя."
+          }
+        }
+      }
+    },
+    "CPU is in use because hardware acceleration is unavailable.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU is in use because hardware acceleration is unavailable."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание выполняется на CPU. Аппаратное ускорение недоступно."
+          }
+        }
+      }
+    },
+    "CPU is in use because the accelerator could not load the model.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU is in use because the accelerator could not load the model."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание выполняется на CPU, поскольку ускорителю не удалось загрузить модель."
+          }
+        }
+      }
+    },
     "CPU fallback: GPU execution failed.": {
       "extractionState": "manual",
       "localizations": {

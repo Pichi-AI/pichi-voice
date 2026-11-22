@@ -30,7 +30,8 @@ final class GigaAMPreviewFinalizationXCTests: XCTestCase {
         }
 
         var isReady = true
-        var executionStatus: GigaAMExecutionStatus? { .init(backend: .cpu) }
+        var executionStatus: GigaAMExecutionStatus? = .init(backend: .cpu)
+        func report(_ status: GigaAMExecutionStatus) { self.executionStatus = status }
         private(set) var calls: [Call] = []
         private(set) var discarded: [UUID] = []
         private(set) var attempts = 0
@@ -74,6 +75,16 @@ final class GigaAMPreviewFinalizationXCTests: XCTestCase {
         func setFailure() { self.failNext = true }
         func discardWindowReuse(for sessionID: UUID) { self.discarded.append(sessionID) }
         func unload() { self.isReady = false }
+    }
+
+    func testCoreMLRecoveryReportsTheAcceleratorFailureAfterSuccessfulFinal() async throws {
+        let output = GigaAMTranscript(text: "текст", confidence: 1, words: [], endOfUtteranceProbability: nil, processingDuration: 0)
+        try await withProvider(descriptor: GigaAMModelCatalog.coreMLModel, output: output) { provider, fixture, _ in
+            await fixture.report(.init(backend: .cpu, fallbackReason: .acceleratorInferenceFailed))
+            let final = try await provider.transcribeFinal([Float](repeating: 0, count: 16_000))
+            XCTAssertEqual(final.text, output.text)
+            XCTAssertEqual(provider.executionStatus?.fallbackReason, "CPU is in use because accelerated recognition failed.")
+        }
     }
 
     private func withProvider(

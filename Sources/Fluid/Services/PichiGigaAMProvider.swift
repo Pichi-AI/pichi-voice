@@ -718,9 +718,9 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         switch reportedReason {
         case .compatibleExportMissing: reason = "CPU fallback: a compatible GPU export is not installed."
         case .invalidExport: reason = "CPU fallback: the GPU export failed validation."
-        case .gpuUnavailable: reason = "CPU fallback: GPU execution is unavailable on this device."
-        case .acceleratorLoadFailed: reason = "CPU fallback: the GPU model could not be loaded."
-        case .acceleratorInferenceFailed: reason = "CPU fallback: GPU execution failed."
+        case .gpuUnavailable: reason = "CPU is in use because hardware acceleration is unavailable."
+        case .acceleratorLoadFailed: reason = "CPU is in use because the accelerator could not load the model."
+        case .acceleratorInferenceFailed: reason = "CPU is in use because accelerated recognition failed."
         case .explicitCPU: reason = "CPU was explicitly selected for diagnostics."
         case .unsupportedInputShape: reason = "CPU fallback: the GPU export does not support this input shape."
         case .incompatibleExport: reason = "CPU fallback: this imported export does not support GPU execution."
