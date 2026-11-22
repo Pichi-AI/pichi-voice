@@ -4,7 +4,7 @@ import Foundation
 /// A bounded GigaAM Core ML inference facade that keeps both the long and
 /// six-second graph ready for preview calls.
 ///
-/// The package directory is an already verified `coreMLModel` import. The
+/// Preparation verifies the model catalog artifacts before using them. The
 /// six-second graph is materialized once into a private staging directory and
 /// both compilation derivatives are retained until the actor is released.
 public actor GigaAMNeuralPreviewEngine {
@@ -85,6 +85,7 @@ public actor GigaAMNeuralPreviewEngine {
                                         vocabulary: self.vocabulary, audioDuration: duration)
         }
     }
+
     static func validate(_ samples: [Float], longContext: Bool) throws {
         let capacity = longContext ? longWindowSampleCount : shortWindowSampleCount
         guard !samples.isEmpty, samples.count <= capacity, samples.allSatisfy(\.isFinite) else {
@@ -93,4 +94,3 @@ public actor GigaAMNeuralPreviewEngine {
     }
 
 }
-

@@ -7,7 +7,7 @@ extension GigaAMModelDescriptor {
     nonisolated var libraryMetadata: SpeechModelLibraryMetadata {
         if case .gguf = self.format {
             return SpeechModelLibraryMetadata(
-                size: String(format: "~%.1f MiB", Double(self.modelByteCount ?? 0) / 1_048_576),
+                size: String(format: "~%.1f MiB", Double(PichiGigaAMModelStore.downloadSize(includingPreviewFor: self)) / 1_048_576),
                 processor: "GPU preferred; CPU fallback",
                 recommendedMemory: "4 GB+ RAM recommended",
                 features: "Punctuation, capitalization and text normalization. Quantized Q8 model for GPU and CPU.",
@@ -68,8 +68,24 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     static let shared = PichiGigaAMModelStore()
     static var defaultDownloadByteCount: Int64 {
         let descriptor = self.shared.downloadDescriptor
-        return descriptor.artifacts.compactMap(\.byteCount).reduce(0, +)
+        return self.downloadSize(includingPreviewFor: descriptor)
     }
+    static func downloadSize(includingPreviewFor descriptor: GigaAMModelDescriptor) -> Int64 {
+        let base = descriptor.artifacts.compactMap(\.byteCount).reduce(0, +)
+        if Self.supportsNeuralCompanion, descriptor == GigaAMModelCatalog.downloadableModel {
+            return base + GigaAMModelCatalog.coreMLModel.artifacts.compactMap(\.byteCount).reduce(0, +)
+        }
+        return base
+    }
+
+    static var supportsNeuralCompanion: Bool {
+        #if os(macOS) && arch(arm64)
+        return ProcessInfo.processInfo.physicalMemory >= 8_000_000_000
+        #else
+        return false
+        #endif
+    }
+
     static var supportsDefaultDownload: Bool { self.shared.downloadDescriptor.downloadBaseURL != nil }
     static var preferredLibraryMetadata: SpeechModelLibraryMetadata? { self.shared.downloadDescriptor.libraryMetadata }
     var defaultModelFingerprint: String { self.downloadDescriptor.fingerprint }
@@ -213,16 +229,11 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
 
     /// Keep optional preview assets outside import discovery and never borrow an imported model.
     func neuralCompanion(for selection: Selection) -> Selection? {
-        #if os(macOS) && arch(arm64)
-        guard selection.allowsDownload, selection.fallbackReason == nil,
-              selection.descriptor == GigaAMModelCatalog.downloadableModel,
-              ProcessInfo.processInfo.physicalMemory >= 8_000_000_000 else { return nil }
+        guard Self.supportsNeuralCompanion, selection.allowsDownload, selection.fallbackReason == nil,
+              selection.descriptor == GigaAMModelCatalog.downloadableModel else { return nil }
         return Selection(descriptor: GigaAMModelCatalog.coreMLModel,
                          root: selection.root.appendingPathComponent("DictationPreview", isDirectory: true),
                          allowsDownload: true)
-        #else
-        return nil
-        #endif
     }
 
     /// Preparation only downloads the pinned public source unless a verified import was
@@ -764,7 +775,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             do {
                 return try await self.neuralResult(preview, samples: samples, total: samples.count, delta: false)
             } catch is CancellationError { throw CancellationError() }
-            catch { self.disableNeuralPreview(preview) }
+            catch { try await self.disableNeuralPreview(preview) }
         }
         // Meeting captions have no admitted dictation lease and remain stateless.
         // Retain native feature evidence during preview so final correction does
@@ -795,7 +806,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         } catch is CancellationError { throw CancellationError() }
         catch let request as IncrementalPreviewRequest { throw request }
         catch {
-            self.disableNeuralPreview(preview)
+            try await self.disableNeuralPreview(preview)
             // ASRService replays the full buffer on the canonical provider after a failed delta.
             throw error
         }
@@ -833,11 +844,14 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         return ASRTranscriptionResult(text: words.map(\.text).joined(separator: " "), confidence: confidence)
     }
 
-    private func disableNeuralPreview(_ preview: GigaAMAdaptivePreview) {
-        guard self.adaptivePreview === preview else { return }
+    private func disableNeuralPreview(_ preview: GigaAMAdaptivePreview) async throws {
+        guard self.adaptivePreview === preview, let lease = self.admittedSource?.leaseID else { throw CancellationError() }
         self.adaptivePreview = nil
         self.previewSampleCount = 0
         self.usesFixedPreviewCadence = false
+        await preview.close()
+        try Task.checkCancellation()
+        guard self.admittedSource?.leaseID == lease else { throw CancellationError() }
         DebugLogger.shared.info("GigaAM dictation preview recovered on canonical engine", source: "GigaAM")
     }
 
