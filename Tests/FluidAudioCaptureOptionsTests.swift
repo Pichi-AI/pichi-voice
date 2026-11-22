@@ -139,11 +139,12 @@ nonisolated final class GigaAMPreferences: @unchecked Sendable {
     var importedID: String? = "private"
     func string(forKey key: String) -> String? { importedID }
 }
-nonisolated struct GigaAMModelDescriptor: Sendable {
+nonisolated struct GigaAMModelDescriptor: Sendable, Equatable {
     let id: String
     var fingerprint: String { "synthetic/" + id }
     func filesExist(in root: URL) -> Bool { root.lastPathComponent == id }
 }
+nonisolated enum GigaAMModelCatalog { static let coreMLModel = GigaAMModelDescriptor(id: "public-coreml") }
 nonisolated enum GigaAMError: Error { case incompatibleModel }
 // Inert acoustic neighbor. The runner projects the actual provider admission
 // methods, while this probe never extracts features or opens a model.

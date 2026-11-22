@@ -72,6 +72,7 @@ gigaam_selection += "\n" + method(gigaam, "    var directory: URL")
 gigaam_selection += "\n" + method(gigaam, "    private var registeredDescriptors:")
 gigaam_selection += "\n" + method(gigaam, "    func selectedArtifact()")
 gigaam_selection += "\n" + method(gigaam, "    private static func locate(")
+gigaam_selection += "\n" + method(gigaam, "    private static func previousCoreMLDirectory(")
 projection += "\nnonisolated final class PichiGigaAMModelStore {\n" + gigaam_selection.replace("    private ", "    ") + "\n// GIGAAM_STORE_FIELDS\n}\n"
 projection = projection.replace("// GIGAAM_STORE_FIELDS", """
     static let importedModelPreferenceKey = "pichiGigaAMImportedModelID"
