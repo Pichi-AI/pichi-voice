@@ -22,6 +22,8 @@ final nonisolated class ConcealablePreferences: UserDefaults, @unchecked Sendabl
 nonisolated struct SpeechModelPerformanceRatings { let speedRating: Int; let accuracyRating: Int; let speedPercent: Double; let accuracyPercent: Double }
 nonisolated struct SpeechModelLibraryMetadata { let size: String; let processor: String; let recommendedMemory: String; let features: String; let performanceRatings: SpeechModelPerformanceRatings; let performanceExplanation: String; let cardDescription: String?; let hardwareLabel: String? }
 @MainActor protocol TranscriptionProvider {}
+enum IncrementalPreviewRequest: Error { case needsFullAudio }
+@MainActor protocol IncrementalDictationPreviewProviding: TranscriptionProvider {}
 nonisolated final class DebugLogger {
     static let shared = DebugLogger()
     func log(_ message: String, source: String) {}

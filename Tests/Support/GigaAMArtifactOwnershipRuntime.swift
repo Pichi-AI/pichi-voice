@@ -84,3 +84,8 @@ public actor GigaAMRuntime {
 
 // GigaAMTranscript, GigaAMWordTiming and GigaAMExecutionProvider are real declarations
 // the runner appends; it also compiles the real GigaAMWindowReuse.swift beside this file.
+
+public actor GigaAMNeuralPreviewEngine {
+    public init(directory: URL) async throws { throw GigaAMError.incompatibleModel }
+    public func recognize(_ samples: [Float], longContext: Bool) throws -> [GigaAMWordTiming] { throw GigaAMError.notPrepared }
+}
