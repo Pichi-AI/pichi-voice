@@ -156,7 +156,7 @@ final class GigaAMPreviewFinalizationXCTests: XCTestCase {
     #if os(macOS) && arch(arm64)
     func testAdaptiveDictationReceivesOnlyTheDeltaAndUsesNativeFinalWithEvidence() async throws {
         let output = try self.transcript()
-        try await self.withProvider(output: output, liveDictation: true) { provider, native, _ in
+        try await self.withProvider(descriptor: GigaAMModelCatalog.coreMLModel, output: output, liveDictation: true) { provider, native, _ in
             provider.setNeuralDecoderForTesting { _, _ in [.init(text: "Черновик", start: 0, end: 0.2, confidence: 1)] }
             let lease = UUID()
             try provider.beginAdmittedTranscription(leaseID: lease)
@@ -187,7 +187,7 @@ final class GigaAMPreviewFinalizationXCTests: XCTestCase {
 
     func testFailedNeuralPreviewRemainsCanonicalForTheRestOfThatAdmission() async throws {
         let output = try self.transcript()
-        try await self.withProvider(output: output, liveDictation: true) { provider, _, _ in
+        try await self.withProvider(descriptor: GigaAMModelCatalog.coreMLModel, output: output, liveDictation: true) { provider, _, _ in
             provider.setNeuralDecoderForTesting { _, _ in throw GigaAMError.invalidOutput }
             let lease = UUID()
             try provider.beginAdmittedTranscription(leaseID: lease)

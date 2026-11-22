@@ -68,6 +68,10 @@ public actor GigaAMRuntime {
     public init() throws {}
     public var executionStatus: GigaAMExecutionStatus? { nil }
     public var isReady: Bool { false }
+    public var supportsAdaptivePreview: Bool { false }
+    public func recognizePreview(_ samples: [Float], longContext: Bool) throws -> [GigaAMWordTiming] {
+        throw GigaAMError.notPrepared
+    }
     public func beginAttempt() throws {}
     public func load(descriptor: GigaAMModelDescriptor, directory: URL,
                      executionProvider: GigaAMExecutionProvider = .automatic) async throws {
@@ -84,8 +88,3 @@ public actor GigaAMRuntime {
 
 // GigaAMTranscript, GigaAMWordTiming and GigaAMExecutionProvider are real declarations
 // the runner appends; it also compiles the real GigaAMWindowReuse.swift beside this file.
-
-public actor GigaAMNeuralPreviewEngine {
-    public init(directory: URL) async throws { throw GigaAMError.incompatibleModel }
-    public func recognize(_ samples: [Float], longContext: Bool) throws -> [GigaAMWordTiming] { throw GigaAMError.notPrepared }
-}

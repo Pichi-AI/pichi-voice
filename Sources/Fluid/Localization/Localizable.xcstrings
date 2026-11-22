@@ -32929,6 +32929,23 @@
         }
       }
     },
+    "Neural Engine / CPU": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neural Engine / CPU"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neural Engine / CPU"
+          }
+        }
+      }
+    },
     "Never": {
       "extractionState": "manual",
       "localizations": {
@@ -53046,7 +53063,7 @@
         }
       }
     },
-    "The published GigaAM v3 Core ML export runs on GPU by default. CPU is used only if GPU execution is unavailable or fails. Library percentages are relative product ratings, not measured accuracy.": {
+    "GigaAM uses one Core ML package for live text, final recognition and acoustic dictionary features. On Apple Silicon, Core ML can use the Neural Engine. Library percentages are relative product ratings, not measured accuracy.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
@@ -53067,7 +53084,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "The published GigaAM v3 Core ML export runs on GPU by default. CPU is used only if GPU execution is unavailable or fails. Library percentages are relative product ratings, not measured accuracy."
+                  "value": "GigaAM uses one Core ML package for live text, final recognition and acoustic dictionary features. On Apple Silicon, Core ML can use the Neural Engine. Library percentages are relative product ratings, not measured accuracy."
                 }
               }
             }
@@ -53091,7 +53108,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "Опубликованный экспорт GigaAM v3 для Core ML по умолчанию использует GPU. CPU включается только при недоступности или ошибке выполнения на GPU. Проценты в библиотеке являются относительными оценками, а не измеренной точностью."
+                  "value": "Один пакет GigaAM для Core ML показывает текст во время диктовки, распознаёт запись целиком и извлекает признаки для словаря. На Mac с Apple Silicon Core ML может использовать Neural Engine. Проценты в библиотеке отражают относительные оценки моделей."
                 }
               }
             }

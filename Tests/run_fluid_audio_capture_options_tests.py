@@ -99,7 +99,6 @@ gigaam_hooks += """
     var usesFixedPreviewCadence = false
     let neuralDecoder: (() -> Void)? = nil
     func admitNeuralPreview() {}
-    func startCompanionPreparation(allowDownload: Bool) {}
 """
 
 projection += "\n@MainActor final class PichiGigaAMProvider { let modelStore: PichiGigaAMModelStore; let expectedModelFingerprint: String?; let pronunciationStore = PronunciationDictionaryStore.shared; var loadedModelFingerprint: String?; var dictionaryUsesEncoderFeatures = false; var dictionarySnapshot: GigaAMDictionaryAcoustics.Snapshot?; var executionAttemptPending = false; var previewReuseSession: GigaAMWindowReuseSession?; var runtime: CaptureGigaAMRuntime?; init(store: PichiGigaAMModelStore, expected: String? = nil) { modelStore = store; expectedModelFingerprint = expected }\n" + gigaam_hooks.replace("    private ", "    ") + "\n}\n"

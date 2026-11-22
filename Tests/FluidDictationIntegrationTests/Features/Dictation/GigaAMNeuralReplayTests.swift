@@ -18,9 +18,8 @@ final class GigaAMNeuralReplayTests: XCTestCase {
         defer { prefs.removePersistentDomain(forName: suite) }
         let store = PichiGigaAMModelStore(directory: root.appendingPathComponent("Models"), preferences: prefs, environment: [:])
         let selection = try store.selectedArtifact()
-        guard let companion = store.neuralCompanion(for: selection), store.modelsExistOnDisk(selection: selection),
-              store.modelsExistOnDisk(selection: companion) else {
-            XCTFail("Both verified model directories are required")
+        guard selection.descriptor == GigaAMModelCatalog.coreMLModel, store.modelsExistOnDisk(selection: selection) else {
+            XCTFail("The verified public Core ML model directory is required")
             return
         }
         let prior = PrivateProfileStorage.current
@@ -44,7 +43,7 @@ final class GigaAMNeuralReplayTests: XCTestCase {
         var active: UUID?
         do {
             try await provider.prepare()
-            let ready = await provider.waitForNeuralPreviewForTesting()
+            let ready = provider.hasAdaptiveDecoderForTesting
             XCTAssertTrue(ready)
             var finals: [String] = []
             var timings: [[Double]] = []

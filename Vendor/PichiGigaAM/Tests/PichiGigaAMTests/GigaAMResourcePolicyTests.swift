@@ -2,45 +2,25 @@ import XCTest
 @testable import PichiGigaAM
 
 final class GigaAMResourcePolicyTests: XCTestCase {
-    func testBackgroundRecordingNeverAdmitsGPUAndPreservesArtifactAtEveryMemoryBudget() {
+    func testOnePlatformArtifactAcrossDevicesIncludingCPUFallback() {
+        #if os(macOS)
+        let expected = GigaAMModelCatalog.coreMLModel
+        XCTAssertFalse(expected.artifacts.contains { $0.path.hasSuffix(".gguf") })
+        #else
+        let expected = GigaAMModelCatalog.downloadableModel
+        XCTAssertEqual(expected.format, .gguf)
+        #endif
         for hasGPU in [true, false] {
-            for memory: UInt64? in [nil, 0, 600 * 1_024 * 1_024, 16_000_000_000] {
-                let policy = GigaAMResourcePolicy(hasGPU: hasGPU, physicalMemory: 16_000_000_000,
-                    availableProcessMemory: memory, requiresBackgroundExecution: true)
-                XCTAssertEqual(policy.gpuAdmissionReason, .backgroundExecution)
-                XCTAssertEqual(policy.defaultCPUReason, .backgroundExecution)
-                XCTAssertEqual(policy.preferredDownload.fingerprint, GigaAMModelCatalog.downloadableModel.fingerprint)
+            for memory: UInt64 in [2_000_000_000, 4_166_696_960, 16_000_000_000] {
+                for background in [true, false] {
+                    let policy = GigaAMResourcePolicy(hasGPU: hasGPU, physicalMemory: memory,
+                        requiresBackgroundExecution: background)
+                    XCTAssertEqual(policy.preferredDownload, expected)
+                    let reason: GigaAMExecutionStatus.FallbackReason? = background ? .backgroundExecution : (hasGPU ? nil : .gpuUnavailable)
+                    XCTAssertEqual(policy.defaultCPUReason, reason)
+                    XCTAssertEqual(policy.gpuAdmissionReason, reason)
+                }
             }
-        }
-    }
-
-    func testCapableGPUSelectsOnlyTheUniversalQuantizedArtifact() {
-        let policy = GigaAMResourcePolicy(hasGPU: true, physicalMemory: 16_000_000_000)
-        XCTAssertEqual(policy.preferredDownload, GigaAMModelCatalog.downloadableModel)
-        XCTAssertEqual(policy.preferredDownload.artifacts.count, 1)
-        XCTAssertNil(policy.defaultCPUReason)
-        XCTAssertNil(policy.gpuAdmissionReason)
-        XCTAssertNotEqual(policy.preferredDownload, GigaAMModelCatalog.coreMLModel)
-    }
-
-    func testSmallTabletsUseTheSameGGUFAndPreferGPURegardlessOfTotalRAM() {
-        for memory: UInt64 in [2_000_000_000, 3_000_000_000, 4_166_696_960] {
-            let policy = GigaAMResourcePolicy(hasGPU: true, physicalMemory: memory,
-                                              availableProcessMemory: 1_024 * 1_024 * 1_024)
-            XCTAssertEqual(policy.preferredDownload, GigaAMModelCatalog.downloadableModel)
-            XCTAssertEqual(policy.preferredDownload.format, .gguf)
-            XCTAssertNil(policy.defaultCPUReason)
-            XCTAssertNil(policy.gpuAdmissionReason)
-            XCTAssertEqual(policy.preferredDownload.artifacts.compactMap(\.byteCount).reduce(0, +), 272_151_136)
-        }
-    }
-
-    func testMissingGPUUsesTheSameGGUFOnCPU() {
-        for memory: UInt64 in [2_000_000_000, 16_000_000_000] {
-            let policy = GigaAMResourcePolicy(hasGPU: false, physicalMemory: memory)
-            XCTAssertEqual(policy.preferredDownload, GigaAMModelCatalog.downloadableModel)
-            XCTAssertEqual(policy.defaultCPUReason, .gpuUnavailable)
-            XCTAssertEqual(policy.gpuAdmissionReason, .gpuUnavailable)
         }
     }
 
@@ -51,7 +31,7 @@ final class GigaAMResourcePolicyTests: XCTestCase {
         let exhausted = GigaAMResourcePolicy(hasGPU: true, physicalMemory: 16_000_000_000,
                                              availableProcessMemory: 0)
         XCTAssertEqual(pressured.preferredDownload.fingerprint, normal.preferredDownload.fingerprint)
-        XCTAssertNil(pressured.defaultCPUReason, "Transient headroom is checked at preparation, not frozen by the store")
+        XCTAssertNil(pressured.defaultCPUReason)
         XCTAssertNil(normal.gpuAdmissionReason)
         XCTAssertEqual(pressured.gpuAdmissionReason, .memoryBudget)
         XCTAssertEqual(exhausted.gpuAdmissionReason, .memoryBudget)
