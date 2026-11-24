@@ -119,6 +119,25 @@ nonisolated enum DictionaryNegativeExampleStore {
                "Re-extraction crops the original focal interval in the new feature space")
         expect(profile.modelKey == legacy && profile.enrollments == old, "Persisted legacy provenance and original records stay intact")
         guard let first = term?.references.first else { preconditionFailure("Missing migrated reference") }
+        let offClock = [Float](repeating: 0.25, count: 16_001)
+        let ending = DictionaryAudioInspection(samples: offClock, recordedSampleCount: offClock.count,
+            frames: [window(count: 26).frames], words: [], selectedStart: 0.61,
+            selectedEnd: Double(offClock.count) / 16_000)
+        let tailRead = PronunciationDictionaryStore.CaptureRead(profiles: [profile], inspections: inspections.mapValues { _ in ending })
+        let tail = GigaAMDictionaryAcoustics.Snapshot(modelKey: active, generation: "test", enabled: true,
+            entries: entries, pronunciation: tailRead, negatives: nil)
+        let completedWindow = window(first: 300, count: 26)
+        let wholeCut = try await GigaAMEncoderDictionaryStorage.preparedWords(tail) { input in
+            guard input.count == 16_640, input.prefix(offClock.count).elementsEqual(offClock),
+                  input.dropFirst(offClock.count).allSatisfy({ $0 == 0 }) else {
+                throw PronunciationDictionaryStoreError.inconsistentEnrollment
+            }
+            return [completedWindow]
+        }
+        expect(wholeCut.words.first?.term.references.first?.frameCount == 11,
+               "A terminal off-clock selection uses one padded forward pass and retains every selected frame")
+        let brokenCut = try await GigaAMEncoderDictionaryStorage.preparedWords(tail) { _ in [newWindow] }
+        expect(brokenCut.words.isEmpty, "An incomplete or discontinuous output cannot be treated as a complete reference")
         for recordedKey in [legacy, active] {
             let veto = DictionaryNegativeExampleStore.CaptureRead(entryID: entry,
                 profileKey: DictionaryNegativeEvidenceResolver.profileKey(profile) + ":shared-features-v1" +

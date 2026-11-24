@@ -239,7 +239,16 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
             }
         }
         try requireOpenLease()
-        let extracted = try await reencode(inspection.samples)
+        let samples = inspection.samples
+        guard samples.count <= 240_000 else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+        // A valid legacy cut can include the final partial 40 ms encoder stride.
+        // Core ML's uncentered 320-sample STFT (hop 160) may otherwise omit it.
+        // Complete that analysis frame with silence, retaining the exact original cut.
+        let melFrames = (max(320, samples.count) - 320) / 160 + 1
+        let coveredEnd = ((melFrames + 3) / 4) * 640
+        let missing = range.upperBound > coveredEnd ? (640 - samples.count % 640) % 640 : 0
+        let input = missing == 0 ? samples : samples + [Float](repeating: 0, count: missing)
+        let extracted = try await reencode(input)
         try requireOpenLease()
         guard let cut = try self.focalFeatures(extracted, sampleCount: inspection.samples.count, range: range) else {
             throw PronunciationDictionaryStoreError.inconsistentEnrollment
