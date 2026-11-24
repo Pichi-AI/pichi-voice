@@ -42,9 +42,14 @@ final class GigaAMNeuralReplayTests: XCTestCase {
         }
         var active: UUID?
         do {
-            try await provider.prepare()
-            let ready = provider.hasAdaptiveDecoderForTesting
-            XCTAssertTrue(ready)
+            @MainActor func prepareAndCheck() async throws -> Bool {
+                try await provider.prepare()
+                return provider.isReady && provider.hasAdaptiveDecoderForTesting
+            }
+            async let first = prepareAndCheck()
+            async let second = prepareAndCheck()
+            let readiness = try await (first, second)
+            XCTAssertTrue(readiness.0 && readiness.1)
             var finals: [String] = []
             var timings: [[Double]] = []
             var reports: [[String: Any]] = []
