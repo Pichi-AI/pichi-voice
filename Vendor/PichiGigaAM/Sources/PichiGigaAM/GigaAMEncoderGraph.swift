@@ -5,7 +5,7 @@ import Foundation
 /// Core ML program. Both outputs come from one prediction with the original weights.
 enum GigaAMEncoderGraph {
     static let outputName = "layer_norm_95_cast_fp16"
-    static let specSHA256 = "8702b052a3d9821b28c7f8cd6732b09da5d1e6741dcb1977016a58ce39324ec1"
+    static let specSHA256 = "58d24a9c366146884d2cc777ad20c505ab11b46971c3db32597c89ef6b201824"
 
     static func materialize(from package: URL, into destination: URL) throws {
         let path = "Data/com.apple.CoreML/model.mlmodel"
@@ -14,7 +14,11 @@ enum GigaAMEncoderGraph {
             throw GigaAMError.checksumMismatch(path)
         }
 
-        let exposed = try exposingEncoder(in: original)
+        // The public fixed-shape export left padding visible to self-attention.
+        // Restore the key mask used by the variable-length encoder before exposing its features.
+        let masked = try GigaAMShortGraph.reconstruct(resource: "gigaam-attention",
+            original: original, expectedSize: 472_498) { _, _ in throw GigaAMError.incompatibleModel }
+        let exposed = try exposingEncoder(in: masked)
         guard digest(exposed) == specSHA256 else { throw GigaAMError.checksumMismatch(path) }
         try GigaAMShortGraph.stage(specification: exposed, from: package, into: destination)
     }
