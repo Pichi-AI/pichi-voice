@@ -563,6 +563,26 @@ import Darwin
         expect(try descriptorCount() == beforeExpanded + 384, "Expanded admission retains only bounded descriptors")
         expandedRead.close(leaseID: capacityLease)
         expect(try descriptorCount() == beforeExpanded, "Expanded admission releases all descriptors")
+        // Forty migrated words share 390 unique files. Their three-reference
+        // baselines require only 120 descriptors, so all forty must be usable.
+        let tail = retained.suffix(10)
+        let legacy = Array(expanded.dropLast()) + [Array(tail.prefix(5)), Array(tail.suffix(5))].map { captures in
+            PronunciationDictionaryProfile(dictionaryEntryID: UUID(), label: "Migrated", modelKey: "synthetic-family-b",
+                hiddenSize: 2, enrollments: captures)
+        }
+        try await capacityStore.replaceAllProfiles(legacy)
+        let beforeMigrating = try descriptorCount()
+        let migration = try capacityStore.admitCaptureRead(leaseID: capacityLease, modelKey: "new-artifact",
+            entryIDs: Set(legacy.map(\.dictionaryEntryID)), fallbackModelKey: "synthetic-family-b",
+            maximumReferencesPerProfile: 10, referenceSelection: { $0.enrollments })
+        expect(Set(migration.profiles.map(\.id)) == Set(legacy.map(\.id)), "Every eligible migrated word is admitted")
+        expect(legacy.allSatisfy { migration.matchingEnrollments(for: $0).starts(with: $0.enrollments.prefix(3)) },
+            "Every migrated word retains its baseline before another word receives optional references")
+        expect(legacy.reduce(0) { $0 + migration.matchingEnrollments(for: $1).count } == 384,
+            "Available migrated variants fill the remaining reference budget")
+        expect(try descriptorCount() == beforeMigrating + 384, "The migrated snapshot stays within the descriptor budget")
+        migration.close(leaseID: capacityLease)
+        expect(try descriptorCount() == beforeMigrating, "The migrated snapshot releases every descriptor")
         struct CapacityDocument: Encodable { let version = 1; let profiles: [PronunciationDictionaryProfile] }
         var malformedOptional = sharedFamily; malformedOptional.enrollments[0] = .init(values: [1], sourceFrameCount: 1, modelKey: malformedOptional.modelKey)
         try JSONEncoder().encode(CapacityDocument(profiles: [malformedOptional, exactDifferentWidth])).write(to: capacityURL, options: .atomic)

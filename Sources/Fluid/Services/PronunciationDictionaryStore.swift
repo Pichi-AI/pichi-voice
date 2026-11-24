@@ -318,13 +318,13 @@ actor PronunciationDictionaryStore {
             committed = true
             return true
         }
-        var exactSelections: [[PronunciationEnrollmentCapture]] = []
+        var deferredExtras: [(PronunciationDictionaryProfile, [PronunciationEnrollmentCapture])] = []
         for selected in exact {
             let captures = referenceSelection(selected)
             guard captures.count <= maximumReferencesPerProfile, captures.allSatisfy({ selected.enrollments.contains($0) }) else {
                 throw PronunciationDictionaryStoreError.inconsistentEnrollment
             }
-            exactSelections.append(captures)
+            deferredExtras.append((selected, captures))
             _ = try pinReferences(selected, captures: Array(captures.prefix(3)), optional: false)
         }
         var profiles = exact
@@ -341,11 +341,7 @@ actor PronunciationDictionaryStore {
                 guard try pinReferences(candidate, captures: baseline, optional: true) else { return }
                 profiles.append(candidate)
                 admittedEntries.insert(candidate.dictionaryEntryID)
-                if isFallback {
-                    for capture in captures.dropFirst(baseline.count) {
-                        _ = try pinReferences(candidate, captures: [capture], optional: true, append: true)
-                    }
-                }
+                if isFallback { deferredExtras.append((candidate, captures)) }
             } catch is CancellationError { throw CancellationError() }
             catch { /* An optional family reference cannot invalidate the mandatory exact snapshot. */ }
         }
@@ -353,11 +349,11 @@ actor PronunciationDictionaryStore {
             try admitOptional(index)
         }
         for index in shared.indices where !attempted.contains(index) { try admitOptional(index) }
-        // Mandatory exact baselines are all pinned before any optional extras.
+        // Pin the baselines for all exact and admitted fallback profiles before any extras.
         // Admit extras individually so a missing file or full budget cannot
         // prevent a different profile's baseline from being captured.
-        for (index, selected) in exact.enumerated() {
-            for capture in exactSelections[index].dropFirst(3) {
+        for (selected, captures) in deferredExtras {
+            for capture in captures.dropFirst(3) {
                 do { _ = try pinReferences(selected, captures: [capture], optional: true, append: true) }
                 catch is CancellationError { throw CancellationError() }
                 catch PronunciationDictionaryStoreError.staleEvidence { throw PronunciationDictionaryStoreError.staleEvidence }
