@@ -462,7 +462,7 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
         #endif
         let metadata = descriptor.libraryMetadata
         XCTAssertTrue(metadata.size.contains("MiB"))
-        #if os(macOS)
+        #if os(macOS) && arch(arm64)
         XCTAssertEqual(metadata.processor, "Neural Engine / CPU")
         #else
         XCTAssertEqual(metadata.processor, "GPU preferred; CPU fallback")

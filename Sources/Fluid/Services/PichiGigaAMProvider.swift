@@ -18,7 +18,7 @@ extension GigaAMModelDescriptor {
             )
         }
         if case .coreML = self.format {
-            #if os(macOS)
+            #if os(macOS) && arch(arm64)
             let processor = "Neural Engine / CPU"
             #else
             let processor = "GPU preferred; CPU fallback"
