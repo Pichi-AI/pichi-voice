@@ -475,18 +475,27 @@
         let before = ActualPasteVerifierProbe.Snapshot(element: element, pid: 123, role: "AXTextArea",
             value: "before", characterCount: 6, caret: CFRange(location: 6, length: 0))
         let readback = PasteReadbackDouble.shared
+        let realDelays = [ActualPasteVerifierProbe.firstCheckDelay, ActualPasteVerifierProbe.secondCheckDelay,
+                          ActualPasteVerifierProbe.finalCheckDelay]
+        // Cancellation lands while the worker is parked inside delay k + 1. Both outcomes a real sleep can have at that
+        // instant are covered: interrupted (false) and already elapsed when cancel arrives (true). The latter is the CI race.
         for completedReads in 0...2 {
-            readback.reset([before, before, before])
-            let worker = Task.detached { await ActualPasteVerifierProbe.verify(before: before, pastedText: "new") }
-            if completedReads == 0 {
-                try await Task.sleep(nanoseconds: 20_000_000)
-            } else {
-                while readback.readCount < completedReads { await Task.yield() }
+            for sleepOutcome in [false, true] {
+                readback.reset([before, before, before])
+                let gate = PasteWaitGate(passThrough: completedReads)
+                let worker = Task.detached {
+                    await ActualPasteVerifierProbe.verify(before: before, pastedText: "new", wait: { await gate.wait($0) })
+                }
+                await gate.waitUntilParked()
+                let parkedDelays = await gate.delays
+                worker.cancel()
+                await gate.finish(sleepOutcome)
+                let verdict = await worker.value
+                let name = "delay \(completedReads + 1), sleep \(sleepOutcome ? "elapsed" : "interrupted")"
+                check(parkedDelays == Array(realDelays[0...completedReads]), "Real verifier waits the real delays up to \(name)")
+                check(verdict == .unknown(reason: "cancelled"), "Real verifier returns a silent cancelled verdict during \(name)")
+                check(readback.readCount == completedReads, "Real verifier performs no AX read after cancellation during \(name)")
             }
-            worker.cancel()
-            let verdict = await worker.value
-            check(verdict == .unknown(reason: "cancelled"), "Real verifier returns a silent cancelled verdict during delay \(completedReads + 1)")
-            check(readback.readCount == completedReads, "Real verifier performs no AX read after cancellation during delay \(completedReads + 1)")
         }
         readback.reset([.init(element: element, pid: 123, role: "AXTextArea", value: "before new",
                               characterCount: 10, caret: CFRange(location: 10, length: 0))])
@@ -533,4 +542,33 @@ actor PasteVerificationGate {
     }
     func open() { releaseWaiter?.resume(); releaseWaiter = nil }
     func recordFocusRead(profile: PrivateProfileSnapshot) { focusReads.append(profile) }
+}
+
+/// Replaces the verifier's sleep so cancellation happens at a known point instead of after a wall-clock guess.
+/// The first `passThrough` waits return at once; the next one parks until `finish`, which then opens every later wait.
+actor PasteWaitGate {
+    private let passThrough: Int
+    private(set) var delays: [TimeInterval] = []
+    private var parked = false
+    private var result: Bool?
+    private var parkedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var resultWaiter: CheckedContinuation<Bool, Never>?
+    init(passThrough: Int) { self.passThrough = passThrough }
+    func wait(_ delay: TimeInterval) async -> Bool {
+        delays.append(delay)
+        if delays.count <= passThrough { return true }
+        if let result { return result }
+        parked = true
+        for waiter in parkedWaiters { waiter.resume() }
+        parkedWaiters.removeAll()
+        return await withCheckedContinuation { resultWaiter = $0 }
+    }
+    func waitUntilParked() async {
+        if !parked { await withCheckedContinuation { parkedWaiters.append($0) } }
+    }
+    func finish(_ value: Bool) {
+        result = value
+        resultWaiter?.resume(returning: value)
+        resultWaiter = nil
+    }
 }
