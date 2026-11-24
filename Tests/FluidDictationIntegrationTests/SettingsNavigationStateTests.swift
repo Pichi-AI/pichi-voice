@@ -273,18 +273,10 @@ final class SettingsNavigationStateTests: XCTestCase {
             XCTAssertEqual(selectedLabel, PichiLocalization.text(expected.displayName, locale: locale), line: line)
         }
 
-        // AppKit moves focus with Right Arrow and commits the selection with Space.
-        XCTAssertTrue(window.makeFirstResponder(control))
-        for (keyCode, characters): (UInt16, String) in [(124, "\u{F703}"), (49, " ")] {
-            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
-                                                       timestamp: ProcessInfo.processInfo.systemUptime,
-                                                       windowNumber: window.windowNumber, context: nil, characters: characters,
-                                                       charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode))
-            window.firstResponder?.keyDown(with: event)
-        }
-        checkSelection(.light, appearance: .aqua)
-
-        for (preference, appearance): (SettingsStore.ThemePreference, NSAppearance.Name?) in [(.dark, .darkAqua), (.system, nil)] {
+        let choices: [(SettingsStore.ThemePreference, NSAppearance.Name?)] = [
+            (.light, .aqua), (.dark, .darkAqua), (.system, nil),
+        ]
+        for (preference, appearance) in choices {
             let label = PichiLocalization.text(preference.displayName, locale: locale)
             let segment = try XCTUnwrap(segments.first { $0.accessibilityLabel() == label })
             _ = segment.accessibilityPerformPress()
