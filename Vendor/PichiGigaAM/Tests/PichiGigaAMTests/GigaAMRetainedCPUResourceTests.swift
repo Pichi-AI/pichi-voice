@@ -88,7 +88,7 @@ final class GigaAMRetainedCPUResourceTests: XCTestCase {
             resources.set(profile)
             let runtime = try GigaAMRuntime(resources: { resources.read() })
             do {
-                try await runtime.load(descriptor: profile.preferredDownload, directory: URL(fileURLWithPath: path))
+                try await runtime.load(descriptor: GigaAMModelCatalog.downloadableModel, directory: URL(fileURLWithPath: path))
                 let status = await runtime.executionStatus
                 XCTAssertEqual(status?.backend, backend)
                 XCTAssertEqual(status?.fallbackReason, reason)
@@ -128,7 +128,15 @@ final class GigaAMRetainedCPUResourceTests: XCTestCase {
             resources.set(.init(hasGPU: true, physicalMemory: 16_000_000_000, availableProcessMemory: 2_000_000_000))
             try await runtime.beginAttempt()
             let recovered = await runtime.executionStatus
+            #if os(macOS) && arch(arm64)
+            XCTAssertEqual(recovered?.backend, .neuralEngine)
+            let supportsEncoder = await runtime.supportsEncoderFeatureCapture
+            XCTAssertTrue(supportsEncoder)
+            let words = try await runtime.recognizePreview([Float](repeating: 0, count: 8_000), longContext: false)
+            XCTAssertTrue(words.isEmpty)
+            #else
             XCTAssertEqual(recovered?.backend, .gpu)
+            #endif
             XCTAssertNil(recovered?.fallbackReason)
             await runtime.unload()
         } catch { await runtime.unload(); throw error }

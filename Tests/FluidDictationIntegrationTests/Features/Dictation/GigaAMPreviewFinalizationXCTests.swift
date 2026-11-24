@@ -198,14 +198,23 @@ final class GigaAMPreviewFinalizationXCTests: XCTestCase {
 
     func testFailedNeuralPreviewRemainsCanonicalForTheRestOfThatAdmission() async throws {
         let output = try self.transcript()
-        try await self.withProvider(descriptor: GigaAMModelCatalog.coreMLModel, output: output, liveDictation: true) { provider, _, _ in
-            provider.setNeuralDecoderForTesting { _, _ in throw GigaAMError.invalidOutput }
+        try await self.withProvider(descriptor: GigaAMModelCatalog.coreMLModel, output: output, liveDictation: true) { provider, native, _ in
+            provider.setNeuralDecoderForTesting { _, _ in
+                if await native.attempts < 2 { throw GigaAMError.invalidOutput }
+                return [.init(text: "Снова", start: 0, end: 0.2, confidence: 1)]
+            }
             let lease = UUID()
             try provider.beginAdmittedTranscription(leaseID: lease)
             let fallback = try await provider.transcribeStreaming([Float](repeating: 0.1, count: 8_000))
             XCTAssertEqual(fallback.text, output.text)
             XCTAssertFalse(provider.usesFixedPreviewCadence)
             await provider.endAdmittedTranscription(leaseID: lease)
+            let next = UUID()
+            try provider.beginAdmittedTranscription(leaseID: next)
+            let restored = try await provider.transcribeStreaming([Float](repeating: 0.1, count: 8_000))
+            XCTAssertEqual(restored.text, "Снова")
+            XCTAssertTrue(provider.usesFixedPreviewCadence)
+            await provider.endAdmittedTranscription(leaseID: next)
         }
     }
     #endif

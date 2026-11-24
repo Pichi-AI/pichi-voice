@@ -628,11 +628,12 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             await self.refreshExecutionStatus(from: runtime)
             guard self.lifecycleGeneration == generation, self.runtime === runtime else { throw CancellationError() }
             if self.expectedModelFingerprint == nil, model.descriptor == GigaAMModelCatalog.coreMLModel,
-               try await runtime.prepareAdaptivePreview() {
+               await runtime.supportsAdaptivePreview {
+                _ = try await runtime.prepareAdaptivePreview()
                 guard self.lifecycleGeneration == generation, self.runtime === runtime else { throw CancellationError() }
                 self.neuralDecoder = { try await runtime.recognizePreview($0, longContext: $1) }
                 self.admitNeuralPreview()
-                DebugLogger.shared.info("GigaAM integrated Core ML preview and final ready", source: "GigaAM")
+                DebugLogger.shared.info("GigaAM integrated Core ML preview configured", source: "GigaAM")
             }
         }
         self.preparationTask = task
@@ -661,6 +662,17 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         }
     }
 
+    private func beginExecutionIfNeeded(_ runtime: any PichiGigaAMInferenceRuntime) async throws {
+        guard self.executionAttemptPending || self.admittedSource == nil else { return }
+        let lease = self.admittedSource?.leaseID
+        let generation = self.lifecycleGeneration
+        self.executionAttemptPending = false
+        try await runtime.beginAttempt()
+        try Task.checkCancellation()
+        guard self.lifecycleGeneration == generation, self.admittedSource?.leaseID == lease,
+              self.runtime === runtime, self.isReady else { throw CancellationError() }
+    }
+
     func transcribeDetailed(_ samples: [Float], captureEncoderFeatures: Bool = false,
                             reusingWindowsFor session: GigaAMWindowReuseSession? = nil) async throws -> GigaAMTranscript {
         try Task.checkCancellation()
@@ -668,12 +680,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         let generation = self.lifecycleGeneration
         let fingerprint = self.loadedModelFingerprint
         do {
-            if self.executionAttemptPending || self.admittedSource == nil {
-                self.executionAttemptPending = false
-                try await runtime.beginAttempt()
-                try Task.checkCancellation()
-                guard self.runtime === runtime, self.isReady else { throw CancellationError() }
-            }
+            try await self.beginExecutionIfNeeded(runtime)
             if let session {
                 guard session.isOpen, self.previewReuseSession === session,
                       self.admittedSource?.leaseID == session.id else { throw CancellationError() }
@@ -788,7 +795,8 @@ final class PichiGigaAMProvider: TranscriptionProvider {
 
     private func neuralResult(_ preview: GigaAMAdaptivePreview, samples: [Float], total: Int,
                               delta: Bool) async throws -> ASRTranscriptionResult {
-        guard let lease = self.admittedSource?.leaseID else { throw CancellationError() }
+        guard let lease = self.admittedSource?.leaseID, let runtime = self.runtime else { throw CancellationError() }
+        try await self.beginExecutionIfNeeded(runtime)
         let result = if delta {
             try await preview.preview(appendingSamples: samples, totalSampleCount: total)
         } else {

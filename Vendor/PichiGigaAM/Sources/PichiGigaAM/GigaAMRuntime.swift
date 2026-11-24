@@ -49,7 +49,17 @@ public actor GigaAMRuntime {
         return self.session != nil || self.coreML?.isLoaded == true || self.gguf?.isLoaded == true
     }
     public static var encoderFeatureAPIAvailable: Bool { TranscribeCpp.Session.nativeEncoderFeatureAPIAvailable }
-    public var supportsEncoderFeatureCapture: Bool { self.gguf?.supportsEncoderFeatures == true }
+    public var supportsEncoderFeatureCapture: Bool {
+        #if os(macOS)
+        if self.coreML?.isLoaded == true && self.descriptor == GigaAMModelCatalog.coreMLModel { return true }
+        #endif
+        return self.gguf?.supportsEncoderFeatures == true
+    }
+
+    public var supportsAdaptivePreview: Bool {
+        GigaAMNeuralPreviewEngine.isSupportedPlatform && self.descriptor == GigaAMModelCatalog.coreMLModel &&
+            !self.resources().requiresBackgroundExecution
+    }
 
     public func load(descriptor: GigaAMModelDescriptor, directory: URL, executionProvider: GigaAMExecutionProvider = .automatic) throws {
         try autoreleasepool {
@@ -182,6 +192,9 @@ public actor GigaAMRuntime {
     public func recognizePreview(_ samples: [Float], longContext: Bool) throws -> [GigaAMWordTiming] {
         try Task.checkCancellation()
         try GigaAMNeuralPreviewEngine.validate(samples, longContext: longContext)
+        if !longContext && self.shortCoreML == nil {
+            guard try self.prepareAdaptivePreview() else { throw GigaAMError.notPrepared }
+        }
         guard self.executionStatus?.backend == .neuralEngine,
               let backend = longContext ? self.coreML : self.shortCoreML,
               let vocabulary = self.vocabulary else { throw GigaAMError.notPrepared }
