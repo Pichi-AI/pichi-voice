@@ -15,7 +15,7 @@ struct BrandSettingsSection: View {
             HStack {
                 Text("Appearance").font(self.theme.typography.bodyStrong)
                 Spacer()
-                FluidSegmentedPicker(title: "Theme", options: SettingsStore.ThemePreference.allCases.map {
+                AppSegmentedPicker(title: "Theme", options: SettingsStore.ThemePreference.allCases.map {
                     (value: $0, title: PichiLocalization.text($0.displayName, locale: self.interfaceLocale))
                 }, selection: Binding(get: { self.settings.themePreference }, set: { self.settings.themePreference = $0 }))
                 .frame(width: 240)

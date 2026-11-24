@@ -4,7 +4,7 @@ import SwiftUI
 /// Native segmented selection with owned, opaque label surfaces. AppKit can
 /// flatten SwiftUI label styling and keep white ink over a pale selected tint.
 /// The native bezel, focus, keyboard tracking and accessibility remain intact.
-struct FluidSegmentedPicker<Selection: Hashable>: NSViewRepresentable {
+struct AppSegmentedPicker<Selection: Hashable>: NSViewRepresentable {
     let title: String
     let options: [(value: Selection, title: String)]
     @Binding var selection: Selection
@@ -16,7 +16,7 @@ struct FluidSegmentedPicker<Selection: Hashable>: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSSegmentedControl {
         let control = NSSegmentedControl()
-        control.cell = FluidSegmentedCell(textCell: "")
+        control.cell = AppSegmentedCell(textCell: "")
         control.trackingMode = .selectOne
         control.segmentStyle = .rounded
         control.segmentDistribution = .fillEqually
@@ -51,13 +51,13 @@ struct FluidSegmentedPicker<Selection: Hashable>: NSViewRepresentable {
         }
         let selected = self.options.firstIndex { $0.value == self.selection } ?? -1
         if control.selectedSegment != selected { control.selectedSegment = selected }
-        (control.cell as? FluidSegmentedCell)?.palette = self.theme.palette
+        (control.cell as? AppSegmentedCell)?.palette = self.theme.palette
         control.needsDisplay = true
     }
 
     final class Coordinator: NSObject {
-        var parent: FluidSegmentedPicker
-        init(_ parent: FluidSegmentedPicker) { self.parent = parent }
+        var parent: AppSegmentedPicker
+        init(_ parent: AppSegmentedPicker) { self.parent = parent }
 
         @objc func selectionChanged(_ control: NSSegmentedControl) {
             let index = control.selectedSegment
@@ -69,7 +69,7 @@ struct FluidSegmentedPicker<Selection: Hashable>: NSViewRepresentable {
     }
 }
 
-private final class FluidSegmentedCell: NSSegmentedCell {
+private final class AppSegmentedCell: NSSegmentedCell {
     var palette: AppTheme.Palette?
 
     override func drawSegment(_ segment: Int, inFrame frame: NSRect, with controlView: NSView) {
