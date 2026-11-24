@@ -254,7 +254,11 @@ extension PichiGigaAMIntegrationTests {
     func testPronunciationReadinessRejectsInconsistentFeaturesWithoutLoadingModel() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("gigaam-readiness-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
+        #if os(macOS)
+        let fingerprint = GigaAMModelCatalog.coreMLModel.fingerprint
+        #else
         let fingerprint = GigaAMModelCatalog.downloadableModel.fingerprint
+        #endif
         let modelStore = PichiGigaAMModelStore(directory: root)
         let encoder = modelStore.encoderDictionarySupported(fingerprint: fingerprint)
         let key = encoder ? GigaAMEncoderDictionaryStorage.modelKey(fingerprint: fingerprint)
@@ -374,7 +378,11 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
             try await asr.downloadModel(.gigaam, progressHandler: nil)
             XCTAssertTrue(provider.isReady)
             let artifact = try store.installedModel()
+            #if os(macOS)
+            XCTAssertEqual(artifact.descriptor, GigaAMModelCatalog.coreMLModel)
+            #else
             XCTAssertEqual(artifact.descriptor, GigaAMModelCatalog.downloadableModel)
+            #endif
             XCTAssertNil(artifact.descriptor.endOfUtteranceThreshold)
             let raw = try await FileTranscriptionService(asrService: asr).transcribeFile(URL(fileURLWithPath: audioPath))
             XCTAssertFalse(raw.text.isEmpty)
@@ -414,7 +422,13 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
         let model = SettingsStore.SpeechModel.gigaam
         let preferred = try XCTUnwrap(GigaAMModelCatalog.models.first)
         let metadata = preferred.libraryMetadata
-        XCTAssertEqual(model.libraryMetadata, GigaAMModelCatalog.downloadableModel.libraryMetadata)
+        #if os(macOS)
+        let defaultDescriptor = GigaAMModelCatalog.coreMLModel
+        #else
+        let defaultDescriptor = GigaAMModelCatalog.downloadableModel
+        #endif
+        XCTAssertEqual(model.libraryMetadata, defaultDescriptor.libraryMetadata)
+        XCTAssertNotEqual(metadata, defaultDescriptor.libraryMetadata)
         XCTAssertEqual(model.supportedLanguageCodes, "RU")
         XCTAssertEqual(model.supportedLanguageNames, "Russian")
         XCTAssertTrue(metadata.features.contains("Punctuation"))
@@ -441,17 +455,31 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
 
     @MainActor
     func testPublicDownloadMetadataDoesNotInheritPrivateExportCapabilities() {
+        #if os(macOS)
+        let descriptor = GigaAMModelCatalog.coreMLModel
+        #else
         let descriptor = GigaAMModelCatalog.downloadableModel
+        #endif
         let metadata = descriptor.libraryMetadata
-        XCTAssertEqual(metadata.size, "~259.5 MiB")
-        XCTAssertTrue(metadata.features.contains("Q8"))
+        XCTAssertTrue(metadata.size.contains("MiB"))
+        #if os(macOS)
+        XCTAssertEqual(metadata.processor, "Neural Engine / CPU")
+        #else
         XCTAssertEqual(metadata.processor, "GPU preferred; CPU fallback")
+        #endif
         XCTAssertTrue(metadata.features.contains("Punctuation"))
+        XCTAssertTrue(metadata.features.contains("normalization"))
         XCTAssertFalse(metadata.features.contains("FP16"))
         XCTAssertFalse(metadata.features.contains("end-of-utterance"))
         XCTAssertNil(descriptor.endOfUtteranceThreshold)
         XCTAssertFalse(metadata.performanceExplanation.contains("0.97 seconds"))
         XCTAssertTrue(metadata.performanceExplanation.contains("not measured accuracy"))
+
+        let legacy = GigaAMModelCatalog.downloadableModel.libraryMetadata
+        XCTAssertTrue(legacy.features.contains("Q8"))
+        #if os(macOS)
+        XCTAssertNotEqual(metadata, legacy)
+        #endif
     }
 
     @MainActor

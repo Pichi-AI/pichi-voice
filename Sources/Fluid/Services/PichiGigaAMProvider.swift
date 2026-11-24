@@ -499,15 +499,19 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         } ?? ""
         let entryIDs = Set(entries.map(\.id))
         let useEncoderReferences = self.dictionaryUsesEncoderFeatures
+        let legacyKey = GigaAMEncoderDictionaryStorage.legacyReferenceKey(for: modelKey)
         let pronunciation = dictionaryEnabled && !entryIDs.isEmpty
-            ? try self.pronunciationStore.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs, maximumReferencesPerProfile: useEncoderReferences ? 10 : 3,
+            ? try self.pronunciationStore.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs,
+                fallbackModelKey: legacyKey, maximumReferencesPerProfile: useEncoderReferences ? 10 : 3,
                 referenceSelection: { profile in
                     useEncoderReferences ? GigaAMEncoderDictionaryStorage.retainedCaptures(profile.enrollments)
                         : GigaAMDictionaryAcoustics.activeCaptures(profile.enrollments) }) : nil
         let negatives: DictionaryNegativeExampleStore.CaptureRead?
         do {
+            let legacyEntryIDs = Set(pronunciation?.profiles.filter { $0.modelKey == legacyKey }.map(\.dictionaryEntryID) ?? [])
             negatives = dictionaryEnabled && DictionaryMatcherExperiment.compareNegatives && !entryIDs.isEmpty
-                ? try DictionaryNegativeExampleStore.shared.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs) : nil
+                ? try DictionaryNegativeExampleStore.shared.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs,
+                    fallbackModelKey: legacyKey, fallbackEntryIDs: legacyEntryIDs) : nil
         } catch {
             pronunciation?.close(leaseID: leaseID)
             throw error
@@ -624,7 +628,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             await self.refreshExecutionStatus(from: runtime)
             guard self.lifecycleGeneration == generation, self.runtime === runtime else { throw CancellationError() }
             if self.expectedModelFingerprint == nil, model.descriptor == GigaAMModelCatalog.coreMLModel,
-               await runtime.supportsAdaptivePreview {
+               try await runtime.prepareAdaptivePreview() {
                 guard self.lifecycleGeneration == generation, self.runtime === runtime else { throw CancellationError() }
                 self.neuralDecoder = { try await runtime.recognizePreview($0, longContext: $1) }
                 self.admitNeuralPreview()
@@ -909,7 +913,14 @@ final class PichiGigaAMProvider: TranscriptionProvider {
                 #if DEBUG
                 if let beforeReferencePreparationForTesting { await beforeReferencePreparationForTesting() }
                 #endif
-                preparation = try await GigaAMEncoderDictionaryStorage.preparedWords(snapshot)
+                guard let runtime = self.runtime else { throw CancellationError() }
+                preparation = try await GigaAMEncoderDictionaryStorage.preparedWords(snapshot) { @MainActor samples in
+                    try validateAdmission(snapshot)
+                    guard self.runtime === runtime else { throw CancellationError() }
+                    let transcript = try await runtime.transcribe(samples, captureEncoderFeatures: true, reusingWindowsFor: nil)
+                    try validateAdmission(snapshot)
+                    return Self.learningFrames(transcript.encoderWindows)
+                }
                 try Task.checkCancellation()
                 try validateAdmission(snapshot)
                 self.encoderReferenceCache = GigaAMEncoderDictionaryStorage.canCache(preparation)
@@ -978,7 +989,8 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         accepted.compactMap { span in
             guard let window = windows.first(where: { Int(($0.offset / 0.04).rounded()) == span.frameOffset }),
                   let profile = snapshot.pronunciation?.profiles.first(where: {
-                      $0.dictionaryEntryID == span.entryID && $0.modelKey == snapshot.modelKey
+                      $0.dictionaryEntryID == span.entryID && ($0.modelKey == snapshot.modelKey ||
+                          $0.modelKey == GigaAMEncoderDictionaryStorage.legacyReferenceKey(for: snapshot.modelKey))
                   }), span.frameRange.lowerBound >= 0, span.frameRange.upperBound <= window.features.frameCount else { return nil }
             let lower = span.frameRange.lowerBound * 768, upper = span.frameRange.upperBound * 768
             let frames = DictionaryMatchFrames(hiddenSize: 768, values: Array(window.features.values[lower..<upper]))

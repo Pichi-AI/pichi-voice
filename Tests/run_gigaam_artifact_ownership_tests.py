@@ -26,7 +26,7 @@ result_values = protocol[protocol.index("nonisolated struct ASRTranscriptionResu
 pronunciation = (repo / "Sources/Fluid/Services/PronunciationDictionaryStore.swift").read_text()
 enrollment = pronunciation[pronunciation.index("nonisolated struct PronunciationEnrollmentCapture:"):pronunciation.index("nonisolated struct PronunciationDictionaryProfile:")]
 native = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMCoreMLInference.swift").read_text()
-runtime_status = native[native.index("public struct GigaAMExecutionStatus:"):native.index("/// The shipped Core ML graph")]
+runtime_status = native[native.index("public struct GigaAMExecutionStatus:"):native.index("final class GigaAMCoreMLInference")]
 
 def method(source, signature):
     start = source.index(signature)

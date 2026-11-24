@@ -38,6 +38,7 @@ Configure the test host with:
 - `PICHI_ENCODER_DICTIONARY_PLAN`: local JSON manifest
 - `PICHI_GIGAAM_MODEL_DIR`: an existing compatible model directory
 - `PICHI_ENCODER_DICTIONARY_RESULTS`: a private output directory
+- Optional `PICHI_ENCODER_DICTIONARY_LEGACY_REFERENCE_DIR`: seed the isolated test profile with verified GGUF, unload it, then check that Core ML reads the saved references and prepares them from the original audio.
 
 The manifest contains `terms` mapping stable keys to canonical spellings and
 `cases` containing `name`, `path` and `kind`. Audio paths point to finite,
