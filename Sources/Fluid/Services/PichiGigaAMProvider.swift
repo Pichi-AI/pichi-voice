@@ -586,7 +586,6 @@ final class PichiGigaAMProvider: TranscriptionProvider {
 
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
-        if self.isReady { return }
         if let task = self.preparationTask {
             let generation = self.lifecycleGeneration
             try await task.value
@@ -596,6 +595,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             }
             return
         }
+        if self.isReady { return }
         let admittedSelection = try self.admittedSource?.selection
             ?? (self.expectedModelFingerprint == nil ? self.modelStore.selectedArtifact() : nil)
         self.preparedDefaultCPUReason = admittedSelection?.fallbackReason
@@ -623,18 +623,19 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             guard self.lifecycleGeneration == generation, self.runtime === runtime else {
                 throw CancellationError()
             }
-            self.loadedModelFingerprint = fingerprint
-            self.isReady = true
-            await self.refreshExecutionStatus(from: runtime)
-            guard self.lifecycleGeneration == generation, self.runtime === runtime else { throw CancellationError() }
             if self.expectedModelFingerprint == nil, model.descriptor == GigaAMModelCatalog.coreMLModel,
                await runtime.supportsAdaptivePreview {
                 _ = try await runtime.prepareAdaptivePreview()
+                try Task.checkCancellation()
                 guard self.lifecycleGeneration == generation, self.runtime === runtime else { throw CancellationError() }
                 self.neuralDecoder = { try await runtime.recognizePreview($0, longContext: $1) }
-                self.admitNeuralPreview()
                 DebugLogger.shared.info("GigaAM integrated Core ML preview configured", source: "GigaAM")
             }
+            self.loadedModelFingerprint = fingerprint
+            self.isReady = true
+            self.admitNeuralPreview()
+            await self.refreshExecutionStatus(from: runtime)
+            guard self.lifecycleGeneration == generation, self.runtime === runtime else { throw CancellationError() }
         }
         self.preparationTask = task
         defer {
