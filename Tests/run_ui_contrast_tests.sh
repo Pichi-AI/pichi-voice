@@ -801,13 +801,13 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Theme/Components/FluidEditControls.swift \
     Sources/Fluid/Theme/Components/FluidManagementSheet.swift \
     Sources/Fluid/UI/AISettings/ProviderConnectionFields.swift \
-    Sources/Fluid/Theme/Components/FluidSegmentedPicker.swift \
+    Sources/Fluid/Theme/Components/AppSegmentedPicker.swift \
     Sources/Fluid/Theme/Components/FluidDropdown.swift \
     Sources/Fluid/Theme/Components/FluidGlassControls.swift \
     Sources/Fluid/Theme/Components/ThemedCard.swift \
     Sources/Fluid/UI/AISettingsComponents.swift \
     "$task_test_dir/ProductionLabels.swift" \
-    Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift \
+    Tests/UIContrastTests.swift Tests/AppSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift \
     Tests/NativeSidebarContrastTests.swift Tests/Support/FixedScaleSnapshot.swift Tests/DashboardShortcutSurfaceTests.swift \
     Sources/Fluid/UI/StatsActivityPeriod.swift Sources/Fluid/UI/StatsChartInteraction.swift \
     Tests/MeetingSpeakerPaletteContrastTests.swift Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift Tests/SecondaryGlassInkTests.swift Tests/ParticipantInputContrastTests.swift Tests/NativeInputPresentationContrastTests.swift \

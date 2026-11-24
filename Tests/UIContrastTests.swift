@@ -254,7 +254,7 @@ struct UIContrastTests {
             return
         }
         if CommandLine.arguments.contains("--segmented-only") {
-            try await FluidSegmentedPickerTests.run(directory: directory)
+            try await AppSegmentedPickerTests.run(directory: directory)
             return
         }
         if CommandLine.arguments.contains("--native-appearance-only") {
@@ -494,7 +494,7 @@ struct UIContrastTests {
         print("Production disabled command glyph, Help and word metric: \(reviewChecks) review regression rendering checks passed")
         print("Production prominent active/inactive foreground: \(prominentAppearanceChecks) reference-fill rendering checks passed")
         self.verifyConstruction()
-        try await FluidSegmentedPickerTests.run(directory: directory)
+        try await AppSegmentedPickerTests.run(directory: directory)
         try await NativePaletteAppearanceTests.run(directory: directory)
         try await NativeSidebarContrastTests.run(directory: directory)
         try await DashboardShortcutSurfaceTests.run(directory: directory)
