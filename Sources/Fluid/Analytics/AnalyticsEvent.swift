@@ -63,6 +63,7 @@ enum AnalyticsUsageMode: String {
     case command
     case edit
     case meeting
+    case liveMeeting = "live_meeting"
 }
 
 enum AnalyticsModelRole: String {

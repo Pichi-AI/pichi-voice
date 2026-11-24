@@ -376,6 +376,14 @@ private struct BrowserCaptureFailure: LocalizedError {
     var errorDescription: String? { self.message }
 }
 
+/// The ignored `private_assets` directory of the worktree that holds this file, found from
+/// `<worktree>/Tests/FluidDictationIntegrationTests/Features/Meeting/<this file>`.
+private func worktreePrivateAssetsDirectory(filePath: String = #filePath) -> URL {
+    var worktree = URL(fileURLWithPath: filePath)
+    for _ in 0..<5 { worktree.deleteLastPathComponent() }
+    return worktree.appendingPathComponent("private_assets").standardizedFileURL.resolvingSymlinksInPath()
+}
+
 private struct BrowserCaptureOptions {
     let bundleID: String
     let root: URL
@@ -395,9 +403,7 @@ private struct BrowserCaptureOptions {
         let rootPath = try required("ROOT")
         guard rootPath.hasPrefix("/") else { throw BrowserCaptureFailure(message: "ROOT must be an absolute path.") }
         self.root = URL(fileURLWithPath: rootPath, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
-        let privateAssets = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("private_assets").standardizedFileURL.resolvingSymlinksInPath()
+        let privateAssets = worktreePrivateAssetsDirectory()
         guard self.root.path.hasPrefix(privateAssets.path + "/") else {
             throw BrowserCaptureFailure(message: "ROOT must be inside this worktree's ignored private_assets directory.")
         }
@@ -1228,8 +1234,7 @@ private struct SystemContinuityOptions {
             throw BrowserCaptureFailure(message: "System capture requires absolute ROOT and fresh UUID RUN_ID.")
         }
         self.root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
-        let privateAssets = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("private_assets").standardizedFileURL.resolvingSymlinksInPath()
+        let privateAssets = worktreePrivateAssetsDirectory()
         guard self.root.path.hasPrefix(privateAssets.path + "/") else {
             throw BrowserCaptureFailure(message: "ROOT must be a child of this worktree's ignored private_assets.")
         }

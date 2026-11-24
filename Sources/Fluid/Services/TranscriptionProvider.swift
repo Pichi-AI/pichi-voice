@@ -229,6 +229,9 @@ protocol TranscriptionProvider {
     /// Current prepared execution policy, or nil when the provider does not report it.
     var executionStatus: TranscriptionExecutionStatus? { get }
 
+    /// Keep preview starts on the capture clock when the admitted backend can sustain it.
+    @MainActor var usesFixedPreviewCadence: Bool { get }
+
     /// Download/prepare models for transcription.
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws
 
@@ -301,8 +304,20 @@ protocol TranscriptionProvider {
     var shouldClearCacheAfterCancellation: Bool { get }
 }
 
+enum IncrementalPreviewRequest: Error {
+    case needsFullAudio
+}
+
+/// Providers using the existing append-only microphone route. A failed delta retries the
+/// full PCM prefix through the same admitted provider and executor.
+nonisolated protocol IncrementalDictationPreviewProviding: AnyObject {
+    @MainActor func incrementalPreviewDeltaStart(totalSampleCount: Int) -> Int?
+    func transcribeStreamingDelta(_ newSamples: [Float], totalSampleCount: Int) async throws -> ASRTranscriptionResult
+}
+
 // Default implementation for optional methods
 extension TranscriptionProvider {
+    @MainActor var usesFixedPreviewCadence: Bool { false }
     var pronunciationProfileModelKey: String? { nil }
     var executionStatus: TranscriptionExecutionStatus? { nil }
     @MainActor func beginAdmittedTranscription(leaseID: UUID) throws {}

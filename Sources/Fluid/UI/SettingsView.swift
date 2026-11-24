@@ -106,7 +106,6 @@ struct SettingsView: View {
                 }
 
                 // Normal ON path
-                self.shareDetailedAnalytics = newValue
                 self.applyAnalyticsConsentChange(newValue)
             }
         )
@@ -1615,7 +1614,6 @@ struct SettingsView: View {
             AnalyticsConfirmationView(
                 onConfirm: {
                     if let pending = pendingDetailedAnalyticsValue {
-                        self.shareDetailedAnalytics = pending
                         self.applyAnalyticsConsentChange(pending)
                     }
                     self.pendingDetailedAnalyticsValue = nil
@@ -1824,7 +1822,7 @@ struct SettingsView: View {
 
     private func applyAnalyticsConsentChange(_ enabled: Bool) {
         SettingsStore.shared.shareDetailedAnalytics = enabled
-        AnalyticsService.shared.setDetailedAnalyticsEnabled(enabled)
+        self.shareDetailedAnalytics = SettingsStore.shared.shareDetailedAnalytics
     }
 
     // MARK: - Helper Views

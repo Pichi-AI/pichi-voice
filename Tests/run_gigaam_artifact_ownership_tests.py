@@ -64,7 +64,8 @@ with tempfile.TemporaryDirectory(prefix="pichi-gigaam-artifact-ownership-") as t
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMEncoderFeatures.swift"),
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMAcousticMatcher.swift"),
         # 174: the provider owns GigaAMWindowReuseSession handles and reads GigaAMTranscriptionWork.
-        str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMWindowReuse.swift"), str(runtime), "-o", str(library),
+        str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMWindowReuse.swift"),
+        str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMAdaptivePreview.swift"), str(runtime), "-o", str(library),
     ], check=True, cwd=repo)
     progress_source = temporary / "PreparationProgress.swift"
     progress_source.write_text("import Foundation\n" + progress + "\n" + execution_status + "\n" + result_values + "\n" + enrollment + "\n" + word_provenance)

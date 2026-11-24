@@ -52,3 +52,11 @@ ranges, unchanged surrounding text and controls. Exclude an entire context once
 any occurrence becomes a reference, and deduplicate repeated physical audio.
 Freeze source annotations before examining correction results. Report tuning
 and feedback retests separately from untouched validation.
+
+## macOS dictation previews
+
+On supported Apple Silicon Macs the default public GigaAM GGUF retains ownership of the final transcript, timestamps and dictionary evidence. A pinned FP16 Core ML companion can handle live previews on the CPU and Neural Engine. An admitted recording freezes its preview route. Local imports, meetings, file transcription and unsupported devices keep their existing route.
+
+The companion is prepared asynchronously. An existing installation with only GGUF can start dictating immediately. The first eligible admission starts the optional download (about 422 MiB); a later recording can use it once preparation finishes. The companion has its own subdirectory under the default GigaAM store and is removed with the default model. Ordinary dictation continues if optional preparation or prediction fails.
+
+The incremental provider consumes new 16 kHz samples on the existing capture clock. It aligns the short window's observations using word identity and audio time, checks independent observations before sealing a core, uses more context on disputed boundaries, and reconciles phrase ends against the native model. Capture, privacy admission and the final dictionary pass use their existing services. Both graphs derive from the same verified public package. The six-second shape recipe ships without model weights. Its development generator is [generate_preview_recipe.py](../../Vendor/PichiGigaAM/Tools/generate_preview_recipe.py).

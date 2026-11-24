@@ -361,6 +361,9 @@ final class AppServices: ObservableObject {
                     configuration,
                     isAppleSilicon: CPUArchitecture.isAppleSilicon
                 )
+            },
+            onRecordingStarted: {
+                AnalyticsService.shared.recordUsage(mode: .liveMeeting)
             }
         )
         self._meetingSessionCoordinator = coordinator

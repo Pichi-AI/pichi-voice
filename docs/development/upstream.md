@@ -19,6 +19,12 @@ Apply the least-change principle to every change, including existing features an
 
 Fix shared defects within the existing mechanism with regression coverage; keeping the upstream architecture does not require retaining a known bug. Consider a generally applicable fix for upstream contribution while preserving the repository's read-only upstream boundary.
 
+Tests follow the same boundary. Do not move or edit an upstream file, test or production code, only to make a test pass or to isolate it. Put new test code in Pichi files, and new macOS test files under `Tests/FluidDictationIntegrationTests/Features/<feature>/`, which needs no project edit ([testing policy](testing.md#test-ownership-and-storage)). An exception needs the owner's approval and is listed here with its reason:
+
+| Upstream file | Test-only change | Reason | Approved |
+| --- | --- | --- | --- |
+| `Sources/Fluid/Services/Meeting/Backend/MeetingDiarizationModelStore.swift` | In a DEBUG build hosted by XCTest, `prepareInBackground()` returns without starting preparation; `HostedSpeakerModelPreparationTests` checks it | The FluidMeet settings sheet and the meetings view call it. In the empty test home it started the real speaker-model download, which outlived the test and held the ordinary model admission, so later tests failed with "busy" ([#191](https://github.com/Pichi-AI/pichi-voice/issues/191)). No seam in Pichi files reaches the shared store that the sheet uses. Upstream also detects the test host: `MeetingSessionStore` with the same `XCTestCase` check, `UpdateTerminationScheduler` with `XCTestConfigurationFilePath` | 2026-11-20 |
+
 ```mermaid
 flowchart LR
     U[FluidVoice main] --> S[Upstream sync branch]

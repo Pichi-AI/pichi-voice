@@ -1,6 +1,6 @@
 # Russian summary and AI enhancement evaluations
 
-The opt-in [native runner](../../Tests/FluidDictationIntegrationTests/PichiTextModelEvalTests.swift) compares local text models through the application's existing contracts. It changes no selected model, provider, prompt, preference, original model tag or global server parameter. Normal CI skips inference. The checked-in [corpus](../../Tests/Fixtures/TextModelEvals/russian-v1.json) contains eight authored summary cases and eight authored dictation cases. It includes no user recording or transcript.
+The opt-in [native runner](../../Tests/FluidDictationIntegrationTests/Features/TextModels/PichiTextModelEvalTests.swift) compares local text models through the application's existing contracts. It changes no selected model, provider, prompt, preference, original model tag or global server parameter. Normal CI skips inference. The checked-in [corpus](../../Tests/Fixtures/TextModelEvals/russian-v1.json) contains eight authored summary cases and eight authored dictation cases. It includes no user recording or transcript.
 
 ## Request profiles
 
