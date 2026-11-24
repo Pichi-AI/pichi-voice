@@ -121,7 +121,8 @@ nonisolated enum DictionaryNegativeExampleStore {
         guard let first = term?.references.first else { preconditionFailure("Missing migrated reference") }
         for recordedKey in [legacy, active] {
             let veto = DictionaryNegativeExampleStore.CaptureRead(entryID: entry,
-                profileKey: DictionaryNegativeEvidenceResolver.profileKey(profile) + ":shared-features-v1",
+                profileKey: DictionaryNegativeEvidenceResolver.profileKey(profile) + ":shared-features-v1" +
+                    (recordedKey == active ? ":" + active : ""),
                 modelKey: recordedKey, values: [.init(hiddenSize: 768, values: first.values)])
             let vetoed = try await GigaAMEncoderDictionaryStorage.preparedWords(.init(modelKey: active, generation: "test",
                 enabled: true, entries: entries, pronunciation: read, negatives: veto), reencode: reencode)

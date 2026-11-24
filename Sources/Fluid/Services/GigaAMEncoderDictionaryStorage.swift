@@ -15,6 +15,11 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
         return self.modelKey(fingerprint: GigaAMModelCatalog.downloadableModel.fingerprint)
     }
 
+    static func feedbackProfileKey(_ profile: PronunciationDictionaryProfile, modelKey: String) -> String {
+        let base = DictionaryNegativeEvidenceResolver.profileKey(profile) + ":shared-features-v1"
+        return profile.modelKey == modelKey ? base : base + ":" + modelKey
+    }
+
     typealias Reencode = @Sendable ([Float]) async throws -> [DictionaryLearningFeatureFrames]
 
     private static func validModelKey(_ value: String) -> Bool {
@@ -95,12 +100,11 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
                         diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID))
                     }
                 }
-                let profileKey = DictionaryNegativeEvidenceResolver.profileKey(profile) + ":shared-features-v1"
                 let vetoKeys = migrating ? [profile.modelKey, snapshot.modelKey] : [snapshot.modelKey]
                 var negatives: [GigaAMEncoderFeatures] = []
                 for key in vetoKeys {
                     for frames in snapshot.negatives?.frames(entryID: profile.dictionaryEntryID,
-                        profileKey: profileKey, modelKey: key) ?? [] {
+                        profileKey: self.feedbackProfileKey(profile, modelKey: key), modelKey: key) ?? [] {
                         try Task.checkCancellation()
                         guard frames.hiddenSize == GigaAMEncoderFeatures.dimension else {
                             throw PronunciationDictionaryStoreError.inconsistentEnrollment

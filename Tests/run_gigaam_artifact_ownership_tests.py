@@ -43,7 +43,7 @@ neighbors = (repo / "Tests/Support/GigaAMArtifactDictionaryNeighbors.swift").rea
 acoustics = (repo / "Sources/Fluid/Services/GigaAMDictionaryAcoustics.swift").read_text()
 encoder = (repo / "Sources/Fluid/Services/GigaAMEncoderDictionaryStorage.swift").read_text()
 neighbors = neighbors.replace("// ACTUAL_LEGACY_MODEL_KEY", method(acoustics, "    static func modelKey("))
-neighbors = neighbors.replace("// ACTUAL_ENCODER_MODEL_KEY", method(encoder, "    private static var keyPrefix:") + "\n" + method(encoder, "    static func modelKey("))
+neighbors = neighbors.replace("// ACTUAL_ENCODER_MODEL_KEY", method(encoder, "    private static var keyPrefix:") + "\n" + method(encoder, "    static func modelKey(") + "\n" + method(encoder, "    static func feedbackProfileKey("))
 # 175: final correction counts retryable reference diagnostics of the real preparation result.
 encoder_dictionary = (repo / "Sources/Fluid/Services/GigaAMEncoderDictionary.swift").read_text()
 neighbors = neighbors.replace("// ACTUAL_ENCODER_PREPARATION", "\n".join(method(encoder_dictionary, signature)

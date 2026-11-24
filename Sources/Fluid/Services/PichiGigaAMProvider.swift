@@ -1005,7 +1005,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             let frames = DictionaryMatchFrames(hiddenSize: 768, values: Array(window.features.values[lower..<upper]))
             guard frames.isValid else { return nil }
             return DictionaryAcousticEvidence(id: UUID(), entryID: span.entryID, label: span.label,
-                profileKey: DictionaryNegativeEvidenceResolver.profileKey(profile) + ":shared-features-v1",
+                profileKey: GigaAMEncoderDictionaryStorage.feedbackProfileKey(profile, modelKey: snapshot.modelKey),
                 modelKey: snapshot.modelKey, sourceWordRange: span.wordRange.lowerBound..<(span.wordRange.upperBound + 1),
                 frames: frames, matchFrameRange: span.absoluteFrameRange)
         }
