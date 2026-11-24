@@ -31,6 +31,9 @@ actor PronunciationDictionaryStore {
     }
     // ACTUAL_MATCHING_ENROLLMENTS
     nonisolated final class CaptureRead: @unchecked Sendable {
+        private var open = true
+        var isOpen: Bool { lock.withLock { open } }
+        func close() { lock.withLock { open = false } }
         let profiles: [PronunciationDictionaryProfile]
         private let pinned: [String: [PronunciationEnrollmentCapture]]
         private let inspections: [UUID: DictionaryAudioInspection]
@@ -59,6 +62,7 @@ actor PronunciationDictionaryStore {
 }
 nonisolated enum DictionaryNegativeExampleStore {
     final class CaptureRead: @unchecked Sendable {
+        let isOpen = true
         let entryID: UUID; let profileKey: String; let modelKey: String; let values: [DictionaryMatchFrames]
         init(entryID: UUID, profileKey: String, modelKey: String, values: [DictionaryMatchFrames]) {
             self.entryID = entryID; self.profileKey = profileKey; self.modelKey = modelKey; self.values = values
@@ -82,6 +86,63 @@ nonisolated enum DictionaryNegativeExampleStore {
         for i in 0..<count { values[i * 768 + (first + i) % 768] = 1 }
         return .init(extractorVersion: recipe, frames: .init(offset: offset, frameDuration: 0.04, hiddenSize: 768, values: values))
     }
+    private static func checkMigration(_ saved: [PronunciationEnrollmentCapture], inspections: [UUID: DictionaryAudioInspection],
+                                       entry: UUID, pcm: [Float]) async throws {
+        let active = GigaAMEncoderDictionaryStorage.modelKey(fingerprint: GigaAMModelCatalog.coreMLModel.fingerprint)
+        let legacy = GigaAMEncoderDictionaryStorage.modelKey(fingerprint: GigaAMModelCatalog.downloadableModel.fingerprint)
+        expect(GigaAMEncoderDictionaryStorage.legacyReferenceKey(for: active) == legacy &&
+               GigaAMEncoderDictionaryStorage.legacyReferenceKey(for: active + "-changed") == nil &&
+               GigaAMEncoderDictionaryStorage.legacyReferenceKey(for: legacy) == nil, "Only the pinned upgrade direction admits migration")
+        let old = saved.map { value in
+            PronunciationEnrollmentCapture(values: value.values, sourceFrameCount: value.sourceFrameCount, modelKey: legacy,
+                originalAudioID: value.originalAudioID, observedText: value.observedText, sourceRecordingID: value.sourceRecordingID,
+                extractorVersion: value.extractorVersion, capturedAt: value.capturedAt, inspectionID: value.inspectionID)
+        }
+        let profile = PronunciationDictionaryProfile(dictionaryEntryID: entry, label: "Alpha", modelKey: legacy, hiddenSize: 768, enrollments: old)
+        let read = PronunciationDictionaryStore.CaptureRead(profiles: [profile], inspections: inspections)
+        let entries = [SettingsStore.CustomDictionaryEntry(id: entry, triggers: [], replacement: "Alpha")]
+        let snapshot = GigaAMDictionaryAcoustics.Snapshot(modelKey: active, generation: "test", enabled: true,
+            entries: entries, pronunciation: read, negatives: nil)
+        let unavailable = try await GigaAMEncoderDictionaryStorage.preparedWords(snapshot)
+        expect(unavailable.words.isEmpty, "Old vectors never silently substitute for Core ML references")
+        let newWindow = window(first: 300)
+        let reencode: GigaAMEncoderDictionaryStorage.Reencode = { samples in
+            guard samples == pcm else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+            return [newWindow]
+        }
+        let migrated = try await GigaAMEncoderDictionaryStorage.preparedWords(snapshot, reencode: reencode)
+        let term = migrated.words.first?.term
+        expect(term?.modelKey == active && term?.references.count == old.count && read.readCount == old.count,
+               "New features are derived individually from every admitted original recording")
+        // Original selected interval 0.61...0.77 s selects frames 15...19 of the new recording.
+        expect(term?.references.allSatisfy { $0.frameCount == 5 && $0.values[315] == 1 } == true,
+               "Re-extraction crops the original focal interval in the new feature space")
+        expect(profile.modelKey == legacy && profile.enrollments == old, "Persisted legacy provenance and original records stay intact")
+        guard let first = term?.references.first else { preconditionFailure("Missing migrated reference") }
+        for recordedKey in [legacy, active] {
+            let veto = DictionaryNegativeExampleStore.CaptureRead(entryID: entry,
+                profileKey: DictionaryNegativeEvidenceResolver.profileKey(profile) + ":shared-features-v1",
+                modelKey: recordedKey, values: [.init(hiddenSize: 768, values: first.values)])
+            let vetoed = try await GigaAMEncoderDictionaryStorage.preparedWords(.init(modelKey: active, generation: "test",
+                enabled: true, entries: entries, pronunciation: read, negatives: veto), reencode: reencode)
+            expect(vetoed.words.isEmpty, "Vetoes collected before and after the upgrade can both disable a contradictory term")
+        }
+        let missingPCM = try await GigaAMEncoderDictionaryStorage.preparedWords(snapshot, reencode: { _ in [] })
+        expect(missingPCM.words.isEmpty && !GigaAMEncoderDictionaryStorage.canCache(missingPCM),
+               "An unavailable re-extraction remains retryable without matching stale vectors")
+        do {
+            _ = try await GigaAMEncoderDictionaryStorage.preparedWords(snapshot, reencode: { _ in throw CancellationError() })
+            preconditionFailure("Cancelled migration returned")
+        } catch is CancellationError { checks += 1 }
+        do {
+            _ = try await GigaAMEncoderDictionaryStorage.preparedWords(snapshot, reencode: { _ in
+                read.close()
+                return [newWindow]
+            })
+            preconditionFailure("A closed lease must not publish re-encoded features")
+        } catch PronunciationDictionaryStoreError.staleEvidence { checks += 1 }
+    }
+
     static func main() async throws {
         let key = GigaAMEncoderDictionaryStorage.modelKey(fingerprint: "synthetic-artifact-sha256")
         var pcm = [Float](repeating: 0.2, count: 16_000)
@@ -194,6 +255,7 @@ nonisolated enum DictionaryNegativeExampleStore {
             entries: entries, pronunciation: wrongPins, negatives: nil))
         expect(unpinned.words.count == 1 && unpinned.words[0].term.references.count == 3,
             "The actually pinned baseline remains usable when optional references were not admitted")
+        try await checkMigration(saved, inspections: inspections, entry: entry, pcm: pcm)
         let previousKey = GigaAMEncoderDictionaryStorage.admittedReferenceKey(wrongPins)
         let nextKey = GigaAMEncoderDictionaryStorage.admittedReferenceKey(read)
         let reused = previousKey == nextKey && GigaAMEncoderDictionaryStorage.canCache(unpinned)

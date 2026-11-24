@@ -214,7 +214,7 @@ actor PronunciationDictionaryStore {
     /// references and 16 MB metadata limits remain in force. Invalid, unavailable or
     /// excess optional candidates are omitted before the immutable snapshot is created. One
     /// fallback per otherwise unrepresented word precedes extra variants for an admitted word.
-    nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>,
+    nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>, fallbackModelKey: String? = nil,
                                      includingSharedFamilies: Bool = false, maximumReferencesPerProfile: Int = 3,
                                      referenceSelection: @Sendable (PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] = { $0.matchingEnrollments }) throws -> CaptureRead {
         try Task.checkCancellation()
@@ -245,10 +245,13 @@ actor PronunciationDictionaryStore {
                 var selectedIDs = Set(exact.map(\.id))
                 var shared: [PronunciationDictionaryProfile] = []
                 var candidateCount = 0
-                if includingSharedFamilies {
-                    for item in document.profiles where item.modelKey != modelKey && entryIDs.contains(item.dictionaryEntryID) &&
-                        ParakeetSpeechModelCatalog.sharesPronunciationFamily(item.modelKey, with: modelKey)
-                    {
+                if includingSharedFamilies || fallbackModelKey != nil {
+                    for item in document.profiles where item.modelKey != modelKey && entryIDs.contains(item.dictionaryEntryID) {
+                        // A provider may recover an older artifact's saved recordings only
+                        // for entries which have no profile under the current artifact.
+                        let fallback = item.modelKey == fallbackModelKey && !selectedEntries.contains(item.dictionaryEntryID)
+                        guard fallback || (includingSharedFamilies &&
+                            ParakeetSpeechModelCatalog.sharesPronunciationFamily(item.modelKey, with: modelKey)) else { continue }
                         try Task.checkCancellation()
                         candidateCount += 1
                         guard isValid(item), item.isEligibleForMatching, exact.count + shared.count < 1024,
@@ -333,9 +336,15 @@ actor PronunciationDictionaryStore {
                 let candidate = shared[index]
                 let captures = referenceSelection(candidate)
                 guard captures.count <= maximumReferencesPerProfile else { return }
-                if try pinReferences(candidate, captures: captures, optional: true) {
-                    profiles.append(candidate)
-                    admittedEntries.insert(candidate.dictionaryEntryID)
+                let isFallback = candidate.modelKey == fallbackModelKey
+                let baseline = isFallback ? Array(captures.prefix(3)) : captures
+                guard try pinReferences(candidate, captures: baseline, optional: true) else { return }
+                profiles.append(candidate)
+                admittedEntries.insert(candidate.dictionaryEntryID)
+                if isFallback {
+                    for capture in captures.dropFirst(baseline.count) {
+                        _ = try pinReferences(candidate, captures: [capture], optional: true, append: true)
+                    }
                 }
             } catch is CancellationError { throw CancellationError() }
             catch { /* An optional family reference cannot invalidate the mandatory exact snapshot. */ }

@@ -222,7 +222,8 @@ actor DictionaryNegativeExampleStore {
 
     /// Called synchronously by the admitted provider before its first suspension. The
     /// value is independent of later store selection and has no write authority.
-    nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>) throws -> CaptureRead {
+    nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>, fallbackModelKey: String? = nil,
+                                     fallbackEntryIDs: Set<UUID> = []) throws -> CaptureRead {
         try Task.checkCancellation()
         guard let profile = self.profile, PrivateProfileStorage.isReadable(profile),
               PrivateProfileStorage.acceptsNewWork else { throw PronunciationDictionaryStoreError.staleEvidence }
@@ -234,7 +235,10 @@ actor DictionaryNegativeExampleStore {
                 guard all.count <= 32, all.allSatisfy({ $0.frames.isValid }) else {
                     throw PronunciationDictionaryStoreError.inconsistentEnrollment
                 }
-                return all.filter { $0.modelKey == modelKey && entryIDs.contains($0.entryID) }
+                return all.filter {
+                    entryIDs.contains($0.entryID) && ($0.modelKey == modelKey ||
+                        ($0.modelKey == fallbackModelKey && fallbackEntryIDs.contains($0.entryID)))
+                }
             }
         }
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else {

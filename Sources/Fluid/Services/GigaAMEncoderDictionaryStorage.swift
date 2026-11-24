@@ -2,11 +2,20 @@ import Foundation
 import PichiGigaAM
 
 /// Maps the existing private pronunciation store to fingerprint-bound learned features.
-/// Missing features never trigger inference or reinterpret an older acoustic recipe.
+/// The pinned Core ML export can rebuild older GGUF references from admitted local PCM.
 nonisolated enum GigaAMEncoderDictionaryStorage {
     private static var keyPrefix: String { "gigaam-dictionary/" + GigaAMEncoderFeatures.extractorVersion + "/" }
 
     static func modelKey(fingerprint: String) -> String { self.keyPrefix + fingerprint }
+
+    /// Only this verified pair shares the pre-CTC layer and 40 ms clock.
+    /// Positives are always recomputed. Stored vetoes retain their producer key.
+    static func legacyReferenceKey(for target: String) -> String? {
+        guard target == self.modelKey(fingerprint: GigaAMModelCatalog.coreMLModel.fingerprint) else { return nil }
+        return self.modelKey(fingerprint: GigaAMModelCatalog.downloadableModel.fingerprint)
+    }
+
+    typealias Reencode = @Sendable ([Float]) async throws -> [DictionaryLearningFeatureFrames]
 
     private static func validModelKey(_ value: String) -> Bool {
         value.hasPrefix(self.keyPrefix) && value.utf8.count > self.keyPrefix.utf8.count && value.utf8.count <= 1_024 &&
@@ -35,7 +44,7 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
         !preparation.diagnostics.contains { $0.reason == .invalidReferences }
     }
 
-    @concurrent static func preparedWords(_ snapshot: GigaAMDictionaryAcoustics.Snapshot) async throws -> GigaAMEncoderDictionary.Preparation {
+    @concurrent static func preparedWords(_ snapshot: GigaAMDictionaryAcoustics.Snapshot, reencode: Reencode? = nil) async throws -> GigaAMEncoderDictionary.Preparation {
         try Task.checkCancellation()
         guard snapshot.enabled, let read = snapshot.pronunciation else { return .init(words: [], diagnostics: []) }
         guard self.validModelKey(snapshot.modelKey) else { return .init(words: [], diagnostics: [.init(.wrongModel)]) }
@@ -48,7 +57,9 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
         var bytes = 0
         for profile in profiles {
             try Task.checkCancellation()
-            guard profile.modelKey == snapshot.modelKey, profile.hiddenSize == GigaAMEncoderFeatures.dimension,
+            let migrating = profile.modelKey != snapshot.modelKey
+            guard !migrating || (profile.modelKey == self.legacyReferenceKey(for: snapshot.modelKey) && reencode != nil),
+                  profile.hiddenSize == GigaAMEncoderFeatures.dimension,
                   let entry = entries[profile.dictionaryEntryID], profile.label == entry.replacement else {
                 diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID)); continue
             }
@@ -61,42 +72,41 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
             }
             guard (3...10).contains(captures.count), Array(captures.prefix(3)) == Array(retained.prefix(3)),
                   captures == retained.filter({ captures.contains($0) }),
-                  captures.prefix(3).allSatisfy({ self.validCapture($0, modelKey: snapshot.modelKey) }) else {
+                  captures.prefix(3).allSatisfy({ self.validCapture($0, modelKey: profile.modelKey) }) else {
                 diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID)); continue
             }
             do {
                 var references: [GigaAMEncoderFeatures] = []
                 for (index, capture) in captures.enumerated() {
                     try Task.checkCancellation()
-                    if index < 3 {
-                        guard let id = capture.inspectionID,
-                              let features = try self.features(capture: capture, inspection: read.inspection(for: id)) else {
+                    do {
+                        guard self.validCapture(capture, modelKey: profile.modelKey), let id = capture.inspectionID else {
                             throw PronunciationDictionaryStoreError.inconsistentEnrollment
                         }
+                        let inspection = index < 3 ? try read.inspection(for: id) : try read.optionalInspection(for: id)
+                        guard let inspection else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+                        let features = try await self.reference(capture: capture, inspection: inspection,
+                            snapshot: snapshot, reencode: migrating ? reencode : nil)
                         references.append(features)
-                    } else {
-                        guard self.validCapture(capture, modelKey: snapshot.modelKey), let id = capture.inspectionID,
-                              let inspection = try read.optionalInspection(for: id) else {
-                            diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID)); continue
-                        }
-                        do {
-                            guard let features = try self.features(capture: capture, inspection: inspection) else {
-                                diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID)); continue
-                            }
-                            references.append(features)
-                        } catch is CancellationError { throw CancellationError() }
-                        catch { diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID)) }
+                    } catch is CancellationError { throw CancellationError() }
+                    catch PronunciationDictionaryStoreError.staleEvidence { throw PronunciationDictionaryStoreError.staleEvidence }
+                    catch {
+                        if index < 3 { throw error }
+                        diagnostics.append(.init(.invalidReferences, profile.dictionaryEntryID))
                     }
                 }
                 let profileKey = DictionaryNegativeEvidenceResolver.profileKey(profile) + ":shared-features-v1"
+                let vetoKeys = migrating ? [profile.modelKey, snapshot.modelKey] : [snapshot.modelKey]
                 var negatives: [GigaAMEncoderFeatures] = []
-                for frames in snapshot.negatives?.frames(entryID: profile.dictionaryEntryID,
-                    profileKey: profileKey, modelKey: snapshot.modelKey) ?? [] {
-                    try Task.checkCancellation()
-                    guard frames.hiddenSize == GigaAMEncoderFeatures.dimension else {
-                        throw PronunciationDictionaryStoreError.inconsistentEnrollment
+                for key in vetoKeys {
+                    for frames in snapshot.negatives?.frames(entryID: profile.dictionaryEntryID,
+                        profileKey: profileKey, modelKey: key) ?? [] {
+                        try Task.checkCancellation()
+                        guard frames.hiddenSize == GigaAMEncoderFeatures.dimension else {
+                            throw PronunciationDictionaryStoreError.inconsistentEnrollment
+                        }
+                        negatives.append(try GigaAMEncoderFeatures(values: frames.values))
                     }
-                    negatives.append(try GigaAMEncoderFeatures(values: frames.values))
                 }
                 for features in references + negatives {
                     let size = features.values.count * MemoryLayout<Float>.size
@@ -209,14 +219,43 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
             capture.values.contains(where: { abs($0) > 1e-8 }) && (1...GigaAMEncoderFeatures.maximumFrames).contains(capture.sourceFrameCount)
     }
 
-    private static func features(capture: PronunciationEnrollmentCapture, inspection: DictionaryAudioInspection) throws -> GigaAMEncoderFeatures? {
+    private static func reference(capture: PronunciationEnrollmentCapture, inspection: DictionaryAudioInspection,
+                                  snapshot: GigaAMDictionaryAcoustics.Snapshot, reencode: Reencode?) async throws -> GigaAMEncoderFeatures {
+        guard let reencode else {
+            guard let stored = try self.features(capture: capture, inspection: inspection) else {
+                throw PronunciationDictionaryStoreError.inconsistentEnrollment
+            }
+            return stored
+        }
+        guard let range = self.selectedRange(inspection) else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+        func requireOpenLease() throws {
+            try Task.checkCancellation()
+            guard snapshot.pronunciation?.isOpen == true, snapshot.negatives?.isOpen != false else {
+                throw PronunciationDictionaryStoreError.staleEvidence
+            }
+        }
+        try requireOpenLease()
+        let extracted = try await reencode(inspection.samples)
+        try requireOpenLease()
+        guard let cut = try self.focalFeatures(extracted, sampleCount: inspection.samples.count, range: range) else {
+            throw PronunciationDictionaryStoreError.inconsistentEnrollment
+        }
+        return cut.features
+    }
+
+    private static func selectedRange(_ inspection: DictionaryAudioInspection) -> Range<Int>? {
         guard inspection.isValid, inspection.frames.count == 1,
               inspection.selectedEnd <= inspection.duration + 1e-9 else { return nil }
         let start = Int((inspection.selectedStart * 16_000).rounded(.down))
         let end = min(inspection.recordedSampleCount, Int((inspection.selectedEnd * 16_000).rounded(.up)))
+        return start < end ? start..<end : nil
+    }
+
+    private static func features(capture: PronunciationEnrollmentCapture, inspection: DictionaryAudioInspection) throws -> GigaAMEncoderFeatures? {
+        guard let range = self.selectedRange(inspection) else { return nil }
         guard let cut = try self.focalFeatures(inspection.frames.map {
             DictionaryLearningFeatureFrames(extractorVersion: capture.extractorVersion ?? "", frames: $0)
-        }, sampleCount: inspection.samples.count, range: start..<end), cut.features.frameCount == capture.sourceFrameCount else { return nil }
+        }, sampleCount: inspection.samples.count, range: range), cut.features.frameCount == capture.sourceFrameCount else { return nil }
         return cut.features
     }
 
