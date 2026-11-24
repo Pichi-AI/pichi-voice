@@ -124,28 +124,29 @@ final class DictionaryRejectionService {
         if retained == nil, let id = hit.evidenceID { retained = await self.negatives.retainedEvidence(id: id) }
         guard !Task.isCancelled, current(), let evidence = retained, evidence.entryID == hit.entryID, evidence.label == hit.label,
               evidence.frames.isValid else { return false }
-        func profileMatches(_ profiles: [PronunciationDictionaryProfile]) -> Bool {
-            profiles.contains { item in
-                let suffix = item.modelKey == evidence.modelKey ? "" : ":" + evidence.modelKey
-                return item.dictionaryEntryID == evidence.entryID &&
-                    DictionaryNegativeEvidenceResolver.profileKey(item) + ":shared-features-v1" + suffix == evidence.profileKey
-            }
-        }
         let revision = await self.negatives.revision()
         let before = await self.profiles()
-        guard !Task.isCancelled, current(), profileMatches(before) else { return false }
+        guard !Task.isCancelled, current(), Self.matchesSourceProfile(evidence, in: before) else { return false }
         let correction = DictionaryNegativeCorrection(evidence: evidence, correctedText: corrected,
             expiresAt: Date().addingTimeInterval(DictionaryLearningRecording.lifetime))
         do {
             let inserted = try await self.negatives.save(correction, expectedRevision: revision)
             let after = await self.profiles()
             let latestRevision = await self.negatives.revision()
-            guard !Task.isCancelled, current(), profileMatches(after), latestRevision == revision else {
+            guard !Task.isCancelled, current(), Self.matchesSourceProfile(evidence, in: after), latestRevision == revision else {
                 if inserted, latestRevision == revision { try? await self.negatives.remove(id: evidence.id) }
                 return false
             }
             return true
         } catch { return false }
+    }
+
+    nonisolated static func matchesSourceProfile(_ evidence: DictionaryAcousticEvidence, in profiles: [PronunciationDictionaryProfile]) -> Bool {
+        profiles.contains { item in
+            let suffix = item.modelKey == evidence.modelKey ? "" : ":" + evidence.modelKey
+            return item.dictionaryEntryID == evidence.entryID &&
+                DictionaryNegativeEvidenceResolver.profileKey(item) + ":shared-features-v1" + suffix == evidence.profileKey
+        }
     }
 
     /// The selected occurrence alone is restored. Identical labels elsewhere may
