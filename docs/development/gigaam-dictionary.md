@@ -5,7 +5,7 @@ weights. The provider binds every example to the model fingerprint and extractor
 recipe. Existing correction capture, pronunciation storage and admitted profile
 reads carry the original PCM and optional features from the same ASR pass.
 
-A compatible GGUF runtime supplies bounded 768-channel encoder features at a
+The standard Mac Core ML package and compatible imported GGUF runtimes supply bounded 768-channel encoder features at a
 40 ms clock. Matching calibrates its operating point from the active references
 and other enrolled terms. A confirmed contextual correction complements two
 other recordings through the existing `activeCaptures` selection; older examples
@@ -15,7 +15,7 @@ Uncertain matches keep the original text.
 
 ## Runtime availability
 
-Ordinary builds use the versioned local archive in
+For GGUF compatibility, ordinary builds use the versioned local archive in
 `Vendor/TranscribeCpp/Artifacts`. Its manifest records the checksum, pinned
 upstream source, reviewed patch, licenses and platform provenance.
 `scripts/dev/check-transcribe-sdk.py` verifies that archive during portable
@@ -38,6 +38,7 @@ Configure the test host with:
 - `PICHI_ENCODER_DICTIONARY_PLAN`: local JSON manifest
 - `PICHI_GIGAAM_MODEL_DIR`: an existing compatible model directory
 - `PICHI_ENCODER_DICTIONARY_RESULTS`: a private output directory
+- Optional `PICHI_ENCODER_DICTIONARY_LEGACY_REFERENCE_DIR`: seed the isolated test profile with verified GGUF, unload it, then check that Core ML reads the saved references and prepares them from the original audio.
 
 The manifest contains `terms` mapping stable keys to canonical spellings and
 `cases` containing `name`, `path` and `kind`. Audio paths point to finite,
@@ -53,10 +54,10 @@ any occurrence becomes a reference, and deduplicate repeated physical audio.
 Freeze source annotations before examining correction results. Report tuning
 and feedback retests separately from untouched validation.
 
-## macOS dictation previews
+## macOS Core ML dictation
 
-On supported Apple Silicon Macs the default public GigaAM GGUF retains ownership of the final transcript, timestamps and dictionary evidence. A pinned FP16 Core ML companion can handle live previews on the CPU and Neural Engine. An admitted recording freezes its preview route. Local imports, meetings, file transcription and unsupported devices keep their existing route.
+The default macOS GigaAM download is the pinned GigaAM v3 E2E CTC FP16 Core ML package (about 422 MiB). The same weights supply live previews, a full-context final transcript, token-derived word times and acoustic dictionary features. The app also recognizes the identical package previously installed under `DictationPreview` by version 0.3.1. Saved jobs with explicit older fingerprints retain their original selection; normal Mac dictation never requests their GGUF or ONNX downloads.
 
-The companion is prepared asynchronously. An existing installation with only GGUF can start dictating immediately. The first eligible admission starts the optional download (about 422 MiB); a later recording can use it once preparation finishes. The companion has its own subdirectory under the default GigaAM store and is removed with the default model. Ordinary dictation continues if optional preparation or prediction fails.
+Core ML emits its final encoder representation before the CTC head for acoustic matching. Frame timing, window ownership, learning bounds, negative evidence and privacy admission follow the existing dictionary pipeline. The short preview uses a locally derived six-second shape; long-context repair and final recognition use the long graph. An accelerator failure can recover on CPU using the same model package. [Short shape generator](../../Vendor/PichiGigaAM/Tools/generate_preview_recipe.py).
 
-The incremental provider consumes new 16 kHz samples on the existing capture clock. It aligns the short window's observations using word identity and audio time, checks independent observations before sealing a core, uses more context on disputed boundaries, and reconciles phrase ends against the native model. Capture, privacy admission and the final dictionary pass use their existing services. Both graphs derive from the same verified public package. The six-second shape recipe ships without model weights. Its development generator is [generate_preview_recipe.py](../../Vendor/PichiGigaAM/Tools/generate_preview_recipe.py).
+Both fixed Core ML shapes mask padded encoder positions before attention softmax in every Conformer block. This prevents the size of the padded window from changing valid frames. To run the model-backed size invariance test, point `PICHI_GIGAAM_MASK_TEST_MODEL_DIR` at the pinned package directory.

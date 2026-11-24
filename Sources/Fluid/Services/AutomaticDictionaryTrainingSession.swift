@@ -286,19 +286,17 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
                 SettingsStore.shared.customDictionaryEntries.contains { $0.id == evidence.entryID && $0.replacement == evidence.label }
             }
             do {
-                let profiles = await pronunciationStore.profiles(modelKey: evidence.modelKey)
+                let profiles = await pronunciationStore.allProfiles()
                 guard self.isProfileVisible, !self.isCancelled, DictionaryMatcherExperiment.collectNegatives,
                       pronunciationGeneration == DictionaryMatcherExperiment.generation, entryIsCurrent(),
-                      correction.expiresAt > Date(), profiles.contains(where: {
-                          $0.dictionaryEntryID == evidence.entryID && DictionaryNegativeEvidenceResolver.profileKey($0) + ":shared-features-v1" == evidence.profileKey
-                      }) else { throw PronunciationDictionaryStoreError.staleEvidence }
+                      correction.expiresAt > Date(), DictionaryRejectionService.matchesSourceProfile(evidence, in: profiles) else { throw PronunciationDictionaryStoreError.staleEvidence }
                 try await store.save(correction, expectedRevision: revision)
-                let latest = await pronunciationStore.profiles(modelKey: evidence.modelKey)
+                let latest = await pronunciationStore.allProfiles()
                 let latestRevision = await store.revision()
                 guard self.isProfileVisible, !self.isCancelled, DictionaryMatcherExperiment.collectNegatives,
                       pronunciationGeneration == DictionaryMatcherExperiment.generation, entryIsCurrent(),
                       latestRevision == revision,
-                      latest.contains(where: { $0.dictionaryEntryID == evidence.entryID && DictionaryNegativeEvidenceResolver.profileKey($0) + ":shared-features-v1" == evidence.profileKey })
+                      DictionaryRejectionService.matchesSourceProfile(evidence, in: latest)
                 else {
                     try await store.remove(id: evidence.id)
                     throw PronunciationDictionaryStoreError.staleEvidence

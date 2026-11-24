@@ -219,6 +219,22 @@ extension ExternalDictationHistoryCorrectionTests {
         }
     }
 
+    func testMigratedPronunciationFeedbackRequiresItsExactSourceAndTarget() throws {
+        let (entry, source, alignment) = self.acousticFixture()
+        let original = try XCTUnwrap(alignment.acousticEvidence.first)
+        let target = "synthetic-coreml"
+        let key = GigaAMEncoderDictionaryStorage.feedbackProfileKey(source, modelKey: target)
+        func evidence(_ modelKey: String, _ profileKey: String) -> DictionaryAcousticEvidence {
+            .init(id: UUID(), entryID: entry.id, label: entry.replacement, profileKey: profileKey,
+                  modelKey: modelKey, sourceWordRange: 0..<1, frames: original.frames)
+        }
+        XCTAssertTrue(DictionaryRejectionService.matchesSourceProfile(evidence(target, key), in: [source]))
+        XCTAssertFalse(DictionaryRejectionService.matchesSourceProfile(evidence(target, original.profileKey), in: [source]))
+        XCTAssertFalse(DictionaryRejectionService.matchesSourceProfile(evidence("another-target", key), in: [source]))
+        XCTAssertFalse(DictionaryRejectionService.matchesSourceProfile(evidence(target, key), in: []))
+        XCTAssertTrue(DictionaryRejectionService.matchesSourceProfile(original, in: [source]))
+    }
+
     func testIndependentHistoryRejectionsSurviveCancellationOfEarlierPresentation() async throws {
         try await self.withHistory { history, _, root in
             let (entry, profile, initial) = self.acousticFixture()

@@ -65,6 +65,7 @@ nonisolated struct PronunciationEnrollmentCapture {
     var edgeFrameCount: Int? = 10
 }
 nonisolated struct PronunciationDictionaryProfile {
+    var dictionaryEntryID = UUID()
     var automaticMatchingEnabled: Bool? = true
     var modelKey = "A"
     var hiddenSize = 2
@@ -92,7 +93,7 @@ nonisolated enum PronunciationDictionaryStoreError: Error { case staleEvidence, 
         func inspection(for id: UUID) throws -> DictionaryAudioInspection { .init() }
         func originalAudioSamples(for capture: PronunciationEnrollmentCapture, entryID: UUID) throws -> [Float] { [1] }
     }
-    func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>, includingSharedFamilies: Bool = false, maximumReferencesPerProfile: Int = 3,
+    func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>, fallbackModelKey: String? = nil, includingSharedFamilies: Bool = false, maximumReferencesPerProfile: Int = 3,
         referenceSelection: @Sendable (PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] = { $0.matchingEnrollments }) throws -> CaptureRead { .init() }
     static func selectSharedProfiles(_ profiles: [PronunciationDictionaryProfile], modelKey: String, hiddenSize: Int?) -> [PronunciationDictionaryProfile] {
         profiles.filter { $0.modelKey == modelKey && (hiddenSize == nil || $0.hiddenSize == hiddenSize) }
@@ -110,7 +111,7 @@ nonisolated enum PronunciationDictionaryStoreError: Error { case staleEvidence, 
         func frames(entryID: UUID, profileKey: String, modelKey: String) -> [DictionaryMatchFrames] { active ? [.init()] : [] }
         func close(leaseID: UUID) { active = false }
     }
-    func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>) throws -> CaptureRead { .init() }
+    func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>, fallbackModelKey: String? = nil, fallbackEntryIDs: Set<UUID> = []) throws -> CaptureRead { .init() }
     func revision() async -> UUID { UUID() }
     func frames(entryID: UUID, profileKey: String, modelKey: String) async -> [DictionaryMatchFrames] { [] }
 }
@@ -139,11 +140,12 @@ nonisolated final class GigaAMPreferences: @unchecked Sendable {
     var importedID: String? = "private"
     func string(forKey key: String) -> String? { importedID }
 }
-nonisolated struct GigaAMModelDescriptor: Sendable {
+nonisolated struct GigaAMModelDescriptor: Sendable, Equatable {
     let id: String
     var fingerprint: String { "synthetic/" + id }
     func filesExist(in root: URL) -> Bool { root.lastPathComponent == id }
 }
+nonisolated enum GigaAMModelCatalog { static let coreMLModel = GigaAMModelDescriptor(id: "public-coreml") }
 nonisolated enum GigaAMError: Error { case incompatibleModel }
 // Inert acoustic neighbor. The runner projects the actual provider admission
 // methods, while this probe never extracts features or opens a model.
@@ -163,6 +165,7 @@ nonisolated enum GigaAMDictionaryAcoustics {
 }
 
 nonisolated enum GigaAMEncoderDictionaryStorage {
+    static func legacyReferenceKey(for key: String) -> String? { nil }
     static func modelKey(fingerprint: String) -> String { "synthetic-encoder/" + fingerprint }
     static func retainedCaptures(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] { captures }
 }
