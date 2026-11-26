@@ -26,7 +26,7 @@ result_values = protocol[protocol.index("nonisolated struct ASRTranscriptionResu
 pronunciation = (repo / "Sources/Fluid/Services/PronunciationDictionaryStore.swift").read_text()
 enrollment = pronunciation[pronunciation.index("nonisolated struct PronunciationEnrollmentCapture:"):pronunciation.index("nonisolated struct PronunciationDictionaryProfile:")]
 native = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMCoreMLInference.swift").read_text()
-runtime_status = native[native.index("public struct GigaAMExecutionStatus:"):native.index("/// The shipped Core ML graph")]
+runtime_status = native[native.index("public struct GigaAMExecutionStatus:"):native.index("final class GigaAMCoreMLInference")]
 
 def method(source, signature):
     start = source.index(signature)
@@ -43,7 +43,7 @@ neighbors = (repo / "Tests/Support/GigaAMArtifactDictionaryNeighbors.swift").rea
 acoustics = (repo / "Sources/Fluid/Services/GigaAMDictionaryAcoustics.swift").read_text()
 encoder = (repo / "Sources/Fluid/Services/GigaAMEncoderDictionaryStorage.swift").read_text()
 neighbors = neighbors.replace("// ACTUAL_LEGACY_MODEL_KEY", method(acoustics, "    static func modelKey("))
-neighbors = neighbors.replace("// ACTUAL_ENCODER_MODEL_KEY", method(encoder, "    private static var keyPrefix:") + "\n" + method(encoder, "    static func modelKey("))
+neighbors = neighbors.replace("// ACTUAL_ENCODER_MODEL_KEY", method(encoder, "    private static var keyPrefix:") + "\n" + method(encoder, "    static func modelKey(") + "\n" + method(encoder, "    static func feedbackProfileKey("))
 # 175: final correction counts retryable reference diagnostics of the real preparation result.
 encoder_dictionary = (repo / "Sources/Fluid/Services/GigaAMEncoderDictionary.swift").read_text()
 neighbors = neighbors.replace("// ACTUAL_ENCODER_PREPARATION", "\n".join(method(encoder_dictionary, signature)
@@ -64,7 +64,8 @@ with tempfile.TemporaryDirectory(prefix="pichi-gigaam-artifact-ownership-") as t
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMEncoderFeatures.swift"),
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMAcousticMatcher.swift"),
         # 174: the provider owns GigaAMWindowReuseSession handles and reads GigaAMTranscriptionWork.
-        str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMWindowReuse.swift"), str(runtime), "-o", str(library),
+        str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMWindowReuse.swift"),
+        str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMAdaptivePreview.swift"), str(runtime), "-o", str(library),
     ], check=True, cwd=repo)
     progress_source = temporary / "PreparationProgress.swift"
     progress_source.write_text("import Foundation\n" + progress + "\n" + execution_status + "\n" + result_values + "\n" + enrollment + "\n" + word_provenance)

@@ -30,7 +30,8 @@ final class GigaAMPreviewFinalizationXCTests: XCTestCase {
         }
 
         var isReady = true
-        var executionStatus: GigaAMExecutionStatus? { .init(backend: .cpu) }
+        var executionStatus: GigaAMExecutionStatus? = .init(backend: .cpu)
+        func report(_ status: GigaAMExecutionStatus) { self.executionStatus = status }
         private(set) var calls: [Call] = []
         private(set) var discarded: [UUID] = []
         private(set) var attempts = 0
@@ -76,9 +77,20 @@ final class GigaAMPreviewFinalizationXCTests: XCTestCase {
         func unload() { self.isReady = false }
     }
 
+    func testCoreMLRecoveryReportsTheAcceleratorFailureAfterSuccessfulFinal() async throws {
+        let output = GigaAMTranscript(text: "текст", confidence: 1, words: [], endOfUtteranceProbability: nil, processingDuration: 0)
+        try await withProvider(descriptor: GigaAMModelCatalog.coreMLModel, output: output) { provider, fixture, _ in
+            await fixture.report(.init(backend: .cpu, fallbackReason: .acceleratorInferenceFailed))
+            let final = try await provider.transcribeFinal([Float](repeating: 0, count: 16_000))
+            XCTAssertEqual(final.text, output.text)
+            XCTAssertEqual(provider.executionStatus?.fallbackReason, "CPU is in use because accelerated recognition failed.")
+        }
+    }
+
     private func withProvider(
         descriptor: GigaAMModelDescriptor = GigaAMModelCatalog.downloadableModel,
         output: GigaAMTranscript,
+        liveDictation: Bool = false,
         body: (PichiGigaAMProvider, NativeFixture, PronunciationDictionaryStore) async throws -> Void
     ) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("gigaam-preview-\(UUID().uuidString)")
@@ -91,7 +103,7 @@ final class GigaAMPreviewFinalizationXCTests: XCTestCase {
         PrivateProfileDefaults.shared.set(true, forKey: "DictionarySharedFeatureMatcherEnabled")
         let store = PronunciationDictionaryStore(fileURL: root.appendingPathComponent("pronunciations.json"), profile: profile)
         let provider = PichiGigaAMProvider(modelStore: .init(directory: root, downloadDescriptor: descriptor),
-            expectedModelFingerprint: descriptor.fingerprint, pronunciationStore: store)
+            expectedModelFingerprint: liveDictation ? nil : descriptor.fingerprint, pronunciationStore: store)
         let native = NativeFixture(output: output)
         await provider.usePreparedRuntimeForTesting(native, fingerprint: descriptor.fingerprint)
         defer {
@@ -151,6 +163,61 @@ final class GigaAMPreviewFinalizationXCTests: XCTestCase {
             }
         }
     }
+
+    #if os(macOS) && arch(arm64)
+    func testAdaptiveDictationReceivesOnlyTheDeltaAndUsesNativeFinalWithEvidence() async throws {
+        let output = try self.transcript()
+        try await self.withProvider(descriptor: GigaAMModelCatalog.coreMLModel, output: output, liveDictation: true) { provider, native, _ in
+            provider.setNeuralDecoderForTesting { _, _ in [.init(text: "Черновик", start: 0, end: 0.2, confidence: 1)] }
+            let lease = UUID()
+            try provider.beginAdmittedTranscription(leaseID: lease)
+            XCTAssertTrue(provider.usesFixedPreviewCadence)
+            let loud = [Float](repeating: 0.1, count: 8_000)
+            let first = try await provider.transcribeStreaming(loud)
+            XCTAssertEqual(first.text, "Черновик")
+            XCTAssertEqual(provider.incrementalPreviewDeltaStart(totalSampleCount: 16_000), 8_000)
+            _ = try await provider.transcribeStreamingDelta(loud, totalSampleCount: 16_000)
+            let quiet = [Float](repeating: 0, count: 8_000)
+            do {
+                _ = try await provider.transcribeStreamingDelta(quiet, totalSampleCount: 24_000)
+                XCTFail("A phrase checkpoint needs the full authoritative audio")
+            } catch IncrementalPreviewRequest.needsFullAudio {}
+            let full = loud + loud + quiet
+            let checked = try await provider.transcribeStreaming(full)
+            XCTAssertEqual(checked.text, output.text)
+            let final = try await provider.transcribeFinal(full)
+            XCTAssertEqual(final.text, output.text)
+            XCTAssertNotNil(final.dictionaryLearningAlignment)
+            let calls = await native.calls
+            XCTAssertEqual(calls.map(\.session), [lease, lease])
+            await provider.endAdmittedTranscription(leaseID: lease)
+            XCTAssertFalse(provider.usesFixedPreviewCadence)
+            XCTAssertNil(provider.incrementalPreviewDeltaStart(totalSampleCount: 32_000))
+        }
+    }
+
+    func testFailedNeuralPreviewRemainsCanonicalForTheRestOfThatAdmission() async throws {
+        let output = try self.transcript()
+        try await self.withProvider(descriptor: GigaAMModelCatalog.coreMLModel, output: output, liveDictation: true) { provider, native, _ in
+            provider.setNeuralDecoderForTesting { _, _ in
+                if await native.attempts < 2 { throw GigaAMError.invalidOutput }
+                return [.init(text: "Снова", start: 0, end: 0.2, confidence: 1)]
+            }
+            let lease = UUID()
+            try provider.beginAdmittedTranscription(leaseID: lease)
+            let fallback = try await provider.transcribeStreaming([Float](repeating: 0.1, count: 8_000))
+            XCTAssertEqual(fallback.text, output.text)
+            XCTAssertFalse(provider.usesFixedPreviewCadence)
+            await provider.endAdmittedTranscription(leaseID: lease)
+            let next = UUID()
+            try provider.beginAdmittedTranscription(leaseID: next)
+            let restored = try await provider.transcribeStreaming([Float](repeating: 0.1, count: 8_000))
+            XCTAssertEqual(restored.text, "Снова")
+            XCTAssertTrue(provider.usesFixedPreviewCadence)
+            await provider.endAdmittedTranscription(leaseID: next)
+        }
+    }
+    #endif
 
     func testCaptionCallsAndFinalOnlyRequestsDoNotReuseAnotherRecording() async throws {
         try await self.withProvider(output: self.transcript()) { provider, native, _ in

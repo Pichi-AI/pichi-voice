@@ -17,7 +17,7 @@ native menu labels, so putting the surface inside a `Menu` label is insufficient
 Segmented controls, disclosure rows, and icon-only action/context menus are not
 selection dropdowns and retain their own controls.
 
-Standard segmented selections use `FluidSegmentedPicker` with caller-resolved
+Standard segmented selections use `AppSegmentedPicker` with caller-resolved
 display labels and the existing selection binding. Its native cell owns opaque
 label surfaces and paired palette ink because AppKit flattens SwiftUI segment
 label colors. Native bezels, tracking, keyboard focus and accessibility remain.

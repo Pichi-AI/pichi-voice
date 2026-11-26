@@ -17,13 +17,14 @@ public struct GigaAMExecutionStatus: Sendable, Equatable {
     }
 }
 
-/// The shipped Core ML graph is consumed unchanged. This object owns only its
+/// A compiled GigaAM graph can expose both CTC scores and encoder features. This object owns its
 /// private compilation derivative and one loaded model at a time.
 final class GigaAMCoreMLInference {
     struct Output {
         let values: [Float]
         let frameCount: Int
         let vocabularySize: Int
+        var encoderValues: [Float]?
     }
 
     private let compiledURL: URL
@@ -32,9 +33,12 @@ final class GigaAMCoreMLInference {
     private var logitsName: String?
     private var lengthName: String?
     var isLoaded: Bool { self.model != nil }
+    var capacity: Int { self.featureFrameCount }
 
     init(packageURL: URL, featureFrameCount: Int) throws {
-        guard (2_199...8_000).contains(featureFrameCount) else { throw GigaAMError.incompatibleModel }
+        guard featureFrameCount == 599 || (2_199...8_000).contains(featureFrameCount) else {
+            throw GigaAMError.incompatibleModel
+        }
         self.featureFrameCount = featureFrameCount
         self.compiledURL = try MLModel.compileModel(at: packageURL)
     }
@@ -45,12 +49,16 @@ final class GigaAMCoreMLInference {
     }
 
     func load(gpu: Bool) throws {
+        try self.load(computeUnits: gpu ? .cpuAndGPU : .cpuOnly)
+    }
+
+    func load(computeUnits: MLComputeUnits) throws {
         self.model = nil
         self.logitsName = nil
         self.lengthName = nil
         try Task.checkCancellation()
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = gpu ? .cpuAndGPU : .cpuOnly
+        configuration.computeUnits = computeUnits
         let model = try MLModel(contentsOf: self.compiledURL, configuration: configuration)
         let inputs = model.modelDescription.inputDescriptionsByName
         guard inputs["features"]?.multiArrayConstraint?.shape.map(\.intValue) == [1, GigaAMFrontend.melCount, self.featureFrameCount],
@@ -60,7 +68,8 @@ final class GigaAMCoreMLInference {
         let outputs = model.modelDescription.outputDescriptionsByName
         let logits = outputs.filter {
             let type = $0.value.multiArrayConstraint?.dataType
-            return $0.value.multiArrayConstraint?.shape.count == 3 && (type == .float16 || type == .float32)
+            return $0.key != GigaAMEncoderGraph.outputName &&
+                $0.value.multiArrayConstraint?.shape.count == 3 && (type == .float16 || type == .float32)
         }
         let lengths = outputs.filter { $0.value.multiArrayConstraint?.shape.map(\.intValue) == [1] && $0.value.multiArrayConstraint?.dataType == .int32 }
         guard logits.count == 1, lengths.count == 1 else { throw GigaAMError.incompatibleModel }
@@ -76,7 +85,7 @@ final class GigaAMCoreMLInference {
         self.lengthName = nil
     }
 
-    func predict(features: [Float], frameCount: Int) throws -> Output {
+    func predict(features: [Float], frameCount: Int, captureEncoderFeatures: Bool = false) throws -> Output {
         try Task.checkCancellation()
         guard let model = self.model, let logitsName = self.logitsName, let lengthName = self.lengthName else { throw GigaAMError.notPrepared }
         guard frameCount > 0, frameCount <= self.featureFrameCount,
@@ -100,7 +109,19 @@ final class GigaAMCoreMLInference {
         let validFrames = try Self.validFrameCount(inputFrames: frameCount,
                                                    reportedFrames: outputLengths[0].intValue,
                                                    availableFrames: shape[1])
-        return try Self.readLogits(logits, validFrames: validFrames)
+        var output = try Self.readLogits(logits, validFrames: validFrames)
+        if captureEncoderFeatures {
+            let states = result.featureValue(for: GigaAMEncoderGraph.outputName)?.multiArrayValue
+            output.encoderValues = Self.readEncoder(states, outputFrames: shape[1], validFrames: validFrames)
+        }
+        try Task.checkCancellation()
+        return output
+    }
+
+    /// Keep transcript readback independent of an unavailable optional dictionary output.
+    static func readEncoder(_ states: MLMultiArray?, outputFrames: Int, validFrames: Int) -> [Float]? {
+        guard let states, states.shape.map(\.intValue) == [1, outputFrames, GigaAMEncoderFeatures.dimension] else { return nil }
+        return try? Self.readLogits(states, validFrames: validFrames).values
     }
 
     static func validFrameCount(inputFrames: Int, reportedFrames: Int, availableFrames: Int) throws -> Int {

@@ -68,6 +68,11 @@ public actor GigaAMRuntime {
     public init() throws {}
     public var executionStatus: GigaAMExecutionStatus? { nil }
     public var isReady: Bool { false }
+    public var supportsAdaptivePreview: Bool { false }
+    public func prepareAdaptivePreview() throws -> Bool { false }
+    public func recognizePreview(_ samples: [Float], longContext: Bool) throws -> [GigaAMWordTiming] {
+        throw GigaAMError.notPrepared
+    }
     public func beginAttempt() throws {}
     public func load(descriptor: GigaAMModelDescriptor, directory: URL,
                      executionProvider: GigaAMExecutionProvider = .automatic) async throws {

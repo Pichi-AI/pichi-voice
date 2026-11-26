@@ -22,6 +22,8 @@ final nonisolated class ConcealablePreferences: UserDefaults, @unchecked Sendabl
 nonisolated struct SpeechModelPerformanceRatings { let speedRating: Int; let accuracyRating: Int; let speedPercent: Double; let accuracyPercent: Double }
 nonisolated struct SpeechModelLibraryMetadata { let size: String; let processor: String; let recommendedMemory: String; let features: String; let performanceRatings: SpeechModelPerformanceRatings; let performanceExplanation: String; let cardDescription: String?; let hardwareLabel: String? }
 @MainActor protocol TranscriptionProvider {}
+enum IncrementalPreviewRequest: Error { case needsFullAudio }
+@MainActor protocol IncrementalDictationPreviewProviding: TranscriptionProvider {}
 nonisolated final class DebugLogger {
     static let shared = DebugLogger()
     func log(_ message: String, source: String) {}
@@ -56,10 +58,18 @@ nonisolated enum ProgressiveFileDownloader {
         let manager = FileManager.default
         try manager.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? manager.removeItem(at: root.deletingLastPathComponent()) }
+        #if os(macOS)
+        let publicDescriptor = GigaAMModelCatalog.coreMLModel
+        #else
         let publicDescriptor = GigaAMModelCatalog.downloadableModel
-        self.expect(publicDescriptor.libraryMetadata.hardwareLabel == "Apple Silicon", "The public model advertises Apple Silicon without changing its Intel compatibility")
+        #endif
+        self.expect(publicDescriptor.libraryMetadata.hardwareLabel == "Apple Silicon", "The public model advertises Apple Silicon")
         self.expect(publicDescriptor.libraryMetadata.cardDescription?.contains("punctuation") == true, "The public formatted export describes punctuation")
-        self.expect(publicDescriptor.libraryMetadata.cardDescription?.contains("Intel") == true, "The summary makes CPU compatibility explicit")
+        #if os(macOS)
+        self.expect(publicDescriptor.libraryMetadata.cardDescription?.contains("Core ML") == true, "The macOS summary identifies Core ML explicitly")
+        #else
+        self.expect(publicDescriptor.libraryMetadata.cardDescription?.contains("Intel") == true, "The GGUF summary makes CPU compatibility explicit")
+        #endif
         for descriptor in GigaAMModelCatalog.models where descriptor.format == .onnx && descriptor.vocabularyFile == nil {
             self.expect(descriptor.libraryMetadata.cardDescription?.contains("punctuation") == false, "Character exports do not inherit formatting claims")
         }
@@ -87,31 +97,44 @@ nonisolated enum ProgressiveFileDownloader {
             preconditionFailure("Installed synthetic fixtures must not download")
         }
 
-        // Freeze the new dictionary recipe from artifact metadata before any
-        // runtime load. No dictionary entries means no private read is admitted.
-        self.expect(!GigaAMRuntime.encoderFeatureAPIAvailable, "The inert runtime does not advertise features by default")
-        self.expect(!store.encoderDictionarySupported(fingerprint: publicDescriptor.fingerprint),
-                    "Missing SDK feature support rejects the encoder recipe before prepare")
+        // Freeze the dictionary recipe from artifact metadata before any runtime load.
+        // Core ML dictionary support is a product contract independent of the legacy
+        // transcribe.cpp SDK flag. The old GGUF route still requires that flag when
+        // an installation explicitly selects an old export.
+        let coreMLDescriptor = publicDescriptor
+        let legacyGGUFDescriptor = GigaAMModelCatalog.downloadableModel
+        self.expect(!GigaAMRuntime.encoderFeatureAPIAvailable, "The inert runtime does not advertise the legacy SDK feature by default")
+        #if os(macOS)
+        self.expect(store.encoderDictionarySupported(fingerprint: coreMLDescriptor.fingerprint),
+                    "The default Core ML fingerprint admits dictionary support without the legacy SDK flag")
+        #else
+        self.expect(!store.encoderDictionarySupported(fingerprint: coreMLDescriptor.fingerprint),
+                    "The non-macOS GGUF default still follows the legacy SDK capability gate")
+        #endif
+        self.expect(!store.encoderDictionarySupported(fingerprint: coreMLDescriptor.fingerprint + "-changed"),
+                    "A changed artifact fingerprint cannot inherit Core ML dictionary support")
+        self.expect(!store.encoderDictionarySupported(fingerprint: legacyGGUFDescriptor.fingerprint),
+                    "An explicitly retained GGUF still follows the legacy SDK capability gate")
         GigaAMArtifactTestCapabilities.encoderFeatureAPIAvailable = true
-        self.expect(store.encoderDictionarySupported(fingerprint: publicDescriptor.fingerprint),
-                    "An exact registered GGUF fingerprint admits encoder features without a model load")
-        self.expect(!store.encoderDictionarySupported(fingerprint: publicDescriptor.fingerprint + "-changed"),
-                    "A changed artifact fingerprint cannot inherit encoder support")
+        self.expect(store.encoderDictionarySupported(fingerprint: legacyGGUFDescriptor.fingerprint),
+                    "An exact registered GGUF admits encoder features when the SDK reports support")
+        self.expect(!store.encoderDictionarySupported(fingerprint: legacyGGUFDescriptor.fingerprint + "-changed"),
+                    "A changed GGUF fingerprint cannot inherit encoder support")
         if let nonGGUF = GigaAMModelCatalog.models.first(where: { $0.format != .gguf }) {
             self.expect(!store.encoderDictionarySupported(fingerprint: nonGGUF.fingerprint),
-                        "Registered non-GGUF exports cannot inherit the native encoder API")
+                        "Registered non-GGUF exports cannot inherit the legacy native encoder API")
         }
         DictionaryMatcherExperiment.sharedFeaturesEnabled = true
         DictionaryMatcherExperiment.generation = "before-cold-prepare"
-        let cold = PichiGigaAMProvider(modelStore: store, expectedModelFingerprint: publicDescriptor.fingerprint)
+        let cold = PichiGigaAMProvider(modelStore: store, expectedModelFingerprint: coreMLDescriptor.fingerprint)
         let coldLease = UUID()
         try cold.beginAdmittedTranscription(leaseID: coldLease)
         self.expect(!cold.isReady && cold.loadedModelFingerprint == nil,
                     "Metadata admission does not prepare or publish an inference runtime")
-        self.expect(self.usesEncoder(cold), "Cold admission freezes the available encoder recipe")
+        self.expect(self.usesEncoder(cold), "Cold admission freezes the available Core ML dictionary recipe")
         let admitted = self.snapshot(cold)
-        self.expect(admitted?.modelKey == GigaAMEncoderDictionaryStorage.modelKey(fingerprint: publicDescriptor.fingerprint),
-                    "The admitted encoder key binds the exact artifact and actual storage recipe")
+        self.expect(admitted?.modelKey == GigaAMEncoderDictionaryStorage.modelKey(fingerprint: coreMLDescriptor.fingerprint),
+                    "The admitted encoder key binds the Core ML artifact and actual storage recipe")
         self.expect(admitted?.enabled == true && admitted?.generation == "before-cold-prepare",
                     "Admission freezes the dictionary enable flag and generation")
         self.expect(admitted?.pronunciation == nil && admitted?.negatives == nil,
@@ -122,30 +145,30 @@ nonisolated enum ProgressiveFileDownloader {
         try cold.beginAdmittedTranscription(leaseID: coldLease)
         self.expect(self.usesEncoder(cold) && self.snapshot(cold)?.modelKey == admitted?.modelKey &&
                     self.snapshot(cold)?.generation == admitted?.generation && self.snapshot(cold)?.enabled == true,
-                    "Repeated admission of the same lease preserves recipe and flags after capability changes")
+                    "Repeated admission of the same Core ML lease preserves recipe and flags after SDK capability changes")
         let otherLease = UUID()
         do { try cold.beginAdmittedTranscription(leaseID: otherLease); preconditionFailure("A second lease must be rejected") }
         catch is CancellationError { self.checks += 1 }
         await cold.endAdmittedTranscription(leaseID: otherLease)
         self.expect(self.snapshot(cold)?.modelKey == admitted?.modelKey && self.usesEncoder(cold),
-                    "Another lease cannot release the frozen encoder snapshot")
+                    "Another lease cannot release the frozen Core ML snapshot")
         await cold.endAdmittedTranscription(leaseID: coldLease)
         self.expect(self.snapshot(cold) == nil && !self.usesEncoder(cold),
                     "The owning lease releases its snapshot and encoder capture state")
         let nextLease = UUID()
         try cold.beginAdmittedTranscription(leaseID: nextLease)
-        self.expect(!self.usesEncoder(cold) && self.snapshot(cold)?.enabled == false &&
+        self.expect(self.usesEncoder(cold) && self.snapshot(cold)?.enabled == false &&
                     self.snapshot(cold)?.generation == "changed-after-admission" &&
-                    self.snapshot(cold)?.modelKey == GigaAMDictionaryAcoustics.modelKey(fingerprint: publicDescriptor.fingerprint),
-                    "A later lease captures the changed capability and disabled state using the actual legacy recipe")
+                    self.snapshot(cold)?.modelKey == GigaAMEncoderDictionaryStorage.modelKey(fingerprint: coreMLDescriptor.fingerprint),
+                    "A later Core ML lease keeps the product contract even when the legacy SDK flag changes")
         await cold.endAdmittedTranscription(leaseID: nextLease)
         let mismatchedEvidence = DictionaryLearningAudioEvidence(recordingID: UUID(),
-            modelKey: GigaAMEncoderDictionaryStorage.modelKey(fingerprint: publicDescriptor.fingerprint + "-changed"),
+            modelKey: GigaAMEncoderDictionaryStorage.modelKey(fingerprint: coreMLDescriptor.fingerprint + "-changed"),
             observedText: "synthetic", sourceWordRange: 0..<1, sourceSampleRange: 0..<1,
             focalSampleRange: 0..<1, samples: [0])
         self.expect(try await cold.originalAudioEnrollment(mismatchedEvidence) == nil,
                     "Original encoder evidence from a different artifact is rejected before storage or inference")
-        let wrong = PichiGigaAMProvider(modelStore: store, expectedModelFingerprint: publicDescriptor.fingerprint + "-changed")
+        let wrong = PichiGigaAMProvider(modelStore: store, expectedModelFingerprint: coreMLDescriptor.fingerprint + "-changed")
         await GigaAMArtifactTestGate.shared.reset()
         do { try await wrong.prepare(); preconditionFailure("An unregistered fingerprint must not prepare") }
         catch GigaAMError.missingModels { self.checks += 1 }
@@ -154,7 +177,7 @@ nonisolated enum ProgressiveFileDownloader {
         self.expect(!wrong.isReady && wrong.loadedModelFingerprint == nil,
                     "Fingerprint rejection cannot publish loaded state")
         await wrong.unloadModel()
-        DictionaryMatcherExperiment.generation = "artifact-ownership-inert-dictionary"
+                DictionaryMatcherExperiment.generation = "artifact-ownership-inert-dictionary"
 
         let provider = PichiGigaAMProvider(modelStore: store)
         let lease = UUID()

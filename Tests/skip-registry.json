@@ -53,6 +53,10 @@
    "layer": "diagnostic-tool",
    "reason": "Local encoder dictionary replay is opt-in"
   },
+  "FluidDictationIntegrationTests/GigaAMNeuralReplayTests/testHalfSecondDictationThroughPreparedProviderWhenEnabled()": {
+   "layer": "L3-real-model",
+   "reason": "Set PICHI_GIGAAM_NEURAL_REPLAY_DIR to an isolated public replay fixture"
+  },
   "FluidDictationIntegrationTests/GigaAMPreviewFinalizationXCTests/testRealModelLongDictationReusesWindowsAndMatchesFullFinalizationWhenEnabled()": {
    "layer": "L3-real-model",
    "reason": "Set approved local GigaAM weights, public/synthetic audio and a private report path for real replay"

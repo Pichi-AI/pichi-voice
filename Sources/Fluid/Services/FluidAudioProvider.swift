@@ -2266,3 +2266,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     func resetStreamingPreviewCache() {}
 }
 #endif
+
+#if arch(arm64)
+extension FluidAudioProvider: IncrementalDictationPreviewProviding {}
+#endif

@@ -1,3 +1,4 @@
+import CoreML
 import Foundation
 import Metal
 import OnnxRuntimeBindings
@@ -19,6 +20,7 @@ public actor GigaAMRuntime {
     private var loadedURL: URL?
     private var frontend: GigaAMFrontend
     private var coreML: GigaAMCoreMLInference?
+    private var shortCoreML: GigaAMCoreMLInference?
     private var gguf: GigaAMGGUFInference?
     private var loadedIdentity: String?
     private let resources: @Sendable () -> GigaAMResourcePolicy
@@ -47,7 +49,17 @@ public actor GigaAMRuntime {
         return self.session != nil || self.coreML?.isLoaded == true || self.gguf?.isLoaded == true
     }
     public static var encoderFeatureAPIAvailable: Bool { TranscribeCpp.Session.nativeEncoderFeatureAPIAvailable }
-    public var supportsEncoderFeatureCapture: Bool { self.gguf?.supportsEncoderFeatures == true }
+    public var supportsEncoderFeatureCapture: Bool {
+        #if os(macOS)
+        if self.coreML?.isLoaded == true && self.descriptor == GigaAMModelCatalog.coreMLModel { return true }
+        #endif
+        return self.gguf?.supportsEncoderFeatures == true
+    }
+
+    public var supportsAdaptivePreview: Bool {
+        GigaAMNeuralPreviewEngine.isSupportedPlatform && self.descriptor == GigaAMModelCatalog.coreMLModel &&
+            !self.resources().requiresBackgroundExecution
+    }
 
     public func load(descriptor: GigaAMModelDescriptor, directory: URL, executionProvider: GigaAMExecutionProvider = .automatic) throws {
         try autoreleasepool {
@@ -96,7 +108,16 @@ public actor GigaAMRuntime {
                     self.vocabulary = GigaAMVocabulary(tokens: tokens + ["<blk>"], blankID: tokens.count, unknownID: 0, subword: true)
                     self.frontend = try GigaAMFrontend(windowURL: directory.appendingPathComponent(configuration.windowFile),
                                                        melFilterbankURL: directory.appendingPathComponent(configuration.melFilterbankFile))
-                    let native = try GigaAMCoreMLInference(packageURL: modelURL, featureFrameCount: configuration.featureFrameCount)
+                    let native: GigaAMCoreMLInference
+                    #if os(macOS)
+                    if descriptor == GigaAMModelCatalog.coreMLModel {
+                        native = try Self.compileDerivedGraph(from: modelURL, short: false, frameCount: configuration.featureFrameCount)
+                    } else {
+                        native = try GigaAMCoreMLInference(packageURL: modelURL, featureFrameCount: configuration.featureFrameCount)
+                    }
+                    #else
+                    native = try GigaAMCoreMLInference(packageURL: modelURL, featureFrameCount: configuration.featureFrameCount)
+                    #endif
                     self.coreML = native
                     try self.requireCoreMLCapacity()
                     if executionProvider == .cpu {
@@ -107,10 +128,7 @@ public actor GigaAMRuntime {
                         self.executionStatus = .init(backend: .cpu, fallbackReason: self.resources().requiresBackgroundExecution ? .backgroundExecution : .gpuUnavailable)
                     } else {
                         do {
-                            try native.load(gpu: true)
-                            let smoke = self.frontend.features([Float](repeating: 0, count: GigaAMFrontend.fftSize))
-                            _ = try native.predict(features: smoke.values, frameCount: smoke.frameCount)
-                            self.executionStatus = .init(backend: .gpu, fallbackReason: nil)
+                            try self.loadCoreMLAccelerator(native, descriptor: descriptor)
                         } catch {
                             try Task.checkCancellation()
                             guard Self.permitsExecutionFallback(error) else { throw error }
@@ -129,6 +147,63 @@ public actor GigaAMRuntime {
                 self.unload()
                 throw error
             }
+        }
+    }
+
+    private static func compileDerivedGraph(from package: URL, short: Bool, frameCount: Int) throws -> GigaAMCoreMLInference {
+        let staging = FileManager.default.temporaryDirectory.appendingPathComponent("pichi-gigaam-\(UUID().uuidString).mlpackage")
+        defer { try? FileManager.default.removeItem(at: staging) }
+        if short {
+            try GigaAMShortGraph.materialize(from: package, into: staging)
+        } else {
+            try GigaAMEncoderGraph.materialize(from: package, into: staging)
+        }
+        try Task.checkCancellation()
+        return try GigaAMCoreMLInference(packageURL: staging, featureFrameCount: frameCount)
+    }
+
+    private func loadCoreMLAccelerator(_ native: GigaAMCoreMLInference, descriptor: GigaAMModelDescriptor) throws {
+        let neural = descriptor == GigaAMModelCatalog.coreMLModel && GigaAMNeuralPreviewEngine.isSupportedPlatform
+        try native.load(computeUnits: neural ? .cpuAndNeuralEngine : .cpuAndGPU)
+        let smoke = self.frontend.features([Float](repeating: 0, count: GigaAMFrontend.fftSize))
+        _ = try native.predict(features: smoke.values, frameCount: smoke.frameCount)
+        self.executionStatus = .init(backend: neural ? .neuralEngine : .gpu)
+    }
+
+    /// Optional six-second specialization, prepared from the same verified
+    /// package. Canonical recognition stays available if preparation fails.
+    public func prepareAdaptivePreview() throws -> Bool {
+        try Task.checkCancellation()
+        guard let package = self.loadedURL, self.descriptor == GigaAMModelCatalog.coreMLModel,
+              self.executionStatus?.backend == .neuralEngine else { return false }
+        if self.shortCoreML != nil { return true }
+        do {
+            let short = try Self.compileDerivedGraph(from: package, short: true, frameCount: GigaAMShortGraph.frameCount)
+            try short.load(computeUnits: .cpuAndNeuralEngine)
+            try Task.checkCancellation()
+            self.shortCoreML = short
+            return true
+        } catch {
+            try Task.checkCancellation()
+            return false
+        }
+    }
+
+    public func recognizePreview(_ samples: [Float], longContext: Bool) throws -> [GigaAMWordTiming] {
+        try Task.checkCancellation()
+        try GigaAMNeuralPreviewEngine.validate(samples, longContext: longContext)
+        if !longContext && self.shortCoreML == nil {
+            guard try self.prepareAdaptivePreview() else { throw GigaAMError.notPrepared }
+        }
+        guard self.executionStatus?.backend == .neuralEngine,
+              let backend = longContext ? self.coreML : self.shortCoreML,
+              let vocabulary = self.vocabulary else { throw GigaAMError.notPrepared }
+        return try autoreleasepool {
+            let features = self.frontend.features(samples)
+            let output = try backend.predict(features: features.values, frameCount: features.frameCount)
+            guard output.vocabularySize == vocabulary.tokens.count else { throw GigaAMError.invalidOutput }
+            return try GigaAMCTC.decode(logProbabilities: output.values, frameCount: output.frameCount,
+                vocabulary: vocabulary, audioDuration: Double(samples.count) / Double(GigaAMFrontend.sampleRate))
         }
     }
 
@@ -213,7 +288,7 @@ public actor GigaAMRuntime {
                 try self.loadGGUFGPUOrFallback(native)
                 return
             }
-            guard let native = self.coreML, native.isLoaded, self.executionStatus?.backend == .cpu,
+            guard let native = self.coreML, let descriptor = self.descriptor, native.isLoaded, self.executionStatus?.backend == .cpu,
                   let reason = self.executionStatus?.fallbackReason,
                   [.gpuUnavailable, .memoryBudget, .acceleratorLoadFailed, .acceleratorInferenceFailed].contains(reason),
                   self.resources().hasGPU else { return }
@@ -223,10 +298,7 @@ public actor GigaAMRuntime {
                 return
             }
             do {
-                try native.load(gpu: true)
-                let smoke = self.frontend.features([Float](repeating: 0, count: GigaAMFrontend.fftSize))
-                _ = try native.predict(features: smoke.values, frameCount: smoke.frameCount)
-                self.executionStatus = .init(backend: .gpu, fallbackReason: nil)
+                try self.loadCoreMLAccelerator(native, descriptor: descriptor)
             } catch {
                 try Task.checkCancellation()
                 guard Self.permitsExecutionFallback(error) else { throw error }
@@ -246,6 +318,7 @@ public actor GigaAMRuntime {
         autoreleasepool {
             self.gguf?.unload()
             self.gguf = nil
+            self.shortCoreML = nil
             self.coreML?.unloadModel()
             self.coreML = nil
             self.session = nil
@@ -306,11 +379,12 @@ public actor GigaAMRuntime {
                                         processingDuration: ProcessInfo.processInfo.systemUptime - start, encoderWindows: result.encoderWindows)
             }
             guard samples.allSatisfy(\.isFinite), Self.permitsExecutionFallback(error),
-                  self.executionStatus?.backend == .gpu, let native = self.coreML else { throw error }
+                  self.executionStatus?.backend != .cpu, let native = self.coreML else { throw error }
             // The failed synchronous prediction has joined. Retire its GPU model
             // before loading CPU from the same frozen compilation derivative.
             do {
                 try autoreleasepool {
+                    self.shortCoreML = nil
                     native.unloadModel()
                     try self.requireCoreMLCapacity()
                     try native.load(gpu: false)
@@ -427,14 +501,20 @@ public actor GigaAMRuntime {
               snapshot.values.count == snapshot.frameCount * snapshot.dimension,
               snapshot.frameCount <= 600,
               abs(snapshot.frameCount - Int(ceil(duration / 0.04))) <= 1 else { throw GigaAMError.invalidOutput }
+        return try self.encoderWindows(values: snapshot.values, frameCount: snapshot.frameCount, duration: duration)
+    }
+
+    private static func encoderWindows(values: [Float], frameCount: Int, duration: Double) throws -> [GigaAMEncoderWindow] {
+        guard frameCount > 0, frameCount <= 600, values.count == frameCount * GigaAMEncoderFeatures.dimension,
+              abs(frameCount - Int(ceil(duration / GigaAMEncoderFeatures.frameDuration))) <= 1 else { throw GigaAMError.invalidOutput }
         var windows: [GigaAMEncoderWindow] = []
-        for coreStart in stride(from: 0, to: snapshot.frameCount, by: 250) {
+        for coreStart in stride(from: 0, to: frameCount, by: 250) {
             try Task.checkCancellation()
-            let lower = max(0, coreStart - 62), upper = min(snapshot.frameCount, coreStart + 312)
+            let lower = max(0, coreStart - 62), upper = min(frameCount, coreStart + 312)
             let ownStart = Double(coreStart) * 0.04
-            let ownEnd = min(duration, Double(min(snapshot.frameCount, coreStart + 250)) * 0.04)
+            let ownEnd = min(duration, Double(min(frameCount, coreStart + 250)) * 0.04)
             guard ownStart < ownEnd else { continue }
-            let features = try GigaAMEncoderFeatures(values: Array(snapshot.values[(lower * 768)..<(upper * 768)]))
+            let features = try GigaAMEncoderFeatures(values: Array(values[(lower * 768)..<(upper * 768)]))
             windows.append(try GigaAMEncoderWindow(offset: Double(lower) * 0.04,
                 ownership: ownStart..<ownEnd, features: features))
         }
@@ -468,11 +548,18 @@ public actor GigaAMRuntime {
             let values: [Float]
             let frameCount: Int
             var probability: Float?
+            var windows: [GigaAMEncoderWindow] = []
             if let native = self.coreML {
-                let output = try native.predict(features: features.values, frameCount: features.frameCount)
+                let output = try native.predict(features: features.values, frameCount: features.frameCount,
+                                                captureEncoderFeatures: captureEncoderFeatures)
                 guard output.vocabularySize == vocabulary.tokens.count else { throw GigaAMError.invalidOutput }
                 values = output.values
                 frameCount = output.frameCount
+                if let encoder = output.encoderValues {
+                    do { windows = try Self.encoderWindows(values: encoder, frameCount: frameCount, duration: Double(samples.count) / 16_000) }
+                    catch is CancellationError { throw CancellationError() }
+                    catch { windows = [] }
+                }
             } else {
                 guard let session = self.session else { throw GigaAMError.notPrepared }
                 let featureData = features.values.withUnsafeBytes { NSMutableData(bytes: $0.baseAddress!, length: $0.count) }
@@ -500,7 +587,7 @@ public actor GigaAMRuntime {
             }
             let duration = Double(samples.count) / Double(GigaAMFrontend.sampleRate)
             let words = try GigaAMCTC.decode(logProbabilities: values, frameCount: frameCount, vocabulary: vocabulary, audioDuration: duration)
-            return GigaAMTranscript(text: words.map(\.text).joined(separator: " "), confidence: words.isEmpty ? 0 : words.map(\.confidence).reduce(0, +) / Float(words.count), words: words, endOfUtteranceProbability: probability, processingDuration: ProcessInfo.processInfo.systemUptime - start)
+            return GigaAMTranscript(text: words.map(\.text).joined(separator: " "), confidence: words.isEmpty ? 0 : words.map(\.confidence).reduce(0, +) / Float(words.count), words: words, endOfUtteranceProbability: probability, processingDuration: ProcessInfo.processInfo.systemUptime - start, encoderWindows: windows)
         }
     }
 

@@ -18,13 +18,18 @@ extension GigaAMModelDescriptor {
             )
         }
         if case .coreML = self.format {
+            #if os(macOS) && arch(arm64)
+            let processor = "Neural Engine / CPU"
+            #else
+            let processor = "GPU preferred; CPU fallback"
+            #endif
             return SpeechModelLibraryMetadata(
                 size: String(format: "~%.1f MiB", Double(self.artifacts.compactMap(\.byteCount).reduce(0, +)) / 1_048_576),
-                processor: "GPU preferred; CPU fallback",
+                processor: processor,
                 recommendedMemory: "8 GB+ RAM recommended",
                 features: "Punctuation, capitalization and text normalization. Published Core ML model.",
                 performanceRatings: .init(speedRating: 4, accuracyRating: 4, speedPercent: 0.90, accuracyPercent: 0.90),
-                performanceExplanation: "The published GigaAM v3 Core ML export runs on GPU by default. CPU is used only if GPU execution is unavailable or fails. Library percentages are relative product ratings, not measured accuracy.",
+                performanceExplanation: "GigaAM uses one Core ML package for live text, final recognition and acoustic dictionary features. On Apple Silicon, Core ML can use the Neural Engine. Library percentages are relative product ratings, not measured accuracy.",
                 cardDescription: "Russian speech recognition with automatic punctuation and text normalization. Runs locally using Core ML.",
                 hardwareLabel: "Apple Silicon"
             )
@@ -67,9 +72,9 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     typealias Download = @Sendable (URL, Int64, @escaping @Sendable (Int64, Int64) -> Void) async throws -> (URL, URLResponse)
     static let shared = PichiGigaAMModelStore()
     static var defaultDownloadByteCount: Int64 {
-        let descriptor = self.shared.downloadDescriptor
-        return descriptor.artifacts.compactMap(\.byteCount).reduce(0, +)
+        self.shared.downloadDescriptor.artifacts.compactMap(\.byteCount).reduce(0, +)
     }
+
     static var supportsDefaultDownload: Bool { self.shared.downloadDescriptor.downloadBaseURL != nil }
     static var preferredLibraryMetadata: SpeechModelLibraryMetadata? { self.shared.downloadDescriptor.libraryMetadata }
     var defaultModelFingerprint: String { self.downloadDescriptor.fingerprint }
@@ -140,7 +145,10 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
 
     /// Metadata-only capability used while freezing admission, before model load.
     func encoderDictionarySupported(fingerprint: String) -> Bool {
-        GigaAMRuntime.encoderFeatureAPIAvailable &&
+        #if os(macOS)
+        if fingerprint == GigaAMModelCatalog.coreMLModel.fingerprint { return true }
+        #endif
+        return GigaAMRuntime.encoderFeatureAPIAvailable &&
             self.registeredDescriptors.first(where: { $0.fingerprint == fingerprint })?.format == .gguf
     }
 
@@ -169,7 +177,15 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     }
 
     private static func locate(_ descriptor: GigaAMModelDescriptor, in root: URL) -> URL? {
-        [root.appendingPathComponent(descriptor.id, isDirectory: true), root].first { descriptor.filesExist(in: $0) }
+        let direct = [root.appendingPathComponent(descriptor.id, isDirectory: true), root]
+        if let found = direct.first(where: { descriptor.filesExist(in: $0) }) { return found }
+        // Version 0.3.1 installed these exact pinned bytes as an optional companion.
+        // Use them in place so old URLs remain valid and an upgrade works offline.
+        if descriptor == GigaAMModelCatalog.coreMLModel {
+            let previous = self.previousCoreMLDirectory(in: root)
+            if descriptor.filesExist(in: previous) { return previous }
+        }
+        return nil
     }
 
     // Disk scans in the model picker remain cheap. Full digests are verified off the
@@ -204,11 +220,19 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     /// live source preference. Recover only the matching automatic policy reason.
     func automaticCPUReason(forFingerprint fingerprint: String, directory: URL) -> GigaAMExecutionStatus.FallbackReason? {
         let owned = Self.defaultDirectory.appendingPathComponent(self.downloadDescriptor.id, isDirectory: true)
+        let path = directory.standardizedFileURL.path
+        let previousCoreML = self.downloadDescriptor == GigaAMModelCatalog.coreMLModel &&
+            path == Self.previousCoreMLDirectory(in: Self.defaultDirectory).standardizedFileURL.path
         guard fingerprint == self.downloadDescriptor.fingerprint,
-              directory.standardizedFileURL.path == owned.standardizedFileURL.path,
+              path == owned.standardizedFileURL.path || previousCoreML,
               self.preferences.string(forKey: Self.importedModelPreferenceKey) == nil,
               self.environment["PICHI_GIGAAM_MODEL_DIR"]?.isEmpty ?? true else { return nil }
         return self.defaultCPUReason
+    }
+
+    private static func previousCoreMLDirectory(in root: URL) -> URL {
+        root.appendingPathComponent("DictationPreview", isDirectory: true)
+            .appendingPathComponent(GigaAMModelCatalog.coreMLModel.id, isDirectory: true)
     }
 
     /// Preparation only downloads the pinned public source unless a verified import was
@@ -365,6 +389,13 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
               self.environment["PICHI_GIGAAM_MODEL_DIR"]?.isEmpty != false,
               directory.path == Self.defaultDirectory.standardizedFileURL.path else { return }
         try Self.validateOwnedDirectory(directory)
+        if selection.descriptor == GigaAMModelCatalog.coreMLModel {
+            let previous = Self.previousCoreMLDirectory(in: directory)
+            if selection.descriptor.filesExist(in: previous) {
+                try Self.validateOwnedDirectory(previous)
+                try FileManager.default.removeItem(at: previous)
+            }
+        }
         guard let installed = Self.locate(selection.descriptor, in: directory) else { return }
         if installed.path != directory.path {
             try Self.validateOwnedDirectory(installed)
@@ -423,6 +454,10 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     private(set) var executionStatus: TranscriptionExecutionStatus?
     private var runtime: (any PichiGigaAMInferenceRuntime)?
     private var previewReuseSession: GigaAMWindowReuseSession?
+    private var neuralDecoder: GigaAMAdaptivePreview.Decoder?
+    private var adaptivePreview: GigaAMAdaptivePreview?
+    private var previewSampleCount = 0
+    private(set) var usesFixedPreviewCadence = false
     private var preparationTask: Task<Void, Error>?
     private var lifecycleGeneration = 0
     private var executionAttemptPending = false
@@ -464,15 +499,19 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         } ?? ""
         let entryIDs = Set(entries.map(\.id))
         let useEncoderReferences = self.dictionaryUsesEncoderFeatures
+        let legacyKey = GigaAMEncoderDictionaryStorage.legacyReferenceKey(for: modelKey)
         let pronunciation = dictionaryEnabled && !entryIDs.isEmpty
-            ? try self.pronunciationStore.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs, maximumReferencesPerProfile: useEncoderReferences ? 10 : 3,
+            ? try self.pronunciationStore.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs,
+                fallbackModelKey: legacyKey, maximumReferencesPerProfile: useEncoderReferences ? 10 : 3,
                 referenceSelection: { profile in
                     useEncoderReferences ? GigaAMEncoderDictionaryStorage.retainedCaptures(profile.enrollments)
                         : GigaAMDictionaryAcoustics.activeCaptures(profile.enrollments) }) : nil
         let negatives: DictionaryNegativeExampleStore.CaptureRead?
         do {
+            let legacyEntryIDs = Set(pronunciation?.profiles.filter { $0.modelKey == legacyKey }.map(\.dictionaryEntryID) ?? [])
             negatives = dictionaryEnabled && DictionaryMatcherExperiment.compareNegatives && !entryIDs.isEmpty
-                ? try DictionaryNegativeExampleStore.shared.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs) : nil
+                ? try DictionaryNegativeExampleStore.shared.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs,
+                    fallbackModelKey: legacyKey, fallbackEntryIDs: legacyEntryIDs) : nil
         } catch {
             pronunciation?.close(leaseID: leaseID)
             throw error
@@ -480,12 +519,17 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         self.dictionarySnapshot = .init(modelKey: modelKey, generation: DictionaryMatcherExperiment.generation,
             enabled: dictionaryEnabled, entries: entries, pronunciation: pronunciation, negatives: negatives)
         self.admittedSource = (leaseID, selection)
+        self.admitNeuralPreview()
         self.previewReuseSession = nil
         self.executionAttemptPending = true
     }
 
     func endAdmittedTranscription(leaseID: UUID) async {
         guard self.admittedSource?.leaseID == leaseID else { return }
+        let adaptive = self.adaptivePreview
+        self.adaptivePreview = nil
+        self.previewSampleCount = 0
+        self.usesFixedPreviewCadence = false
         let reuseSession = self.previewReuseSession
         let runtime = self.runtime
         reuseSession?.invalidate()
@@ -496,7 +540,16 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         self.dictionaryUsesEncoderFeatures = false
         self.admittedSource = nil
         self.executionAttemptPending = false
+        await adaptive?.close()
         if let reuseSession { await runtime?.discardWindowReuse(for: reuseSession.id) }
+    }
+
+    private func admitNeuralPreview() {
+        guard let decoder = self.neuralDecoder, self.admittedSource?.selection?.descriptor == GigaAMModelCatalog.coreMLModel,
+              self.loadedModelFingerprint == GigaAMModelCatalog.coreMLModel.fingerprint else { return }
+        self.adaptivePreview = GigaAMAdaptivePreview(decode: decoder)
+        self.previewSampleCount = 0
+        self.usesFixedPreviewCadence = true
     }
 
     // MARK: - Provider lifecycle
@@ -509,6 +562,13 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     }
 
     #if DEBUG
+    var hasAdaptiveDecoderForTesting: Bool { self.neuralDecoder != nil }
+
+    func setNeuralDecoderForTesting(_ decoder: GigaAMAdaptivePreview.Decoder?) {
+        precondition(self.admittedSource == nil)
+        self.neuralDecoder = decoder
+    }
+
     var beforeReferencePreparationForTesting: (@MainActor () async -> Void)?
 
     func resetPronunciationReferenceCacheForTesting() {
@@ -526,7 +586,6 @@ final class PichiGigaAMProvider: TranscriptionProvider {
 
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
-        if self.isReady { return }
         if let task = self.preparationTask {
             let generation = self.lifecycleGeneration
             try await task.value
@@ -536,6 +595,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             }
             return
         }
+        if self.isReady { return }
         let admittedSelection = try self.admittedSource?.selection
             ?? (self.expectedModelFingerprint == nil ? self.modelStore.selectedArtifact() : nil)
         self.preparedDefaultCPUReason = admittedSelection?.fallbackReason
@@ -563,9 +623,19 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             guard self.lifecycleGeneration == generation, self.runtime === runtime else {
                 throw CancellationError()
             }
+            if self.expectedModelFingerprint == nil, model.descriptor == GigaAMModelCatalog.coreMLModel,
+               await runtime.supportsAdaptivePreview {
+                _ = try await runtime.prepareAdaptivePreview()
+                try Task.checkCancellation()
+                guard self.lifecycleGeneration == generation, self.runtime === runtime else { throw CancellationError() }
+                self.neuralDecoder = { try await runtime.recognizePreview($0, longContext: $1) }
+                DebugLogger.shared.info("GigaAM integrated Core ML preview configured", source: "GigaAM")
+            }
             self.loadedModelFingerprint = fingerprint
             self.isReady = true
+            self.admitNeuralPreview()
             await self.refreshExecutionStatus(from: runtime)
+            guard self.lifecycleGeneration == generation, self.runtime === runtime else { throw CancellationError() }
         }
         self.preparationTask = task
         defer {
@@ -593,6 +663,17 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         }
     }
 
+    private func beginExecutionIfNeeded(_ runtime: any PichiGigaAMInferenceRuntime) async throws {
+        guard self.executionAttemptPending || self.admittedSource == nil else { return }
+        let lease = self.admittedSource?.leaseID
+        let generation = self.lifecycleGeneration
+        self.executionAttemptPending = false
+        try await runtime.beginAttempt()
+        try Task.checkCancellation()
+        guard self.lifecycleGeneration == generation, self.admittedSource?.leaseID == lease,
+              self.runtime === runtime, self.isReady else { throw CancellationError() }
+    }
+
     func transcribeDetailed(_ samples: [Float], captureEncoderFeatures: Bool = false,
                             reusingWindowsFor session: GigaAMWindowReuseSession? = nil) async throws -> GigaAMTranscript {
         try Task.checkCancellation()
@@ -600,12 +681,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         let generation = self.lifecycleGeneration
         let fingerprint = self.loadedModelFingerprint
         do {
-            if self.executionAttemptPending || self.admittedSource == nil {
-                self.executionAttemptPending = false
-                try await runtime.beginAttempt()
-                try Task.checkCancellation()
-                guard self.runtime === runtime, self.isReady else { throw CancellationError() }
-            }
+            try await self.beginExecutionIfNeeded(runtime)
             if let session {
                 guard session.isOpen, self.previewReuseSession === session,
                       self.admittedSource?.leaseID == session.id else { throw CancellationError() }
@@ -654,9 +730,9 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         switch reportedReason {
         case .compatibleExportMissing: reason = "CPU fallback: a compatible GPU export is not installed."
         case .invalidExport: reason = "CPU fallback: the GPU export failed validation."
-        case .gpuUnavailable: reason = "CPU fallback: GPU execution is unavailable on this device."
-        case .acceleratorLoadFailed: reason = "CPU fallback: the GPU model could not be loaded."
-        case .acceleratorInferenceFailed: reason = "CPU fallback: GPU execution failed."
+        case .gpuUnavailable: reason = "CPU is in use because hardware acceleration is unavailable."
+        case .acceleratorLoadFailed: reason = "CPU is in use because the accelerator could not load the model."
+        case .acceleratorInferenceFailed: reason = "CPU is in use because accelerated recognition failed."
         case .explicitCPU: reason = "CPU was explicitly selected for diagnostics."
         case .unsupportedInputShape: reason = "CPU fallback: the GPU export does not support this input shape."
         case .incompatibleExport: reason = "CPU fallback: this imported export does not support GPU execution."
@@ -677,6 +753,12 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     }
 
     func transcribeStreaming(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+        if let preview = self.adaptivePreview {
+            do {
+                return try await self.neuralResult(preview, samples: samples, total: samples.count, delta: false)
+            } catch is CancellationError { throw CancellationError() }
+            catch { try await self.disableNeuralPreview(preview) }
+        }
         // Meeting captions have no admitted dictation lease and remain stateless.
         // Retain native feature evidence during preview so final correction does
         // not need to run recognition again just to acquire it.
@@ -691,6 +773,69 @@ final class PichiGigaAMProvider: TranscriptionProvider {
                                                        reusingWindowsFor: session)
         return ASRTranscriptionResult(text: result.text, confidence: result.confidence,
                                       endOfUtteranceProbability: result.endOfUtteranceProbability)
+    }
+
+    func incrementalPreviewDeltaStart(totalSampleCount: Int) -> Int? {
+        guard self.adaptivePreview != nil, self.previewSampleCount > 0,
+              totalSampleCount > self.previewSampleCount else { return nil }
+        return self.previewSampleCount
+    }
+
+    func transcribeStreamingDelta(_ samples: [Float], totalSampleCount: Int) async throws -> ASRTranscriptionResult {
+        guard let preview = self.adaptivePreview else { throw GigaAMError.notPrepared }
+        do {
+            return try await self.neuralResult(preview, samples: samples, total: totalSampleCount, delta: true)
+        } catch is CancellationError { throw CancellationError() }
+        catch let request as IncrementalPreviewRequest { throw request }
+        catch {
+            try await self.disableNeuralPreview(preview)
+            // ASRService replays the full buffer on the canonical provider after a failed delta.
+            throw error
+        }
+    }
+
+    private func neuralResult(_ preview: GigaAMAdaptivePreview, samples: [Float], total: Int,
+                              delta: Bool) async throws -> ASRTranscriptionResult {
+        guard let lease = self.admittedSource?.leaseID, let runtime = self.runtime else { throw CancellationError() }
+        try await self.beginExecutionIfNeeded(runtime)
+        let result = if delta {
+            try await preview.preview(appendingSamples: samples, totalSampleCount: total)
+        } else {
+            try await preview.preview(growingSamples: samples)
+        }
+        try Task.checkCancellation()
+        guard self.admittedSource?.leaseID == lease, self.adaptivePreview === preview else { throw CancellationError() }
+        if self.previewSampleCount == 0 {
+            DebugLogger.shared.info("GigaAM dictation preview using adaptive Core ML", source: "GigaAM")
+        }
+        let words: [GigaAMWordTiming]
+        if result.needsCanonicalCheckpoint {
+            if delta { throw IncrementalPreviewRequest.needsFullAudio }
+            let session = self.previewReuseSession ?? GigaAMWindowReuseSession(id: lease)
+            self.previewReuseSession = session
+            let canonical = try await self.transcribeDetailed(samples,
+                captureEncoderFeatures: self.dictionaryUsesEncoderFeatures && DictionaryMatcherExperiment.sharedFeaturesEnabled,
+                reusingWindowsFor: session)
+            try await preview.acceptCanonicalCheckpoint(canonical.words, sampleCount: total)
+            guard self.admittedSource?.leaseID == lease, self.adaptivePreview === preview else { throw CancellationError() }
+            words = canonical.words
+        } else {
+            words = result.words
+        }
+        self.previewSampleCount = total
+        let confidence = words.isEmpty ? 0 : words.reduce(Float(0)) { $0 + $1.confidence } / Float(words.count)
+        return ASRTranscriptionResult(text: words.map(\.text).joined(separator: " "), confidence: confidence)
+    }
+
+    private func disableNeuralPreview(_ preview: GigaAMAdaptivePreview) async throws {
+        guard self.adaptivePreview === preview, let lease = self.admittedSource?.leaseID else { throw CancellationError() }
+        self.adaptivePreview = nil
+        self.previewSampleCount = 0
+        self.usesFixedPreviewCadence = false
+        await preview.close()
+        try Task.checkCancellation()
+        guard self.admittedSource?.leaseID == lease else { throw CancellationError() }
+        DebugLogger.shared.info("GigaAM dictation preview recovered on canonical engine", source: "GigaAM")
     }
 
     func transcribeFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult {
@@ -777,7 +922,14 @@ final class PichiGigaAMProvider: TranscriptionProvider {
                 #if DEBUG
                 if let beforeReferencePreparationForTesting { await beforeReferencePreparationForTesting() }
                 #endif
-                preparation = try await GigaAMEncoderDictionaryStorage.preparedWords(snapshot)
+                guard let runtime = self.runtime else { throw CancellationError() }
+                preparation = try await GigaAMEncoderDictionaryStorage.preparedWords(snapshot) { @MainActor samples in
+                    try validateAdmission(snapshot)
+                    guard self.runtime === runtime else { throw CancellationError() }
+                    let transcript = try await runtime.transcribe(samples, captureEncoderFeatures: true, reusingWindowsFor: nil)
+                    try validateAdmission(snapshot)
+                    return Self.learningFrames(transcript.encoderWindows)
+                }
                 try Task.checkCancellation()
                 try validateAdmission(snapshot)
                 self.encoderReferenceCache = GigaAMEncoderDictionaryStorage.canCache(preparation)
@@ -846,13 +998,14 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         accepted.compactMap { span in
             guard let window = windows.first(where: { Int(($0.offset / 0.04).rounded()) == span.frameOffset }),
                   let profile = snapshot.pronunciation?.profiles.first(where: {
-                      $0.dictionaryEntryID == span.entryID && $0.modelKey == snapshot.modelKey
+                      $0.dictionaryEntryID == span.entryID && ($0.modelKey == snapshot.modelKey ||
+                          $0.modelKey == GigaAMEncoderDictionaryStorage.legacyReferenceKey(for: snapshot.modelKey))
                   }), span.frameRange.lowerBound >= 0, span.frameRange.upperBound <= window.features.frameCount else { return nil }
             let lower = span.frameRange.lowerBound * 768, upper = span.frameRange.upperBound * 768
             let frames = DictionaryMatchFrames(hiddenSize: 768, values: Array(window.features.values[lower..<upper]))
             guard frames.isValid else { return nil }
             return DictionaryAcousticEvidence(id: UUID(), entryID: span.entryID, label: span.label,
-                profileKey: DictionaryNegativeEvidenceResolver.profileKey(profile) + ":shared-features-v1",
+                profileKey: GigaAMEncoderDictionaryStorage.feedbackProfileKey(profile, modelKey: snapshot.modelKey),
                 modelKey: snapshot.modelKey, sourceWordRange: span.wordRange.lowerBound..<(span.wordRange.upperBound + 1),
                 frames: frames, matchFrameRange: span.absoluteFrameRange)
         }
@@ -993,6 +1146,11 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         self.executionStatus = nil
         self.dictionaryReferenceCache = nil
         self.encoderReferenceCache = nil
+        let adaptive = self.adaptivePreview
+        self.neuralDecoder = nil
+        self.adaptivePreview = nil
+        self.previewSampleCount = 0
+        self.usesFixedPreviewCadence = false
         let preparationTask = self.preparationTask
         let runtime = self.runtime
         self.preparationTask = nil
@@ -1001,6 +1159,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         self.loadedModelFingerprint = nil
         preparationTask?.cancel()
         if let task = preparationTask { _ = try? await task.value }
+        await adaptive?.close()
         await runtime?.unload()
     }
 
@@ -1022,3 +1181,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         try self.modelStore.removeOwnedModels(selection: admittedSelection)
     }
 }
+
+#if os(macOS) && arch(arm64)
+extension PichiGigaAMProvider: IncrementalDictationPreviewProviding {}
+#endif

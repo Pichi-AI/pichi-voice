@@ -39,7 +39,7 @@ vocabulary = vocabulary.replace("#if arch(arm64)", "").replace("#endif", "")
 evidence_reader = between(negative, "nonisolated final class DictionaryCaptureEvidenceFile", "\nnonisolated struct DictionaryNegativeCorrection")
 experiment_core = between(experiment, "nonisolated enum DictionaryPronunciationExperiment", "\n/// Bounded, local-only evidence")
 references_core = references.replace("#if arch(arm64)", "").replace("import FluidAudio", "").replace("#endif", "")
-runtime_status = between(native, "public struct GigaAMExecutionStatus:", "/// The shipped Core ML graph")
+runtime_status = between(native, "public struct GigaAMExecutionStatus:", "final class GigaAMCoreMLInference")
 projection = runtime_status + "\n" + enhancements + "\n" + evidence_reader + "\n" + experiment_core + "\n" + references_core + "\n" + vocabulary
 projection += "\n@MainActor final class FluidAudioProvider {\n" + options + getters + "\n" + method(fluid, "    static func preparedEdgeProfiles(") + "\n// FLUID_TEST_FIELDS\n}\n"
 projection = projection.replace("    private ", "    ")
@@ -72,6 +72,7 @@ gigaam_selection += "\n" + method(gigaam, "    var directory: URL")
 gigaam_selection += "\n" + method(gigaam, "    private var registeredDescriptors:")
 gigaam_selection += "\n" + method(gigaam, "    func selectedArtifact()")
 gigaam_selection += "\n" + method(gigaam, "    private static func locate(")
+gigaam_selection += "\n" + method(gigaam, "    private static func previousCoreMLDirectory(")
 projection += "\nnonisolated final class PichiGigaAMModelStore {\n" + gigaam_selection.replace("    private ", "    ") + "\n// GIGAAM_STORE_FIELDS\n}\n"
 projection = projection.replace("// GIGAAM_STORE_FIELDS", """
     static let importedModelPreferenceKey = "pichiGigaAMImportedModelID"
@@ -89,7 +90,18 @@ projection = projection.replace("// GIGAAM_STORE_FIELDS", """
 window_reuse = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMWindowReuse.swift").read_text()
 projection += "\nnonisolated " + method(window_reuse, "public final class GigaAMWindowReuseSession") + "\n"
 projection += "\nnonisolated final class CaptureGigaAMRuntime { func discardWindowReuse(for sessionID: UUID) async {} }\n"
-gigaam_hooks = between(gigaam, "    private var admittedSource:", "    // MARK: - Provider lifecycle")
+# This fixture exercises the real capture/authorization hooks. Accelerator preparation
+# and decoding have their own hosted tests, so keep those external side effects inert.
+gigaam_hooks = between(gigaam, "    private var admittedSource:", "    private func admitNeuralPreview(")
+gigaam_hooks += """
+    actor Preview { func close() {} }
+    var adaptivePreview: Preview?
+    var previewSampleCount = 0
+    var usesFixedPreviewCadence = false
+    let neuralDecoder: (() -> Void)? = nil
+    func admitNeuralPreview() {}
+"""
+
 projection += "\n@MainActor final class PichiGigaAMProvider { let modelStore: PichiGigaAMModelStore; let expectedModelFingerprint: String?; let pronunciationStore = PronunciationDictionaryStore.shared; var loadedModelFingerprint: String?; var dictionaryUsesEncoderFeatures = false; var dictionarySnapshot: GigaAMDictionaryAcoustics.Snapshot?; var executionAttemptPending = false; var previewReuseSession: GigaAMWindowReuseSession?; var runtime: CaptureGigaAMRuntime?; init(store: PichiGigaAMModelStore, expected: String? = nil) { modelStore = store; expectedModelFingerprint = expected }\n" + gigaam_hooks.replace("    private ", "    ") + "\n}\n"
 assert "self.modelStore.ensureInstalled(selection: admittedSelection" in method(gigaam, "    func prepare(")
 assert "let selection = try admittedSelection ?? self.selectedArtifact()" in method(gigaam, "    func ensureInstalled(")

@@ -71,7 +71,7 @@ actor PronunciationDictionaryStore {
             preconditionFailure("Artifact ownership tests must never read pronunciation references")
         }
     }
-    nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>,
+    nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>, fallbackModelKey: String? = nil,
         includingSharedFamilies: Bool = false, maximumReferencesPerProfile: Int = 3,
         referenceSelection: @Sendable (PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] = { $0.matchingEnrollments }) throws -> CaptureRead {
         preconditionFailure("Artifact ownership tests must never read private dictionaries")
@@ -87,7 +87,7 @@ actor DictionaryNegativeExampleStore {
         var isOpen: Bool { preconditionFailure("This probe never admits negative evidence") }
         func close(leaseID: UUID) { preconditionFailure("This probe never admits negative evidence") }
     }
-    nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>) throws -> CaptureRead {
+    nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>, fallbackModelKey: String? = nil, fallbackEntryIDs: Set<UUID> = []) throws -> CaptureRead {
         preconditionFailure("Artifact ownership tests must never read negative audio")
     }
 }
@@ -122,6 +122,7 @@ nonisolated enum GigaAMDictionaryAcoustics {
 }
 
 nonisolated enum GigaAMEncoderDictionaryStorage {
+    static func legacyReferenceKey(for key: String) -> String? { nil }
     // ACTUAL_ENCODER_MODEL_KEY
     static func retainedCaptures(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] {
         preconditionFailure("Artifact ownership tests must never select learned encoder references")
@@ -132,7 +133,7 @@ nonisolated enum GigaAMEncoderDictionaryStorage {
     static func canCache(_ preparation: GigaAMEncoderDictionary.Preparation) -> Bool {
         preconditionFailure("Artifact ownership tests must never cache learned encoder references")
     }
-    static func preparedWords(_ snapshot: GigaAMDictionaryAcoustics.Snapshot) async throws -> GigaAMEncoderDictionary.Preparation {
+    static func preparedWords(_ snapshot: GigaAMDictionaryAcoustics.Snapshot, reencode: @Sendable ([Float]) async throws -> [DictionaryLearningFeatureFrames]) async throws -> GigaAMEncoderDictionary.Preparation {
         preconditionFailure("Artifact ownership tests must never prepare learned encoder references")
     }
     static func enrollment(samples: [Float], modelKey: String, featureFrames: [DictionaryLearningFeatureFrames],

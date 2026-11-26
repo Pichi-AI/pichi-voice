@@ -2,7 +2,7 @@ import Foundation
 import Metal
 import os
 
-/// One public artifact serves every device. Native preparation checks current
+/// The default artifact is fixed for each platform. Native preparation checks current
 /// process headroom separately from total device RAM and model file size.
 public struct GigaAMResourcePolicy: Sendable, Equatable {
     public let hasGPU: Bool
@@ -51,7 +51,11 @@ public struct GigaAMResourcePolicy: Sendable, Equatable {
     }
 
     public var preferredDownload: GigaAMModelDescriptor {
-        GigaAMModelCatalog.downloadableModel
+        #if os(macOS)
+        return GigaAMModelCatalog.coreMLModel
+        #else
+        return GigaAMModelCatalog.downloadableModel
+        #endif
     }
 
     public var defaultCPUReason: GigaAMExecutionStatus.FallbackReason? {
