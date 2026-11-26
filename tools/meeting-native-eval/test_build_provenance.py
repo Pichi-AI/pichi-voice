@@ -102,7 +102,9 @@ class TranscribeInputTests(unittest.TestCase):
         names = [path.name for path in transcribe_inputs(ROOT / 'Vendor/TranscribeCpp')]
         self.assertIn('TranscribeCpp.xcframework.zip', names)
         self.assertIn('Session.swift', names)
-        self.assertEqual([path.name for path in gigaam_package_inputs(ROOT / 'Vendor/PichiGigaAM')], ['Package.swift'])
+        resources = sorted(path.name for path in (ROOT / 'Vendor/PichiGigaAM/Sources/PichiGigaAM/Resources').iterdir() if path.is_file())
+        self.assertTrue(resources, 'PichiGigaAM ships graph recipes as resources')
+        self.assertEqual([path.name for path in gigaam_package_inputs(ROOT / 'Vendor/PichiGigaAM')], ['Package.swift', *resources])
 
     def test_a_gigaam_package_without_a_manifest_is_refused(self):
         with tempfile.TemporaryDirectory() as temporary, self.assertRaises(ValueError):

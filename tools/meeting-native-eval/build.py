@@ -57,7 +57,7 @@ products = Path(subprocess.check_output([str(x) for x in [*package_command, '--s
 if DEPS.exists():
     shutil.rmtree(DEPS)
 DEPS.mkdir(parents=True)
-for name in ['OnnxRuntimeBindings.o', 'TranscribeCpp.o', 'TranscribeCpp.swiftmodule', 'onnxruntime.framework', 'CTranscribe.framework']:
+for name in ['OnnxRuntimeBindings.o', 'TranscribeCpp.o', 'TranscribeCpp.swiftmodule', 'onnxruntime.framework', 'CTranscribe.framework', 'PichiGigaAM_PichiGigaAM.bundle']:
     if not (products / name).exists():
         raise SystemExit(f'swift build did not produce {name} in {products}; the SwiftPM product layout may have changed')
     # Frameworks keep their Versions symlinks; copying them as plain directories would break loading.
@@ -89,7 +89,16 @@ error = (AUDIO / 'Sources/FluidAudio/Diarizer/Core/DiarizerTypes.swift').read_te
 helpers = [AUDIO / ('Sources/FluidAudio/Shared/' + name + '.swift') for name in ['ANEMemoryOptimizer', 'ANEMemoryUtils', 'AppLogger', 'AudioMelSpectrogram']]
 run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-emit-module', '-emit-library', '-module-name', 'FluidAudio', '-module-cache-path', BUILD / 'ModuleCache', '-emit-module-path', BUILD / 'FluidAudio.swiftmodule', '-o', BUILD / 'libFluidAudio.dylib', BUILD / 'DiarizerError.swift', *helpers])
 giga_sources = sorted((ROOT / 'Vendor/PichiGigaAM/Sources/PichiGigaAM').glob('*.swift'))
-run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-emit-module', '-emit-library', '-module-name', 'PichiGigaAM', '-module-cache-path', BUILD / 'ModuleCache', '-emit-module-path', BUILD / 'PichiGigaAM.swiftmodule', '-I', DEPS, '-F', DEPS, '-profile-generate', '-framework', 'onnxruntime', '-framework', 'CTranscribe', '-lc++', '-lz', '-framework', 'Accelerate', '-framework', 'CoreML', '-framework', 'Metal', '-framework', 'MetalKit', '-Xlinker', '-rpath', '-Xlinker', str(DEPS), DEPS / 'OnnxRuntimeBindings.o', DEPS / 'TranscribeCpp.o', *giga_sources, '-o', BUILD / 'libPichiGigaAM.dylib'])
+# SwiftPM generates Bundle.module for a target with resources. These sources are compiled with swiftc,
+# so the builder supplies the same accessor for the resource bundle SwiftPM produced and staged above.
+(BUILD / 'PichiGigaAMResourceBundle.swift').write_text(
+    'import Foundation\n\nextension Foundation.Bundle {\n'
+    '    static let module: Bundle = {\n'
+    '        let path = ' + json.dumps(str(DEPS / 'PichiGigaAM_PichiGigaAM.bundle')) + '\n'
+    '        guard let bundle = Bundle(path: path) else { fatalError("PichiGigaAM resources are missing at \\(path)") }\n'
+    '        return bundle\n'
+    '    }()\n}\n')
+run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-emit-module', '-emit-library', '-module-name', 'PichiGigaAM', '-module-cache-path', BUILD / 'ModuleCache', '-emit-module-path', BUILD / 'PichiGigaAM.swiftmodule', '-I', DEPS, '-F', DEPS, '-profile-generate', '-framework', 'onnxruntime', '-framework', 'CTranscribe', '-lc++', '-lz', '-framework', 'Accelerate', '-framework', 'CoreML', '-framework', 'Metal', '-framework', 'MetalKit', '-Xlinker', '-rpath', '-Xlinker', str(DEPS), DEPS / 'OnnxRuntimeBindings.o', DEPS / 'TranscribeCpp.o', *giga_sources, BUILD / 'PichiGigaAMResourceBundle.swift', '-o', BUILD / 'libPichiGigaAM.dylib'])
 sources = [BUILD / 'CanonicalContracts.swift', SOURCE / 'Backend/MeetingCanonicalEvidenceTypes.swift', BUILD / 'LegacyAttribution.swift', SOURCE / 'Backend/MeetingResumableNemotronDiarizerSession.swift', SOURCE / 'Backend/MeetingIncrementalNemotronDiarizerSession.swift', *sorted((SOURCE / 'Backend/Nemotron3').glob('*.swift')), SOURCE / 'Backend/MeetingFast32NemotronDiarizer.swift', SOURCE / 'Backend/MeetingSpeakerAttribution.swift', ROOT / 'tools/meeting-native-eval/Runner.swift']
 run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-default-isolation', 'MainActor', '-module-cache-path', BUILD / 'ModuleCache', '-I', BUILD, '-I', DEPS, '-F', DEPS, '-L', BUILD, '-lFluidAudio', '-lPichiGigaAM', '-framework', 'onnxruntime', '-lc++', '-framework', 'Accelerate', '-Xlinker', '-rpath', '-Xlinker', str(BUILD), '-Xlinker', '-rpath', '-Xlinker', str(DEPS), *sources, '-o', BUILD / 'runner'])
 swift_version = subprocess.check_output(['xcrun', 'swift', '--version'], text=True, stderr=subprocess.STDOUT).strip()
