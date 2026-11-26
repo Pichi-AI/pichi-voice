@@ -12,17 +12,25 @@ inputs and whole-meeting split leakage fail before native inference.
 
 ## Build prerequisites
 
-Use a dedicated worktree. Supply these already available dependency artifacts in that worktree:
+Use a dedicated worktree and Xcode's command line tools. Supply this already available dependency
+checkout in that worktree:
 
 - `.build/SourcePackages/checkouts/FluidAudio` at `eb1e6628998e47022799d305b52c2680d3576801`.
-- `Vendor/onnxruntime-swift-package-manager`, the vendored package the application builds. Its
-  `PICHI_VENDORING.md` names the upstream revision, which the build manifest records with the
-  hashes of the vendored bridge headers.
-- `.build/meeting-native-eval/dependencies/onnxruntime.framework`, a native macOS framework.
-- `.build/meeting-native-eval/dependencies/OnnxRuntimeBindings.o`, the matching native bridge.
 
-An APFS copy of immutable artifacts is sufficient. Never share a mutable package checkout,
-DerivedData or output directory with another build. No dependency resolver runs here.
+The builder runs `swift build` of the vendored `Vendor/PichiGigaAM` package into
+`.build/meeting-native-eval/giga-package` and stages its products in
+`.build/meeting-native-eval/dependencies`: the ONNX Runtime bridge object and framework, the
+TranscribeCpp object and module, and the `CTranscribe` native framework. Every package that build
+needs is vendored (`Vendor/onnxruntime-swift-package-manager`, `Vendor/TranscribeCpp`), so no
+package repository is resolved. The PichiGigaAM sources themselves are still compiled by the
+builder against those staged products. Because `swiftc` does not generate SwiftPM's `Bundle.module`, the
+builder also stages the `PichiGigaAM_PichiGigaAM.bundle` resource bundle from that build and compiles a
+generated accessor that points at it. SwiftPM fetches the ONNX Runtime binary archive only
+when its shared cache lacks it; no model is downloaded. The build manifest records the upstream
+ONNX Runtime revision from `PICHI_VENDORING.md` and the hashes of the vendored manifests, ONNX
+bridge headers, TranscribeCpp pin, archive and Swift sources, and the staged native objects and
+frameworks. Never share a mutable package checkout, DerivedData or output directory with another
+build. No dependency resolver runs for FluidAudio.
 
 ```sh
 python3 tools/meeting-native-eval/build.py

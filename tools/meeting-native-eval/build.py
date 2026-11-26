@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """Build an offline native evaluation CLI from pinned production source files.
 
-Dependency checkouts and the prebuilt ONNX bridge must already exist in this worktree.
-This command never downloads a model or package, opens the app, or changes preferences.
+The FluidAudio checkout must already exist in this worktree. The native packages PichiGigaAM
+needs (ONNX Runtime bridge and framework, TranscribeCpp and its native framework) are built by
+`swift build` of the vendored PichiGigaAM package, whose dependencies are all vendored. This
+command never downloads a model, opens the app, or changes preferences; SwiftPM fetches a binary
+package artifact only when its shared cache lacks it.
 """
 from pathlib import Path
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 
-from provenance import vendored_inputs, vendored_revision
+from provenance import gigaam_package_inputs, transcribe_inputs, vendored_inputs, vendored_revision
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / '.build/meeting-native-eval'
@@ -18,10 +23,13 @@ SOURCE = ROOT / 'Sources/Fluid/Services/Meeting'
 AUDIO = ROOT / '.build/SourcePackages/checkouts/FluidAudio'
 # Microsoft removed the package repository, so the application builds this vendored copy.
 ORT = ROOT / 'Vendor/onnxruntime-swift-package-manager'
+GIGAAM = ROOT / 'Vendor/PichiGigaAM'
+TRANSCRIBE = ROOT / 'Vendor/TranscribeCpp'
+PACKAGE_SCRATCH = BUILD / 'giga-package'
 BASELINE = '448431f01a7941777349ca9370a2d8bf9dead69e'
 
-def run(args):
-    subprocess.run([str(x) for x in args], cwd=ROOT, check=True)
+def run(args, env=None):
+    subprocess.run([str(x) for x in args], cwd=ROOT, check=True, env=env)
 
 def sha(path):
     digest = hashlib.sha256()
@@ -38,8 +46,22 @@ assert revision == 'eb1e6628998e47022799d305b52c2680d3576801', revision
 # exported from, and the manifest below also hashes the bridge headers this build compiles against.
 ort_revision = vendored_revision((ORT / 'PICHI_VENDORING.md').read_text())
 ort_inputs = vendored_inputs(ORT)
-assert (DEPS / 'OnnxRuntimeBindings.o').is_file()
-assert (DEPS / 'onnxruntime.framework').is_dir()
+# Build the packages PichiGigaAM imports exactly as the application resolves them, then stage their
+# products. The bin path is asked from SwiftPM because it differs between build systems.
+# xcrun selects the same toolchain as every swiftc call below. ORT_POD_LOCAL_PATH would make the vendored
+# package take a local ONNX Runtime archive instead of the checksum-pinned release, so it never reaches SwiftPM.
+package_env = {key: value for key, value in os.environ.items() if key != 'ORT_POD_LOCAL_PATH'}
+package_command = ['xcrun', 'swift', 'build', '-c', 'release', '--package-path', GIGAAM, '--scratch-path', PACKAGE_SCRATCH]
+run([*package_command, '--product', 'PichiGigaAM'], env=package_env)
+products = Path(subprocess.check_output([str(x) for x in [*package_command, '--show-bin-path']], cwd=ROOT, text=True, env=package_env).strip())
+if DEPS.exists():
+    shutil.rmtree(DEPS)
+DEPS.mkdir(parents=True)
+for name in ['OnnxRuntimeBindings.o', 'TranscribeCpp.o', 'TranscribeCpp.swiftmodule', 'onnxruntime.framework', 'CTranscribe.framework', 'PichiGigaAM_PichiGigaAM.bundle']:
+    if not (products / name).exists():
+        raise SystemExit(f'swift build did not produce {name} in {products}; the SwiftPM product layout may have changed')
+    # Frameworks keep their Versions symlinks; copying them as plain directories would break loading.
+    run(['ditto', products / name, DEPS / name])
 (DEPS / 'module.modulemap').write_text('module OnnxRuntimeBindings {\numbrella "' + str(ORT / 'objectivec/include') + '"\nexport *\n}\n')
 # Compile exact canonical declarations, without bringing the UI, model registry or session store
 # into this offline executable. This is the same boundary used by the core's standalone tests.
@@ -47,6 +69,10 @@ contracts = 'import Foundation\ntypealias MeetingAudioTrackID = UUID\n'
 runtime = (SOURCE / 'Backend/MeetingParakeetNemotronRuntime.swift').read_text()
 contracts += runtime[runtime.index('nonisolated struct MeetingNemotronSpeakerSegment'):runtime.index("/// The attempt's prepared Parakeet ASR session")]
 contracts += '\nnonisolated enum MeetingPCMInputError: Error { case unsupportedRuntime }\n'
+# The timing provenance record lives beside unrelated persistence codecs, so only its own declaration is taken.
+persisted = (SOURCE / 'MeetingPersistedMetadata.swift').read_text()
+start = persisted.index('/// Token emission envelopes')
+contracts += '\n' + persisted[start:persisted.index('nonisolated enum MeetingMicrophoneBindingOutcome', start)]
 errors = (SOURCE / 'Backend/MeetingProductionParakeetNemotronRuntime.swift').read_text()
 start = errors.index('nonisolated enum MeetingParakeetNemotronRuntimeError')
 contracts += errors[start:errors.index('/// Buffered providers', start)]
@@ -63,9 +89,19 @@ error = (AUDIO / 'Sources/FluidAudio/Diarizer/Core/DiarizerTypes.swift').read_te
 helpers = [AUDIO / ('Sources/FluidAudio/Shared/' + name + '.swift') for name in ['ANEMemoryOptimizer', 'ANEMemoryUtils', 'AppLogger', 'AudioMelSpectrogram']]
 run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-emit-module', '-emit-library', '-module-name', 'FluidAudio', '-module-cache-path', BUILD / 'ModuleCache', '-emit-module-path', BUILD / 'FluidAudio.swiftmodule', '-o', BUILD / 'libFluidAudio.dylib', BUILD / 'DiarizerError.swift', *helpers])
 giga_sources = sorted((ROOT / 'Vendor/PichiGigaAM/Sources/PichiGigaAM').glob('*.swift'))
-run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-emit-module', '-emit-library', '-module-name', 'PichiGigaAM', '-module-cache-path', BUILD / 'ModuleCache', '-emit-module-path', BUILD / 'PichiGigaAM.swiftmodule', '-I', DEPS, '-F', DEPS, '-profile-generate', '-framework', 'onnxruntime', '-lc++', '-framework', 'Accelerate', '-Xlinker', '-rpath', '-Xlinker', str(DEPS), DEPS / 'OnnxRuntimeBindings.o', *giga_sources, '-o', BUILD / 'libPichiGigaAM.dylib'])
-sources = [BUILD / 'CanonicalContracts.swift', SOURCE / 'Backend/MeetingCanonicalEvidenceTypes.swift', BUILD / 'LegacyAttribution.swift', SOURCE / 'Backend/MeetingResumableNemotronDiarizerSession.swift', *sorted((SOURCE / 'Backend/Nemotron3').glob('*.swift')), SOURCE / 'Backend/MeetingFast32NemotronDiarizer.swift', SOURCE / 'Backend/MeetingSpeakerAttribution.swift', ROOT / 'tools/meeting-native-eval/Runner.swift']
+# SwiftPM generates Bundle.module for a target with resources. These sources are compiled with swiftc,
+# so the builder supplies the same accessor for the resource bundle SwiftPM produced and staged above.
+(BUILD / 'PichiGigaAMResourceBundle.swift').write_text(
+    'import Foundation\n\nextension Foundation.Bundle {\n'
+    '    static let module: Bundle = {\n'
+    '        let path = ' + json.dumps(str(DEPS / 'PichiGigaAM_PichiGigaAM.bundle'), ensure_ascii=False) + '\n'
+    '        guard let bundle = Bundle(path: path) else { fatalError("PichiGigaAM resources are missing at \\(path)") }\n'
+    '        return bundle\n'
+    '    }()\n}\n')
+run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-emit-module', '-emit-library', '-module-name', 'PichiGigaAM', '-module-cache-path', BUILD / 'ModuleCache', '-emit-module-path', BUILD / 'PichiGigaAM.swiftmodule', '-I', DEPS, '-F', DEPS, '-profile-generate', '-framework', 'onnxruntime', '-framework', 'CTranscribe', '-lc++', '-lz', '-framework', 'Accelerate', '-framework', 'CoreML', '-framework', 'Metal', '-framework', 'MetalKit', '-Xlinker', '-rpath', '-Xlinker', str(DEPS), DEPS / 'OnnxRuntimeBindings.o', DEPS / 'TranscribeCpp.o', *giga_sources, BUILD / 'PichiGigaAMResourceBundle.swift', '-o', BUILD / 'libPichiGigaAM.dylib'])
+sources = [BUILD / 'CanonicalContracts.swift', SOURCE / 'Backend/MeetingCanonicalEvidenceTypes.swift', BUILD / 'LegacyAttribution.swift', SOURCE / 'Backend/MeetingResumableNemotronDiarizerSession.swift', SOURCE / 'Backend/MeetingIncrementalNemotronDiarizerSession.swift', *sorted((SOURCE / 'Backend/Nemotron3').glob('*.swift')), SOURCE / 'Backend/MeetingFast32NemotronDiarizer.swift', SOURCE / 'Backend/MeetingSpeakerAttribution.swift', ROOT / 'tools/meeting-native-eval/Runner.swift']
 run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-default-isolation', 'MainActor', '-module-cache-path', BUILD / 'ModuleCache', '-I', BUILD, '-I', DEPS, '-F', DEPS, '-L', BUILD, '-lFluidAudio', '-lPichiGigaAM', '-framework', 'onnxruntime', '-lc++', '-framework', 'Accelerate', '-Xlinker', '-rpath', '-Xlinker', str(BUILD), '-Xlinker', '-rpath', '-Xlinker', str(DEPS), *sources, '-o', BUILD / 'runner'])
-manifest = {'schema_version': 1, 'source_revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(), 'baseline_revision': BASELINE, 'fluid_audio_revision': revision, 'onnx_runtime_revision': ort_revision, 'sources': {str(path.relative_to(ROOT)): sha(path) for path in [*sources, *helpers, *giga_sources, *ort_inputs, *sorted((ROOT / 'tools/meeting-native-eval').glob('*.py'))]}, 'baseline_original_source_sha256': hashlib.sha256(legacy.encode()).hexdigest(), 'binary_sha256': sha(BUILD / 'runner'), 'onnx_bridge_sha256': sha(DEPS / 'OnnxRuntimeBindings.o'), 'onnx_runtime_sha256': sha(DEPS / 'onnxruntime.framework/Versions/A/onnxruntime')}
+swift_version = subprocess.check_output(['xcrun', 'swift', '--version'], text=True, stderr=subprocess.STDOUT).strip()
+manifest = {'schema_version': 1, 'swift_version': swift_version, 'source_revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(), 'baseline_revision': BASELINE, 'fluid_audio_revision': revision, 'onnx_runtime_revision': ort_revision, 'sources': {str(path.relative_to(ROOT)): sha(path) for path in [*sources, SOURCE / 'MeetingPersistedMetadata.swift', *helpers, *giga_sources, *gigaam_package_inputs(GIGAAM), *ort_inputs, *transcribe_inputs(TRANSCRIBE), *sorted((ROOT / 'tools/meeting-native-eval').glob('*.py'))]}, 'baseline_original_source_sha256': hashlib.sha256(legacy.encode()).hexdigest(), 'binary_sha256': sha(BUILD / 'runner'), 'onnx_bridge_sha256': sha(DEPS / 'OnnxRuntimeBindings.o'), 'onnx_runtime_sha256': sha(DEPS / 'onnxruntime.framework/Versions/A/onnxruntime'), 'transcribe_cpp_bridge_sha256': sha(DEPS / 'TranscribeCpp.o'), 'transcribe_cpp_native_sha256': sha(DEPS / 'CTranscribe.framework/Versions/A/CTranscribe')}
 (BUILD / 'build-manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
 print('Native evaluation runner built; no inference performed.')
