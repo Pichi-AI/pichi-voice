@@ -12,6 +12,7 @@ nonisolated struct BrandDistribution: Codable, Equatable, Sendable {
     var updatesEnabled: Bool = false
     var expectedSigningTeam: String?
     var feedbackEndpoint: String?
+    var feedbackEmail: String?
     var privacyPolicyURL: String?
     var account: AccountConfiguration?
     var legacyAccount: LegacyAccountConfiguration?
@@ -47,6 +48,9 @@ nonisolated struct BrandDistribution: Codable, Equatable, Sendable {
         try self.account?.validate()
         try self.legacyAccount?.validate()
         if let feedbackEndpoint { try BrandProfile.validateHTTPS(feedbackEndpoint) }
+        if let feedbackEmail, !Self.isValidFeedbackEmail(feedbackEmail) {
+            throw BrandProfile.ValidationError.invalid("The feedback recipient must be one email address.")
+        }
         if let privacyPolicyURL { try BrandProfile.validateHTTPS(privacyPolicyURL) }
         if let expectedSigningTeam {
             guard expectedSigningTeam.range(of: "^[A-Z0-9]{10}$", options: .regularExpression) != nil else {
@@ -56,6 +60,13 @@ nonisolated struct BrandDistribution: Codable, Equatable, Sendable {
         guard !self.updatesEnabled || (self.repository != nil && self.expectedSigningTeam != nil) else {
             throw BrandProfile.ValidationError.invalid("App updates need a repository and expected signing team.")
         }
+    }
+
+    static func isValidFeedbackEmail(_ email: String) -> Bool {
+        return email.utf16.count <= 254 && email.range(
+            of: #"\A(?!\.)(?!.*\.\.)([A-Z0-9_'+\-\.]*)[A-Z0-9_+\-]@([A-Z0-9][A-Z0-9\-]*\.)+[A-Z]{2,}\z"#,
+            options: [.caseInsensitive, .regularExpression]
+        ) != nil
     }
 
     var repositoryOwner: String { self.repository.flatMap(URL.init(string:))?.pathComponents.dropFirst().first ?? "" }

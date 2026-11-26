@@ -10,11 +10,15 @@ Record the exact Pichi Voice source commit in the web change. Check the rendered
 
 The `.openai/hosting.json` identifies the optional Sites preview publication. Keep that identity on updates. It is independent of the production site's route and does not configure `pichi.ai` by itself.
 
+## User documentation
+
+Edit the [English](../docs/product/user-guide.md) and [Russian](../docs/product/user-guide.ru.md) Markdown guides. Run `sh website/guide/render.sh` from the repository root with Pandoc 3 installed. The resulting static HTML at `/voice/docs/` and `/ru/voice/docs/` uses the same content, localized navigation and section links. Commit both rendered pages with the Markdown. The Astro landing site serves the static files directly. Verify both production routes before distributing an app build that links to them.
+
 ## Release links and copy
 
 Mac distribution is a Developer ID-signed, Apple-notarized DMG downloaded from the product website. Mac App Store submission is not a release requirement, and no separate Store edition is planned. Mobile App Store and TestFlight delivery remain separate.
 
-Enable a direct download only for an actually published compatible package. Show platform icons and Coming Soon for unavailable downloads. The active macOS link targets `Pichi-Voice-0.1.0-69-macos-arm64.dmg` in release `v0.1.0+69-public.1`. The release owner must publish and verify that exact DMG before deploying this change. No release asset is published by this website change. Keep compatibility, installation, build and signing details in the release and development records. Public copy retains local setup requirements, optional-cloud disclosure and the mobile distinction between offline in-person meetings and unavailable phone-call audio access.
+Enable a direct download only for an actually published compatible package. Show platform icons and Coming Soon for unavailable downloads. The macOS link follows the published latest release asset named `Pichi-Voice.dmg`. No release asset is published by this website change. Keep compatibility, installation, build and signing details in the release and development records. Public copy retains local setup requirements, optional-cloud disclosure and the mobile distinction between offline in-person meetings and unavailable phone-call audio access.
 
 The illustrated meeting text is synthetic and is not a screenshot or performance measurement. Application source and website assets remain subject to the repository's GPL-3.0 license; the static directory includes `voice/LICENSE.txt`.
 

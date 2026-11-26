@@ -92,15 +92,20 @@ struct ReleaseHighlightsPolicyTests {
         let restored = ReleaseHighlightsPolicy(seenVersions: defaults.stringArray(forKey: ReleaseHighlightsPolicy.seenKey) ?? [])
         precondition(restored.seenVersions == policy.seenVersions)
 
-        let plist = try Data(contentsOf: URL(fileURLWithPath: "Info.plist"))
-        let info = try require(PropertyListSerialization.propertyList(from: plist, format: nil) as? [String: Any])
-        let version = try require(info["CFBundleShortVersionString"] as? String)
         let catalogData = try Data(contentsOf: URL(fileURLWithPath: "Sources/Fluid/Localization/Localizable.xcstrings"))
         let catalog = try require(JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
         let entries = try require(catalog["strings"] as? [String: [String: Any]])
-        for privateAI in [false, true] {
-            let content = ReleaseHighlightsContent.current(hasPrivateAI: privateAI)
-            precondition(!version.isEmpty && !content.release.isEmpty, "The installed version and release label must be present")
+        for version in ["0.2.3", "0.2.0", "0.3.0", "1.6.13"] {
+            let content = ReleaseHighlightsContent.current(version: version)
+            precondition(content.release == version)
+            if version == "0.2.3" {
+                precondition(content.features.map(\.destination) == [.voiceEngine, .meetings])
+            } else if version == "0.3.0" {
+                precondition(content.features.map(\.preview) == [.sources, .analytics])
+                precondition(content.features.map(\.destination) == [.meetingSources, .analyticsPrivacy])
+            } else {
+                precondition(content.features.isEmpty, "An unmatched version must not claim another version’s changes")
+            }
             var automaticPolicy = ReleaseHighlightsPolicy()
             let automatic = automaticPolicy.request(owner: owner, version: version, eligible: true)
             precondition(automatic?.version == version && automatic?.manual == false, "The shipped release must be offered automatically before acknowledgment")
@@ -108,15 +113,12 @@ struct ReleaseHighlightsPolicyTests {
             var shippedVersionPolicy = ReleaseHighlightsPolicy(seenVersions: [version])
             let manual = shippedVersionPolicy.request(owner: owner, version: version, eligible: true, manual: true)
             precondition(manual?.version == version && manual?.manual == true, "Help must open the shipped release highlights after acknowledgment")
-            precondition((1...3).contains(content.features.count))
             precondition(Set(content.features.map(\.id)).count == content.features.count)
-            precondition(content.features.filter { $0.destination == .voiceEngine }.count == 2)
-            precondition(content.features.allSatisfy { $0.destination != .aiProviders }, "Pichi release notes must not claim the upstream private cleanup runtime is bundled")
             for feature in content.features {
                 precondition(!feature.title.isEmpty && !feature.detail.isEmpty && !feature.action.isEmpty)
             }
             // These fields are trusted interface keys, with no imported brand or user data.
-            let copy = [content.title, content.subtitle] + content.features.flatMap { [$0.eyebrow, $0.title, $0.detail, $0.action] }
+            let copy = [content.title, content.subtitle, "View release history"] + content.features.flatMap { [$0.eyebrow, $0.title, $0.detail, $0.action] }
             for key in copy {
                 let entry = try require(entries[key])
                 let localizations = try require(entry["localizations"] as? [String: [String: Any]])
@@ -125,10 +127,6 @@ struct ReleaseHighlightsPolicyTests {
                     let unit = try require(localization["stringUnit"] as? [String: String])
                     precondition(unit["state"] == "translated" && unit["value"]?.isEmpty == false, "Every release field needs complete English and Russian copy")
                 }
-            }
-            if !privateAI {
-                let last = try require(content.features.last)
-                precondition(!last.title.contains("Fluid models"))
             }
         }
         print("PASS: version ledger, persistence, multiple owners, rapid dismissal, interruption/retry, stale callbacks, bounded history, shipped automatic/manual requests, and complete English/Russian release content")

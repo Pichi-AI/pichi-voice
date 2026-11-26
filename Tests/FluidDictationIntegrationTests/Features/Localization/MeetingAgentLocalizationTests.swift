@@ -51,19 +51,12 @@ final class MeetingAgentLocalizationTests: XCTestCase {
     }
 
     func testCurrentReleaseHighlightsHaveCompleteRussianCopy() {
-        let content = ReleaseHighlightsContent.current(hasPrivateAI: false)
-        let modelAttributionTitles = ["speech-pro": "Fluid Speech Pro", "qwen": "Qwen3 ASR 1.7B"]
-        var keys = [content.title, content.subtitle]
-        for feature in content.features {
-            keys += [feature.eyebrow, feature.detail, feature.action]
-            if modelAttributionTitles[feature.id] == feature.title {
-                for language in [PichiInterfaceLanguage.english, .russian] {
-                    XCTAssertEqual(PichiLocalization.text(feature.title, language: language, bundle: .main),
-                                   feature.title, "Genuine model attribution must remain verbatim")
-                }
-            } else {
-                keys.append(feature.title)
-            }
+        var keys = ["View release history"]
+        for version in ["0.2.3", "0.3.0"] {
+            let content = ReleaseHighlightsContent.current(version: version)
+            XCTAssertEqual(content.release, version)
+            keys += [content.title, content.subtitle]
+            keys += content.features.flatMap { [$0.eyebrow, $0.title, $0.detail, $0.action] }
         }
         for key in keys {
             let english = PichiLocalization.text(key, language: .english, bundle: .main)

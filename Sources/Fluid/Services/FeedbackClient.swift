@@ -44,22 +44,21 @@ struct FeedbackSubmission: Encodable {
     }
 
     static func isValidEmail(_ value: String) -> Bool {
-        let email = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return email.utf16.count <= 254 && email.range(
-            of: #"^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-\.]*)[A-Z0-9_+\-]@([A-Z0-9][A-Z0-9\-]*\.)+[A-Z]{2,}$"#,
-            options: [.caseInsensitive, .regularExpression]
-        ) != nil
+        BrandDistribution.isValidFeedbackEmail(value.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    var trimmedMessage: String { self.message.trimmingCharacters(in: .whitespacesAndNewlines) }
+
     var content: String {
-        var text = "[\(self.category.rawValue)]\n\(self.message.trimmingCharacters(in: .whitespacesAndNewlines))"
+        var text = "[\(self.category.rawValue)]\n\(self.trimmedMessage)"
         if let appDetails { text += "\n\n--- App details ---\n\(appDetails)" }
         return text
     }
 
-    var isValid: Bool {
-        Self.isValidEmail(self.email)
-            && !self.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    var isValid: Bool { Self.isValidEmail(self.email) && self.hasValidMessage }
+
+    var hasValidMessage: Bool {
+        !self.trimmedMessage.isEmpty
             && self.message.utf16.count <= Self.messageLimit
             && self.content.utf16.count <= 5000
     }
@@ -73,6 +72,54 @@ struct FeedbackSubmission: Encodable {
     private enum CodingKeys: String, CodingKey {
         case email = "email_id"
         case feedback
+    }
+}
+
+/// Both deliveries use the same native form. Only the HTTPS service can acknowledge receipt.
+enum FeedbackDelivery: Equatable {
+    case endpoint(URL), email(String), support
+
+    init(distribution: BrandDistribution) {
+        if let endpoint = distribution.feedbackEndpoint.flatMap(URL.init(string:)) {
+            self = .endpoint(endpoint)
+        } else if let recipient = distribution.feedbackEmail {
+            self = .email(recipient)
+        } else {
+            self = .support
+        }
+    }
+
+    func accepts(_ submission: FeedbackSubmission) -> Bool {
+        switch self {
+        case .endpoint: submission.isValid
+        case .email: submission.hasValidMessage
+        case .support: false
+        }
+    }
+
+    enum Outcome { case received, handedToMail }
+
+    @MainActor
+    func submit(
+        _ submission: FeedbackSubmission,
+        session: URLSession = .shared,
+        composeEmail: (String, String, String) -> Bool
+    ) async throws -> Outcome {
+        switch self {
+        case let .endpoint(url):
+            try await FeedbackClient(session: session, endpoint: url).send(submission)
+            return .received
+        case let .email(recipient):
+            guard submission.hasValidMessage else { throw FeedbackClient.Failure.invalid }
+            let subject = "\(AppBrand.appName): \(PichiLocalization.text(submission.category.rawValue))"
+            let body = [submission.trimmedMessage, submission.appDetails].compactMap { $0 }.joined(separator: "\n\n")
+            guard composeEmail(recipient, subject, body) else {
+                throw FeedbackClient.Failure.mailUnavailable
+            }
+            return .handedToMail
+        case .support:
+            throw FeedbackClient.Failure.notConfigured
+        }
     }
 }
 
@@ -116,10 +163,11 @@ struct FeedbackClient {
     private struct Receipt: Decodable { let message: String }
 
     enum Failure: LocalizedError {
-        case notConfigured, invalid, rateLimited, rejected, server, connection, unconfirmed
+        case notConfigured, mailUnavailable, invalid, rateLimited, rejected, server, connection, unconfirmed
 
         var errorDescription: String? {
             switch self {
+            case .mailUnavailable: PichiLocalization.text("Couldn’t open your mail app. Your draft is still here.")
             case .notConfigured: PichiLocalization.text("Use the support link for this distribution.")
             case .invalid: PichiLocalization.text("Add a valid email and a message within the character limit.")
             case .rateLimited: PichiLocalization.text("Too many messages at once. Please wait a minute, then try again. Your draft is still here.")

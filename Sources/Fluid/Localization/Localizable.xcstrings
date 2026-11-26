@@ -5721,19 +5721,19 @@
         }
       }
     },
-    "Always here in Help → What’s new.": {
+    "Open this again from Help at the bottom of the sidebar.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Always here in Help → What’s new."
+            "value": "Open this again from Help at the bottom of the sidebar."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Всегда доступно в меню «Справка» → «Что нового»."
+            "value": "Это окно можно снова открыть в разделе «Помощь» внизу боковой панели."
           }
         }
       }
@@ -15389,6 +15389,23 @@
         }
       }
     },
+    "Couldn’t open your mail app. Your draft is still here.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t open your mail app. Your draft is still here."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось открыть почтовое приложение. Ваш черновик сохранён в этой форме."
+          }
+        }
+      }
+    },
     "Couldn’t save this example. It may have expired or the word changed.": {
       "extractionState": "manual",
       "localizations": {
@@ -22213,6 +22230,380 @@
         }
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
+    },
+    "Explore changes and installation notes for published versions.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Explore changes and installation notes for published versions."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Посмотрите, что изменилось в каждой опубликованной версии и как её установить."
+          }
+        }
+      }
+    },
+    "More control over meeting audio and privacy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More control over meeting audio and privacy"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Звук встречи и приватность"
+          }
+        }
+      }
+    },
+    "Choose the audio for your next meeting and see how usage reporting works on your Mac.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose the audio for your next meeting and see how usage reporting works on your Mac."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите, какой звук записывать на встрече, и узнайте, какие данные приложение отправляет с Mac."
+          }
+        }
+      }
+    },
+    "Choose what you record": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose what you record"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбор источника звука"
+          }
+        }
+      }
+    },
+    "Record just your microphone, add audio from one app, or include all computer audio. You can save your choice for next time.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record just your microphone, add audio from one app, or include all computer audio. You can save your choice for next time."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записывайте только микрофон, добавьте звук одного приложения или всего компьютера. Выбор можно сохранить для следующей встречи."
+          }
+        }
+      }
+    },
+    "Open recording settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open recording settings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть настройки записи"
+          }
+        }
+      }
+    },
+    "See what usage data is shared": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "See what usage data is shared"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Какие данные отправляются"
+          }
+        }
+      }
+    },
+    "The public Mac release reports daily activity. Detailed metrics are optional. Audio and transcript text stay out of analytics.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The public Mac release reports daily activity. Detailed metrics are optional. Audio and transcript text stay out of analytics."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Публичная версия для Mac передаёт сведения о ежедневной активности. Подробная статистика включается по желанию. В аналитику не попадают аудио и тексты расшифровок."
+          }
+        }
+      }
+    },
+    "See what is collected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "See what is collected"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Посмотреть состав данных"
+          }
+        }
+      }
+    },
+    "Microphone only": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone only"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Только микрофон"
+          }
+        }
+      }
+    },
+    "One application": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One application"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Одно приложение"
+          }
+        }
+      }
+    },
+    "All computer audio": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All computer audio"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Весь звук компьютера"
+          }
+        }
+      }
+    },
+    "Daily activity": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Daily activity"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ежедневная активность"
+          }
+        }
+      }
+    },
+    "Optional detailed metrics": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Optional detailed metrics"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подробная статистика по желанию"
+          }
+        }
+      }
+    },
+    "No audio or transcripts": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No audio or transcripts"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Без аудио и расшифровок"
+          }
+        }
+      }
+    },
+    "Dictation and Russian interface updates": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dictation and Russian interface updates"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диктовка и русский интерфейс"
+          }
+        }
+      }
+    },
+    "GigaAM finishes dictation sooner, and more of the Mac interface is available in Russian.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM finishes dictation sooner, and more of the Mac interface is available in Russian."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM быстрее завершает диктовку. Окна обновлений, настройки ИИ и сообщения об ошибках теперь доступны на русском."
+          }
+        }
+      }
+    },
+    "Faster GigaAM dictation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Faster GigaAM dictation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Более быстрая диктовка с GigaAM"
+          }
+        }
+      }
+    },
+    "GigaAM reuses audio it has already processed when you finish dictating.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM reuses audio it has already processed when you finish dictating."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Когда вы заканчиваете диктовать, GigaAM использует уже обработанные фрагменты записи."
+          }
+        }
+      }
+    },
+    "Meeting summaries across languages": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting summaries across languages"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Итоги встреч при смене языка"
+          }
+        }
+      }
+    },
+    "Changing the interface language preserves the meeting data used to create summaries.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changing the interface language preserves the meeting data used to create summaries."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "При смене языка интерфейса сохраняются данные встречи, по которым формируются её итоги."
+          }
+        }
+      }
+    },
+    "View release history": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View release history"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть историю изменений"
+          }
+        }
+      }
     },
     "Fluid Speech Pro": {
       "extractionState": "manual",
@@ -36750,6 +37141,40 @@
         }
       }
     },
+    "Open bug report form": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open bug report form"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть форму сообщения об ошибке"
+          }
+        }
+      }
+    },
+    "Open email draft": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open email draft"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть черновик письма"
+          }
+        }
+      }
+    },
     "Open support": {
       "extractionState": "manual",
       "localizations": {
@@ -43857,6 +44282,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Показать в Finder"
+          }
+        }
+      }
+    },
+    "Review and send the draft to %@ in your mail app.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review and send the draft to %@ in your mail app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте черновик и отправьте его на %@ в почтовом приложении."
           }
         }
       }

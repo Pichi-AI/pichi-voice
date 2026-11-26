@@ -1510,8 +1510,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func openIssueReportingPage() {
-        guard let url = URL(string: AppBrand.supportURL.absoluteString) else { return }
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(AppBrand.issueReportURL)
     }
 
     private func openPreviousBuildPicker() {
@@ -1744,6 +1743,14 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
                 self.requestedNavigationDestination = nil
             }
         }
+    }
+
+    static func openHelpDocumentation(
+        package: BrandPackage = AppBrand.package,
+        language: PichiInterfaceLanguage = PichiLocalization.language,
+        open: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) {
+        if let url = package.documentationURL(for: language.locale) { _ = open(url) }
     }
 
     /// Public entry-point for non-menu UI surfaces (e.g. overlay controls) to open Preferences.
