@@ -3,6 +3,20 @@ import XCTest
 @testable import PichiGigaAM
 
 final class GigaAMCoreMLReadbackTests: XCTestCase {
+    func testOptionalEncoderReadsOnlyValidFramesAndRequiresTheLearnedDimension() throws {
+        let states = try MLMultiArray(shape: [1, 3, 768], dataType: .float32)
+        let pointer = states.dataPointer.bindMemory(to: Float.self, capacity: states.count)
+        for index in 0..<states.count { pointer[index] = Float(index) }
+        pointer[2 * 768] = .nan
+        let result = GigaAMCoreMLInference.readEncoder(states, outputFrames: 3, validFrames: 2)
+        XCTAssertEqual(result, (0..<(2 * 768)).map(Float.init))
+        XCTAssertNil(GigaAMCoreMLInference.readEncoder(states, outputFrames: 3, validFrames: 3))
+        XCTAssertNil(GigaAMCoreMLInference.readEncoder(states, outputFrames: 2, validFrames: 2))
+        XCTAssertNil(GigaAMCoreMLInference.readEncoder(nil, outputFrames: 3, validFrames: 2))
+        let logits = try MLMultiArray(shape: [1, 2, 257], dataType: .float32)
+        XCTAssertNil(GigaAMCoreMLInference.readEncoder(logits, outputFrames: 2, validFrames: 2))
+    }
+
     func testPublishedLengthRoundingCannotReadPastAudioOrPhysicalOutput() throws {
         XCTAssertEqual(try GigaAMCoreMLInference.validFrameCount(inputFrames: 2_099, reportedFrames: 526, availableFrames: 625), 525)
         XCTAssertEqual(try GigaAMCoreMLInference.validFrameCount(inputFrames: 2_199, reportedFrames: 551, availableFrames: 625), 550)

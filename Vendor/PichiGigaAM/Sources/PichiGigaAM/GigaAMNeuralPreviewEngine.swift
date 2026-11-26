@@ -11,79 +11,28 @@ public actor GigaAMNeuralPreviewEngine {
     private static let shortWindowSampleCount = 6 * GigaAMFrontend.sampleRate
     private static let longWindowSampleCount = 25 * GigaAMFrontend.sampleRate
 
-    private let frontend: GigaAMFrontend
-    private let vocabulary: GigaAMVocabulary
-    private let longBackend: GigaAMCoreMLInference
-    private let shortBackend: GigaAMCoreMLInference
+    private let runtime: GigaAMRuntime
 
+    /// Compatibility facade for callers which only request previews. Dictation
+    /// uses the preview methods on its already loaded canonical runtime.
     public init(directory: URL) async throws {
-        guard Self.isSupportedPlatform else {
-            throw GigaAMError.incompatibleModel
-        }
-        let descriptor = GigaAMModelCatalog.coreMLModel
-        guard case .coreML(let configuration) = descriptor.format else {
-            throw GigaAMError.incompatibleModel
-        }
-        try descriptor.verify(in: directory)
-        try Task.checkCancellation()
-
-        guard let vocabularyFile = descriptor.vocabularyFile else {
-            throw GigaAMError.invalidVocabulary
-        }
-        let pieces = try String(contentsOf: directory.appendingPathComponent(vocabularyFile), encoding: .utf8)
-            .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var tokens = pieces
-        if tokens.last == "" { tokens.removeLast() }
-        guard !tokens.isEmpty, tokens.count <= 65_535, tokens.first == "<unk>",
-              !tokens.contains("<blk>") else { throw GigaAMError.invalidVocabulary }
-        let vocabulary = GigaAMVocabulary(tokens: tokens + ["<blk>"], blankID: tokens.count,
-                                           unknownID: 0, subword: true)
-        let frontend = try GigaAMFrontend(windowURL: directory.appendingPathComponent(configuration.windowFile),
-                                          melFilterbankURL: directory.appendingPathComponent(configuration.melFilterbankFile))
-        let package = directory.appendingPathComponent(descriptor.modelFile, isDirectory: true)
-
-        let stagingURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pichi-gigaam-short-\(UUID().uuidString).mlpackage", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: stagingURL) }
-        self.frontend = frontend
-        self.vocabulary = vocabulary
-        try Task.checkCancellation()
-        try FileManager.default.createDirectory(at: stagingURL, withIntermediateDirectories: true)
-        try GigaAMShortGraph.materialize(from: package, into: stagingURL)
-        try Task.checkCancellation()
-        let long = try GigaAMCoreMLInference(packageURL: package,
-                                             featureFrameCount: configuration.featureFrameCount)
-        let short = try GigaAMCoreMLInference(packageURL: stagingURL,
-                                              featureFrameCount: GigaAMShortGraph.frameCount)
-        try short.load(computeUnits: .cpuAndNeuralEngine)
-        try long.load(computeUnits: .cpuAndNeuralEngine)
-        self.shortBackend = short
-        self.longBackend = long
+        guard Self.isSupportedPlatform else { throw GigaAMError.incompatibleModel }
+        let runtime = try GigaAMRuntime()
+        try await runtime.load(descriptor: GigaAMModelCatalog.coreMLModel, directory: directory)
+        guard try await runtime.prepareAdaptivePreview() else { throw GigaAMError.incompatibleModel }
+        self.runtime = runtime
     }
 
-    private static var isSupportedPlatform: Bool {
+    static var isSupportedPlatform: Bool {
         #if os(macOS) && arch(arm64)
-            return true
+        return true
         #else
-            return false
+        return false
         #endif
     }
 
-    /// Routes short input to the materialized six-second graph and bounded
-    /// long input to the verified 25-second graph.
-    public func recognize(_ samples: [Float], longContext: Bool) throws -> [GigaAMWordTiming] {
-        try Task.checkCancellation()
-        try Self.validate(samples, longContext: longContext)
-        return try autoreleasepool {
-            let backend = longContext ? self.longBackend : self.shortBackend
-            let features = self.frontend.features(samples)
-            guard features.frameCount <= backend.capacity else { throw GigaAMError.invalidAudio }
-            let output = try backend.predict(features: features.values, frameCount: features.frameCount)
-            guard output.vocabularySize == self.vocabulary.tokens.count else { throw GigaAMError.invalidOutput }
-            let duration = Double(samples.count) / Double(GigaAMFrontend.sampleRate)
-            return try GigaAMCTC.decode(logProbabilities: output.values, frameCount: output.frameCount,
-                                        vocabulary: self.vocabulary, audioDuration: duration)
-        }
+    public func recognize(_ samples: [Float], longContext: Bool) async throws -> [GigaAMWordTiming] {
+        try await self.runtime.recognizePreview(samples, longContext: longContext)
     }
 
     static func validate(_ samples: [Float], longContext: Bool) throws {

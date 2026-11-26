@@ -24,8 +24,11 @@ final class GigaAMEncoderDictionaryLiveTests: XCTestCase {
               let outputPath = env["PICHI_ENCODER_DICTIONARY_RESULTS"] else {
             throw XCTSkip("Local encoder dictionary replay is opt-in")
         }
-        guard GigaAMRuntime.encoderFeatureAPIAvailable else {
-            throw XCTSkip("This native SDK does not expose encoder snapshots")
+        let modelDirectory = URL(fileURLWithPath: modelPath, isDirectory: true)
+        let coreMLInstalled = GigaAMModelCatalog.coreMLModel.filesExist(in: modelDirectory)
+            || GigaAMModelCatalog.coreMLModel.filesExist(in: modelDirectory.appendingPathComponent(GigaAMModelCatalog.coreMLModel.id, isDirectory: true))
+        if !coreMLInstalled && !GigaAMRuntime.encoderFeatureAPIAvailable {
+            throw XCTSkip("This native SDK does not expose encoder snapshots for the explicitly selected GGUF")
         }
         XCTAssertNil(env["TRANSCRIBE_DUMP_DIR"], "The live API must not depend on debug dumps")
         let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: URL(fileURLWithPath: planPath)))
@@ -52,17 +55,26 @@ final class GigaAMEncoderDictionaryLiveTests: XCTestCase {
         settings.customDictionaryEntries = entries
         let store = PronunciationDictionaryStore(fileURL: root.appendingPathComponent("pronunciation-dictionary-v1.json"), profile: profile)
         try await store.replaceAllProfiles([])
-        let modelStore = PichiGigaAMModelStore(directory: URL(fileURLWithPath: modelPath),
-            downloadDescriptor: GigaAMModelCatalog.downloadableModel,
+        let modelStore = PichiGigaAMModelStore(directory: modelDirectory,
+            downloadDescriptor: GigaAMModelCatalog.coreMLModel,
             environment: ["PICHI_GIGAAM_MODEL_DIR": modelPath])
         let provider = PichiGigaAMProvider(modelStore: modelStore, pronunciationStore: store)
+        let referenceProvider: PichiGigaAMProvider
+        if let legacyPath = env["PICHI_ENCODER_DICTIONARY_LEGACY_REFERENCE_DIR"] {
+            let source = URL(fileURLWithPath: legacyPath, isDirectory: true)
+            try GigaAMModelCatalog.downloadableModel.verify(in: source)
+            referenceProvider = PichiGigaAMProvider(modelStore: .init(directory: source,
+                downloadDescriptor: GigaAMModelCatalog.downloadableModel), pronunciationStore: store)
+        } else {
+            referenceProvider = provider
+        }
         do {
-            try await provider.prepare(progressHandler: nil)
+            try await referenceProvider.prepare(progressHandler: nil)
             var captures: [String: [PronunciationEnrollmentCapture]] = [:]
             var key: String?
             for clip in manifest.cases where clip.kind == "reference" {
                 let samples = try Self.samples(clip.path)
-                let result = try await provider.transcribeFinal(samples)
+                let result = try await referenceProvider.transcribeFinal(samples)
                 let alignment = try XCTUnwrap(result.dictionaryLearningAlignment)
                 XCTAssertFalse(alignment.featureFrames.isEmpty)
                 XCTAssertTrue(alignment.featureFrames.allSatisfy { $0.extractorVersion == GigaAMEncoderFeatures.extractorVersion })
@@ -75,7 +87,7 @@ final class GigaAMEncoderDictionaryLiveTests: XCTestCase {
                     observedText: heard, sourceWordRange: 0..<max(1, selected.count),
                     sourceSampleRange: 0..<samples.count, focalSampleRange: lower..<upper, samples: samples,
                     featureFrames: alignment.featureFrames)
-                let extracted = try await provider.originalAudioEnrollment(evidence)
+                let extracted = try await referenceProvider.originalAudioEnrollment(evidence)
                 let capture = try XCTUnwrap(extracted)
                 XCTAssertEqual(capture.values.count, 768)
                 captures[try XCTUnwrap(clip.label), default: []].append(capture)
@@ -84,7 +96,7 @@ final class GigaAMEncoderDictionaryLiveTests: XCTestCase {
                 let values = try XCTUnwrap(captures[term])
                 XCTAssertTrue((3...10).contains(values.count))
                 XCTAssertEqual(GigaAMDictionaryAcoustics.activeCaptures(values).count, 3)
-                let valid = try await provider.validateDictionaryPronunciations(values)
+                let valid = try await referenceProvider.validateDictionaryPronunciations(values)
                 XCTAssertTrue(valid)
                 let entry = try XCTUnwrap(entries.first { $0.replacement == manifest.terms[term] })
                 try await store.upsert(dictionaryEntryID: entry.id, label: entry.replacement,
@@ -96,12 +108,23 @@ final class GigaAMEncoderDictionaryLiveTests: XCTestCase {
                 let profile = try XCTUnwrap(saved.first { $0.label == manifest.terms[term] })
                 XCTAssertEqual(profile.enrollments.count, captures[term]?.count)
             }
+            if referenceProvider !== provider {
+                await referenceProvider.unloadModel()
+                XCTAssertFalse(referenceProvider.isReady)
+                try await provider.prepare(progressHandler: nil)
+            }
             var rows: [[String: Any]] = []
             for clip in manifest.cases where clip.kind != "reference" {
                 let samples = try Self.samples(clip.path)
                 let start = Date()
                 let result = try await provider.transcribeFinal(samples)
                 let alignment = try XCTUnwrap(result.dictionaryLearningAlignment)
+                XCTAssertFalse(alignment.featureFrames.isEmpty)
+                if referenceProvider !== provider {
+                    XCTAssertNotEqual(alignment.modelKey, key)
+                    XCTAssertEqual(provider.lastFinalizationMetrics?.preparedTerms, manifest.terms.count)
+                    XCTAssertEqual(provider.lastFinalizationMetrics?.retryableReferenceIssues, 0)
+                }
                 rows.append(["name": clip.name, "kind": clip.kind, "label": clip.label as Any? ?? NSNull(),
                     "corrected": result.text, "raw_words": alignment.words.map { ["text": $0.text, "start": $0.start, "end": $0.end] as [String: Any] },
                     "model_key": alignment.modelKey, "same_pass_feature_windows": alignment.featureFrames.count,
@@ -113,6 +136,7 @@ final class GigaAMEncoderDictionaryLiveTests: XCTestCase {
             await provider.unloadModel()
             XCTAssertFalse(provider.isReady)
         } catch {
+            if referenceProvider !== provider { await referenceProvider.unloadModel() }
             await provider.unloadModel()
             throw error
         }

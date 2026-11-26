@@ -1,9 +1,10 @@
-"""Build the 599-frame Core ML specialization recipe from verified public GigaAM inputs.
+"""Build the short and long Core ML graph recipes from verified public GigaAM inputs.
 
 Development only: Python 3, coremltools' MIL_pb2, protobuf, bsdiff4 1.4.4.
 Usage: python generate_preview_recipe.py path/to/gigaam_v3_e2e.mlpackage gigaam-599.recipe
 """
 import argparse
+import copy
 import hashlib
 import struct
 from pathlib import Path
@@ -117,6 +118,58 @@ def specialize(original, weights):
     return short, position_tables
 
 
+def mask_attention(spec, frames):
+    """Exclude padded key positions in each attention block before softmax."""
+    def renamed(template, name, **inputs):
+        op = copy.deepcopy(template)
+        op.outputs[0].name = name
+        op.attributes["name"].immediateValue.tensor.strings.values[0] = name
+        for key, source in inputs.items():
+            op.inputs[key].arguments[0].name = source
+        return op
+
+    def transform(field, data):
+        if field != 502:
+            return data
+        program = MIL_pb2.Program.FromString(data)
+        block, = program.functions["main"].block_specializations.values()
+        ops = list(block.operations)
+        named = {out.name: op for op in ops for out in op.outputs}
+        pad = named["bitwise_not"]
+        if [d.constant.size for d in pad.outputs[0].type.tensorType.dimensions] != [1, frames]:
+            raise ValueError("Unexpected encoded padding mask")
+        zero = named["const_46_to_fp16"]
+        penalty = renamed(zero, "masked_key_logit")
+        penalty.attributes["val"].immediateValue.tensor.bytes.values = struct.pack("<e", -10000)
+        bias = renamed(named["masked_fill_1_cast_fp16"], "attention_padding", cond="bitwise_not",
+                       a=penalty.outputs[0].name, b=zero.outputs[0].name)
+        bias.outputs[0].type.CopyFrom(pad.outputs[0].type)
+        bias.outputs[0].type.tensorType.dataType = zero.outputs[0].type.tensorType.dataType
+        updated = []
+        attention_blocks = 0
+        for op in ops:
+            shape = [d.constant.size for d in op.outputs[0].type.tensorType.dimensions]
+            if op.type == "softmax" and len(shape) == 4:
+                source = op.inputs["x"].arguments[0].name
+                if named[source].type != "matmul" or shape != [1, 16, frames, frames]:
+                    raise ValueError("Unexpected attention logits")
+                name = "masked_" + source
+                add = renamed(named["add_8_cast_fp16"], name, x=source, y=bias.outputs[0].name)
+                add.outputs[0].type.CopyFrom(named[source].outputs[0].type)
+                updated.append(add)
+                op.inputs["x"].arguments[0].name = name
+                attention_blocks += 1
+            updated.append(op)
+            if op is pad:
+                updated.extend([penalty, bias])
+        if attention_blocks != 16:
+            raise ValueError("Expected one attention adjustment in each of the 16 encoder blocks")
+        del block.operations[:]
+        block.operations.extend(updated)
+        return program.SerializeToString(deterministic=True)
+    return rewrite_fields(spec, transform)
+
+
 def spec_operations(original, target):
     """Compress a structural section as old-spec ranges and short literal insertions."""
     control, differences, _ = core.diff(original, target)
@@ -181,11 +234,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("package", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--long", action="store_true", help="Generate the canonical 2499-frame attention recipe")
     args = parser.parse_args()
     files = args.package / "Data/com.apple.CoreML"
     original = (files / "model.mlmodel").read_bytes()
     with (files / "weights/weight.bin").open("rb") as weights:
         if hashlib.sha256(original).hexdigest() != SPEC_HASH or hashlib.file_digest(weights, "sha256").hexdigest() != WEIGHTS_HASH:
             raise ValueError("The input must be the pinned public GigaAM v3 E2E CTC package")
-        short, tables = specialize(original, weights)
-    args.output.write_bytes(make_recipe(original, short, tables))
+        if args.long:
+            target, tables = mask_attention(original, 625), []
+        else:
+            short, tables = specialize(original, weights)
+            target = mask_attention(short, 150)
+    args.output.write_bytes(make_recipe(original, target, tables))

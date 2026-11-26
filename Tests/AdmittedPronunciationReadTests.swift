@@ -358,6 +358,33 @@ import Darwin
             profileKey: "selected", modelKey: "synthetic", sourceWordRange: 0..<1, frames: negativeFrames),
             correctedText: "synthetic", expiresAt: Date().addingTimeInterval(60))
         try await negativeStore.save(correction, expectedRevision: negativeStore.revision())
+        // One-way artifact migration must preserve the old profile identity while
+        // opening only the original samples and vetoes admitted for this entry.
+        let fallbackLease = UUID()
+        let exactOnly = try store.admitCaptureRead(leaseID: fallbackLease, modelKey: "next", entryIDs: [entry])
+        expect(exactOnly.profiles.isEmpty, "Stored profiles require an explicit migration source")
+        exactOnly.close(leaseID: fallbackLease)
+        let migrating = try store.admitCaptureRead(leaseID: fallbackLease, modelKey: "next", entryIDs: [entry], fallbackModelKey: "synthetic")
+        expect(migrating.profiles == [profiles[0]], "Only the requested fallback entry can supply persisted recordings")
+        expect(try migrating.inspection(for: pinnedID) == inspection, "The saved focal range and PCM come through the capture lease")
+        migrating.close(leaseID: fallbackLease)
+        rejects("Closed migration cannot read original audio") { _ = try migrating.inspection(for: pinnedID) }
+        let allowVeto = try negativeStore.admitCaptureRead(leaseID: fallbackLease, modelKey: "next", entryIDs: [entry],
+            fallbackModelKey: "synthetic", fallbackEntryIDs: [entry])
+        expect(allowVeto.frames(entryID: entry, profileKey: "selected", modelKey: "synthetic") == [negativeFrames], "Admitted original-profile veto retains its actual producer")
+        expect(allowVeto.frames(entryID: entry, profileKey: "selected", modelKey: "next").isEmpty, "Veto frames are never relabelled")
+        allowVeto.close(leaseID: fallbackLease)
+        let omitVeto = try negativeStore.admitCaptureRead(leaseID: fallbackLease, modelKey: "next", entryIDs: [entry], fallbackModelKey: "synthetic")
+        expect(omitVeto.frames(entryID: entry, profileKey: "selected", modelKey: "synthetic").isEmpty, "An unselected fallback profile cannot supply vetoes")
+        omitVeto.close(leaseID: fallbackLease)
+        let currentCaptures = ids.map { PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "next", inspectionID: $0) }
+        let exact = PronunciationDictionaryProfile(dictionaryEntryID: entry, label: profiles[0].label,
+            modelKey: "next", hiddenSize: 2, enrollments: currentCaptures)
+        try await store.replaceAllProfiles(profiles + [exact])
+        let preferExact = try store.admitCaptureRead(leaseID: fallbackLease, modelKey: "next", entryIDs: [entry], fallbackModelKey: "synthetic")
+        expect(preferExact.profiles == [exact], "A new exact profile takes precedence over an older reference for the same word")
+        preferExact.close(leaseID: fallbackLease)
+        try await store.replaceAllProfiles(profiles)
         let multiLease = UUID()
         rejects("Default capture admission rejects more than three references") {
             _ = try store.admitCaptureRead(leaseID: multiLease, modelKey: "synthetic", entryIDs: [entry],
@@ -536,6 +563,26 @@ import Darwin
         expect(try descriptorCount() == beforeExpanded + 384, "Expanded admission retains only bounded descriptors")
         expandedRead.close(leaseID: capacityLease)
         expect(try descriptorCount() == beforeExpanded, "Expanded admission releases all descriptors")
+        // Forty migrated words share 390 unique files. Their three-reference
+        // baselines require only 120 descriptors, so all forty must be usable.
+        let tail = retained.suffix(10)
+        let legacy = Array(expanded.dropLast()) + [Array(tail.prefix(5)), Array(tail.suffix(5))].map { captures in
+            PronunciationDictionaryProfile(dictionaryEntryID: UUID(), label: "Migrated", modelKey: "synthetic-family-b",
+                hiddenSize: 2, enrollments: captures)
+        }
+        try await capacityStore.replaceAllProfiles(legacy)
+        let beforeMigrating = try descriptorCount()
+        let migration = try capacityStore.admitCaptureRead(leaseID: capacityLease, modelKey: "new-artifact",
+            entryIDs: Set(legacy.map(\.dictionaryEntryID)), fallbackModelKey: "synthetic-family-b",
+            maximumReferencesPerProfile: 10, referenceSelection: { $0.enrollments })
+        expect(Set(migration.profiles.map(\.id)) == Set(legacy.map(\.id)), "Every eligible migrated word is admitted")
+        expect(legacy.allSatisfy { migration.matchingEnrollments(for: $0).starts(with: $0.enrollments.prefix(3)) },
+            "Every migrated word retains its baseline before another word receives optional references")
+        expect(legacy.reduce(0) { $0 + migration.matchingEnrollments(for: $1).count } == 384,
+            "Available migrated variants fill the remaining reference budget")
+        expect(try descriptorCount() == beforeMigrating + 384, "The migrated snapshot stays within the descriptor budget")
+        migration.close(leaseID: capacityLease)
+        expect(try descriptorCount() == beforeMigrating, "The migrated snapshot releases every descriptor")
         struct CapacityDocument: Encodable { let version = 1; let profiles: [PronunciationDictionaryProfile] }
         var malformedOptional = sharedFamily; malformedOptional.enrollments[0] = .init(values: [1], sourceFrameCount: 1, modelKey: malformedOptional.modelKey)
         try JSONEncoder().encode(CapacityDocument(profiles: [malformedOptional, exactDifferentWidth])).write(to: capacityURL, options: .atomic)

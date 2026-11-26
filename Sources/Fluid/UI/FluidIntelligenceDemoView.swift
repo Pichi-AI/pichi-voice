@@ -63,7 +63,7 @@ struct FluidIntelligenceDemoView: View {
                 }
                 .buttonStyle(.plain).disabled(self.busy).accessibilityLabel(PichiLocalization.text("Close demo"))
             }
-            FluidSegmentedPicker(title: "Example", options: Self.examples.indices.map {
+            AppSegmentedPicker(title: "Example", options: Self.examples.indices.map {
                 (value: $0, title: PichiLocalization.text(Self.examples[$0].title))
             }, selection: self.$selected)
             .disabled(self.busy)

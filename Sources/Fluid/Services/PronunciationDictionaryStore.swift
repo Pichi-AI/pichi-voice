@@ -214,7 +214,7 @@ actor PronunciationDictionaryStore {
     /// references and 16 MB metadata limits remain in force. Invalid, unavailable or
     /// excess optional candidates are omitted before the immutable snapshot is created. One
     /// fallback per otherwise unrepresented word precedes extra variants for an admitted word.
-    nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>,
+    nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>, fallbackModelKey: String? = nil,
                                      includingSharedFamilies: Bool = false, maximumReferencesPerProfile: Int = 3,
                                      referenceSelection: @Sendable (PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] = { $0.matchingEnrollments }) throws -> CaptureRead {
         try Task.checkCancellation()
@@ -245,10 +245,13 @@ actor PronunciationDictionaryStore {
                 var selectedIDs = Set(exact.map(\.id))
                 var shared: [PronunciationDictionaryProfile] = []
                 var candidateCount = 0
-                if includingSharedFamilies {
-                    for item in document.profiles where item.modelKey != modelKey && entryIDs.contains(item.dictionaryEntryID) &&
-                        ParakeetSpeechModelCatalog.sharesPronunciationFamily(item.modelKey, with: modelKey)
-                    {
+                if includingSharedFamilies || fallbackModelKey != nil {
+                    for item in document.profiles where item.modelKey != modelKey && entryIDs.contains(item.dictionaryEntryID) {
+                        // A provider may recover an older artifact's saved recordings only
+                        // for entries which have no profile under the current artifact.
+                        let fallback = item.modelKey == fallbackModelKey && !selectedEntries.contains(item.dictionaryEntryID)
+                        guard fallback || (includingSharedFamilies &&
+                            ParakeetSpeechModelCatalog.sharesPronunciationFamily(item.modelKey, with: modelKey)) else { continue }
                         try Task.checkCancellation()
                         candidateCount += 1
                         guard isValid(item), item.isEligibleForMatching, exact.count + shared.count < 1024,
@@ -315,13 +318,13 @@ actor PronunciationDictionaryStore {
             committed = true
             return true
         }
-        var exactSelections: [[PronunciationEnrollmentCapture]] = []
+        var deferredExtras: [(PronunciationDictionaryProfile, [PronunciationEnrollmentCapture])] = []
         for selected in exact {
             let captures = referenceSelection(selected)
             guard captures.count <= maximumReferencesPerProfile, captures.allSatisfy({ selected.enrollments.contains($0) }) else {
                 throw PronunciationDictionaryStoreError.inconsistentEnrollment
             }
-            exactSelections.append(captures)
+            deferredExtras.append((selected, captures))
             _ = try pinReferences(selected, captures: Array(captures.prefix(3)), optional: false)
         }
         var profiles = exact
@@ -333,10 +336,12 @@ actor PronunciationDictionaryStore {
                 let candidate = shared[index]
                 let captures = referenceSelection(candidate)
                 guard captures.count <= maximumReferencesPerProfile else { return }
-                if try pinReferences(candidate, captures: captures, optional: true) {
-                    profiles.append(candidate)
-                    admittedEntries.insert(candidate.dictionaryEntryID)
-                }
+                let isFallback = candidate.modelKey == fallbackModelKey
+                let baseline = isFallback ? Array(captures.prefix(3)) : captures
+                guard try pinReferences(candidate, captures: baseline, optional: true) else { return }
+                profiles.append(candidate)
+                admittedEntries.insert(candidate.dictionaryEntryID)
+                if isFallback { deferredExtras.append((candidate, captures)) }
             } catch is CancellationError { throw CancellationError() }
             catch { /* An optional family reference cannot invalidate the mandatory exact snapshot. */ }
         }
@@ -344,11 +349,11 @@ actor PronunciationDictionaryStore {
             try admitOptional(index)
         }
         for index in shared.indices where !attempted.contains(index) { try admitOptional(index) }
-        // Mandatory exact baselines are all pinned before any optional extras.
+        // Pin the baselines for all exact and admitted fallback profiles before any extras.
         // Admit extras individually so a missing file or full budget cannot
         // prevent a different profile's baseline from being captured.
-        for (index, selected) in exact.enumerated() {
-            for capture in exactSelections[index].dropFirst(3) {
+        for (selected, captures) in deferredExtras {
+            for capture in captures.dropFirst(3) {
                 do { _ = try pinReferences(selected, captures: [capture], optional: true, append: true) }
                 catch is CancellationError { throw CancellationError() }
                 catch PronunciationDictionaryStoreError.staleEvidence { throw PronunciationDictionaryStoreError.staleEvidence }

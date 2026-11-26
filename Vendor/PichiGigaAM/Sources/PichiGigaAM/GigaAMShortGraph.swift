@@ -5,34 +5,46 @@ import Foundation
 /// describes protobuf structure and byte ranges; learned tensors stay in the downloaded package.
 enum GigaAMShortGraph {
     static let frameCount = 599
-    static let specByteCount = 491_354
-    static let specSHA256 = "86c4293e860749138794edabb426fa6963d138a46afa42a162e72dbc3fa194bc"
+    static let specByteCount = 494_598
+    static let specSHA256 = "90110335e9346f5146195cad032812743c48cce4e5c0b986a392cd7e6a8ae3bb"
 
     /// The caller verifies the model catalog descriptor and owns the staging directory.
     static func materialize(from verifiedLongPackage: URL, into destination: URL) throws {
-        let manager = FileManager.default
         let spec = "Data/com.apple.CoreML/model.mlmodel"
         let weights = "Data/com.apple.CoreML/weights/weight.bin"
         let original = try Data(contentsOf: verifiedLongPackage.appendingPathComponent(spec))
-        guard let url = Bundle.module.url(forResource: "gigaam-599", withExtension: "recipe") else {
-            throw GigaAMError.incompatibleModel
-        }
         let handle = try FileHandle(forReadingFrom: verifiedLongPackage.appendingPathComponent(weights))
         defer { try? handle.close() }
-        let derivative = try reconstruct(recipe: Data(contentsOf: url), original: original, expectedSize: specByteCount) { offset, count in
+        let derivative = try reconstruct(resource: "gigaam-599", original: original, expectedSize: specByteCount) { offset, count in
             try handle.seek(toOffset: UInt64(offset))
             return try handle.read(upToCount: count) ?? Data()
         }
         guard SHA256.hash(data: derivative).map({ String(format: "%02x", $0) }).joined() == specSHA256 else {
             throw GigaAMError.checksumMismatch(spec)
         }
+        try self.stage(specification: derivative, from: verifiedLongPackage, into: destination)
+    }
+
+    static func stage(specification: Data, from package: URL, into destination: URL) throws {
+        let manager = FileManager.default
+        let spec = "Data/com.apple.CoreML/model.mlmodel"
+        let weights = "Data/com.apple.CoreML/weights/weight.bin"
         let toWeights = destination.appendingPathComponent(weights)
         try manager.createDirectory(at: toWeights.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try manager.copyItem(at: verifiedLongPackage.appendingPathComponent("Manifest.json"),
+        try manager.copyItem(at: package.appendingPathComponent("Manifest.json"),
                              to: destination.appendingPathComponent("Manifest.json"))
         // Foundation uses clonefile where possible; this also works across volumes.
-        try manager.copyItem(at: verifiedLongPackage.appendingPathComponent(weights), to: toWeights)
-        try derivative.write(to: destination.appendingPathComponent(spec), options: .atomic)
+        try manager.copyItem(at: package.appendingPathComponent(weights), to: toWeights)
+        try specification.write(to: destination.appendingPathComponent(spec), options: .atomic)
+    }
+
+    static func reconstruct(resource: String, original: Data, expectedSize: Int,
+                            readWeights: (Int, Int) throws -> Data) throws -> Data {
+        guard let url = Bundle.module.url(forResource: resource, withExtension: "recipe") else {
+            throw GigaAMError.incompatibleModel
+        }
+        return try reconstruct(recipe: Data(contentsOf: url), original: original,
+                               expectedSize: expectedSize, readWeights: readWeights)
     }
 
     /// Records are an opcode (copy spec, literal, copy positional table) followed by

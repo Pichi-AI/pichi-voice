@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Uses the production native control in an unshown window. No app services,
 /// permission prompts, persistent preferences or native input are initialized.
-enum FluidSegmentedPickerTests {
+enum AppSegmentedPickerTests {
     private enum Choice: CaseIterable, Hashable { case system, light, dark }
 
     @MainActor private final class State: ObservableObject {
@@ -17,7 +17,7 @@ enum FluidSegmentedPickerTests {
     private struct Host: View {
         @ObservedObject var state: State
         var body: some View {
-            FluidSegmentedPicker(title: "Theme", options: Choice.allCases.enumerated().map {
+            AppSegmentedPicker(title: "Theme", options: Choice.allCases.enumerated().map {
                 (value: $0.element, title: self.state.titles[$0.offset])
             }, selection: self.$state.selection)
             .disabled(!self.state.enabled)
