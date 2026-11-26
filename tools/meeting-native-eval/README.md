@@ -23,7 +23,9 @@ The builder runs `swift build` of the vendored `Vendor/PichiGigaAM` package into
 TranscribeCpp object and module, and the `CTranscribe` native framework. Every package that build
 needs is vendored (`Vendor/onnxruntime-swift-package-manager`, `Vendor/TranscribeCpp`), so no
 package repository is resolved. The PichiGigaAM sources themselves are still compiled by the
-builder against those staged products. SwiftPM fetches the ONNX Runtime binary archive only
+builder against those staged products. Because `swiftc` does not generate SwiftPM's `Bundle.module`, the
+builder also stages the `PichiGigaAM_PichiGigaAM.bundle` resource bundle from that build and compiles a
+generated accessor that points at it. SwiftPM fetches the ONNX Runtime binary archive only
 when its shared cache lacks it; no model is downloaded. The build manifest records the upstream
 ONNX Runtime revision from `PICHI_VENDORING.md` and the hashes of the vendored manifests, ONNX
 bridge headers, TranscribeCpp pin, archive and Swift sources, and the staged native objects and

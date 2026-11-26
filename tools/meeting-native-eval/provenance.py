@@ -36,8 +36,11 @@ def _complete(inputs, what):
 
 
 def gigaam_package_inputs(package):
-    """The manifest that selects PichiGigaAM's packages, resources and linked frameworks."""
-    return _complete([Path(package) / 'Package.swift'], 'vendored PichiGigaAM package')
+    """The manifest that selects PichiGigaAM's packages, resources and linked frameworks, and the
+    resource files SwiftPM copies into the target's bundle (the GigaAM graph recipes)."""
+    package = Path(package)
+    resources = sorted(path for path in (package / 'Sources/PichiGigaAM/Resources').glob('*') if path.is_file())
+    return _complete([package / 'Package.swift', *resources], 'vendored PichiGigaAM package')
 
 
 def transcribe_inputs(package):
