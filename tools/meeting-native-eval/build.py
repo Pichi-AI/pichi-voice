@@ -94,7 +94,7 @@ giga_sources = sorted((ROOT / 'Vendor/PichiGigaAM/Sources/PichiGigaAM').glob('*.
 (BUILD / 'PichiGigaAMResourceBundle.swift').write_text(
     'import Foundation\n\nextension Foundation.Bundle {\n'
     '    static let module: Bundle = {\n'
-    '        let path = ' + json.dumps(str(DEPS / 'PichiGigaAM_PichiGigaAM.bundle')) + '\n'
+    '        let path = ' + json.dumps(str(DEPS / 'PichiGigaAM_PichiGigaAM.bundle'), ensure_ascii=False) + '\n'
     '        guard let bundle = Bundle(path: path) else { fatalError("PichiGigaAM resources are missing at \\(path)") }\n'
     '        return bundle\n'
     '    }()\n}\n')
